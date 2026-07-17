@@ -1,0 +1,1230 @@
+[
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000004",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Homotypic::Basionym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000005",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Autonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000007",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000008",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000009",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Conserved",
+    "gbif_status": "conservandum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000010",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Correct",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000011",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Incorrect",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000013",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::NotLatin"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000014",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Illegitimate::IncorrectOriginalSpelling",
+    "gbif_status": "negatum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000015",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Illegitimate::Superfluous",
+    "gbif_status": "superfluum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000016",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Illegitimate::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000019",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::AsSynonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000020",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::ConservedSpelling",
+    "gbif_status": "conservandum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000021",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::OfficialList"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000022",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::AdoptedByPersoon"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000023",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Validating::ConservedWork",
+    "gbif_status": "conservandum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000024",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed::OfficialIndexOfRejectedAndInvalidWorksInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000025",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::OfficialListOfWorksApprovedAsAvailable"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000026",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000031",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::PotentiallyValidating",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000032",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized",
+    "assignable": "false"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000035",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Accepting::SanctionedName",
+    "gbif_status": "conservandum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000038",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000039",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000040",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000041",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000042",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::PotentiallyValidating::FamilyBefore1961",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000043",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Invalid::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000044",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Usage::IncorrectOriginalSpelling",
+    "gbif_status": "negatum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000045",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::Gender"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000046",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::PartOfSpeech"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000047",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::Gender::Feminine",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000048",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::Gender::Masculine",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000049",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::Gender::Neuter",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000050",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::PartOfSpeech::Adjective",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000051",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::PartOfSpeech::NounInApposition",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000052",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::PartOfSpeech::NounInGenitiveCase",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000053",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Latinized::PartOfSpeech::Participle",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000055",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Fossil",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000056",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::Hybrid",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000057",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::Fossil",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000058",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed::OfficialIndexOfRejectedGenericNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000059",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed::OfficialIndexOfRejectedSpecificNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000060",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::OfficialListOfSpecificNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000061",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Usage::FamilyGroupNameForm",
+    "gbif_status": "nullum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000081",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000082",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::NotEffectivelyPublished",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000083",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::InvalidlyPublished",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000084",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000085",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Illegitimate",
+    "gbif_status": "illegitimum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000086",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate",
+    "gbif_status": "legitimate"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000087",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate::Correct",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000088",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate::Incorrect",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000089",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate::NomenNovum",
+    "gbif_status": "novum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000090",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::InvalidlyPublished::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000091",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Illegitimate::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000092",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate::Candidatus"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000093",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000094",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Accepting",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000095",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Accepting::ConservedName",
+    "gbif_status": "conservandum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000096",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Synonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000097",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000098",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Usage"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000099",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Usage::Misspelling",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000100",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Misapplication",
+    "gbif_status": "ambigua"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000101",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Synonym::Homotypic"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000102",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp::Unaccepting::Synonym::Heterotypic"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000103",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Legitimate::OfficialList"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000104",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Illegitimate::Rejected",
+    "gbif_status": "rejiciendum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000105",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp::EffectivelyPublished::ValidlyPublished::Illegitimate::NotInOfficialList"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000106",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym::Primary::Forgotten"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000107",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000108",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym::Primary::Suppressed"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000109",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000110",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icnp"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000111",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icvcn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000112",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective::ReplacedHomonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000119",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Invalid::HomonymyOfTypeGenus"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000120",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Invalid::SuppressionOfTypeGenus"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000121",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icvcn::Accepting",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000122",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icvcn::Unaccepting",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000123",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icvcn::Unaccepting::Supressed",
+    "gbif_status": "rejiciendum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000124",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icvcn::Accepting::UncertainPlacement",
+    "gbif_status": "valid",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000125",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icvcn::Valid",
+    "gbif_status": "available",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000126",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icvcn::Invalid",
+    "gbif_status": "negatum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000127",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icvcn::Valid::Accepted",
+    "gbif_status": "valid",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000128",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icvcn::Valid::Unaccepted",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000129",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Valid::NomenInquirendum",
+    "gbif_status": "dubimum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000133",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Usage::FamilyGroupNameOriginalForm",
+    "gbif_status": "nullum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000168",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000169",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NonBinominal"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000170",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NonBinominal"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000171",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NonBinominal"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000172",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NonBinominal"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000173",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NonBinominal"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000174",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000175",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000176",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000177",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000178",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000179",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000180",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000181",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000182",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000183",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000184",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000185",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000186",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000187",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000188",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000189",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000190",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000191",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000192",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000193",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000194",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000195",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000196",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000197",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000198",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000199",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000200",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000201",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000202",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000203",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000204",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000205",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000206",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Excluded",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000207",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000208",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000209",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000210",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000211",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000212",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000213",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000214",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000218",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000219",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed",
+    "gbif_status": "rejiciendum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000221",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed::NotInOfficialListOfAvailableNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000222",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::Suppressed::OfficialIndexOfRejectedFamilyGroupNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000223",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available",
+    "gbif_status": "available",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000224",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Valid",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000225",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Valid::NomenDubium",
+    "gbif_status": "dubimum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000226",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Invalid",
+    "gbif_status": "invalidum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000228",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::OfficialListOfGenericNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000229",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::OfficialListOfFamilyGroupNamesInZoology"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000230",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icvcn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000231",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icnp"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000232",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000233",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000264",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Validating",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000266",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Validating::UncertainPlacement",
+    "gbif_status": "valid",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000268",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Validating::ConservedName",
+    "gbif_status": "conservandum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000269",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::PotentiallyValidating::ReinstatedName",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000270",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::PotentiallyValidating::ReplacementName",
+    "gbif_status": "novum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000271",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::PotentiallyValidating::FirstRevisorAction",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000272",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000273",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Usage",
+    "assignable": "false"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000274",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Misapplication",
+    "gbif_status": "ambigua",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000275",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Usage::Misspelling",
+    "gbif_status": "nullum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000276",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000277",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000278",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective::UnjustifiedEmendation"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000279",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective::UnnecessaryReplacementName",
+    "gbif_status": "superfluum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000280",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Suppression",
+    "gbif_status": "rejiciendum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000281",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Suppression::Partial"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000282",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Suppression::Conditional"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000283",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Suppression::Total"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000284",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::ForgottenName",
+    "gbif_status": "oblitum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000285",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Subjective"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000287",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective::SynonymicHomonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000289",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000290",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym::Primary"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000291",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym::Secondary"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000292",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Homonym::Secondary::Secondary1961"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000369",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000370",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Accepting",
+    "gbif_status": "valid"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000371",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Accepting::AlternativeFamilyName",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000372",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000374",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Usage"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000375",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Usage::Misspelling",
+    "gbif_status": "nullum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000376",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Misapplication",
+    "gbif_status": "ambigua"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000377",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::NotEffectivelyPublished",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000378",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::NonBinomial"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000379",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000380",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::RejectedPublication",
+    "gbif_status": "oppressa"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000381",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::Provisional",
+    "gbif_status": "provisorium"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000382",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::InvalidlyPublished::Tautonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000383",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000384",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate",
+    "gbif_status": "legitimate"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000385",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Sanctioned",
+    "gbif_status": "rejiciendum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000386",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Illegitimate",
+    "gbif_status": "illegitimum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000387",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::NomenNovum",
+    "gbif_status": "novum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000388",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Nothotaxon"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000389",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Accepting::ConservedName",
+    "gbif_status": "conservandum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000391",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Homonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000392",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Heterotypic"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000393",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Homotypic"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000394",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Homotypic::AlternativeName",
+    "gbif_status": "alternativum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000395",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Homotypic::OrthographicVariant",
+    "gbif_status": "orthographia"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0000396",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::Synonym::Homotypic::Isonym"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0001058",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Fossil::Ichnotaxon",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0001059",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::CollectiveGroup",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0001060",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Unavailable::NomenNudum",
+    "gbif_status": "nudum"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0001061",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Iczn::Available::Invalid::SynonymyOfTypeGenusBefore1961"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0001064",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Icn::Unaccepting::OriginallyInvalid",
+    "gbif_status": "ambigua",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0003000",
+    "kind": "classification",
+    "class": "TaxonNameClassification::Icn::EffectivelyPublished::ValidlyPublished::Legitimate::Emendavit"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0003010",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Unavailable",
+    "gbif_status": "invalidum",
+    "assignable": "true"
+  },
+  {
+    "uri": "http://purl.obolibrary.org/obo/NOMEN_0003011",
+    "kind": "relationship",
+    "class": "TaxonNameRelationship::Iczn::Invalidating::Synonym::ForgottenName::ForgottenName19611972",
+    "gbif_status": "oblitum"
+  }
+]

@@ -1,0 +1,81 @@
+/*
+ * Base theme for hive PWA.
+ *
+ * The palette is deliberately minimal — essentially black-on-white and
+ * white-on-black plus a single accent for focus/selection. Components read
+ * `var(--fg)`, `var(--bg)`, etc.; nothing per-component styles a color
+ * directly. Adding a new palette (e.g. high-contrast) is a matter of
+ * defining `--fg`/`--bg` in a new selector, not touching every component.
+ *
+ * The manual override (data-theme="light" / data-theme="dark" on <html>)
+ * takes precedence over prefers-color-scheme so localStorage-persisted user
+ * choice wins. See app.js for the toggle logic.
+ */
+
+:root {
+  --fg: #111;
+  --bg: #fff;
+  --dim: #666;
+  --border: #ccc;
+  --accent: #005fa3;
+  --accent-fg: #fff;
+  --error: #a00;
+
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #eee;
+    --bg: #111;
+    --dim: #888;
+    --border: #333;
+    --accent: #4ea3e8;
+    --accent-fg: #000;
+    --error: #ff6b6b;
+  }
+}
+
+/* Manual theme override wins over the media query. */
+html[data-theme="light"] {
+  --fg: #111;
+  --bg: #fff;
+  --dim: #666;
+  --border: #ccc;
+  --accent: #005fa3;
+  --accent-fg: #fff;
+  --error: #a00;
+}
+
+html[data-theme="dark"] {
+  --fg: #eee;
+  --bg: #111;
+  --dim: #888;
+  --border: #333;
+  --accent: #4ea3e8;
+  --accent-fg: #000;
+  --error: #ff6b6b;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+a {
+  color: var(--accent);
+}

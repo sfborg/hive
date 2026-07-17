@@ -1,0 +1,6 @@
+*.md
+*.db
+*.db-wal
+*.db-shm
+/hive
+/bin/
