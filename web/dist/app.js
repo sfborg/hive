@@ -1402,6 +1402,23 @@ class SfgaDetail extends LitElement {
       merged.scientific_name = sci;
       merged.scientific_name_string = sci;
       merged.code = this._createDraft.code;
+      // Compute the synthetic author / year fields the form displays.
+      // Parens in the verbatim ⇒ subsequent combination; the recombiner
+      // (if named) lives in combination_authorship. No parens ⇒ original
+      // combination; gnparser puts the sole author in basionym_authorship.
+      const hasParens = sci.includes("(");
+      if (hasParens) {
+        merged.author = preview.combination_authorship || "";
+        merged.year = preview.combination_authorship_year || "";
+      } else {
+        merged.author = preview.basionym_authorship || "";
+        merged.year = preview.basionym_authorship_year || "";
+        // Sync published_in_year to the derived year so the round-trip
+        // matches what the field would produce after a curator edit.
+        if (merged.year && !merged.published_in_year) {
+          merged.published_in_year = merged.year;
+        }
+      }
       // Strip fields we don't want to send back on POST /api/taxon
       // (server-authored on write).
       delete merged.id;
@@ -1442,14 +1459,71 @@ class SfgaDetail extends LitElement {
     this._createDraft = { ...this._createDraft, [field]: value };
   }
 
+  // The form shows only three authorship fields — verbatim + author +
+  // year — instead of the five underlying col__ columns. `author` and
+  // `year` are synthetic: they route to either combination_authorship*
+  // or basionym_authorship* on write, depending on whether the
+  // scientific name is a subsequent combination (parenthetical author)
+  // or the original combination (no parens). Rationale: one Name record
+  // has one year — the year of THIS combination. Basionym-record data
+  // lives on a separate Name row reached through the "add original
+  // combination" wizard (step 3c), not on the current form.
+  _hasParens() {
+    return (this._createDraft.scientific_name || "").includes("(");
+  }
+  _setAuthorship(v) {
+    this._createDraft = { ...this._createDraft, authorship: v };
+  }
+  _setAuthor(v) {
+    if (this._hasParens()) {
+      this._createDraft = {
+        ...this._createDraft,
+        author: v,
+        combination_authorship: v,
+        // Explicitly blank the basionym slot: that data belongs on a
+        // separate record. When step 3c wires up the basionym flow the
+        // authorship there will be captured on its own name row.
+        basionym_authorship: "",
+      };
+    } else {
+      // Original combination — one authorship, gnparser's convention
+      // puts it in the basionym slot (see fillFromParse in core/name.go).
+      this._createDraft = {
+        ...this._createDraft,
+        author: v,
+        basionym_authorship: v,
+        combination_authorship: "",
+      };
+    }
+  }
+  _setYear(v) {
+    if (this._hasParens()) {
+      this._createDraft = {
+        ...this._createDraft,
+        year: v,
+        combination_authorship_year: v,
+        published_in_year: v,
+        basionym_authorship_year: "",
+      };
+    } else {
+      this._createDraft = {
+        ...this._createDraft,
+        year: v,
+        basionym_authorship_year: v,
+        published_in_year: v,
+        combination_authorship_year: "",
+      };
+    }
+  }
+
   async _submitCreate() {
     // Compose the request body from the current draft + parent_id.
     // The draft carries every atomized field the curator saw and
-    // (possibly) edited in the preview form.
-    const body = {
-      ...this._createDraft,
-      parent_id: this._taxon?.id || "",
-    };
+    // (possibly) edited in the preview form. Synthetic form-only
+    // fields (author / year — routed to the right col__ column via
+    // the setter helpers already) are stripped before send.
+    const { author, year, ...body } = this._createDraft;
+    body.parent_id = this._taxon?.id || "";
     this._createBusy = true;
     this._createError = "";
     try {
@@ -1605,15 +1679,23 @@ class SfgaDetail extends LitElement {
       <fieldset>
         <legend>authorship</legend>
         <label>Verbatim authorship</label>
-        <input type="text" .value=${d.authorship || ""} @input=${set("authorship")} />
-        <label>Combination author</label>
-        <input type="text" .value=${d.combination_authorship || ""} @input=${set("combination_authorship")} />
-        <label>Combination year</label>
-        <input type="text" .value=${d.combination_authorship_year || ""} @input=${set("combination_authorship_year")} />
-        <label>Basionym / original author</label>
-        <input type="text" .value=${d.basionym_authorship || ""} @input=${set("basionym_authorship")} />
-        <label>Basionym / original year</label>
-        <input type="text" .value=${d.basionym_authorship_year || ""} @input=${set("basionym_authorship_year")} />
+        <input
+          type="text"
+          .value=${d.authorship || ""}
+          @input=${(e) => this._setAuthorship(e.target.value)}
+        />
+        <label>Author</label>
+        <input
+          type="text"
+          .value=${d.author || ""}
+          @input=${(e) => this._setAuthor(e.target.value)}
+        />
+        <label>Year</label>
+        <input
+          type="text"
+          .value=${d.year || ""}
+          @input=${(e) => this._setYear(e.target.value)}
+        />
       </fieldset>
 
       <fieldset>
@@ -1627,8 +1709,6 @@ class SfgaDetail extends LitElement {
           .value=${d.reference_id || ""}
           @pick=${(e) => this._createFieldChange("reference_id", e.detail.id)}
         ></sfga-combobox>
-        <label>Published in year</label>
-        <input type="text" .value=${d.published_in_year || ""} @input=${set("published_in_year")} />
         <label>Published in page</label>
         <input type="text" .value=${d.published_in_page || ""} @input=${set("published_in_page")} />
       </fieldset>
