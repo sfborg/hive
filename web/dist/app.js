@@ -498,6 +498,12 @@ class SfgaApp extends LitElement {
     // regardless of which input has focus. Bound at document level;
     // torn down in disconnectedCallback.
     window.addEventListener("keydown", this._onGlobalKey);
+    // URL fragment routing. Back/forward buttons update the hash;
+    // hashchange feeds it back into our state. Initial hash is read
+    // before data loads so the tree reveal fires with the right id.
+    this._onHashChange = this._onHashChange.bind(this);
+    window.addEventListener("hashchange", this._onHashChange);
+    this._syncFromHash();
     try {
       // Load in parallel: archive info + dataset metadata for the
       // header, vocabulary bundle for edit-form dropdowns, NOMEN
@@ -511,6 +517,14 @@ class SfgaApp extends LitElement {
       ]);
       this.archive = archive;
       this.metadata = metadata;
+      // Reveal the URL-supplied taxon (if any) after the tree component
+      // has had a chance to render. updateComplete waits for one Lit
+      // render cycle; the tree loads its roots on connectedCallback and
+      // is ready to accept reveal() by then.
+      if (this.screen === "taxa" && this.selectedId) {
+        await this.updateComplete;
+        await this._revealInTree(this.selectedId);
+      }
     } catch (err) {
       this.error = this._formatError(err);
     }
@@ -518,7 +532,91 @@ class SfgaApp extends LitElement {
 
   disconnectedCallback() {
     window.removeEventListener("keydown", this._onGlobalKey);
+    window.removeEventListener("hashchange", this._onHashChange);
     super.disconnectedCallback();
+  }
+
+  // updated pushes state changes back into the URL fragment so the
+  // location bar tracks the current view + selected taxon. Skipped
+  // once (per _syncFromHash call) when the change originated from
+  // the hash — the flag is consumed here so the state ↔ hash echo
+  // loop doesn't self-perpetuate, but subsequent user-driven changes
+  // still propagate to the URL.
+  updated(changed) {
+    if (this._syncingFromHash) {
+      this._syncingFromHash = false;
+      return;
+    }
+    if (changed.has("screen") || changed.has("selectedId")) {
+      this._syncToHash();
+    }
+  }
+
+  // _onHashChange fires when the browser navigates history (back /
+  // forward buttons) or when the user pastes a new hash into the URL
+  // bar. Feeds the new hash into state; the updated() guard prevents
+  // the state → hash update from re-firing hashchange.
+  async _onHashChange() {
+    const before = { screen: this.screen, selectedId: this.selectedId };
+    this._syncFromHash();
+    await this.updateComplete;
+    // Reveal the newly-selected taxon in the tree if the hash change
+    // introduced a fresh selection on the taxa screen.
+    if (
+      this.screen === "taxa" &&
+      this.selectedId &&
+      (before.screen !== "taxa" || before.selectedId !== this.selectedId)
+    ) {
+      await this._revealInTree(this.selectedId);
+    }
+  }
+
+  // _syncFromHash parses location.hash into screen + selectedId.
+  // Recognized paths:
+  //   #/                    → taxa screen, no selection
+  //   #/taxon/{id}          → taxa screen, taxon revealed + selected
+  //   #/metadata            → metadata screen
+  //   #/references          → references screen
+  // Unknown paths fall back to the taxa screen — safer than leaving
+  // the UI in a broken state when someone shares an old-schema link.
+  _syncFromHash() {
+    const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+    const parts = raw.split("/").filter(Boolean);
+    this._syncingFromHash = true;
+    if (parts.length === 0) {
+      this.screen = "taxa";
+      // Preserve any existing selection when the hash is just #/ —
+      // arriving at this branch during a screen switch (e.g. from
+      // metadata → taxa via alt+t) shouldn't discard the current
+      // taxon. Only clear when we're explicitly navigating to root.
+    } else if (parts[0] === "taxon") {
+      this.screen = "taxa";
+      this.selectedId = parts[1] || "";
+    } else if (SfgaApp.views.some((v) => v.id === parts[0])) {
+      this.screen = parts[0];
+    } else {
+      this.screen = "taxa";
+    }
+    // Flag stays true until updated() consumes it on the next render
+    // cycle — see the guard there. No microtask needed.
+  }
+
+  // _syncToHash reflects the current state into location.hash. Uses
+  // pushState so back/forward navigate between visited states.
+  _syncToHash() {
+    let wanted;
+    if (this.screen === "taxa") {
+      wanted = this.selectedId ? `#/taxon/${this.selectedId}` : "#/";
+    } else {
+      wanted = `#/${this.screen}`;
+    }
+    if (location.hash === wanted) return;
+    if (location.hash === "" && wanted === "#/") return;
+    // pushState here doesn't fire hashchange (spec quirk) — no guard
+    // needed for the return trip. Back/forward will fire it, which
+    // routes through _onHashChange with the _syncingFromHash flag set
+    // by _syncFromHash.
+    history.pushState({}, "", wanted);
   }
 
   // Alt+letter dispatches to the matching view. Runs even when a text
