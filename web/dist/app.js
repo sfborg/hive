@@ -1207,9 +1207,16 @@ class SfgaDetail extends LitElement {
       font-size: 0.9em;
       text-align: right;
     }
+    /* Inputs share styles across the edit-form <form> and the
+       create-pane <div>. Without width:100% + box-sizing, <input>
+       uses HTML-default content-driven sizing and grows as the
+       curator types — pushing sibling fields around unpredictably. */
     form input[type="text"],
     form input[type="date"],
-    form textarea {
+    form textarea,
+    .create-pane input[type="text"],
+    .create-pane input[type="date"],
+    .create-pane textarea {
       color: var(--fg);
       background: var(--bg);
       border: 1px solid var(--border);
@@ -1218,15 +1225,21 @@ class SfgaDetail extends LitElement {
       font-size: 1em;
       width: 100%;
       box-sizing: border-box;
+      min-width: 0; /* let grid/flex parents shrink us properly */
     }
     form input[type="text"]:focus,
     form input[type="date"]:focus,
     form textarea:focus,
-    form select:focus {
+    form select:focus,
+    .create-pane input[type="text"]:focus,
+    .create-pane input[type="date"]:focus,
+    .create-pane textarea:focus,
+    .create-pane select:focus {
       outline: none;
       border-color: var(--accent);
     }
-    form textarea {
+    form textarea,
+    .create-pane textarea {
       min-height: 4rem;
       font-family: var(--font-body);
     }
