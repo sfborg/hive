@@ -44,6 +44,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/taxon/{id}/synonyms", s.handleSynonyms)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
+	mux.HandleFunc("POST /api/taxon/{id}/basionym", s.handleAddBasionym)
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/code-default", s.handleCodeDefault)
@@ -395,6 +396,95 @@ func (s *server) handleMoveTaxon(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", fresh.Modified)
 	writeJSON(w, http.StatusOK, taxonToAPI(fresh))
+}
+
+// handleAddBasionym creates the original combination (basionym) for the
+// taxon identified in the path. All three writes happen atomically in
+// one WithTx:
+//
+//  1. CreateName for the basionym — takes the same body shape the new-
+//     taxon endpoint accepts (verbatim + code required; every atomized
+//     field optional and fill-from-parsed on write).
+//  2. AddSynonym linking the new basionym name to the taxon whose id
+//     is in the path (i.e. the current-combination taxon). Any pre-
+//     existing synonym pointing that name at that taxon is a duplicate
+//     insert — AddSynonym surfaces the DB unique-constraint error as
+//     ErrExists / ErrConflict.
+//  3. LinkNameRelation with the current combination's name as the
+//     subject, the new basionym as the object, and type BASIONYM.
+//     sfga's nom_rel_type collapses botanical "basionym" and
+//     zoological "original combination" into one enum value; UI can
+//     present code-scoped labels.
+//
+// Returns the newly created basionym as apiName so the client can
+// display / pick it. The parent taxon's row is untouched; the client
+// stays on its current view.
+func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	if taxonID == "" {
+		writeBadRequest(w, r, "taxon id is required in path")
+		return
+	}
+	var body createTaxonBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.ScientificName) == "" {
+		writeBadRequest(w, r, "scientific_name is required")
+		return
+	}
+	if strings.TrimSpace(body.Code) == "" {
+		writeBadRequest(w, r, "code is required")
+		return
+	}
+	// Fetch the current combination's taxon to grab the name id we're
+	// pointing the BASIONYM relation at.
+	currentTaxon, err := s.a.GetTaxon(r.Context(), taxonID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if currentTaxon.NameID == "" {
+		writeBadRequest(w, r, "current taxon has no attached name; cannot add basionym")
+		return
+	}
+	currentNameID := currentTaxon.NameID
+
+	var newBasionymID string
+	err = s.a.WithTx(r.Context(), func(tx *core.Tx) error {
+		nameID, err := tx.CreateName(body.toColdpName())
+		if err != nil {
+			return err
+		}
+		newBasionymID = nameID
+
+		if _, err := tx.AddSynonym(coldp.Synonym{
+			TaxonID: taxonID,
+			NameID:  nameID,
+			// AddSynonym stamps col__modified / col__modified_by from
+			// the tx actor; status defaults to SYNONYM.
+		}); err != nil {
+			return err
+		}
+
+		return tx.LinkNameRelation(coldp.NameRelation{
+			NameID:        currentNameID,
+			RelatedNameID: nameID,
+			Type:          coldp.NewNomRelType("BASIONYM"),
+		})
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetName(r.Context(), newBasionymID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/name/"+newBasionymID)
+	writeJSON(w, http.StatusCreated, nameToAPI(fresh))
 }
 
 // handleCreateTaxon composes a new (name, taxon) pair in one WithTx and

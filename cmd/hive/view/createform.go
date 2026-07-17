@@ -260,12 +260,19 @@ func nomcodeNew(code string) nomcode.Code { return nomcode.New(code) }
 // scanning the rest of the form.
 func (m detailModel) renderCreatePreview() string {
 	var b strings.Builder
-	parent := m.createParentName
-	if parent == "" {
-		parent = "(root)"
+	var header string
+	if m.createBasionymForTaxonID != "" {
+		header = headerStyle.Render("Add original combination for ") +
+			m.createBasionymForName +
+			"  " + dimStyle.Render("(step 2 / 2 — atomized preview)")
+	} else {
+		parent := m.createParentName
+		if parent == "" {
+			parent = "(root)"
+		}
+		header = headerStyle.Render("New taxon under ") + parent +
+			"  " + dimStyle.Render("(step 2 / 2 — atomized preview)")
 	}
-	header := headerStyle.Render("New taxon under ") + parent +
-		"  " + dimStyle.Render("(step 2 / 2 — atomized preview)")
 	b.WriteString(header)
 	b.WriteByte('\n')
 	b.WriteString(dimStyle.Render(strings.Repeat("─", 40)))
@@ -322,8 +329,21 @@ func (m detailModel) renderCreatePreview() string {
 	if m.saving {
 		b.WriteString(dimStyle.Render("creating…"))
 	} else {
-		b.WriteString(dimStyle.Render(
-			"[tab] next   [shift+tab] prev   [ctrl+s] create   [esc] back to verbatim"))
+		save := "[ctrl+s] create"
+		if m.createBasionymForTaxonID != "" {
+			save = "[ctrl+s] add basionym"
+		}
+		hint := "[tab] next   [shift+tab] prev   " + save + "   [esc] back to verbatim"
+		// Offer the basionym follow-up only from the accepted-name
+		// path when the verbatim looks like a subsequent combination
+		// (parens present, matching the PWA's rule).
+		if m.createBasionymForTaxonID == "" &&
+			(strings.Contains(m.createSciName.Value(), "(") ||
+				strings.TrimSpace(m.createPreviewInputs[cpfBasionymAuthor].Value()) != "" ||
+				strings.TrimSpace(m.createPreviewInputs[cpfBasionymYear].Value()) != "") {
+			hint += "   [ctrl+o] create + add original combination"
+		}
+		b.WriteString(dimStyle.Render(hint))
 	}
 	return b.String()
 }

@@ -25,6 +25,7 @@ type keyMap struct {
 	ViewMeta    key.Binding // "alt+m" — switch to the Metadata view (Media, when it lands, takes alt+shift+m — every project has metadata; fewer have media)
 	ViewRefs    key.Binding // "alt+r" — switch to the References view
 	AddRef      key.Binding // "ctrl+a" — open the add-reference modal from the name edit form
+	AddBasionym key.Binding // "ctrl+o" — from the create pane: save current + start adding the original combination
 	Help        key.Binding
 }
 
@@ -102,6 +103,10 @@ func defaultKeys() keyMap {
 		AddRef: key.NewBinding(
 			key.WithKeys("ctrl+a"),
 			key.WithHelp("ctrl+a", "add reference (in name edit form)"),
+		),
+		AddBasionym: key.NewBinding(
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("ctrl+o", "save + add original combination (in create pane)"),
 		),
 		LoadAll: key.NewBinding(
 			key.WithKeys("G"),

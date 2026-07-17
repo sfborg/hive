@@ -171,6 +171,13 @@ type detailModel struct {
 	createStep         int
 	createParentID     string // "" → root-level taxon
 	createParentName   string // display label for the header
+	// When non-empty, the create-pane's save routes to the "add basionym"
+	// path (CreateName + AddSynonym + LinkNameRelation for this taxon
+	// id) instead of the normal accepted-name create. Set by the
+	// "save + add original combination" flow after the accepted-name
+	// half of the write succeeds.
+	createBasionymForTaxonID string
+	createBasionymForName    string // display label for the header
 	createSciName      textinput.Model
 	createRankPicker   combobox
 	createCodePicker   combobox
@@ -586,6 +593,8 @@ func (m *detailModel) EnterCreateModeCmd(parentID, parentLabel string) (tea.Cmd,
 	m.saveError = ""
 	m.createParentID = parentID
 	m.createParentName = parentLabel
+	m.createBasionymForTaxonID = ""
+	m.createBasionymForName = ""
 
 	sci := textinput.New()
 	sci.Prompt = ""
@@ -606,10 +615,16 @@ func (m *detailModel) EnterCreateModeCmd(parentID, parentLabel string) (tea.Cmd,
 }
 
 // ExitCreateMode discards the in-flight compose without touching the DB.
+// If the pane is mid-basionym (accepted taxon already saved, curator
+// hits Cancel before entering the original combination) the accepted
+// row stays committed — same "adding a basionym is optional" semantics
+// the PWA uses. Only the in-memory basionym draft is discarded.
 func (m *detailModel) ExitCreateMode() {
 	m.creating = false
 	m.createStep = 0
 	m.saveError = ""
+	m.createBasionymForTaxonID = ""
+	m.createBasionymForName = ""
 	m.createSciName.Blur()
 	m.createRankPicker.Blur()
 	m.createCodePicker.Blur()
@@ -624,17 +639,38 @@ func (m *detailModel) ExitCreateMode() {
 //   step 0 — validates verbatim + code, fires ParseNamePreview
 //            (in-process via Archive), and — on success — advances
 //            the form to step 1 with atomized fields pre-filled.
-//   step 1 — commits via CreateName + CreateTaxon in one WithTx,
-//            respecting curator overrides on any atomized field
-//            (fill-gaps semantics inside CreateName ensures empty
-//            fields still get parser defaults).
+//   step 1 — commits. If createBasionymForTaxonID is set, runs
+//            CreateName + AddSynonym + LinkNameRelation in one
+//            WithTx targeting that taxon. Otherwise runs CreateName
+//            + CreateTaxon (normal accepted-name flow).
 // On commit success emits savedMsg with parentMoved=true so the
-// shell reveals the newly-created taxon in the tree.
+// shell reveals the taxon (accepted or the current-combination one
+// for the basionym path).
 func (m *detailModel) CreateSave() tea.Cmd {
 	if m.createStep == 0 {
 		return m.createAdvanceCmd()
 	}
+	if m.createBasionymForTaxonID != "" {
+		return m.basionymCommitCmd()
+	}
 	return m.createCommitCmd()
+}
+
+// CreateSaveThenBasionym is the "save + add original combination"
+// keybinding target. Fires the normal accepted-name commit, then —
+// on success — resets the create pane into basionym mode targeting
+// the just-created taxon. Two-step commit: if the accepted-name
+// half fails, the pane stays put; if the curator abandons the
+// basionym half, the accepted row still stands (adding a basionym
+// is optional).
+//
+// Only meaningful on step 1 of an accepted-name create. No-op in
+// step 0 or when the pane is already in basionym mode.
+func (m *detailModel) CreateSaveThenBasionym() tea.Cmd {
+	if m.createStep != 1 || m.createBasionymForTaxonID != "" {
+		return nil
+	}
+	return m.createThenBasionymCmd()
 }
 
 // createAdvanceCmd runs ParseNamePreview and — via parsePreviewMsg —
@@ -712,6 +748,141 @@ func (m *detailModel) createCommitCmd() tea.Cmd {
 			parentMoved: true,
 		}
 	}
+}
+
+// basionymCommitCmd is the basionym-add write path. Runs three writes
+// atomically in one WithTx: CreateName for the basionym, AddSynonym
+// linking it to the current-combination taxon, and LinkNameRelation
+// with type BASIONYM. sfga's nom_rel_type collapses ICN "basionym"
+// and ICZN "original combination" into the same enum value; UI can
+// present code-scoped labels while the storage stays uniform.
+func (m *detailModel) basionymCommitCmd() tea.Cmd {
+	sci := strings.TrimSpace(m.createSciName.Value())
+	codeID := m.createCodePicker.SelectedID()
+	basionymName := m.composeCreateName(sci, codeID)
+	currentTaxonID := m.createBasionymForTaxonID
+	a := m.a
+	actor := m.actor
+	m.saving = true
+	return func() tea.Msg {
+		ctx := contextWithActor(actor)
+
+		// Look up the current-combination's name id so the BASIONYM
+		// relation can point at it. This is a read outside the tx
+		// but the taxon row can't disappear between now and commit
+		// (we only wrote it seconds ago via createThenBasionymCmd).
+		currentTaxon, err := a.GetTaxon(ctx, currentTaxonID)
+		if err != nil {
+			return savedMsg{err: err}
+		}
+		currentNameID := currentTaxon.NameID
+		if currentNameID == "" {
+			return savedMsg{err: fmt.Errorf(
+				"core: current taxon %s has no attached name; cannot add basionym",
+				currentTaxonID)}
+		}
+
+		err = a.WithTx(ctx, func(tx *core.Tx) error {
+			basionymID, err := tx.CreateName(basionymName)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.AddSynonym(coldp.Synonym{
+				TaxonID: currentTaxonID,
+				NameID:  basionymID,
+			}); err != nil {
+				return err
+			}
+			return tx.LinkNameRelation(coldp.NameRelation{
+				NameID:        currentNameID,
+				RelatedNameID: basionymID,
+				Type:          coldp.NewNomRelType("BASIONYM"),
+			})
+		})
+		if err != nil {
+			return savedMsg{err: err}
+		}
+		// Reveal the current-combination taxon (not the basionym —
+		// the basionym is a synonym, not an accepted taxon in the
+		// tree). The pane will close on this savedMsg.
+		fresh, err := a.GetTaxon(ctx, currentTaxonID)
+		if err != nil {
+			return savedMsg{err: err}
+		}
+		var freshName *coldp.Name
+		if fresh.NameID != "" {
+			freshName, _ = a.GetName(ctx, fresh.NameID)
+		}
+		var parentLabel string
+		if fresh.ParentID != "" {
+			if ref, refErr := a.TaxonRef(ctx, fresh.ParentID); refErr == nil {
+				parentLabel = ref.Label.Text
+			}
+		}
+		return savedMsg{
+			taxon:       fresh,
+			name:        freshName,
+			parentLabel: parentLabel,
+			parentMoved: true,
+		}
+	}
+}
+
+// createThenBasionymCmd is the "save + add original combination" flow.
+// Runs the normal accepted-name commit first; on success the tea
+// runtime delivers a createdForBasionymMsg (a distinct message from
+// savedMsg so the model can transition the pane into basionym mode
+// instead of closing).
+func (m *detailModel) createThenBasionymCmd() tea.Cmd {
+	sci := strings.TrimSpace(m.createSciName.Value())
+	codeID := m.createCodePicker.SelectedID()
+	parentID := m.createParentID
+	name := m.composeCreateName(sci, codeID)
+	a := m.a
+	actor := m.actor
+	m.saving = true
+	return func() tea.Msg {
+		ctx := contextWithActor(actor)
+		var newTaxonID string
+		err := a.WithTx(ctx, func(tx *core.Tx) error {
+			nameID, err := tx.CreateName(name)
+			if err != nil {
+				return err
+			}
+			t := coldp.Taxon{
+				NameID:   nameID,
+				ParentID: parentID,
+			}
+			id, err := tx.CreateTaxon(t)
+			if err != nil {
+				return err
+			}
+			newTaxonID = id
+			return nil
+		})
+		if err != nil {
+			return createdForBasionymMsg{err: err}
+		}
+		// Grab a display label for the header on the next screen.
+		var label string
+		if ref, refErr := a.TaxonRef(ctx, newTaxonID); refErr == nil {
+			label = ref.Label.Text
+		}
+		if label == "" {
+			label = sci
+		}
+		return createdForBasionymMsg{taxonID: newTaxonID, label: label, code: codeID}
+	}
+}
+
+// createdForBasionymMsg carries the just-created accepted taxon's id +
+// display label back to the model so the create pane can transition
+// into basionym mode without closing.
+type createdForBasionymMsg struct {
+	taxonID string
+	label   string
+	code    string
+	err     error
 }
 
 // focusField blurs the previously focused field and focuses the new one.
@@ -1023,6 +1194,32 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 		m.createFocus = cppRank
 		return m, m.focusPreviewCurrent()
 
+	case createdForBasionymMsg:
+		// "Save + add original combination" — accepted taxon is
+		// already committed; transition the pane into basionym mode
+		// for the just-created taxon. Curator lands on step 0 with
+		// blank verbatim + code inherited from the accepted-half.
+		m.saving = false
+		if msg.err != nil {
+			m.saveError = formatCoreError(msg.err)
+			return m, nil
+		}
+		m.createBasionymForTaxonID = msg.taxonID
+		m.createBasionymForName = msg.label
+		m.createStep = 0
+		m.saveError = ""
+		// Reset verbatim input; keep the code picker as-is (already
+		// set from step 0 of the accepted half — matches the code of
+		// the current combination which the basionym almost always
+		// shares).
+		sci := textinput.New()
+		sci.Prompt = ""
+		sci.CharLimit = 500
+		sci.Placeholder = "e.g. Felis onca Linnaeus, 1758"
+		m.createSciName = sci
+		m.createFocus = 0
+		return m, m.createSciName.Focus()
+
 	case comboboxResultsMsg:
 		// Route to the currently focused picker; race guard inside the
 		// combobox drops stale-query messages.
@@ -1188,12 +1385,19 @@ func (m detailModel) renderCreate() string {
 		return m.renderCreatePreview()
 	}
 	var b strings.Builder
-	parent := m.createParentName
-	if parent == "" {
-		parent = "(root)"
+	var header string
+	if m.createBasionymForTaxonID != "" {
+		header = headerStyle.Render("Add original combination for ") +
+			m.createBasionymForName +
+			"  " + dimStyle.Render("(step 1 / 2 — verbatim)")
+	} else {
+		parent := m.createParentName
+		if parent == "" {
+			parent = "(root)"
+		}
+		header = headerStyle.Render("New taxon under ") + parent +
+			"  " + dimStyle.Render("(step 1 / 2 — verbatim)")
 	}
-	header := headerStyle.Render("New taxon under ") + parent +
-		"  " + dimStyle.Render("(step 1 / 2 — verbatim)")
 	b.WriteString(header)
 	b.WriteByte('\n')
 	b.WriteString(dimStyle.Render(strings.Repeat("─", 40)))

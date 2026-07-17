@@ -342,6 +342,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, m.keys.Save):
 				return m, m.detail.CreateSave()
+			case key.Matches(msg, m.keys.AddBasionym):
+				// Only fires on step 1 of an accepted-name create;
+				// CreateSaveThenBasionym returns nil in other states
+				// and the key falls through harmlessly.
+				if cmd := m.detail.CreateSaveThenBasionym(); cmd != nil {
+					return m, cmd
+				}
 			case key.Matches(msg, m.keys.Cancel):
 				m.detail.ExitCreateMode()
 				return m, nil

@@ -177,6 +177,13 @@ export const api = {
         ifMatch ? { "If-Match": ifMatch } : {},
       ),
     create: (body) => j("POST", `/api/taxon`, body),
+    // addBasionym: atomically creates the original combination for the
+    // given taxon (Name + Synonym + BASIONYM relation, all in one tx).
+    // Body is the same shape as create() but parent_id / name_phrase
+    // are ignored — the basionym is a synonym of the given taxon, not
+    // a new accepted taxon.
+    addBasionym: (taxonID, body) =>
+      j("POST", `/api/taxon/${encodeURIComponent(taxonID)}/basionym`, body),
     delete: (id) => j("DELETE", `/api/taxon/${encodeURIComponent(id)}`),
   },
 

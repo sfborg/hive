@@ -1045,6 +1045,15 @@ class SfgaDetail extends LitElement {
     // the parse leave it collapsed. gsvalidator's parse-mismatch rule
     // catches the poorly-parsed cases in either mode.
     _createShowAtomized: { state: true },
+    // When set, the create pane's Save writes to the "add basionym"
+    // endpoint (POST /api/taxon/{X}/basionym) instead of POST /api/taxon.
+    // The value is the current-combination taxon id — set by the
+    // "Create + add original combination" flow after the accepted-taxon
+    // half of the write succeeds. Null = normal accepted-name create.
+    _creatingBasionymFor: { state: true },
+    // Display name for the header row while creating a basionym so the
+    // curator sees which combination they're entering the original for.
+    _creatingBasionymForName: { state: true },
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
@@ -1345,6 +1354,8 @@ class SfgaDetail extends LitElement {
     this._createBusy = false;
     this._createError = "";
     this._createShowAtomized = false;
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
     this._editShowAtomized = false;
     this._confirmDelete = false;
     this._deleteError = "";
@@ -1363,6 +1374,8 @@ class SfgaDetail extends LitElement {
       this._createDraft = {};
       this._createError = "";
       this._createShowAtomized = false;
+      this._creatingBasionymFor = null;
+      this._creatingBasionymForName = "";
       this._load();
     }
   }
@@ -1437,6 +1450,8 @@ class SfgaDetail extends LitElement {
     this._createError = "";
     this._createBusy = false;
     this._creating = true;
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
     // Seed the code picker from the parent's name so ICZN work stays
     // ICZN by default — matches the TUI's CodeForParent behavior.
     if (this._taxon?.id) {
@@ -1455,6 +1470,8 @@ class SfgaDetail extends LitElement {
     this._creating = false;
     this._createStep = 0;
     this._createError = "";
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
   }
 
   // _advanceToPreview fires the server-side parse (POST /api/name/parse)
@@ -1522,28 +1539,80 @@ class SfgaDetail extends LitElement {
   }
 
   async _submitCreate() {
-    // Compose the request body from the current draft + parent_id.
-    // The draft carries every atomized field the curator saw and
-    // (possibly) edited in the preview form.
-    const body = {
-      ...this._createDraft,
-      parent_id: this._taxon?.id || "",
-    };
     this._createBusy = true;
     this._createError = "";
     try {
+      if (this._creatingBasionymFor) {
+        // Basionym write path — POST /api/taxon/{X}/basionym creates
+        // Name + Synonym + BASIONYM name_relation atomically. Reveals
+        // the current-combination taxon (not the basionym; the basionym
+        // is a synonym, not an accepted taxon in the tree).
+        const revealID = this._creatingBasionymFor;
+        await api.taxon.addBasionym(this._creatingBasionymFor, this._createDraft);
+        this._cancelCreate();
+        this.dispatchEvent(
+          new CustomEvent("taxon-moved", {
+            detail: { id: revealID },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      } else {
+        // Normal accepted-name create.
+        const body = {
+          ...this._createDraft,
+          parent_id: this._taxon?.id || "",
+        };
+        const created = await api.taxon.create(body);
+        this._cancelCreate();
+        this.dispatchEvent(
+          new CustomEvent("taxon-moved", {
+            detail: { id: created.id },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+    } catch (err) {
+      this._createError =
+        err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+    } finally {
+      this._createBusy = false;
+    }
+  }
+
+  // _submitCreateThenBasionym is the "Create + add original combination"
+  // path. Saves the current combination first (POST /api/taxon), then
+  // transitions the same pane into basionym-add mode targeting the
+  // just-created taxon. The curator lands on step 0 with a fresh
+  // scientific-name input; when they save that, the basionym write
+  // (POST /api/taxon/{X}/basionym) fires and the pane closes.
+  //
+  // Two-step commit — either half can fail independently. If the
+  // accepted-name save fails, the pane stays put and shows the error.
+  // If it succeeds and the basionym half is then abandoned (curator
+  // hits Cancel), the accepted taxon is still saved. That's the
+  // expected semantics: adding a basionym is optional; the accepted
+  // name is the primary commit.
+  async _submitCreateThenBasionym() {
+    this._createBusy = true;
+    this._createError = "";
+    try {
+      const body = {
+        ...this._createDraft,
+        parent_id: this._taxon?.id || "",
+      };
       const created = await api.taxon.create(body);
-      this._creating = false;
+      // Reset the form for the basionym half. Keep the code (usually
+      // matches the current combination's) but blank everything else
+      // so the curator types the original name fresh.
+      const keepCode = this._createDraft.code || "";
+      this._createDraft = { scientific_name: "", code: keepCode };
       this._createStep = 0;
-      // Same reveal path as a move — tell the shell to expand the tree
-      // down to the newly-created taxon and select it.
-      this.dispatchEvent(
-        new CustomEvent("taxon-moved", {
-          detail: { id: created.id },
-          bubbles: true,
-          composed: true,
-        }),
-      );
+      this._createShowAtomized = false;
+      this._creatingBasionymFor = created.id;
+      this._creatingBasionymForName =
+        created.label?.text || body.scientific_name || "the current combination";
     } catch (err) {
       this._createError =
         err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
@@ -1585,10 +1654,14 @@ class SfgaDetail extends LitElement {
   _renderCreatePane() {
     const parent = this._taxon;
     const parentLabel = parent?.label?.text || parent?.id || "(root)";
+    const heading = this._creatingBasionymFor
+      ? html`Add original combination for
+          <em>${this._creatingBasionymForName}</em>`
+      : html`New taxon under ${parentLabel}`;
     return html`
       <div class="create-pane">
         <h2>
-          New taxon under ${parentLabel}
+          ${heading}
           <span class="step-indicator">
             step ${this._createStep + 1} / 2 —
             ${this._createStep === 0 ? "verbatim" : "atomized preview"}
@@ -1728,11 +1801,39 @@ class SfgaDetail extends LitElement {
           @click=${() => this._submitCreate()}
           ?disabled=${this._createBusy}
         >
-          ${this._createBusy ? "creating…" : "create"}
+          ${this._createBusy
+            ? "creating…"
+            : this._creatingBasionymFor
+              ? "add basionym"
+              : "create"}
         </button>
+        ${this._shouldOfferBasionymAfterCreate(d)
+          ? html`
+              <button
+                @click=${() => this._submitCreateThenBasionym()}
+                ?disabled=${this._createBusy}
+                title="Save the current combination, then enter the original combination as its basionym"
+              >
+                create + add original combination →
+              </button>
+            `
+          : ""}
         <button @click=${() => this._cancelCreate()}>cancel</button>
       </div>
     `;
+  }
+
+  // _shouldOfferBasionymAfterCreate returns true when the current draft
+  // looks like a subsequent combination — parenthetical author in the
+  // verbatim, or an atomized basionym_authorship value from the parse.
+  // Only offered on the accepted-name create path; the basionym-add
+  // path itself hides the button to avoid infinite regress.
+  _shouldOfferBasionymAfterCreate(d) {
+    if (this._creatingBasionymFor) return false;
+    if ((d.scientific_name || "").includes("(")) return true;
+    if ((d.basionym_authorship || "").trim()) return true;
+    if ((d.basionym_authorship_year || "").trim()) return true;
+    return false;
   }
 
   // _renderAtomizedFieldset is the expanded "atomized fields" section
