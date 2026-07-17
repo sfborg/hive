@@ -239,6 +239,34 @@ async function referenceResolver(id) {
 // referenceHitLabel composes the "Author (Year) Title" line used by
 // both the picker source and the resolver. Falls back to citation or
 // id when structured fields are missing.
+// referenceLabelFor returns the reference-picker label text on the
+// name-add form, sharpened to name what the curator's atomized
+// authorship fields say the reference is for. Combination author or
+// year set → "Reference for the combination (X, YYYY)". Basionym set
+// but no combination → "Reference (basionym: X, YYYY)" (nudging the
+// curator toward the basionym flow, since the ref is really for a
+// separate name row). Neither → plain "Reference".
+//
+// The label points at whatever the curator just typed, so it's hard
+// to mistake which combination the reference is being attached to.
+function referenceLabelFor(d) {
+  const combA = (d.combination_authorship || "").trim();
+  const combY = (d.combination_authorship_year || "").trim();
+  const basA = (d.basionym_authorship || "").trim();
+  const basY = (d.basionym_authorship_year || "").trim();
+  const fmt = (a, y) =>
+    a && y ? `${a}, ${y}` : a || y || "";
+  if (combA || combY) {
+    const who = fmt(combA, combY);
+    return `Reference for the combination${who ? ` (${who})` : ""}`;
+  }
+  if (basA || basY) {
+    const who = fmt(basA, basY);
+    return `Reference${who ? ` (basionym: ${who})` : ""}`;
+  }
+  return "Reference";
+}
+
 function referenceHitLabel(h) {
   const parts = [];
   if (h.author) parts.push(h.author);
@@ -1008,6 +1036,15 @@ class SfgaDetail extends LitElement {
     _createDraft: { state: true },
     _createBusy: { state: true },
     _createError: { state: true },
+    // Progressive disclosure toggle for step 1: collapsed shows just
+    // scientific name + rank + verbatim authorship + reference + status
+    // + notes; expanded reveals the atomized name (uninomial/genus/…)
+    // and atomized authorship (basionym + combination pairs). Parsing
+    // runs regardless — the toggle only affects visibility. Power users
+    // who want to verify the parse crack it open; curators who trust
+    // the parse leave it collapsed. gsvalidator's parse-mismatch rule
+    // catches the poorly-parsed cases in either mode.
+    _createShowAtomized: { state: true },
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
@@ -1231,6 +1268,33 @@ class SfgaDetail extends LitElement {
       font-size: 0.85em;
       padding: 0 0.3rem;
     }
+    /* Progressive-disclosure toggle for the atomized-fields section on
+       step 1. Aligned as a single row (grid-column span so it sits
+       between fieldsets), not participating in the two-column form
+       grid of the surrounding fieldsets. */
+    .modal .atomized-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: var(--font-body);
+      cursor: pointer;
+      user-select: none;
+    }
+    .modal .atomized-toggle .hint {
+      color: var(--dim);
+      font-size: 0.85em;
+    }
+    /* Basionym + Combination side-by-side. On narrow screens they stack
+       via the flex-wrap; typical desktop widths get the two-column
+       layout that matches the mental model. */
+    .modal .authorship-pair {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .modal .authorship-pair > fieldset {
+      flex: 1 1 16rem;
+    }
     /* Row wrapping a combobox + adjacent action button so the button
        shrinks and the picker gets the remaining width. */
     .picker-row {
@@ -1273,6 +1337,7 @@ class SfgaDetail extends LitElement {
     this._createDraft = {};
     this._createBusy = false;
     this._createError = "";
+    this._createShowAtomized = false;
     this._confirmDelete = false;
     this._deleteError = "";
   }
@@ -1402,23 +1467,6 @@ class SfgaDetail extends LitElement {
       merged.scientific_name = sci;
       merged.scientific_name_string = sci;
       merged.code = this._createDraft.code;
-      // Compute the synthetic author / year fields the form displays.
-      // Parens in the verbatim ⇒ subsequent combination; the recombiner
-      // (if named) lives in combination_authorship. No parens ⇒ original
-      // combination; gnparser puts the sole author in basionym_authorship.
-      const hasParens = sci.includes("(");
-      if (hasParens) {
-        merged.author = preview.combination_authorship || "";
-        merged.year = preview.combination_authorship_year || "";
-      } else {
-        merged.author = preview.basionym_authorship || "";
-        merged.year = preview.basionym_authorship_year || "";
-        // Sync published_in_year to the derived year so the round-trip
-        // matches what the field would produce after a curator edit.
-        if (merged.year && !merged.published_in_year) {
-          merged.published_in_year = merged.year;
-        }
-      }
       // Strip fields we don't want to send back on POST /api/taxon
       // (server-authored on write).
       delete merged.id;
@@ -1459,71 +1507,14 @@ class SfgaDetail extends LitElement {
     this._createDraft = { ...this._createDraft, [field]: value };
   }
 
-  // The form shows only three authorship fields — verbatim + author +
-  // year — instead of the five underlying col__ columns. `author` and
-  // `year` are synthetic: they route to either combination_authorship*
-  // or basionym_authorship* on write, depending on whether the
-  // scientific name is a subsequent combination (parenthetical author)
-  // or the original combination (no parens). Rationale: one Name record
-  // has one year — the year of THIS combination. Basionym-record data
-  // lives on a separate Name row reached through the "add original
-  // combination" wizard (step 3c), not on the current form.
-  _hasParens() {
-    return (this._createDraft.scientific_name || "").includes("(");
-  }
-  _setAuthorship(v) {
-    this._createDraft = { ...this._createDraft, authorship: v };
-  }
-  _setAuthor(v) {
-    if (this._hasParens()) {
-      this._createDraft = {
-        ...this._createDraft,
-        author: v,
-        combination_authorship: v,
-        // Explicitly blank the basionym slot: that data belongs on a
-        // separate record. When step 3c wires up the basionym flow the
-        // authorship there will be captured on its own name row.
-        basionym_authorship: "",
-      };
-    } else {
-      // Original combination — one authorship, gnparser's convention
-      // puts it in the basionym slot (see fillFromParse in core/name.go).
-      this._createDraft = {
-        ...this._createDraft,
-        author: v,
-        basionym_authorship: v,
-        combination_authorship: "",
-      };
-    }
-  }
-  _setYear(v) {
-    if (this._hasParens()) {
-      this._createDraft = {
-        ...this._createDraft,
-        year: v,
-        combination_authorship_year: v,
-        published_in_year: v,
-        basionym_authorship_year: "",
-      };
-    } else {
-      this._createDraft = {
-        ...this._createDraft,
-        year: v,
-        basionym_authorship_year: v,
-        published_in_year: v,
-        combination_authorship_year: "",
-      };
-    }
-  }
-
   async _submitCreate() {
     // Compose the request body from the current draft + parent_id.
     // The draft carries every atomized field the curator saw and
-    // (possibly) edited in the preview form. Synthetic form-only
-    // fields (author / year — routed to the right col__ column via
-    // the setter helpers already) are stripped before send.
-    const { author, year, ...body } = this._createDraft;
-    body.parent_id = this._taxon?.id || "";
+    // (possibly) edited in the preview form.
+    const body = {
+      ...this._createDraft,
+      parent_id: this._taxon?.id || "",
+    };
     this._createBusy = true;
     this._createError = "";
     try {
@@ -1639,10 +1630,14 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  // Step 1: atomized preview. Every col__ field editable, rank pre-
-  // selected from RankGuess. Curator confirms and saves — atomized
-  // fields ride along on POST /api/taxon so any overrides win over the
-  // gnparser-derived defaults (fill-gaps semantics on the server).
+  // Step 1: atomized preview. Curator sees the essentials up front
+  // (name recap, rank, verbatim authorship, reference, status, notes)
+  // and can expand a "show atomized fields" toggle to reveal + edit
+  // the individual col__ columns gnparser derived. Parsing runs
+  // regardless — the toggle only affects visibility. gsvalidator will
+  // flag parse-mismatch cases regardless of whether the curator ever
+  // opened the expanded view, so trust-the-parse and verify-the-parse
+  // paths both stay safe.
   _renderCreateStep1() {
     const d = this._createDraft;
     const set = (f) => (e) => this._createFieldChange(f, e.target.value);
@@ -1650,8 +1645,9 @@ class SfgaDetail extends LitElement {
       <div class="preview-verbatim">
         Verbatim: <span>${d.scientific_name}</span>
       </div>
+
       <fieldset>
-        <legend>atomized</legend>
+        <legend>name</legend>
         <label>Rank</label>
         <sfga-combobox
           min-search-chars="0"
@@ -1662,45 +1658,28 @@ class SfgaDetail extends LitElement {
           @pick=${(e) => this._createFieldChange("rank", e.detail.id)}
         ></sfga-combobox>
 
-        <label>Uninomial</label>
-        <input type="text" .value=${d.uninomial || ""} @input=${set("uninomial")} />
-        <label>Genus</label>
-        <input type="text" .value=${d.genus || ""} @input=${set("genus")} />
-        <label>Subgenus</label>
-        <input type="text" .value=${d.infrageneric_epithet || ""} @input=${set("infrageneric_epithet")} />
-        <label>Specific epithet</label>
-        <input type="text" .value=${d.specific_epithet || ""} @input=${set("specific_epithet")} />
-        <label>Infraspecific epithet</label>
-        <input type="text" .value=${d.infraspecific_epithet || ""} @input=${set("infraspecific_epithet")} />
-        <label>Cultivar epithet</label>
-        <input type="text" .value=${d.cultivar_epithet || ""} @input=${set("cultivar_epithet")} />
+        <label>Verbatim authorship</label>
+        <input type="text" .value=${d.authorship || ""} @input=${set("authorship")} />
       </fieldset>
 
-      <fieldset>
-        <legend>authorship</legend>
-        <label>Verbatim authorship</label>
+      <label class="atomized-toggle">
         <input
-          type="text"
-          .value=${d.authorship || ""}
-          @input=${(e) => this._setAuthorship(e.target.value)}
+          type="checkbox"
+          .checked=${this._createShowAtomized}
+          @change=${(e) => (this._createShowAtomized = e.target.checked)}
         />
-        <label>Author</label>
-        <input
-          type="text"
-          .value=${d.author || ""}
-          @input=${(e) => this._setAuthor(e.target.value)}
-        />
-        <label>Year</label>
-        <input
-          type="text"
-          .value=${d.year || ""}
-          @input=${(e) => this._setYear(e.target.value)}
-        />
-      </fieldset>
+        show atomized fields
+        <span class="hint">
+          (verify or override the parse; hive parses in the background
+          regardless)
+        </span>
+      </label>
+
+      ${this._createShowAtomized ? this._renderAtomizedFieldset(d, set) : ""}
 
       <fieldset>
         <legend>publication</legend>
-        <label>Reference</label>
+        <label>${referenceLabelFor(d)}</label>
         <sfga-combobox
           min-search-chars="2"
           placeholder="search references…"
@@ -1739,6 +1718,52 @@ class SfgaDetail extends LitElement {
           ${this._createBusy ? "creating…" : "create"}
         </button>
         <button @click=${() => this._cancelCreate()}>cancel</button>
+      </div>
+    `;
+  }
+
+  // _renderAtomizedFieldset is the expanded "atomized fields" section
+  // hidden behind the toggle. Two blocks:
+  //   1. Name atomization (uninomial / genus / subgenus / species /
+  //      infraspecies / cultivar) — one grid.
+  //   2. Authorship atomization: Basionym (original) and Combination
+  //      (current) rendered side-by-side. Botanists use both fields
+  //      routinely ("Aus bus (L.) Smith" → basionym=L., combination=Smith).
+  //      Zoologists often leave combination blank; the layout is the
+  //      same either way. CoLDP maps 1-to-1.
+  _renderAtomizedFieldset(d, set) {
+    return html`
+      <fieldset>
+        <legend>atomized name</legend>
+        <label>Uninomial</label>
+        <input type="text" .value=${d.uninomial || ""} @input=${set("uninomial")} />
+        <label>Genus</label>
+        <input type="text" .value=${d.genus || ""} @input=${set("genus")} />
+        <label>Subgenus</label>
+        <input type="text" .value=${d.infrageneric_epithet || ""} @input=${set("infrageneric_epithet")} />
+        <label>Specific epithet</label>
+        <input type="text" .value=${d.specific_epithet || ""} @input=${set("specific_epithet")} />
+        <label>Infraspecific epithet</label>
+        <input type="text" .value=${d.infraspecific_epithet || ""} @input=${set("infraspecific_epithet")} />
+        <label>Cultivar epithet</label>
+        <input type="text" .value=${d.cultivar_epithet || ""} @input=${set("cultivar_epithet")} />
+      </fieldset>
+
+      <div class="authorship-pair">
+        <fieldset>
+          <legend>basionym (original)</legend>
+          <label>Author</label>
+          <input type="text" .value=${d.basionym_authorship || ""} @input=${set("basionym_authorship")} />
+          <label>Year</label>
+          <input type="text" .value=${d.basionym_authorship_year || ""} @input=${set("basionym_authorship_year")} />
+        </fieldset>
+        <fieldset>
+          <legend>combination (current)</legend>
+          <label>Author</label>
+          <input type="text" .value=${d.combination_authorship || ""} @input=${set("combination_authorship")} />
+          <label>Year</label>
+          <input type="text" .value=${d.combination_authorship_year || ""} @input=${set("combination_authorship_year")} />
+        </fieldset>
       </div>
     `;
   }

@@ -26,11 +26,17 @@ import (
 // step 1. Ordered top-to-bottom so tab navigation walks the form the
 // way the eye reads it.
 //
-// Author + Year are synthetic — they route to combination_authorship*
-// or basionym_authorship* on write, depending on whether the verbatim
-// scientific name has a parenthetical author. Rationale: one Name
-// record has one year; the basionym's data lives on a separate row
-// reached through the basionym wizard (step 3c).
+// Both basionym_authorship + combination_authorship pairs live on the
+// same Name record — for botany "Aus bus (L.) Smith" fills basionym=L.
+// AND combination=Smith on the SAME row (CoLDP convention); zoology
+// often leaves combination_* blank but the storage is identical. The
+// terminal shows all four fields; a "next → add basionym" wizard
+// (step 3c) can later spawn a separate name row when the basionym
+// deserves its own record with a distinct reference.
+//
+// published_in_year is elided — the two atomized-year columns already
+// capture the publication year and the reference-picker carries the
+// bibliographic linkage.
 const (
 	cpfUninomial = iota
 	cpfGenus
@@ -39,8 +45,10 @@ const (
 	cpfInfraspecific
 	cpfCultivar
 	cpfAuthorship
-	cpfAuthor
-	cpfYear
+	cpfBasionymAuthor
+	cpfBasionymYear
+	cpfCombAuthor
+	cpfCombYear
 	cpfPublishedInPage
 	cpfEtymology
 	cpfRemarks
@@ -64,8 +72,10 @@ var createPreviewLabels = [cpfInputCount]string{
 	cpfInfraspecific:   "Infraspecific epithet",
 	cpfCultivar:        "Cultivar epithet",
 	cpfAuthorship:      "Authorship (verbatim)",
-	cpfAuthor:          "Author",
-	cpfYear:            "Year",
+	cpfBasionymAuthor:  "Basionym author",
+	cpfBasionymYear:    "Basionym year",
+	cpfCombAuthor:      "Combination author",
+	cpfCombYear:        "Combination year",
 	cpfPublishedInPage: "Published in page",
 	cpfEtymology:       "Etymology",
 	cpfRemarks:         "Remarks",
@@ -87,13 +97,10 @@ func (m *detailModel) initPreviewInputs(preview *coldp.Name) {
 	m.createPreviewInputs[cpfInfraspecific].SetValue(preview.InfraspecificEpithet)
 	m.createPreviewInputs[cpfCultivar].SetValue(preview.CultivarEpithet)
 	m.createPreviewInputs[cpfAuthorship].SetValue(preview.Authorship)
-	// Author + Year are synthetic — pick the slot that matches the
-	// verbatim's shape. Parens → subsequent combination → use the
-	// combination slot; no parens → original combination → use the
-	// basionym slot (that's where gnparser puts the sole author).
-	author, year := previewAuthorYear(preview)
-	m.createPreviewInputs[cpfAuthor].SetValue(author)
-	m.createPreviewInputs[cpfYear].SetValue(year)
+	m.createPreviewInputs[cpfBasionymAuthor].SetValue(preview.BasionymAuthorship)
+	m.createPreviewInputs[cpfBasionymYear].SetValue(preview.BasionymAuthorshipYear)
+	m.createPreviewInputs[cpfCombAuthor].SetValue(preview.CombinationAuthorship)
+	m.createPreviewInputs[cpfCombYear].SetValue(preview.CombinationAuthorshipYear)
 	m.createPreviewInputs[cpfPublishedInPage].SetValue(preview.PublishedInPage)
 	m.createPreviewInputs[cpfEtymology].SetValue(preview.Etymology)
 	m.createPreviewInputs[cpfRemarks].SetValue(preview.Remarks)
@@ -207,14 +214,19 @@ func (m *detailModel) parsePreviewCmd(verbatim, code string) tea.Cmd {
 // through the empty-safe helpers to avoid coercing empty into a zero
 // enum value.
 //
-// Author + Year are synthetic — routed to combination_authorship* or
-// basionym_authorship* based on the verbatim's parens. Same rule as
-// the PWA's _setAuthor/_setYear helpers, kept in sync at the model
-// level so both frontends produce identical writes.
+// Both authorship pairs (basionym + combination) live on this record
+// per CoLDP convention — a botanical "Aus bus (L.) Smith" gets basionym
+// author L. AND combination author Smith on the same row. published_in_year
+// is derived from whichever year field the curator populated (combination
+// takes precedence when both are set — it's the year of the current
+// combination's publication).
 func (m detailModel) composeCreateName(verbatim, code string) coldp.Name {
-	author := m.createPreviewInputs[cpfAuthor].Value()
-	year := m.createPreviewInputs[cpfYear].Value()
-	combAuthor, combYear, basAuthor, basYear := routeAuthorYear(verbatim, author, year)
+	basYear := m.createPreviewInputs[cpfBasionymYear].Value()
+	combYear := m.createPreviewInputs[cpfCombYear].Value()
+	pubYear := combYear
+	if pubYear == "" {
+		pubYear = basYear
+	}
 	return coldp.Name{
 		ScientificName:            verbatim,
 		ScientificNameString:      verbatim,
@@ -227,41 +239,17 @@ func (m detailModel) composeCreateName(verbatim, code string) coldp.Name {
 		SpecificEpithet:           m.createPreviewInputs[cpfSpecific].Value(),
 		InfraspecificEpithet:      m.createPreviewInputs[cpfInfraspecific].Value(),
 		CultivarEpithet:           m.createPreviewInputs[cpfCultivar].Value(),
-		CombinationAuthorship:     combAuthor,
-		CombinationAuthorshipYear: combYear,
-		BasionymAuthorship:        basAuthor,
+		BasionymAuthorship:        m.createPreviewInputs[cpfBasionymAuthor].Value(),
 		BasionymAuthorshipYear:    basYear,
+		CombinationAuthorship:     m.createPreviewInputs[cpfCombAuthor].Value(),
+		CombinationAuthorshipYear: combYear,
 		Status:                    core.ParseNomStatus(m.createStatusPicker.SelectedID()),
 		ReferenceID:               m.createRefPicker.SelectedID(),
-		PublishedInYear:           year, // one year field — always canonical here too
+		PublishedInYear:           pubYear,
 		PublishedInPage:           m.createPreviewInputs[cpfPublishedInPage].Value(),
 		Etymology:                 m.createPreviewInputs[cpfEtymology].Value(),
 		Remarks:                   m.createPreviewInputs[cpfRemarks].Value(),
 	}
-}
-
-// previewAuthorYear picks the display Author / Year from an atomized
-// preview, matching the parens rule used on write.
-func previewAuthorYear(p *coldp.Name) (author, year string) {
-	if strings.Contains(p.ScientificName, "(") ||
-		strings.Contains(p.ScientificNameString, "(") {
-		return p.CombinationAuthorship, p.CombinationAuthorshipYear
-	}
-	return p.BasionymAuthorship, p.BasionymAuthorshipYear
-}
-
-// routeAuthorYear splits the form's synthetic (author, year) pair into
-// the four underlying col__ columns. Parens ⇒ subsequent combination
-// (recombiner in combination_*, basionym slot blanked). No parens ⇒
-// original combination (single author in basionym_*, combination slot
-// blanked). The blanking keeps subsequent edits consistent; if a
-// curator switches the verbatim between shapes, stale values don't
-// linger in the wrong slot.
-func routeAuthorYear(verbatim, author, year string) (combAuthor, combYear, basAuthor, basYear string) {
-	if strings.Contains(verbatim, "(") {
-		return author, year, "", ""
-	}
-	return "", "", author, year
 }
 
 func nomcodeNew(code string) nomcode.Code { return nomcode.New(code) }
@@ -301,13 +289,21 @@ func (m detailModel) renderCreatePreview() string {
 
 	b.WriteString(sectionHeaderStyle.Render("── authorship ──"))
 	b.WriteByte('\n')
-	for _, f := range []int{cpfAuthorship, cpfAuthor, cpfYear} {
+	b.WriteString(m.renderPreviewInputRow(cpfAuthorship))
+	b.WriteString(sectionHeaderStyle.Render("── basionym (original) ──"))
+	b.WriteByte('\n')
+	for _, f := range []int{cpfBasionymAuthor, cpfBasionymYear} {
+		b.WriteString(m.renderPreviewInputRow(f))
+	}
+	b.WriteString(sectionHeaderStyle.Render("── combination (current) ──"))
+	b.WriteByte('\n')
+	for _, f := range []int{cpfCombAuthor, cpfCombYear} {
 		b.WriteString(m.renderPreviewInputRow(f))
 	}
 
 	b.WriteString(sectionHeaderStyle.Render("── publication ──"))
 	b.WriteByte('\n')
-	b.WriteString(m.renderPreviewPickerRow("Reference", &m.createRefPicker))
+	b.WriteString(m.renderPreviewPickerRow(m.previewRefLabel(), &m.createRefPicker))
 	b.WriteString(m.renderPreviewInputRow(cpfPublishedInPage))
 
 	b.WriteString(sectionHeaderStyle.Render("── metadata ──"))
@@ -330,6 +326,41 @@ func (m detailModel) renderCreatePreview() string {
 			"[tab] next   [shift+tab] prev   [ctrl+s] create   [esc] back to verbatim"))
 	}
 	return b.String()
+}
+
+// previewRefLabel names the reference picker after whatever atomized
+// authorship fields the curator has filled in, so it's hard to mistake
+// which combination the reference is being attached to. Mirrors the
+// PWA's referenceLabelFor rule.
+func (m detailModel) previewRefLabel() string {
+	combA := strings.TrimSpace(m.createPreviewInputs[cpfCombAuthor].Value())
+	combY := strings.TrimSpace(m.createPreviewInputs[cpfCombYear].Value())
+	basA := strings.TrimSpace(m.createPreviewInputs[cpfBasionymAuthor].Value())
+	basY := strings.TrimSpace(m.createPreviewInputs[cpfBasionymYear].Value())
+	fmtPair := func(a, y string) string {
+		switch {
+		case a != "" && y != "":
+			return a + ", " + y
+		case a != "":
+			return a
+		}
+		return y
+	}
+	if combA != "" || combY != "" {
+		who := fmtPair(combA, combY)
+		if who != "" {
+			return "Reference for the combination (" + who + ")"
+		}
+		return "Reference for the combination"
+	}
+	if basA != "" || basY != "" {
+		who := fmtPair(basA, basY)
+		if who != "" {
+			return "Reference (basionym: " + who + ")"
+		}
+		return "Reference"
+	}
+	return "Reference"
 }
 
 func (m detailModel) renderPreviewInputRow(f int) string {
