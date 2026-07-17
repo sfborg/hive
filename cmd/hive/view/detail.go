@@ -1482,15 +1482,33 @@ func (m detailModel) renderFields() string {
 		} else {
 			push("Nom status", statusRaw)
 		}
+		// Basionym linkage — the separate Name row this one relates to
+		// via a name_relation of type BASIONYM. Fetched via the same
+		// ListNameRelations helper the /api/name/{id}.basionym field
+		// uses. Silent on lookup failure — a broken relation shouldn't
+		// mess up the whole detail render.
+		if hits, err := m.a.ListNameRelations(context.Background(), m.name.ID); err == nil {
+			for _, h := range hits {
+				if h.Type != "BASIONYM" || h.Direction != "outgoing" {
+					continue
+				}
+				if ref, err := m.a.NameRef(context.Background(), h.CounterpartID); err == nil {
+					push("Basionym", ref.Label.Text)
+				} else {
+					push("Basionym", h.CounterpartID)
+				}
+				break
+			}
+		}
 		// Atomized authorship rows — only render when populated so a
 		// record with just verbatim authorship stays scannable.
 		// Botanical records typically show both; zoological records
 		// often just show basionym.
 		if a, y := m.name.BasionymAuthorship, m.name.BasionymAuthorshipYear; a != "" || y != "" {
-			push("Basionym", joinNonEmpty(a, y))
+			push("Basionym authorship", joinNonEmpty(a, y))
 		}
 		if a, y := m.name.CombinationAuthorship, m.name.CombinationAuthorshipYear; a != "" || y != "" {
-			push("Combination", joinNonEmpty(a, y))
+			push("Combination authorship", joinNonEmpty(a, y))
 		}
 		push("Published year", m.name.PublishedInYear)
 		// Reference: resolved to a display label via GetReference when a

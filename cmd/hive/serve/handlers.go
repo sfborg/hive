@@ -298,7 +298,47 @@ func (s *server) handleGetName(w http.ResponseWriter, r *http.Request) {
 	}
 	body := nameToAPI(n)
 	body.ReferenceLabel = s.referenceLabel(r.Context(), body.ReferenceID)
+	body.Basionym = s.resolveBasionym(r.Context(), id)
 	writeJSON(w, http.StatusOK, body)
+}
+
+// resolveBasionym returns an apiRef pointing at the linked basionym
+// name — the row related to id via a name_relation of type BASIONYM
+// where id is the subject. Returns nil when there's no basionym
+// linkage (which is the common case for original combinations and
+// for any name whose curator hasn't added a basionym record yet).
+//
+// Resolution errors are swallowed: a broken relation shouldn't fail
+// the whole name-detail response. Worst case the row shows without
+// the "Basionym" line and the curator can re-link.
+func (s *server) resolveBasionym(ctx context.Context, id string) *apiRef {
+	if id == "" {
+		return nil
+	}
+	hits, err := s.a.ListNameRelations(ctx, id)
+	if err != nil {
+		return nil
+	}
+	for _, h := range hits {
+		if h.Type != "BASIONYM" || h.Direction != "outgoing" {
+			continue
+		}
+		// Resolve the counterpart's display label via TaxonRef-style
+		// build. The basionym is a Name, not a Taxon, so use NameRef
+		// which the core layer exposes for exactly this case.
+		ref, err := s.a.NameRef(ctx, h.CounterpartID)
+		if err != nil {
+			return &apiRef{ID: h.CounterpartID}
+		}
+		return &apiRef{
+			ID: ref.ID,
+			Label: apiLabel{
+				Text: ref.Label.Text,
+				HTML: ref.Label.HTML,
+			},
+		}
+	}
+	return nil
 }
 
 // referenceLabel resolves a reference id → "Author (Year) Title" for
@@ -994,6 +1034,7 @@ func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", fresh.Modified)
 	body := nameToAPI(fresh)
 	body.ReferenceLabel = s.referenceLabel(r.Context(), body.ReferenceID)
+	body.Basionym = s.resolveBasionym(r.Context(), body.ID)
 	writeJSON(w, http.StatusOK, body)
 }
 

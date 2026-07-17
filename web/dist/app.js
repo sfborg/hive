@@ -2125,15 +2125,19 @@ class SfgaDetail extends LitElement {
         <!-- Atomized authorship — only render when populated so the
              record stays scannable. Botanical records typically have
              both; zoological records often just have basionym. -->
+        ${n && n.basionym
+          ? html`<dt>Basionym</dt>
+              <dd>${renderLabel(n.basionym.label, n.basionym.id)}</dd>`
+          : ""}
         ${n && (n.basionym_authorship || n.basionym_authorship_year)
           ? row(
-              "Basionym",
+              "Basionym authorship",
               [n.basionym_authorship, n.basionym_authorship_year].filter((x) => x).join(", "),
             )
           : ""}
         ${n && (n.combination_authorship || n.combination_authorship_year)
           ? row(
-              "Combination",
+              "Combination authorship",
               [n.combination_authorship, n.combination_authorship_year].filter((x) => x).join(", "),
             )
           : ""}

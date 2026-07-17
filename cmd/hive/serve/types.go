@@ -283,6 +283,16 @@ type apiName struct {
 	Authors          string `json:"authors,omitempty"`
 	GnID             string `json:"gn_id,omitempty"`
 
+	// Basionym is the linked basionym / original combination — the
+	// separate Name row this name derives from via a name_relation of
+	// type BASIONYM. Populated on read when the linkage exists.
+	// Curator-facing "Basionym: <label>" row on the taxon detail
+	// pane resolves through this field so the display stays in sync
+	// with the actual name_relation (as opposed to just the atomized
+	// col__basionym_authorship string, which lives on this name and
+	// isn't necessarily linked to a separate row).
+	Basionym *apiRef `json:"basionym,omitempty"`
+
 	// ReferenceID is the "published in" reference — sfga stores it as
 	// a comma-separated list of ids (name can be cited in multiple
 	// refs) but hive v1 treats it as a single value. Legacy multi-

@@ -143,6 +143,41 @@ func (a *Archive) TaxonRef(ctx context.Context, id string) (Ref, error) {
 	}, nil
 }
 
+// NameRef returns id + rendered label for a name — the analogue of
+// TaxonRef but keyed on the name row directly (no taxon lookup). Used
+// by name_relation display paths where the counterpart is a Name that
+// may or may not have its own Taxon row (basionyms are usually
+// synonyms; there's no accepted taxon to route through).
+//
+// Missing name → Ref containing just the id as the label text.
+func (a *Archive) NameRef(ctx context.Context, id string) (Ref, error) {
+	if id == "" {
+		return Ref{}, nil
+	}
+	const q = `SELECT
+		COALESCE(NULLIF(gn__canonical_simple, ''), col__scientific_name, ''),
+		COALESCE(col__authorship, ''),
+		COALESCE(col__rank_id, '')
+	FROM name WHERE col__id = ?`
+	var canonical, authorship, rank string
+	err := a.db.QueryRowContext(ctx, q, id).Scan(&canonical, &authorship, &rank)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Ref{ID: id, Label: Label{Text: id}}, nil
+		}
+		return Ref{}, fmt.Errorf("core: name ref %s: %w", id, err)
+	}
+	if canonical == "" {
+		canonical = id
+	}
+	// Extinct dagger doesn't apply to name-only refs — that flag lives
+	// on the taxon. Pass false; BuildLabel just skips the dagger.
+	return Ref{
+		ID:    id,
+		Label: BuildLabel(canonical, authorship, rank, false),
+	}, nil
+}
+
 // CodeForParent returns the nomenclatural code (col__code_id on the
 // parent taxon's associated name row) so the new-taxon form can seed
 // its code picker from the parent by default. Empty parentID → "".
