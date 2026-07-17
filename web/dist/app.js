@@ -1055,6 +1055,11 @@ class SfgaDetail extends LitElement {
     // waiting on the resolver's second fetch.
     _addingReference: { state: true },
     _pickedReferenceLabel: { state: true },
+    // Edit-mode progressive-disclosure toggle for the atomized name +
+    // atomized authorship blocks. Mirrors _createShowAtomized on the
+    // create form; edit and create both surface the same widget set
+    // so curators learn one form.
+    _editShowAtomized: { state: true },
   };
 
   static styles = css`
@@ -1230,31 +1235,11 @@ class SfgaDetail extends LitElement {
       font-family: var(--font-mono);
       font-size: 0.9em;
     }
-    /* Wider modal variant for the atomized name-add preview — the base
-       .modal caps at 32rem which is too tight for the multi-fieldset
-       preview form. */
-    .modal.wide {
-      width: min(48rem, 95vw);
-      max-height: 90vh;
-      overflow: auto;
-    }
-    .modal .step-indicator {
-      color: var(--dim);
-      font-weight: normal;
-      font-size: 0.85em;
-      margin-left: 0.5rem;
-    }
-    .modal .preview-verbatim {
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-      color: var(--dim);
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.3rem;
-    }
-    .modal .preview-verbatim span {
-      color: var(--fg);
-    }
-    .modal fieldset {
+    /* Shared fieldset / atomized-toggle / authorship-pair styles used
+       by both the create pane and the inline edit form. Scoped to
+       :host so they don't leak globally but apply anywhere inside the
+       detail component. */
+    fieldset {
       border: 1px solid var(--border);
       padding: 0.5rem 0.75rem;
       margin: 0;
@@ -1263,16 +1248,12 @@ class SfgaDetail extends LitElement {
       gap: 0.4rem 0.75rem;
       align-items: center;
     }
-    .modal fieldset legend {
+    fieldset legend {
       color: var(--dim);
       font-size: 0.85em;
       padding: 0 0.3rem;
     }
-    /* Progressive-disclosure toggle for the atomized-fields section on
-       step 1. Aligned as a single row (grid-column span so it sits
-       between fieldsets), not participating in the two-column form
-       grid of the surrounding fieldsets. */
-    .modal .atomized-toggle {
+    .atomized-toggle {
       display: flex;
       align-items: center;
       gap: 0.4rem;
@@ -1280,20 +1261,46 @@ class SfgaDetail extends LitElement {
       cursor: pointer;
       user-select: none;
     }
-    .modal .atomized-toggle .hint {
+    .atomized-toggle .hint {
       color: var(--dim);
       font-size: 0.85em;
     }
-    /* Basionym + Combination side-by-side. On narrow screens they stack
-       via the flex-wrap; typical desktop widths get the two-column
-       layout that matches the mental model. */
-    .modal .authorship-pair {
+    .authorship-pair {
       display: flex;
       gap: 0.75rem;
       flex-wrap: wrap;
     }
-    .modal .authorship-pair > fieldset {
+    .authorship-pair > fieldset {
       flex: 1 1 16rem;
+    }
+
+    /* The create pane takes over the whole right-pane while active.
+       Selector-scope its layout to .create-pane so the atomized-preview
+       fieldsets don't leak into other panes. Modal wrappers were
+       removed — clicking outside used to lose curator work, and a
+       pane-native form has no such risk. */
+    .create-pane {
+      display: grid;
+      gap: 0.5rem;
+    }
+    .create-pane .step-indicator {
+      color: var(--dim);
+      font-weight: normal;
+      font-size: 0.85em;
+      margin-left: 0.5rem;
+    }
+    .create-pane .preview-verbatim {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      color: var(--dim);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3rem;
+    }
+    .create-pane .preview-verbatim span {
+      color: var(--fg);
+    }
+    .create-pane .toolbar {
+      justify-content: flex-end;
     }
     /* Row wrapping a combobox + adjacent action button so the button
        shrinks and the picker gets the remaining width. */
@@ -1338,17 +1345,24 @@ class SfgaDetail extends LitElement {
     this._createBusy = false;
     this._createError = "";
     this._createShowAtomized = false;
+    this._editShowAtomized = false;
     this._confirmDelete = false;
     this._deleteError = "";
   }
 
   updated(changed) {
     if (changed.has("taxonId")) {
-      // Discard any in-flight edit when the selection changes.
+      // Discard any in-flight edit or in-flight create when the
+      // selection changes. Same rule as the TUI's SetCurrent.
       this._editing = false;
       this._draft = {};
       this._nameDraft = {};
       this._saveError = "";
+      this._creating = false;
+      this._createStep = 0;
+      this._createDraft = {};
+      this._createError = "";
+      this._createShowAtomized = false;
       this._load();
     }
   }
@@ -1568,26 +1582,25 @@ class SfgaDetail extends LitElement {
     }
   }
 
-  _renderCreateModal() {
+  _renderCreatePane() {
     const parent = this._taxon;
     const parentLabel = parent?.label?.text || parent?.id || "(root)";
     return html`
-      <div class="modal-backdrop" @click=${() => this._cancelCreate()}>
-        <div class="modal wide" @click=${(e) => e.stopPropagation()}>
-          <h3>
-            New taxon under ${parentLabel}
-            <span class="step-indicator">
-              step ${this._createStep + 1} / 2 —
-              ${this._createStep === 0 ? "verbatim" : "atomized preview"}
-            </span>
-          </h3>
-          ${this._createError
-            ? html`<div class="error">${this._createError}</div>`
-            : ""}
-          ${this._createStep === 0
-            ? this._renderCreateStep0()
-            : this._renderCreateStep1()}
-        </div>
+      <div class="create-pane">
+        <h2>
+          New taxon under ${parentLabel}
+          <span class="step-indicator">
+            step ${this._createStep + 1} / 2 —
+            ${this._createStep === 0 ? "verbatim" : "atomized preview"}
+          </span>
+        </h2>
+        <hr />
+        ${this._createError
+          ? html`<div class="error">${this._createError}</div>`
+          : ""}
+        ${this._createStep === 0
+          ? this._renderCreateStep0()
+          : this._renderCreateStep1()}
       </div>
     `;
   }
@@ -1934,6 +1947,14 @@ class SfgaDetail extends LitElement {
     }
     if (!this._taxon) return html``;
 
+    // Create mode takes over the whole pane — there's no existing taxon
+    // to render behind it, and the modal-in-overlay pattern's
+    // click-outside-loses-work risk was real. Curator uses the toolbar
+    // buttons (or Esc) to cancel back to view mode.
+    if (this._creating) {
+      return this._renderCreatePane();
+    }
+
     // Server-rendered label: text + html forms. html carries dagger and
     // italics per rank (BuildLabel). Fall back to canonical / (no name)
     // if the server didn't attach a label (legacy or missing name row).
@@ -1987,6 +2008,21 @@ class SfgaDetail extends LitElement {
         ${n ? row("Authorship", n.authorship) : ""}
         ${n ? row("Nom code", n.code) : ""}
         ${n ? row("Nom status", api.nomen.labelFor(n.status) || n.status) : ""}
+        <!-- Atomized authorship — only render when populated so the
+             record stays scannable. Botanical records typically have
+             both; zoological records often just have basionym. -->
+        ${n && (n.basionym_authorship || n.basionym_authorship_year)
+          ? row(
+              "Basionym",
+              [n.basionym_authorship, n.basionym_authorship_year].filter((x) => x).join(", "),
+            )
+          : ""}
+        ${n && (n.combination_authorship || n.combination_authorship_year)
+          ? row(
+              "Combination",
+              [n.combination_authorship, n.combination_authorship_year].filter((x) => x).join(", "),
+            )
+          : ""}
         ${n ? row("Reference", n.reference_label || n.reference_id) : ""}
         ${n ? row("Published year", n.published_in_year) : ""}
         ${n ? row("Etymology", n.etymology) : ""}
@@ -2018,7 +2054,6 @@ class SfgaDetail extends LitElement {
             </div>
           `
         : ""}
-      ${this._creating ? this._renderCreateModal() : ""}
       ${this._confirmDelete ? this._renderDeleteModal() : ""}
     `;
   }
@@ -2144,11 +2179,14 @@ class SfgaDetail extends LitElement {
   }
 
   // _renderNameSection renders the name-editing block. Hidden when the
-  // taxon has no attached name. Enum-typed fields (rank / code / status)
-  // are text inputs for the walking skeleton — sflib normalizes on write,
-  // so users can type "SPECIES" / "species" / "sp." and get the right ID.
-  // Selects with autocomplete come after /api/enums lands.
+  // taxon has no attached name. Mirrors the create pane's step-1 form
+  // structure — same field set, same progressive-disclosure toggle for
+  // atomized fields, same dynamic reference label. Curators learn one
+  // form and use it for both create and edit.
   _renderNameSection() {
+    // Merge the current name + any in-flight draft so referenceLabelFor
+    // sees whatever atomized authorship values the curator has typed.
+    const merged = { ...(this._name || {}), ...this._nameDraft };
     return html`
       <h3 class="section" style="grid-column: 1 / -1; margin: 0.75rem 0 0 0; color: var(--dim); font-size: 0.95em;">
         ── Name ──
@@ -2181,6 +2219,28 @@ class SfgaDetail extends LitElement {
         @pick=${(e) => this._nameFieldChange("code", e.detail.id)}
       ></sfga-combobox>
 
+      <label>Verbatim authorship</label>
+      <input
+        type="text"
+        .value=${this._nameFieldValue("authorship")}
+        @input=${(e) => this._nameFieldChange("authorship", e.target.value)}
+      />
+
+      <label class="atomized-toggle" style="grid-column: 1 / -1">
+        <input
+          type="checkbox"
+          .checked=${this._editShowAtomized}
+          @change=${(e) => (this._editShowAtomized = e.target.checked)}
+        />
+        show atomized fields
+        <span class="hint">
+          (verify or override the parse — hive parses in the background
+          regardless)
+        </span>
+      </label>
+
+      ${this._editShowAtomized ? this._renderAtomizedEditFields() : ""}
+
       <label>Nom status</label>
       <sfga-combobox
         placeholder="nomenclatural status…"
@@ -2190,7 +2250,7 @@ class SfgaDetail extends LitElement {
         @pick=${(e) => this._nameFieldChange("status", e.detail.id)}
       ></sfga-combobox>
 
-      <label>Reference</label>
+      <label>${referenceLabelFor(merged)}</label>
       <div class="picker-row">
         <sfga-combobox
           min-search-chars="2"
@@ -2229,6 +2289,48 @@ class SfgaDetail extends LitElement {
         .value=${this._nameFieldValue("remarks")}
         @input=${(e) => this._nameFieldChange("remarks", e.target.value)}
       ></textarea>
+    `;
+  }
+
+  // _renderAtomizedEditFields is the collapsed section revealed by the
+  // "show atomized fields" toggle on the edit form. Shape matches the
+  // create pane's atomized fieldset (name grid + basionym/combination
+  // pair) so curators see the same widget in both contexts.
+  _renderAtomizedEditFields() {
+    const v = (f) => this._nameFieldValue(f);
+    const set = (f) => (e) => this._nameFieldChange(f, e.target.value);
+    return html`
+      <fieldset style="grid-column: 1 / -1">
+        <legend>atomized name</legend>
+        <label>Uninomial</label>
+        <input type="text" .value=${v("uninomial")} @input=${set("uninomial")} />
+        <label>Genus</label>
+        <input type="text" .value=${v("genus")} @input=${set("genus")} />
+        <label>Subgenus</label>
+        <input type="text" .value=${v("infrageneric_epithet")} @input=${set("infrageneric_epithet")} />
+        <label>Specific epithet</label>
+        <input type="text" .value=${v("specific_epithet")} @input=${set("specific_epithet")} />
+        <label>Infraspecific epithet</label>
+        <input type="text" .value=${v("infraspecific_epithet")} @input=${set("infraspecific_epithet")} />
+        <label>Cultivar epithet</label>
+        <input type="text" .value=${v("cultivar_epithet")} @input=${set("cultivar_epithet")} />
+      </fieldset>
+      <div class="authorship-pair" style="grid-column: 1 / -1">
+        <fieldset>
+          <legend>basionym (original)</legend>
+          <label>Author</label>
+          <input type="text" .value=${v("basionym_authorship")} @input=${set("basionym_authorship")} />
+          <label>Year</label>
+          <input type="text" .value=${v("basionym_authorship_year")} @input=${set("basionym_authorship_year")} />
+        </fieldset>
+        <fieldset>
+          <legend>combination (current)</legend>
+          <label>Author</label>
+          <input type="text" .value=${v("combination_authorship")} @input=${set("combination_authorship")} />
+          <label>Year</label>
+          <input type="text" .value=${v("combination_authorship_year")} @input=${set("combination_authorship_year")} />
+        </fieldset>
+      </div>
     `;
   }
 

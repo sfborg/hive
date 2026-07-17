@@ -654,13 +654,23 @@ type apiNamePatch struct {
 	Gender  *string `json:"gender,omitempty"`
 	Notho   *string `json:"notho,omitempty"`
 
-	// Structural pieces the curator edits (rarely, but supported).
+	// Structural pieces the curator edits.
 	Uninomial            *string `json:"uninomial,omitempty"`
 	Genus                *string `json:"genus,omitempty"`
 	InfragenericEpithet  *string `json:"infrageneric_epithet,omitempty"`
 	SpecificEpithet      *string `json:"specific_epithet,omitempty"`
 	InfraspecificEpithet *string `json:"infraspecific_epithet,omitempty"`
 	CultivarEpithet      *string `json:"cultivar_epithet,omitempty"`
+
+	// Atomized authorship — the CoLDP split of the raw Authorship
+	// string. See apiName's field-level comments for the code-specific
+	// semantics; both pointers accept empty-string to clear the slot.
+	CombinationAuthorship     *string `json:"combination_authorship,omitempty"`
+	CombinationExAuthorship   *string `json:"combination_ex_authorship,omitempty"`
+	CombinationAuthorshipYear *string `json:"combination_authorship_year,omitempty"`
+	BasionymAuthorship        *string `json:"basionym_authorship,omitempty"`
+	BasionymExAuthorship      *string `json:"basionym_ex_authorship,omitempty"`
+	BasionymAuthorshipYear    *string `json:"basionym_authorship_year,omitempty"`
 
 	// ReferenceID is the "published in" reference ID (v1: single value
 	// stored into sfga's comma-separated col__reference_id). Sending
@@ -719,6 +729,24 @@ func applyNamePatch(n *coldp.Name, p apiNamePatch) {
 	}
 	if p.CultivarEpithet != nil {
 		n.CultivarEpithet = *p.CultivarEpithet
+	}
+	if p.CombinationAuthorship != nil {
+		n.CombinationAuthorship = *p.CombinationAuthorship
+	}
+	if p.CombinationExAuthorship != nil {
+		n.CombinationExAuthorship = *p.CombinationExAuthorship
+	}
+	if p.CombinationAuthorshipYear != nil {
+		n.CombinationAuthorshipYear = *p.CombinationAuthorshipYear
+	}
+	if p.BasionymAuthorship != nil {
+		n.BasionymAuthorship = *p.BasionymAuthorship
+	}
+	if p.BasionymExAuthorship != nil {
+		n.BasionymExAuthorship = *p.BasionymExAuthorship
+	}
+	if p.BasionymAuthorshipYear != nil {
+		n.BasionymAuthorshipYear = *p.BasionymAuthorshipYear
 	}
 	if p.ReferenceID != nil {
 		// name.col__reference_id is a comma-separated list in sfga;
