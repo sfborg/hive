@@ -39,11 +39,28 @@ const (
 
 	// Name fields — hidden and skipped in tab order when the taxon has
 	// no associated name (rare, but possible for legacy archives).
+	// Layout mirrors the create pane's atomized preview: verbatim
+	// scientific name + rank + code + verbatim authorship at the top,
+	// then the atomized name block, then the two authorship pairs
+	// (basionym + combination) — CoLDP puts both on the same Name row
+	// so both are legitimately editable together.
 	fieldScientificNameString
-	fieldRank        // combobox — vocab source
-	fieldCode        // combobox — vocab source
-	fieldNomStatus   // combobox — vocab source
-	fieldReferenceID // combobox — reference search source
+	fieldRank             // combobox — vocab source
+	fieldCode             // combobox — vocab source
+	fieldAuthorship       // verbatim authorship (unatomized)
+	fieldUninomial        // atomized name — same set as the create pane
+	fieldGenus            //
+	fieldInfrageneric     // subgenus
+	fieldSpecific         //
+	fieldInfraspecific    //
+	fieldCultivar         //
+	fieldBasionymAuthor   // atomized authorship — basionym (original)
+	fieldBasionymYear     //
+	fieldCombAuthor       // atomized authorship — combination (current)
+	fieldCombYear         //
+	fieldNomStatus        // combobox — vocab source
+	fieldReferenceID      // combobox — reference search source
+	fieldPublishedInPage  //
 	fieldEtymology
 	fieldNameRemarks
 
@@ -66,8 +83,20 @@ var fieldLabels = [fieldCount]string{
 	fieldScientificNameString: "Scientific name",
 	fieldRank:                 "Rank",
 	fieldCode:                 "Code",
+	fieldAuthorship:           "Verbatim authorship",
+	fieldUninomial:            "Uninomial",
+	fieldGenus:                "Genus",
+	fieldInfrageneric:         "Subgenus",
+	fieldSpecific:             "Specific epithet",
+	fieldInfraspecific:        "Infraspecific epithet",
+	fieldCultivar:             "Cultivar epithet",
+	fieldBasionymAuthor:       "Basionym author",
+	fieldBasionymYear:         "Basionym year",
+	fieldCombAuthor:           "Combination author",
+	fieldCombYear:             "Combination year",
 	fieldNomStatus:            "Nom status",
 	fieldReferenceID:          "Reference",
+	fieldPublishedInPage:      "Published in page",
 	fieldEtymology:            "Etymology",
 	fieldNameRemarks:          "Name remarks",
 }
@@ -168,13 +197,25 @@ type taxonFieldSnapshot struct {
 
 // nameFieldSnapshot is the analogous pre-edit snapshot for name fields.
 type nameFieldSnapshot struct {
-	ScientificNameString string
-	RankID               string
-	CodeID               string
-	StatusID             string
-	ReferenceID          string
-	Etymology            string
-	Remarks              string
+	ScientificNameString      string
+	Authorship                string
+	RankID                    string
+	CodeID                    string
+	StatusID                  string
+	ReferenceID               string
+	Uninomial                 string
+	Genus                     string
+	InfragenericEpithet       string
+	SpecificEpithet           string
+	InfraspecificEpithet      string
+	CultivarEpithet           string
+	BasionymAuthorship        string
+	BasionymAuthorshipYear    string
+	CombinationAuthorship     string
+	CombinationAuthorshipYear string
+	PublishedInPage           string
+	Etymology                 string
+	Remarks                   string
 }
 
 func newDetailModel(a *core.Archive, editable bool, actor string) detailModel {
@@ -398,16 +439,40 @@ func (m *detailModel) EnterEditModeCmd() (tea.Cmd, bool) {
 	if m.nameEditable {
 		m.nameIfMatch = m.name.Modified
 		m.inputs[fieldScientificNameString].SetValue(m.name.ScientificNameString)
+		m.inputs[fieldAuthorship].SetValue(m.name.Authorship)
+		m.inputs[fieldUninomial].SetValue(m.name.Uninomial)
+		m.inputs[fieldGenus].SetValue(m.name.Genus)
+		m.inputs[fieldInfrageneric].SetValue(m.name.InfragenericEpithet)
+		m.inputs[fieldSpecific].SetValue(m.name.SpecificEpithet)
+		m.inputs[fieldInfraspecific].SetValue(m.name.InfraspecificEpithet)
+		m.inputs[fieldCultivar].SetValue(m.name.CultivarEpithet)
+		m.inputs[fieldBasionymAuthor].SetValue(m.name.BasionymAuthorship)
+		m.inputs[fieldBasionymYear].SetValue(m.name.BasionymAuthorshipYear)
+		m.inputs[fieldCombAuthor].SetValue(m.name.CombinationAuthorship)
+		m.inputs[fieldCombYear].SetValue(m.name.CombinationAuthorshipYear)
+		m.inputs[fieldPublishedInPage].SetValue(m.name.PublishedInPage)
 		m.inputs[fieldEtymology].SetValue(m.name.Etymology)
 		m.inputs[fieldNameRemarks].SetValue(m.name.Remarks)
 		m.nameOriginals = nameFieldSnapshot{
-			ScientificNameString: m.name.ScientificNameString,
-			RankID:               m.name.Rank.ID(),
-			CodeID:               m.name.Code.ID(),
-			StatusID:             core.NameRawStatus(m.name.ID),
-			ReferenceID:          core.PrimaryReferenceID(m.name.ReferenceID),
-			Etymology:            m.name.Etymology,
-			Remarks:              m.name.Remarks,
+			ScientificNameString:      m.name.ScientificNameString,
+			Authorship:                m.name.Authorship,
+			RankID:                    m.name.Rank.ID(),
+			CodeID:                    m.name.Code.ID(),
+			StatusID:                  core.NameRawStatus(m.name.ID),
+			ReferenceID:               core.PrimaryReferenceID(m.name.ReferenceID),
+			Uninomial:                 m.name.Uninomial,
+			Genus:                     m.name.Genus,
+			InfragenericEpithet:       m.name.InfragenericEpithet,
+			SpecificEpithet:           m.name.SpecificEpithet,
+			InfraspecificEpithet:      m.name.InfraspecificEpithet,
+			CultivarEpithet:           m.name.CultivarEpithet,
+			BasionymAuthorship:        m.name.BasionymAuthorship,
+			BasionymAuthorshipYear:    m.name.BasionymAuthorshipYear,
+			CombinationAuthorship:     m.name.CombinationAuthorship,
+			CombinationAuthorshipYear: m.name.CombinationAuthorshipYear,
+			PublishedInPage:           m.name.PublishedInPage,
+			Etymology:                 m.name.Etymology,
+			Remarks:                   m.name.Remarks,
 		}
 	}
 
@@ -736,14 +801,26 @@ func (m *detailModel) Save() tea.Cmd {
 		nameIfMatch = m.nameIfMatch
 		nSnap = nameFieldSnapshot{
 			ScientificNameString: m.inputs[fieldScientificNameString].Value(),
+			Authorship:           m.inputs[fieldAuthorship].Value(),
 			// Rank / Code / Status / Reference are all combobox-driven
 			// now — read from the picker's committed selection.
-			RankID:      m.rankPicker.SelectedID(),
-			CodeID:      m.codePicker.SelectedID(),
-			StatusID:    m.statusPicker.SelectedID(),
-			ReferenceID: m.referencePicker.SelectedID(),
-			Etymology:   m.inputs[fieldEtymology].Value(),
-			Remarks:     m.inputs[fieldNameRemarks].Value(),
+			RankID:                    m.rankPicker.SelectedID(),
+			CodeID:                    m.codePicker.SelectedID(),
+			StatusID:                  m.statusPicker.SelectedID(),
+			ReferenceID:               m.referencePicker.SelectedID(),
+			Uninomial:                 m.inputs[fieldUninomial].Value(),
+			Genus:                     m.inputs[fieldGenus].Value(),
+			InfragenericEpithet:       m.inputs[fieldInfrageneric].Value(),
+			SpecificEpithet:           m.inputs[fieldSpecific].Value(),
+			InfraspecificEpithet:      m.inputs[fieldInfraspecific].Value(),
+			CultivarEpithet:           m.inputs[fieldCultivar].Value(),
+			BasionymAuthorship:        m.inputs[fieldBasionymAuthor].Value(),
+			BasionymAuthorshipYear:    m.inputs[fieldBasionymYear].Value(),
+			CombinationAuthorship:     m.inputs[fieldCombAuthor].Value(),
+			CombinationAuthorshipYear: m.inputs[fieldCombYear].Value(),
+			PublishedInPage:           m.inputs[fieldPublishedInPage].Value(),
+			Etymology:                 m.inputs[fieldEtymology].Value(),
+			Remarks:                   m.inputs[fieldNameRemarks].Value(),
 		}
 		nameDirty = nSnap != m.nameOriginals
 		writeName = nameDirty
@@ -811,9 +888,21 @@ func (m *detailModel) Save() tea.Cmd {
 					return err
 				}
 				currentName.ScientificNameString = nSnap.ScientificNameString
+				currentName.Authorship = nSnap.Authorship
 				currentName.Rank = core.ParseRank(nSnap.RankID)
 				currentName.Code = nomcode.New(nSnap.CodeID)
+				currentName.Uninomial = nSnap.Uninomial
+				currentName.Genus = nSnap.Genus
+				currentName.InfragenericEpithet = nSnap.InfragenericEpithet
+				currentName.SpecificEpithet = nSnap.SpecificEpithet
+				currentName.InfraspecificEpithet = nSnap.InfraspecificEpithet
+				currentName.CultivarEpithet = nSnap.CultivarEpithet
+				currentName.BasionymAuthorship = nSnap.BasionymAuthorship
+				currentName.BasionymAuthorshipYear = nSnap.BasionymAuthorshipYear
+				currentName.CombinationAuthorship = nSnap.CombinationAuthorship
+				currentName.CombinationAuthorshipYear = nSnap.CombinationAuthorshipYear
 				currentName.ReferenceID = nSnap.ReferenceID
+				currentName.PublishedInPage = nSnap.PublishedInPage
 				currentName.Etymology = nSnap.Etymology
 				currentName.Remarks = nSnap.Remarks
 				currentName.Modified = nameIfMatch
@@ -1189,6 +1278,16 @@ func (m detailModel) renderFields() string {
 		} else {
 			push("Nom status", statusRaw)
 		}
+		// Atomized authorship rows — only render when populated so a
+		// record with just verbatim authorship stays scannable.
+		// Botanical records typically show both; zoological records
+		// often just show basionym.
+		if a, y := m.name.BasionymAuthorship, m.name.BasionymAuthorshipYear; a != "" || y != "" {
+			push("Basionym", joinNonEmpty(a, y))
+		}
+		if a, y := m.name.CombinationAuthorship, m.name.CombinationAuthorshipYear; a != "" || y != "" {
+			push("Combination", joinNonEmpty(a, y))
+		}
 		push("Published year", m.name.PublishedInYear)
 		// Reference: resolved to a display label via GetReference when a
 		// primary id is present. Falls back to the raw id on lookup
@@ -1233,9 +1332,32 @@ func (m detailModel) renderForm() string {
 	b.WriteByte('\n')
 	limit := m.fieldRange()
 	for i := range limit {
-		if i == firstNameField {
+		// Section headers before boundary fields. The extended edit
+		// form now shows ~26 fields (verbatim + atomized name + two
+		// authorship pairs + reference + notes + taxon extras) — the
+		// headers keep it scannable without a progressive-disclosure
+		// toggle (terminals have vertical space; hiding fields would
+		// complicate tab navigation).
+		switch i {
+		case firstNameField:
 			b.WriteByte('\n')
 			b.WriteString(sectionHeaderStyle.Render("── Name ──"))
+			b.WriteByte('\n')
+		case fieldUninomial:
+			b.WriteByte('\n')
+			b.WriteString(sectionHeaderStyle.Render("── Atomized name ──"))
+			b.WriteByte('\n')
+		case fieldBasionymAuthor:
+			b.WriteByte('\n')
+			b.WriteString(sectionHeaderStyle.Render("── Basionym (original) ──"))
+			b.WriteByte('\n')
+		case fieldCombAuthor:
+			b.WriteByte('\n')
+			b.WriteString(sectionHeaderStyle.Render("── Combination (current) ──"))
+			b.WriteByte('\n')
+		case fieldNomStatus:
+			b.WriteByte('\n')
+			b.WriteString(sectionHeaderStyle.Render("── Metadata ──"))
 			b.WriteByte('\n')
 		}
 		b.WriteString(m.renderFormRow(i))
@@ -1388,6 +1510,19 @@ func vocabTerms(v *core.Vocabulary, name string) []core.VocabTerm {
 		return v.Gender
 	}
 	return nil
+}
+
+// joinNonEmpty produces "a, b" from two strings, dropping either when
+// empty. Used to render "Basionym: Linnaeus, 1758" (or just "Linnaeus"
+// / just "1758") on the view pane without empty commas.
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a != "" && b != "":
+		return a + ", " + b
+	case a != "":
+		return a
+	}
+	return b
 }
 
 func nullableBool(b sql.NullBool) string {
