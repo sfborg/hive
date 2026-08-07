@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gnames/gnlib/ent/nomcode"
+	"github.com/gnames/gnparser"
 	"github.com/gnames/gnparser/ent/parsed"
 	"github.com/google/uuid"
 	"github.com/sfborg/sflib/pkg/coldp"
@@ -98,8 +99,18 @@ func (a *Archive) ParseNamePreview(codeID, verbatim string) *coldp.Name {
 	if verbatim == "" {
 		return &coldp.Name{}
 	}
+	// Feed the nomenclatural code into gnparser so its code-specific
+	// tuning kicks in — cultivar quotes, botanical hybrid marks,
+	// zoological subgenus parentheses, and other edge cases parse
+	// more accurately when the code is known. Only the first-ever
+	// taxon in an empty archive has no code context; every other
+	// create inherits from the parent chain via CodeForParent.
+	// ChangeConfig returns a variant parser without mutating the
+	// shared instance, so parserMu still just guards the shared
+	// parser's not-known-to-be-concurrent-safe state.
 	a.parserMu.Lock()
-	p := a.parser.ParseName(verbatim).Flatten()
+	p := a.parser.ChangeConfig(gnparser.OptCode(parseCodeID(codeID))).
+		ParseName(verbatim).Flatten()
 	a.parserMu.Unlock()
 
 	n := &coldp.Name{

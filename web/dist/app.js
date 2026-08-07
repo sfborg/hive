@@ -144,6 +144,19 @@ const iconPathsFilled = {
   },
 };
 
+// readAtomizedPref / writeAtomizedPref persist the "show atomized
+// fields" toggle across taxa and sessions. Some curators always want
+// to see the parser's atomization to verify edge cases; forcing them
+// to re-toggle it on every navigation is user-hostile. Single boolean
+// key covers both the edit form and the create form's step-1 preview
+// since a curator wanting one usually wants the other.
+function readAtomizedPref() {
+  return localStorage.getItem("hive-show-atomized") === "true";
+}
+function writeAtomizedPref(v) {
+  localStorage.setItem("hive-show-atomized", v ? "true" : "false");
+}
+
 // matchesKey reports whether a DOM KeyboardEvent matches one of the
 // key strings from the shared keymap (core/ui.Shortcut.Keys["wui"]).
 // Format is either a bare KeyboardEvent.key value ("ArrowUp", "g",
@@ -771,6 +784,48 @@ class SfgaApp extends LitElement {
   // Anything more nuanced belongs on the focused component's own
   // keydown handler (see SfgaTree._onKeyDown).
   _onGlobalKey(e) {
+    // Detail-scope shortcuts (e / n / c / s / d) — bare letters, so
+    // gate universally on "curator isn't typing." Fire only on the
+    // Taxa screen and only when a taxon is selected (except new-child,
+    // which allows empty-tree root creation like the TUI's `n`).
+    // Handled before the global-scope switch so detail bindings win
+    // over anything that shares a letter, and so the return here
+    // short-circuits the rest.
+    if (this.screen === "taxa" && !this._isTypingInInput(e)) {
+      const detailAction = actionForEvent(api.keymap.forScope("detail"), e);
+      if (detailAction) {
+        const detail = this.renderRoot.querySelector("sfga-detail");
+        if (detail) {
+          switch (detailAction) {
+            case "detail-edit":
+              if (this.selectedId && this.archive && !this.archive.read_only) {
+                e.preventDefault();
+                detail._startEdit();
+              }
+              return;
+            case "detail-new-child":
+              if (this.archive && !this.archive.read_only) {
+                e.preventDefault();
+                detail._openCreate();
+              }
+              return;
+            case "detail-new-sister":
+              if (this.selectedId && this.archive && !this.archive.read_only) {
+                e.preventDefault();
+                detail._openCreateSister();
+              }
+              return;
+            case "detail-delete":
+              if (this.selectedId && this.archive && !this.archive.read_only) {
+                e.preventDefault();
+                detail._askDelete();
+              }
+              return;
+          }
+        }
+      }
+    }
+
     const action = actionForEvent(api.keymap.forScope("global"), e);
     if (!action) return;
 
@@ -909,8 +964,12 @@ class SfgaApp extends LitElement {
 
   // Detail pane fires taxon-moved after a successful reparent (or a
   // fresh create); forward it to the tree so the visible tree state
-  // reflects the new location.
+  // reflects the new location, and set selectedId so the detail pane
+  // loads the new taxon (essential for "add child, add child, add
+  // child" workflows — otherwise the next create would still attach
+  // under the previous parent).
   async _onMoved(e) {
+    this.selectedId = e.detail.id;
     await this._revealInTree(e.detail.id);
   }
 
@@ -2131,12 +2190,16 @@ class SfgaDetail extends LitElement {
     this._createDraft = {};
     this._createBusy = false;
     this._createError = "";
-    this._createShowAtomized = false;
+    // Both atomized toggles seed from localStorage so a curator who
+    // wants to see the parser's atomization gets that view immediately
+    // on every taxon they open (not just the first). Persists across
+    // sessions too.
+    this._createShowAtomized = readAtomizedPref();
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
     this._createParentID = "";
     this._createParentLabel = "";
-    this._editShowAtomized = false;
+    this._editShowAtomized = readAtomizedPref();
     this._confirmDelete = false;
     this._deleteError = "";
   }
@@ -2153,7 +2216,7 @@ class SfgaDetail extends LitElement {
       this._createStep = 0;
       this._createDraft = {};
       this._createError = "";
-      this._createShowAtomized = false;
+      this._createShowAtomized = readAtomizedPref();
       this._creatingBasionymFor = null;
       this._creatingBasionymForName = "";
       this._load();
@@ -2247,9 +2310,14 @@ class SfgaDetail extends LitElement {
 
   // _openCreateWithParent is the shared open path. Records the intended
   // parent id + label so _submitCreate can attach to the right parent
-  // and the pane's heading names it correctly. Code default is fetched
-  // for that parent — sisters share their parent's code, so a sister
-  // of an ICZN taxon defaults to ICZN too.
+  // and the pane's heading names it correctly. In parallel it fetches:
+  //   - code default (parent's nom_code) so the code picker on step 1
+  //     is pre-seeded and ICZN work stays ICZN.
+  //   - scientific-name prefix (parent's sci-name + " " when the child
+  //     will be a compound name) so the curator only types the new
+  //     epithet — "Felis " → curator adds "catus (L., 1758)".
+  // Both fetches are best-effort: failures leave the corresponding
+  // field empty and the curator types manually.
   async _openCreateWithParent(parentID, parentLabel) {
     this._createDraft = { scientific_name: "", code: "" };
     this._createStep = 0;
@@ -2260,16 +2328,36 @@ class SfgaDetail extends LitElement {
     this._creating = true;
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
-    // Seed the code picker from the parent's name so ICZN work stays
-    // ICZN by default — matches the TUI's CodeForParent behavior.
     if (parentID) {
       try {
-        const { code } = await api.taxon.codeDefault(parentID);
-        if (this._creating && !this._createDraft.code) {
-          this._createDraft = { ...this._createDraft, code: code || "" };
+        const [codeResp, prefixResp] = await Promise.all([
+          api.taxon.codeDefault(parentID).catch(() => ({ code: "" })),
+          api.taxon.createNamePrefix(parentID).catch(() => ({ prefix: "" })),
+        ]);
+        if (this._creating) {
+          this._createDraft = {
+            ...this._createDraft,
+            code: this._createDraft.code || codeResp.code || "",
+            scientific_name: this._createDraft.scientific_name || prefixResp.prefix || "",
+          };
         }
       } catch (_) {
-        /* leave code empty; curator will pick */
+        /* leave defaults empty; curator will fill */
+      }
+    }
+    // Park the cursor at the end of the pre-filled sci-name so a
+    // curator hitting `c` immediately types the epithet after (say)
+    // "Felis catus " without having to click or arrow-right. Awaits
+    // updateComplete so the input actually exists in the DOM; runs
+    // even for empty-prefix cases (autofocus + cursor at 0) so the
+    // flow is uniform.
+    await this.updateComplete;
+    if (this._creating && this._createStep === 0) {
+      const input = this.renderRoot.querySelector(".create-pane input[type='text']");
+      if (input) {
+        input.focus();
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
       }
     }
   }
@@ -2419,7 +2507,7 @@ class SfgaDetail extends LitElement {
       const keepCode = this._createDraft.code || "";
       this._createDraft = { scientific_name: "", code: keepCode };
       this._createStep = 0;
-      this._createShowAtomized = false;
+      this._createShowAtomized = readAtomizedPref();
       this._creatingBasionymFor = created.id;
       this._creatingBasionymForName =
         created.label?.text || body.scientific_name || "the current combination";
@@ -2497,7 +2585,7 @@ class SfgaDetail extends LitElement {
   // rank-guess so suffix rules work invisibly.
   _renderCreateStep0() {
     return html`
-      <label>Scientific name <span class="req">*</span></label>
+      <label>Scientific name + authorship <span class="req">*</span></label>
       <input
         type="text"
         .value=${this._createDraft.scientific_name || ""}
@@ -2558,7 +2646,11 @@ class SfgaDetail extends LitElement {
         <input
           type="checkbox"
           .checked=${this._createShowAtomized}
-          @change=${(e) => (this._createShowAtomized = e.target.checked)}
+          @change=${(e) => {
+            this._createShowAtomized = e.target.checked;
+            this._editShowAtomized = e.target.checked;
+            writeAtomizedPref(e.target.checked);
+          }}
         />
         show atomized fields
         <span class="hint">
@@ -3202,7 +3294,11 @@ class SfgaDetail extends LitElement {
         <input
           type="checkbox"
           .checked=${this._editShowAtomized}
-          @change=${(e) => (this._editShowAtomized = e.target.checked)}
+          @change=${(e) => {
+            this._editShowAtomized = e.target.checked;
+            this._createShowAtomized = e.target.checked;
+            writeAtomizedPref(e.target.checked);
+          }}
         />
         show atomized fields
         <span class="hint">

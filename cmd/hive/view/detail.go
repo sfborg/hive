@@ -600,6 +600,15 @@ func (m *detailModel) EnterCreateModeCmd(parentID, parentLabel string) (tea.Cmd,
 	sci.Prompt = ""
 	sci.CharLimit = 500
 	sci.Placeholder = "e.g. Panthera onca (Linnaeus, 1758)"
+	// Pre-populate the sci-name with the parent's scientific name +
+	// space (via CreateNamePrefix) so a curator adding a child under
+	// "Felis" gets "Felis " with the cursor ready to type the epithet.
+	// Empty prefix (root-taxon create, or parent above genus-group)
+	// falls through to a blank input the same as before.
+	if prefix, err := m.a.CreateNamePrefix(context.Background(), parentID); err == nil && prefix != "" {
+		sci.SetValue(prefix)
+		sci.SetCursor(len(prefix))
+	}
 	m.createSciName = sci
 
 	m.createCodePicker = newCombobox(vocabComboSource(m.vocab, "nom_code"), "nomenclatural code…")
@@ -1384,7 +1393,7 @@ func (m detailModel) renderCreate() string {
 	// style but with a red-ish tint via errStyle so it draws the eye
 	// without shouting. Rank comes from RankGuess on step 2; code
 	// lives at the bottom of step 2.
-	sciLabel := labelStyle.Render(fmt.Sprintf("%-14s", "Scientific name")) +
+	sciLabel := labelStyle.Render(fmt.Sprintf("%-24s", "Scientific name + authorship")) +
 		errStyle.Render("* ") + labelStyle.Render(": ")
 	b.WriteString(sciLabel)
 	b.WriteString(m.createSciName.View())

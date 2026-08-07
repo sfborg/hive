@@ -178,6 +178,82 @@ func (a *Archive) NameRef(ctx context.Context, id string) (Ref, error) {
 	}, nil
 }
 
+// CreateNamePrefix returns the string a new child of parentID should
+// start with — the parent's canonical name plus a trailing space, so
+// the curator only types the new epithet. Empty string means "no
+// prefix, curator types the full name" (for parents above the
+// genus-group where the child is a fresh uninomial).
+//
+// Examples:
+//   parent Felis (GENUS)         → "Felis "
+//   parent Felis catus (SPECIES) → "Felis catus "     (child is subspecies)
+//   parent Felidae (FAMILY)      → ""                 (child is a genus)
+//
+// Uses gn__canonical_full (from gnparser) — no authorship, subgenus
+// parens preserved — so a curator adding a subspecies of "Felis catus
+// Linnaeus, 1758" gets "Felis catus " to type after, not "Felis catus
+// Linnaeus, 1758 " (each child usually has its own authorship). Falls
+// back to canonical_simple if _full is unset, then to
+// col__scientific_name only if both parser caches are empty (very
+// legacy archive).
+//
+// Sfga's rank vocab flags (col__genus_group, col__infraspecific) plus
+// a special case for SPECIES / SPECIES_AGGREGATE decide when to
+// prefix at all.
+func (a *Archive) CreateNamePrefix(ctx context.Context, parentID string) (string, error) {
+	if parentID == "" {
+		return "", nil
+	}
+	const q = `SELECT
+		COALESCE(n.gn__canonical_full, ''),
+		COALESCE(n.gn__canonical_simple, ''),
+		COALESCE(n.col__scientific_name, ''),
+		COALESCE(r.col__genus_group, 0),
+		COALESCE(r.col__infraspecific, 0),
+		COALESCE(n.col__rank_id, '')
+	FROM taxon t
+	LEFT JOIN name n ON n.col__id = t.col__name_id
+	LEFT JOIN rank r ON r.col__id = n.col__rank_id
+	WHERE t.col__id = ?`
+	var (
+		canonicalFull   string
+		canonicalSimple string
+		sciName         string
+		genusGroup      int
+		infrasp         int
+		rankID          string
+	)
+	err := a.db.QueryRowContext(ctx, q, parentID).Scan(
+		&canonicalFull, &canonicalSimple, &sciName, &genusGroup, &infrasp, &rankID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("core: create-name prefix for parent %s: %w", parentID, err)
+	}
+	// SPECIES and SPECIES_AGGREGATE aren't flagged genus_group or
+	// infraspecific in the rank vocab; catch them explicitly so their
+	// subspecies-level children get a trinomial prefix.
+	isSpeciesLevel := rankID == "SPECIES" || rankID == "SPECIES_AGGREGATE"
+	if genusGroup == 0 && infrasp == 0 && !isSpeciesLevel {
+		return "", nil
+	}
+	// Prefer the parser's canonical form (no authorship). Fall through
+	// on empties in case gnparser choked on the parent's name.
+	name := canonicalFull
+	if name == "" {
+		name = canonicalSimple
+	}
+	if name == "" {
+		name = sciName
+	}
+	if name == "" {
+		return "", nil
+	}
+	return name + " ", nil
+}
+
 // CodeForParent returns the nomenclatural code (col__code_id on the
 // parent taxon's associated name row) so the new-taxon form can seed
 // its code picker from the parent by default. Empty parentID → "".

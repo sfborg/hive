@@ -206,8 +206,9 @@ func Keymap() []Shortcut {
 			Description: "edit the selected taxon",
 			Display:     "e",
 			Scope:       ScopeDetail,
-			// WUI uses the on-screen Edit button.
-			Keys: tuiOnly("e"),
+			// Same key in both frontends; WUI gates on "not typing in
+			// an input" so `e` inside a text field types the letter.
+			Keys: both([]string{"e"}, []string{"e"}),
 		},
 		{
 			Action:      "detail-new-child",
@@ -217,21 +218,21 @@ func Keymap() []Shortcut {
 			// c is the mnemonic ([c]hild) that reads naturally alongside
 			// s ([s]ister); n is kept as an alias for muscle memory and
 			// so an empty archive's "n[ew]" reads as expected.
-			Keys: tuiOnly("n", "c"),
+			Keys: both([]string{"n", "c"}, []string{"n", "c"}),
 		},
 		{
 			Action:      "detail-new-sister",
 			Description: "new sister taxon at the same tree level",
 			Display:     "s",
 			Scope:       ScopeDetail,
-			Keys:        tuiOnly("s"),
+			Keys:        both([]string{"s"}, []string{"s"}),
 		},
 		{
 			Action:      "detail-delete",
 			Description: "delete the selected taxon",
 			Display:     "d",
 			Scope:       ScopeDetail,
-			Keys:        tuiOnly("d"),
+			Keys:        both([]string{"d"}, []string{"d"}),
 		},
 
 		// ---- form ----

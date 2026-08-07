@@ -50,6 +50,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/code-default", s.handleCodeDefault)
+	mux.HandleFunc("GET /api/taxon/{id}/create-name-prefix", s.handleCreateNamePrefix)
 
 	mux.HandleFunc("GET /api/name/search", s.handleNameSearch)
 	mux.HandleFunc("POST /api/name/parse", s.handleParseName)
@@ -266,6 +267,21 @@ func (s *server) handleCodeDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"code": code})
+}
+
+// handleCreateNamePrefix returns the string a new child of parentID
+// should have pre-populated in its scientific-name field, ending with
+// a space so the curator's cursor lands ready to type the new epithet.
+// Empty prefix ("" — child is a fresh uninomial) is a valid response.
+// See core.CreateNamePrefix for the exact rules.
+func (s *server) handleCreateNamePrefix(w http.ResponseWriter, r *http.Request) {
+	parentID := r.PathValue("id")
+	prefix, err := s.a.CreateNamePrefix(r.Context(), parentID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"prefix": prefix})
 }
 
 // handleAncestors returns the taxon's parent chain in root-down order
