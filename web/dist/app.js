@@ -75,7 +75,47 @@ const iconPaths = {
     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
   `,
+  // help-circle — circled question mark → open the keyboard help modal
+  "help-circle": svg`
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+    <path d="M12 17h.01" />
+  `,
 };
+
+// matchesKey reports whether a DOM KeyboardEvent matches one of the
+// key strings from the shared keymap (core/ui.Shortcut.Keys["web"]).
+// Format is either a bare KeyboardEvent.key value ("ArrowUp", "g",
+// "?") or a "modifier+key" combination ("alt+t", "ctrl+s"). Shift
+// is implicit in the key value itself (KeyboardEvent.key already
+// returns the shifted character for shifted letters like "G" and
+// "?"), so we only check alt/ctrl/meta explicitly. Kept as a
+// module-level helper because both the app shell (global dispatch)
+// and the tree component (tree-scoped dispatch) need it.
+function matchesKey(e, keyStr) {
+  const parts = keyStr.split("+");
+  const key = parts[parts.length - 1];
+  const mods = new Set(parts.slice(0, -1));
+  if (e.key !== key) return false;
+  if (mods.has("alt") !== !!e.altKey) return false;
+  if (mods.has("ctrl") !== !!e.ctrlKey) return false;
+  if (mods.has("meta") !== !!e.metaKey) return false;
+  return true;
+}
+
+// actionForEvent walks a scope-filtered shortcut list and returns
+// the Action string of the first entry whose web keys match the
+// event, or null if none. The shared keymap lives in memory (loaded
+// by api.keymap.load() at boot) so this is a cheap in-process match.
+function actionForEvent(shortcuts, e) {
+  for (const s of shortcuts) {
+    const keys = s.keys?.web || [];
+    for (const k of keys) {
+      if (matchesKey(e, k)) return s.action;
+    }
+  }
+  return null;
+}
 
 // renderIcon wraps a named icon in a properly-sized <svg>. Size is a
 // number (rendered as square width/height). currentColor lets the CSS
@@ -322,6 +362,7 @@ class SfgaApp extends LitElement {
     theme: { state: true },
     screen: { state: true },
     sidebarCollapsed: { state: true },
+    helpOpen: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -357,6 +398,11 @@ class SfgaApp extends LitElement {
       color: var(--dim);
       font-size: 0.9em;
       font-family: var(--font-mono);
+    }
+    header .header-buttons {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
     }
     button.theme-toggle {
       background: transparent;
@@ -488,6 +534,7 @@ class SfgaApp extends LitElement {
     this.theme = localStorage.getItem("hive-theme") || "auto";
     this.screen = "taxa";
     this.sidebarCollapsed = localStorage.getItem("hive-sidebar") === "collapsed";
+    this.helpOpen = false;
     this._applyTheme();
     this._onGlobalKey = this._onGlobalKey.bind(this);
   }
@@ -507,13 +554,15 @@ class SfgaApp extends LitElement {
     try {
       // Load in parallel: archive info + dataset metadata for the
       // header, vocabulary bundle for edit-form dropdowns, NOMEN
-      // ontology for the nomenclatural-status picker. All cheap and
+      // ontology for the nomenclatural-status picker, keymap for the
+      // help modal and data-driven key dispatch. All cheap and
       // independent; no reason to serialize.
       const [archive, metadata] = await Promise.all([
         api.archive(),
         api.metadata.get().catch(() => null), // legacy archive w/o seeded metadata → null header
         api.vocab.load(),
         api.nomen.load(),
+        api.keymap.load(),
       ]);
       this.archive = archive;
       this.metadata = metadata;
@@ -620,36 +669,61 @@ class SfgaApp extends LitElement {
   }
 
   // _onGlobalKey handles shortcuts that fire regardless of which
-  // shadow tree currently owns focus. Kept deliberately small
-  // (PARITY.md § Focus semantics — global keys must be extremely
-  // obvious in intent). Anything more nuanced belongs on the
-  // focused component's own keydown handler.
+  // shadow tree currently owns focus. Dispatch is data-driven from
+  // the shared keymap (core/ui.Keymap()) so this handler and the
+  // TUI stay in sync — adding a global binding is one edit to
+  // core/ui/keymap.go plus a case here for its Action.
   //
-  // Bindings:
-  //   Alt+<letter> — view switch (Taxa / Metadata / References).
-  //     Runs even inside inputs since Alt-modified keys don't collide
-  //     with typing. Mirrors the TUI's screen-switch bindings.
-  //   /            — focus the search combobox on the Taxa screen.
-  //     Skipped when the curator is already typing in an input, so
-  //     "/" as literal text still works everywhere else.
+  // Global keys are deliberately kept small (PARITY.md § Focus
+  // semantics — global keys must be extremely obvious in intent).
+  // Anything more nuanced belongs on the focused component's own
+  // keydown handler (see SfgaTree._onKeyDown).
   _onGlobalKey(e) {
-    if (e.altKey && !e.ctrlKey && !e.metaKey) {
-      const key = e.key.toLowerCase();
-      const hit = SfgaApp.views.find((v) => v.key === key);
-      if (hit) {
+    const action = actionForEvent(api.keymap.forScope("global"), e);
+    if (!action) return;
+
+    // Actions that would swallow ordinary typing are gated on
+    // "curator isn't already in an input." "cancel" (Escape) is
+    // never gated — Escape inside an input should still close an
+    // overlay. Alt+letter view switches don't collide with typing
+    // (Alt-modified keys don't emit printable characters) so they
+    // aren't gated either.
+    const gateForInput = new Set(["search-focus", "help-open"]);
+    if (gateForInput.has(action) && this._isTypingInInput(e)) return;
+
+    switch (action) {
+      case "view-taxa":
+      case "view-metadata":
+      case "view-references": {
+        const wanted = action.slice("view-".length); // "taxa" / "metadata" / "references"
         e.preventDefault();
-        this.screen = hit.id;
+        this.screen = wanted;
+        return;
       }
-      return;
-    }
-    if (e.key === "/" && !e.altKey && !e.ctrlKey && !e.metaKey) {
-      if (this._isTypingInInput(e)) return;
-      if (this.screen !== "taxa") return;
-      const input = this._searchInput();
-      if (!input) return;
-      e.preventDefault();
-      input.focus();
-      input.select();
+      case "search-focus": {
+        if (this.screen !== "taxa") return;
+        const input = this._searchInput();
+        if (!input) return;
+        e.preventDefault();
+        input.focus();
+        input.select();
+        return;
+      }
+      case "help-open": {
+        e.preventDefault();
+        this.helpOpen = true;
+        return;
+      }
+      case "cancel": {
+        // Escape closes the help overlay from anywhere without
+        // pre-empting cancel behavior inside inputs / modals owned
+        // by other components.
+        if (this.helpOpen) {
+          e.preventDefault();
+          this.helpOpen = false;
+        }
+        return;
+      }
     }
   }
 
@@ -788,19 +862,34 @@ class SfgaApp extends LitElement {
       <header>
         <div class="title">${title}</div>
         <div class="meta">${meta}</div>
-        <button
-          class="theme-toggle"
-          @click=${() => this._cycleTheme()}
-          title="theme: ${this.theme}  (click to cycle)"
-          aria-label="theme: ${this.theme}"
-        >
-          ${renderIcon(this._themeIcon(), 18)}
-        </button>
+        <div class="header-buttons">
+          <button
+            class="theme-toggle"
+            @click=${() => (this.helpOpen = true)}
+            title="keyboard shortcuts  (?)"
+            aria-label="keyboard shortcuts"
+          >
+            ${renderIcon("help-circle", 18)}
+          </button>
+          <button
+            class="theme-toggle"
+            @click=${() => this._cycleTheme()}
+            title="theme: ${this.theme}  (click to cycle)"
+            aria-label="theme: ${this.theme}"
+          >
+            ${renderIcon(this._themeIcon(), 18)}
+          </button>
+        </div>
       </header>
       <main>
         ${this._renderSidebar()}
         ${this._renderScreen()}
       </main>
+      ${this.helpOpen
+        ? html`<sfga-help-modal
+            @close=${() => (this.helpOpen = false)}
+          ></sfga-help-modal>`
+        : ""}
     `;
   }
 
@@ -1177,64 +1266,71 @@ class SfgaTree extends LitElement {
   //   g / Ng           first / Nth sibling in the current group
   //   G / NG           last loaded sibling (or trigger load-more if
   //                    the group is truncated) / Nth
+  //
+  // Dispatch is data-driven from api.keymap.forScope("tree") so the
+  // shared source in core/ui/keymap.go is the single place a binding
+  // is edited.
   _onKeyDown(e) {
-    const k = e.key;
-
-    if (k === "Escape") {
-      e.preventDefault();
-      this._pendingCount = 0;
-      e.currentTarget.blur();
-      return;
-    }
-
     // Digit prefix — accumulate into pendingCount, consumed by g/G.
-    // Only bare digits (no modifiers) count; alt/ctrl/meta digits are
-    // reserved for future shortcuts.
+    // Not a shortcut (no Action); handled before dispatch. Bare digits
+    // only; modifier+digit is reserved for future bindings.
+    const k = e.key;
     if (k.length === 1 && k >= "0" && k <= "9" && !e.altKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       this._pendingCount = this._pendingCount * 10 + (k.charCodeAt(0) - 48);
       return;
     }
 
-    switch (k) {
-      case "ArrowUp":
-      case "k":
-        e.preventDefault();
-        this._pendingCount = 0;
+    // Match against tree-scope + cancel (Escape/blur). Cancel lives
+    // in the global scope of the shared keymap, so include it here
+    // explicitly rather than pulling all global bindings into tree
+    // dispatch — the tree's cancel means "blur," which is different
+    // from the app's cancel handling.
+    const treeAction = actionForEvent(api.keymap.forScope("tree"), e);
+    const cancelKeys = api.keymap.forScope("global").filter((s) => s.action === "cancel");
+    const isCancel = actionForEvent(cancelKeys, e) === "cancel";
+    const action = treeAction || (isCancel ? "cancel" : null);
+
+    if (!action) {
+      // Anything unmapped clears any pending count so a stray keypress
+      // doesn't linger into the next g/G.
+      this._pendingCount = 0;
+      return;
+    }
+
+    e.preventDefault();
+
+    // Actions that reset pending count on invocation (i.e. everything
+    // except tree-first-sibling and tree-last-sibling, which consume
+    // it).
+    const consumesPending = new Set(["tree-first-sibling", "tree-last-sibling"]);
+    if (!consumesPending.has(action)) {
+      this._pendingCount = 0;
+    }
+
+    switch (action) {
+      case "cancel":
+        e.currentTarget.blur();
+        return;
+      case "tree-up":
         this._moveCursor(-1);
         return;
-      case "ArrowDown":
-      case "j":
-        e.preventDefault();
-        this._pendingCount = 0;
+      case "tree-down":
         this._moveCursor(1);
         return;
-      case "ArrowRight":
-      case "l":
-      case "Enter":
-        e.preventDefault();
-        this._pendingCount = 0;
+      case "tree-expand":
         this._expandOrEnter();
         return;
-      case "ArrowLeft":
-      case "h":
-        e.preventDefault();
-        this._pendingCount = 0;
+      case "tree-collapse":
         this._collapseOrParent();
         return;
-      case "g":
-        e.preventDefault();
+      case "tree-first-sibling":
         this._jumpInSiblings(true);
         return;
-      case "G":
-        e.preventDefault();
+      case "tree-last-sibling":
         this._jumpInSiblings(false);
         return;
     }
-
-    // Anything else — including modified keys — clears any pending
-    // count so it doesn't linger across unrelated actions.
-    this._pendingCount = 0;
   }
 
   // _moveCursor walks the visible taxa in this.nodes by `dir` steps
@@ -4448,6 +4544,153 @@ class SfgaReferences extends LitElement {
   }
 }
 
+// ---------- <sfga-help-modal> ----------
+// Keyboard shortcut reference. Rendered when the shell's helpOpen
+// state is true; fires a "close" CustomEvent when the user dismisses.
+// The shell owns open/close state so the ? global shortcut and the
+// header help button both flow through the same path.
+//
+// Content is rendered from api.keymap.forScope(scope) for each scope
+// in scopeOrder — data-driven so an edit to core/ui/keymap.go
+// automatically shows here without touching this component.
+class SfgaHelpModal extends LitElement {
+  // scopeOrder controls rendered section order and labels. Global
+  // first (view-switch + orient-yourself bindings), then per-pane.
+  static scopeOrder = [
+    { scope: "global", label: "Global" },
+    { scope: "tree", label: "Taxon tree" },
+    { scope: "detail", label: "Detail pane" },
+    { scope: "form", label: "Edit forms" },
+  ];
+
+  static styles = css`
+    :host {
+      display: block;
+    }
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      background: color-mix(in oklab, var(--bg) 60%, transparent);
+      display: grid;
+      place-items: center;
+      z-index: 10;
+    }
+    .modal {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--accent);
+      padding: 1rem 1.5rem;
+      width: min(38rem, 95vw);
+      max-height: 90vh;
+      overflow: auto;
+      display: grid;
+      gap: 0.75rem;
+      font-family: var(--font-body);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h3 {
+      margin: 0;
+      font-size: 1.1em;
+      color: var(--accent);
+    }
+    button.close {
+      background: transparent;
+      color: var(--dim);
+      border: 0;
+      padding: 0 0.35rem;
+      font: inherit;
+      font-size: 1.4em;
+      line-height: 1;
+      cursor: pointer;
+    }
+    button.close:hover {
+      color: var(--fg);
+    }
+    .hint {
+      color: var(--dim);
+      font-style: italic;
+      font-size: 0.9em;
+    }
+    section {
+      display: grid;
+      gap: 0.25rem;
+    }
+    section h4 {
+      margin: 0 0 0.15rem 0;
+      font-size: 0.95em;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.15rem;
+    }
+    dl {
+      margin: 0;
+      display: grid;
+      grid-template-columns: minmax(6rem, auto) 1fr;
+      column-gap: 1rem;
+      row-gap: 0.15rem;
+      align-items: baseline;
+    }
+    dt {
+      font-family: var(--font-mono);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    dd {
+      margin: 0;
+    }
+  `;
+
+  render() {
+    return html`
+      <div
+        class="backdrop"
+        @click=${(e) => {
+          // Click on the backdrop (not the modal) closes.
+          if (e.target === e.currentTarget) this._close();
+        }}
+      >
+        <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
+          <header>
+            <h3>Keyboard shortcuts</h3>
+            <button class="close" @click=${() => this._close()} title="close">
+              ×
+            </button>
+          </header>
+          ${SfgaHelpModal.scopeOrder.map((so) => this._renderSection(so))}
+          <div class="hint">
+            Esc or click outside to close.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSection({ scope, label }) {
+    const entries = api.keymap.forScope(scope);
+    if (entries.length === 0) return "";
+    return html`
+      <section>
+        <h4>${label}</h4>
+        <dl>
+          ${entries.map(
+            (s) => html`<dt>${s.display}</dt>
+              <dd>${s.description}</dd>`,
+          )}
+        </dl>
+      </section>
+    `;
+  }
+
+  _close() {
+    this.dispatchEvent(
+      new CustomEvent("close", { bubbles: true, composed: true }),
+    );
+  }
+}
+
 customElements.define("sfga-app", SfgaApp);
 customElements.define("sfga-tree", SfgaTree);
 customElements.define("sfga-detail", SfgaDetail);
@@ -4455,3 +4698,4 @@ customElements.define("sfga-metadata", SfgaMetadata);
 customElements.define("sfga-references", SfgaReferences);
 customElements.define("sfga-combobox", SfgaCombobox);
 customElements.define("sfga-add-reference-modal", SfgaAddReferenceModal);
+customElements.define("sfga-help-modal", SfgaHelpModal);

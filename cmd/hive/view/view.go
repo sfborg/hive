@@ -167,6 +167,13 @@ type model struct {
 	// Which top-level screen is showing. Menu bar reflects this; keys
 	// route into the corresponding sub-model.
 	screen screen
+
+	// Command mode (`:` opens an ex-style prompt) and help overlay
+	// (opened by :h / :help). Both are shell-level modal states —
+	// when either is active, key events are routed to it first and
+	// other bindings are suppressed until it closes.
+	command commandModel
+	help    helpModel
 }
 
 // metadataTitle returns the cached dataset-metadata title, or "" if
@@ -195,6 +202,7 @@ func newModel(a *core.Archive, archivePath string, editable bool, actor string) 
 		keys:        defaultKeys(),
 		focus:       focusTree,
 		metaTitle:   title,
+		help:        newHelpModel(),
 	}
 }
 
@@ -222,6 +230,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the user (e.g. an unresponsive search box).
 		if key.Matches(msg, m.keys.HardQuit) {
 			return m, tea.Quit
+		}
+		// Help overlay owns every key while showing — it is read-only,
+		// and any keypress that isn't Esc/q is swallowed so mashing
+		// keys to leave doesn't trigger the underlying view.
+		if m.help.Active() {
+			var cmd tea.Cmd
+			m.help, cmd = m.help.Update(msg, m.keys)
+			return m, cmd
+		}
+		// Command-mode prompt (`:` ex-mode) owns every key while
+		// active. Enter executes; Esc cancels; other keys populate
+		// the buffer. The dispatched payload lands as
+		// commandExecuteMsg further down the switch.
+		if m.command.Active() {
+			var cmd tea.Cmd
+			m.command, cmd = m.command.Update(msg, m.keys)
+			return m, cmd
+		}
+		// Clear a lingering command-mode error on the next key so the
+		// status bar returns to normal without needing a timer.
+		m.command.ClearError()
+		// `:` opens command mode from view mode. Handled here so it
+		// wins over Alt-letter / Cancel / everything below.
+		if key.Matches(msg, m.keys.Command) {
+			m.command.Open()
+			return m, nil
 		}
 		// Alt-letter view switches fire at the top level so they work
 		// from any focus / mode (except the delete-confirm prompt,
@@ -500,6 +534,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.references, cmd = m.references.Update(msg, m.keys)
 		return m, cmd
+
+	case commandExecuteMsg:
+		// Fan out the parsed command's payload. Each recognized payload
+		// type gets one case here; unknown payloads (nil, from an
+		// empty `:` Enter) are dropped silently.
+		switch p := msg.payload.(type) {
+		case openHelpMsg:
+			m.help.Open()
+			return m, nil
+		case commandErrMsg:
+			m.command.SetError(p.msg)
+			return m, nil
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -556,6 +604,13 @@ func (m *model) deleteTaxonCmd(id string) tea.Cmd {
 func (m *model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return ""
+	}
+
+	// Help overlay takes over the whole viewport. Simpler than
+	// compositing over the tree/detail split and matches how vim
+	// renders `:help` — full-window, Esc to return.
+	if m.help.Active() {
+		return m.help.View(m.width, m.height)
 	}
 
 	menu := m.renderMenuBar()
@@ -723,6 +778,12 @@ func (m *model) toggleFocus() {
 }
 
 func (m *model) statusBar() string {
+	// Command-mode prompt or trailing error takes over the bar when
+	// active. Checked first so `:` is unambiguous — the user can
+	// always see what they've typed even mid-confirm.
+	if s := m.command.View(m.width); s != "" {
+		return s
+	}
 	// Confirm-delete takes over the whole bar so the y/N prompt is
 	// unmissable. Same for delete errors — they replace the hints until
 	// the next key clears them.
@@ -763,9 +824,9 @@ func (m *model) statusBar() string {
 	case m.focus == focusSearch:
 		right = "  type to search  ↑↓ nav  enter pick  esc cancel  "
 	case m.editable:
-		right = "  ↑↓ nav  → expand  g/G top/bot  / search  e edit  n new  d delete  q quit  "
+		right = "  ↑↓ nav  → expand  g/G top/bot  / search  e edit  n new  d delete  :help  q quit  "
 	default:
-		right = "  ↑↓ nav  → expand  ← collapse  g/G top/bot  / search  tab switch  q quit  "
+		right = "  ↑↓ nav  → expand  ← collapse  g/G top/bot  / search  tab switch  :help  q quit  "
 	}
 
 	// Pad between left and right so the bar spans the full width.

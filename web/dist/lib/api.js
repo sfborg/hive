@@ -76,6 +76,10 @@ let vocabCache = null;
 // fetched once, byURI is a URI→term lookup for label display.
 let nomenCache = null;
 let nomenByURI = null;
+// keymapCache holds the shared shortcut list loaded from /api/keymap.
+// Populated once at boot; consumers read via api.keymap.all() or
+// api.keymap.forScope(scope).
+let keymapCache = null;
 
 // sfga nom_code IDs (ZOOLOGICAL, BOTANICAL, …) → NOMEN label prefix
 // (ICZN, ICN, …). Mirrors core.NomenCodePrefix on the server side.
@@ -156,6 +160,31 @@ export const api = {
     // "" and callers fall back to their own display derivation).
     labelFor: (uri) => (nomenByURI ? nomenByURI.get(uri)?.label || "" : ""),
     isLoaded: () => nomenCache !== null,
+  },
+
+  keymap: {
+    // load fetches the canonical shortcut list from /api/keymap once
+    // and caches it in memory. Both frontends share the same source
+    // (core/ui.Keymap()) so the PWA's key handlers and help modal
+    // render from the same table.
+    load: async () => {
+      if (keymapCache) return keymapCache;
+      const resp = await j("GET", "/api/keymap");
+      // Filter to shortcuts with a web binding so callers don't have
+      // to guard every access; TUI-only rows are useless to the PWA.
+      const all = resp.items || [];
+      keymapCache = all.filter((s) => (s.keys?.web || []).length > 0);
+      return keymapCache;
+    },
+    // all returns the cached, PWA-filtered list. [] before load() has
+    // completed so first-render code paths don't crash on missing
+    // data.
+    all: () => keymapCache || [],
+    // forScope returns the subset of the cache scoped to the given
+    // pane ("global", "tree", "detail", "form"). Consumed by each
+    // scope's key handler for data-driven dispatch.
+    forScope: (scope) => (keymapCache || []).filter((s) => s.scope === scope),
+    isLoaded: () => keymapCache !== null,
   },
 
   taxon: {
