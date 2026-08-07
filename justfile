@@ -75,6 +75,23 @@ serve path='./demo.db': build
     fi
     ./bin/hive serve {{path}}
 
+# Stop any running hive serve, rebuild, and start a fresh one. Useful
+# during frontend iteration: web/dist/ is embedded into the binary via
+# //go:embed, so JS/CSS changes only reach the browser after a rebuild.
+#
+# Uses `pkill -x hive` (exact process-name match) rather than a
+# full-command grep — greping for "bin/hive serve" also matches the
+# calling shell's own argv and would kill this recipe mid-flight.
+restart-serve path='./demo.db':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkill -x hive 2>/dev/null || true
+    # Give the OS a moment to release the port. modernc.org/sqlite closes
+    # cleanly so this is generally instant; the sleep is a belt-and-braces
+    # guard against WAL cleanup racing the next bind.
+    sleep 0.5
+    just serve {{path}}
+
 # Pass arbitrary args through to the compiled binary.
 # Example: `just run view /tmp/other.db`
 run *ARGS: build

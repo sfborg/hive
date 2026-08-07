@@ -67,6 +67,15 @@ type treeModel struct {
 	focused      bool
 	err          error
 	pendingCount int
+	// pendingDescend is the number of "l" steps still to walk after
+	// an async child-page load. Bubble Tea's Update can't await mid-
+	// call, so a count-prefixed descent (5l, 10l) that crosses
+	// collapsed nodes has to survive across treeChildrenMsg cycles:
+	// each async load's applyChildren consumes one step from this
+	// counter and issues the next expandCurrent until we hit zero or
+	// a leaf. Not touched by fully-loaded synchronous descent — those
+	// consume their count inside a single Update.
+	pendingDescend int
 }
 
 func newTreeModel(a *core.Archive) treeModel {
@@ -92,7 +101,13 @@ type treeChildrenMsg struct {
 	nodes         []treeNode
 	cursorHint    int
 	cursorHintSet bool
-	err           error
+	// descendAfterLoad asks applyChildren to move the cursor to the
+	// first newly-loaded child after a first-page expand. Set by
+	// expandCurrent so the `l` / →/Enter binding lands one row into
+	// the parent it just expanded — one press, one level down. No
+	// effect on load-more (offset>0) or roots (parentID=="") paths.
+	descendAfterLoad bool
+	err              error
 }
 
 // loadChildren returns a tea.Cmd that fetches a page of children under
@@ -102,6 +117,15 @@ type treeChildrenMsg struct {
 // rows; the applier is responsible for inserting a sentinel afterwards
 // based on msg.remaining.
 func (m treeModel) loadChildren(parentID string, depth, offset int) tea.Cmd {
+	return m.loadChildrenOpts(parentID, depth, offset, false)
+}
+
+// loadChildrenOpts is the full-arg variant; loadChildren wraps it with
+// descendAfterLoad=false for the paths that don't want cursor movement
+// (roots, load-more). expandCurrent uses the descendAfterLoad=true form
+// so `l` on a collapsed parent lands the cursor on the first child once
+// the fetch returns — one press, one level down.
+func (m treeModel) loadChildrenOpts(parentID string, depth, offset int, descendAfterLoad bool) tea.Cmd {
 	return func() tea.Msg {
 		hits, total, err := m.a.ListChildrenPage(context.Background(), parentID, treePageSize, offset)
 		if err != nil {
@@ -112,11 +136,12 @@ func (m treeModel) loadChildren(parentID string, depth, offset int) tea.Cmd {
 			nodes[i] = hitToTreeNode(h, depth)
 		}
 		return treeChildrenMsg{
-			parentID:  parentID,
-			depth:     depth,
-			offset:    offset,
-			remaining: total - (offset + len(hits)),
-			nodes:     nodes,
+			parentID:         parentID,
+			depth:            depth,
+			offset:           offset,
+			remaining:        total - (offset + len(hits)),
+			nodes:            nodes,
+			descendAfterLoad: descendAfterLoad,
 		}
 	}
 }
@@ -241,7 +266,17 @@ func (m treeModel) RevealCmd(id string) tea.Cmd {
 func (m treeModel) Update(msg tea.Msg, keys keyMap) (treeModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case treeChildrenMsg:
-		return m.applyChildren(msg), nil
+		m = m.applyChildren(msg)
+		// Chain the vim-count descent through async loads: after each
+		// child-page load commits and applyChildren has moved the
+		// cursor to the first newly-loaded row, kick off the next
+		// expand tick if there's remaining descent budget. Guarded on
+		// descendAfterLoad so ordinary loads (roots, sentinel expand)
+		// don't accidentally start walking down the tree.
+		if msg.descendAfterLoad && m.pendingDescend > 0 {
+			return m.descendSteps(m.pendingDescend)
+		}
+		return m, nil
 	case treeRevealedMsg:
 		return m.applyReveal(msg), nil
 	case tea.KeyMsg:
@@ -257,25 +292,53 @@ func (m treeModel) Update(msg tea.Msg, keys keyMap) (treeModel, tea.Cmd) {
 			m.pendingCount = m.pendingCount*10 + d
 			return m, nil
 		}
+		// All motion / expand / collapse actions consume the pending
+		// count as a repeat multiplier (10j → down ten, 10l → descend
+		// ten levels via the leftmost path). g/G still consume it as
+		// a group-index target inside jumpInSiblings. Cap at 10000 as
+		// a paranoia guard against a runaway Nj.
+		count := m.pendingCount
+		if count < 1 {
+			count = 1
+		}
+		if count > 10000 {
+			count = 10000
+		}
 		switch {
 		case key.Matches(msg, keys.Up):
 			m.pendingCount = 0
-			if m.cursor > 0 {
+			for i := 0; i < count; i++ {
+				if m.cursor <= 0 {
+					break
+				}
 				m.cursor--
 			}
 			return m, m.autoLoadCmd()
 		case key.Matches(msg, keys.Down):
 			m.pendingCount = 0
-			if m.cursor < len(m.nodes)-1 {
+			for i := 0; i < count; i++ {
+				if m.cursor >= len(m.nodes)-1 {
+					break
+				}
 				m.cursor++
 			}
 			return m, m.autoLoadCmd()
 		case key.Matches(msg, keys.Expand):
+			// descendSteps walks the count synchronously, and — when
+			// it hits a collapsed node — issues the async child load
+			// and stashes the remaining count on the model so
+			// applyChildren can chain the next step once the load
+			// commits. This makes 10l descend 10 levels even when
+			// crossing not-yet-loaded child pages, matching what the
+			// WUI does with await.
 			m.pendingCount = 0
-			return m.expandCurrent()
+			return m.descendSteps(count)
 		case key.Matches(msg, keys.Collapse):
 			m.pendingCount = 0
-			return m.collapseCurrent(), nil
+			for i := 0; i < count; i++ {
+				m = m.collapseCurrent()
+			}
+			return m, nil
 		case key.Matches(msg, keys.Top):
 			return m.jumpInSiblings(true)
 		case key.Matches(msg, keys.LoadAll):
@@ -580,6 +643,12 @@ func (m treeModel) applyChildren(msg treeChildrenMsg) treeModel {
 		}
 		m.nodes = append(m.nodes[:i+1], inserted...)
 		m.nodes = append(m.nodes, suffix...)
+		// Descend-on-load: expandCurrent asked us to land on the
+		// first newly-loaded child so `l` on a collapsed parent
+		// completes as one press = one level down.
+		if msg.descendAfterLoad && len(msg.nodes) > 0 {
+			m.cursor = i + 1
+		}
 		return m
 	}
 	return m
@@ -602,6 +671,52 @@ func (m treeModel) applyReveal(msg treeRevealedMsg) treeModel {
 	return m
 }
 
+// descendSteps walks `count` levels down the leftmost path,
+// consuming pending descent tickets. Runs synchronously through
+// already-expanded chains; when it hits a collapsed node it stores
+// the remaining count on pendingDescend and returns the async
+// child-load cmd. applyChildren then calls back into descendSteps
+// after the load commits (see the treeChildrenMsg case in Update),
+// chaining the descent across as many async loads as needed.
+//
+// Also stops early on a leaf (or any position where expandCurrent
+// can't advance the cursor) so a stray 100l doesn't keep chasing
+// no-op expands.
+func (m treeModel) descendSteps(count int) (treeModel, tea.Cmd) {
+	for count > 0 {
+		before := m.cursor
+		var cmd tea.Cmd
+		m, cmd = m.expandCurrent()
+		if cmd != nil {
+			// Async load — save remainder for the next chain link.
+			// applyChildren will decrement one more once the load
+			// commits and calls back here.
+			m.pendingDescend = count - 1
+			return m, cmd
+		}
+		if m.cursor == before {
+			// Nothing left to descend into (leaf, empty child list,
+			// or a broken invariant). Bail cleanly.
+			m.pendingDescend = 0
+			return m, nil
+		}
+		count--
+	}
+	m.pendingDescend = 0
+	return m, nil
+}
+
+// expandCurrent implements the → / l / Enter contract, matching the
+// WUI's _expandOrEnter:
+//   - Sentinel row     → load more (cursor stays on the sentinel).
+//   - Leaf             → no-op.
+//   - Collapsed parent → load children AND move cursor to first child
+//                        once the load returns (async, via applyChildren
+//                        honoring descendAfterLoad).
+//   - Expanded parent  → move cursor to first child immediately.
+//
+// Folding expand + descend into one press means `l l l l` walks the
+// leftmost path efficiently and Nl descends N levels in one action.
 func (m treeModel) expandCurrent() (treeModel, tea.Cmd) {
 	if len(m.nodes) == 0 {
 		return m, nil
@@ -614,12 +729,24 @@ func (m treeModel) expandCurrent() (treeModel, tea.Cmd) {
 		offset := m.siblingsBefore(m.cursor)
 		return m, m.loadChildren(cur.parentID, cur.depth, offset)
 	}
-	if !cur.hasChildren || cur.expanded {
+	if !cur.hasChildren {
 		return m, nil
 	}
-	// Children of a leaf-ish node — mark expanded immediately so a second
-	// expand doesn't re-fetch, and issue the load command.
-	return m, m.loadChildren(cur.id, cur.depth+1, 0)
+	if cur.expanded {
+		// Already loaded — first child is the next row, unless the
+		// children were collapsed underneath (impossible; collapse
+		// removes them from the flat list). Move cursor to it.
+		if m.cursor+1 < len(m.nodes) {
+			child := m.nodes[m.cursor+1]
+			if !child.isSentinel() && child.depth == cur.depth+1 {
+				m.cursor = m.cursor + 1
+			}
+		}
+		return m, nil
+	}
+	// Collapsed — trigger a load and ask applyChildren to move the
+	// cursor to the first newly-loaded row when the fetch returns.
+	return m, m.loadChildrenOpts(cur.id, cur.depth+1, 0, true)
 }
 
 // siblingsBefore counts the taxa at nodes[idx].depth that appear

@@ -518,6 +518,17 @@ class SfgaApp extends LitElement {
     }
     aside .tree-scroll {
       overflow: auto;
+      /* Focus ring wraps the whole tree area below the search box and
+         fills to the bottom of the pane — so a short tree doesn't get
+         a half-height content-sized ring. :focus-within reaches
+         through the sfga-tree shadow boundary and matches when the
+         inner <ul> has focus, so keyboard-nav mode is signaled by the
+         whole pane lighting up. See PARITY.md § Focus semantics. */
+      border: 2px solid transparent;
+      border-radius: 2px;
+    }
+    aside .tree-scroll:focus-within {
+      border-color: var(--accent);
     }
     .error {
       color: var(--error);
@@ -721,6 +732,31 @@ class SfgaApp extends LitElement {
         if (this.helpOpen) {
           e.preventDefault();
           this.helpOpen = false;
+          return;
+        }
+        // Escape while typing in the search combobox returns focus
+        // to the tree so the curator can start arrow-nav without
+        // Tab-cycling out. Detected via composedPath so we don't
+        // accidentally hijack Escape inside other inputs (edit
+        // forms, add-reference modal — they own their own Esc).
+        const path = e.composedPath ? e.composedPath() : [];
+        const inSearchCombo = path.some(
+          (node) =>
+            node instanceof HTMLElement &&
+            node.tagName === "SFGA-COMBOBOX" &&
+            node.classList.contains("search"),
+        );
+        if (inSearchCombo && this.screen === "taxa") {
+          e.preventDefault();
+          const combo = this.renderRoot.querySelector("sfga-combobox.search");
+          if (combo) {
+            combo.value = "";
+            combo.valueName = "";
+            const input = combo.renderRoot?.querySelector("input");
+            if (input) input.blur();
+          }
+          const tree = this.renderRoot.querySelector("sfga-tree");
+          if (tree && typeof tree.focus === "function") tree.focus();
         }
         return;
       }
@@ -995,19 +1031,11 @@ class SfgaTree extends LitElement {
       list-style: none;
       margin: 0;
       padding: 0;
-      /* Suppress the default focus outline on the <ul> in favor of the
-         inset ring below — the default outline sits outside the element
-         and gets clipped by the scroll container. */
+      /* Suppress the default focus outline on the <ul>; the pane-level
+         ring lives on the .tree-scroll wrapper in the app shell so it
+         fills the whole tree area (not just the content-sized <ul>).
+         See PARITY.md § Focus semantics. */
       outline: none;
-    }
-    /* Focus ring signals that keyboard shortcuts are now scoped to the
-       tree. Inset so it stays visible inside overflow:auto containers.
-       Shown on both mouse-click and Tab-in (per PARITY.md § Focus
-       semantics), not just :focus-visible — the whole point is to make
-       the "keyboard-active" state obvious after a click. */
-    ul:focus {
-      box-shadow: inset 0 0 0 2px var(--accent);
-      border-radius: 2px;
     }
     li {
       padding: 0.15rem 0.35rem;
@@ -1060,6 +1088,20 @@ class SfgaTree extends LitElement {
   async connectedCallback() {
     super.connectedCallback();
     await this.reloadRoots();
+    // Auto-focus the tree once the initial roots have rendered so a
+    // keyboard-first curator can start arrow-nav without clicking or
+    // Tab-cycling past the search box. Deferred to updateComplete so
+    // Lit has actually mounted the <ul>.
+    await this.updateComplete;
+    this.focus();
+  }
+
+  // focus places keyboard focus on the tree's <ul>, making the tree
+  // the active pane for arrow / vim shortcuts. Public so the shell can
+  // call it (e.g. Esc in the search input returns focus here).
+  focus() {
+    const ul = this.renderRoot.querySelector("ul");
+    if (ul) ul.focus({ preventScroll: true });
   }
 
   // reloadRoots re-fetches the top-level page and replaces the whole
@@ -1269,8 +1311,10 @@ class SfgaTree extends LitElement {
   //
   // Dispatch is data-driven from api.keymap.forScope("tree") so the
   // shared source in core/ui/keymap.go is the single place a binding
-  // is edited.
-  _onKeyDown(e) {
+  // is edited. async so the loop bodies below can await
+  // _moveCursor / _expandOrEnter / _collapseOrParent — each of those
+  // may issue an API fetch (child page load, sentinel expansion).
+  async _onKeyDown(e) {
     // Digit prefix — accumulate into pendingCount, consumed by g/G.
     // Not a shortcut (no Action); handled before dispatch. Bare digits
     // only; modifier+digit is reserved for future bindings.
@@ -1300,35 +1344,43 @@ class SfgaTree extends LitElement {
 
     e.preventDefault();
 
-    // Actions that reset pending count on invocation (i.e. everything
-    // except tree-first-sibling and tree-last-sibling, which consume
-    // it).
-    const consumesPending = new Set(["tree-first-sibling", "tree-last-sibling"]);
-    if (!consumesPending.has(action)) {
-      this._pendingCount = 0;
-    }
+    // Every tree action consumes the pending count. Jump actions
+    // (g/G) read it as a group-index target; motion actions
+    // (j/k/l/h) treat it as a repeat count. cancel ignores it.
+    // Cap loops at 10000 as a paranoia guard against a stray 100000j
+    // that would otherwise block the event loop.
+    const count = Math.max(1, Math.min(this._pendingCount || 1, 10000));
+    this._pendingCount = 0;
 
     switch (action) {
       case "cancel":
         e.currentTarget.blur();
         return;
       case "tree-up":
-        this._moveCursor(-1);
+        for (let i = 0; i < count; i++) {
+          if (!(await this._moveCursor(-1))) break;
+        }
         return;
       case "tree-down":
-        this._moveCursor(1);
+        for (let i = 0; i < count; i++) {
+          if (!(await this._moveCursor(1))) break;
+        }
         return;
       case "tree-expand":
-        this._expandOrEnter();
+        for (let i = 0; i < count; i++) {
+          if (!(await this._expandOrEnter())) break;
+        }
         return;
       case "tree-collapse":
-        this._collapseOrParent();
+        for (let i = 0; i < count; i++) {
+          if (!(await this._collapseOrParent())) break;
+        }
         return;
       case "tree-first-sibling":
-        this._jumpInSiblings(true);
+        this._jumpInSiblings(true, count);
         return;
       case "tree-last-sibling":
-        this._jumpInSiblings(false);
+        this._jumpInSiblings(false, count);
         return;
     }
   }
@@ -1337,9 +1389,11 @@ class SfgaTree extends LitElement {
   // (typically ±1), skipping sentinel rows. When moving down past the
   // last taxon into a sentinel, triggers a load-more so the sentinel
   // page-in happens without a separate keypress — mirrors the TUI's
-  // autoLoad-on-sentinel behavior.
+  // autoLoad-on-sentinel behavior. Returns true when the cursor
+  // actually moved, false at the edges — lets count-prefix loops
+  // break early once they run out of visible taxa.
   async _moveCursor(dir) {
-    if (this.nodes.length === 0) return;
+    if (this.nodes.length === 0) return false;
     let idx = this._cursorIndex();
     if (idx < 0) {
       // Nothing selected yet — land on the first / last taxon.
@@ -1357,46 +1411,63 @@ class SfgaTree extends LitElement {
         const last = this.nodes[this.nodes.length - 1];
         if (last && last.sentinel) await this._loadMore(last);
       }
-      return;
+      return false;
     }
     await this._moveTo(next);
+    return true;
   }
 
   // _expandOrEnter implements the →/l/Enter contract:
-  //   - Sentinel row     → load more.
-  //   - Leaf             → no-op.
-  //   - Collapsed parent → expand.
-  //   - Expanded parent  → step cursor into the first child.
+  //   - Leaf             → no-op (nothing to descend into).
+  //   - Collapsed parent → expand AND step cursor into first child.
+  //   - Expanded parent  → step cursor into first child.
+  //
+  // "Always descend when there's somewhere to descend to" — expanding
+  // a node is almost always followed by wanting to look at what's
+  // inside, so folding the two into one press means `l l l l` walks
+  // the leftmost path efficiently and Nl descends N levels in one
+  // action. Costs one extra press to move to a sibling of the first
+  // child (down-arrow after), which is a fair trade.
+  //
+  // Returns true when the cursor advanced (used by the count-prefix
+  // loop to break early at a leaf).
   async _expandOrEnter() {
     const idx = this._cursorIndex();
-    if (idx < 0) return;
+    if (idx < 0) return false;
     const node = this.nodes[idx];
-    if (!node.has_children) return;
+    if (!node.has_children) return false;
     if (!node.expanded) {
       await this._expand(node);
-      return;
     }
-    // Already expanded — first child is the next node, unless the
-    // child list is empty (rare — cache invariant says has_children
-    // implies at least one child).
-    const child = this.nodes[idx + 1];
-    if (child && !child.sentinel && child.depth === node.depth + 1) {
-      await this._moveTo(idx + 1);
+    // Re-check position — _expand splices children after this row
+    // without moving this row, so idx is still valid, but read fresh
+    // to be defensive against future refactors.
+    const currentIdx = this._cursorIndex();
+    if (currentIdx < 0) return false;
+    const child = this.nodes[currentIdx + 1];
+    if (child && !child.sentinel && child.depth === this.nodes[currentIdx].depth + 1) {
+      await this._moveTo(currentIdx + 1);
+      return true;
     }
+    return false;
   }
 
   // _collapseOrParent implements the ←/h contract:
-  //   - Expanded node   → collapse (children drop out).
+  //   - Expanded node   → collapse (children drop out; cursor stays).
   //   - Anything else   → jump cursor to the parent one depth up.
+  //
+  // Returns true when h "did something" (either collapsed the current
+  // row or ascended). Used by the count-prefix loop to stop looping
+  // once we've reached an already-collapsed root.
   async _collapseOrParent() {
     const idx = this._cursorIndex();
-    if (idx < 0) return;
+    if (idx < 0) return false;
     const node = this.nodes[idx];
     if (node.expanded) {
       this._collapse(node);
-      return;
+      return true;
     }
-    if (node.depth === 0) return;
+    if (node.depth === 0) return false;
     // Walk back through the flat list until we find the row at the
     // parent's depth — that's the parent (siblings share depth, so
     // the first shallower row above must be an ancestor at depth-1).
@@ -1404,9 +1475,10 @@ class SfgaTree extends LitElement {
       if (this.nodes[i].sentinel) continue;
       if (this.nodes[i].depth === node.depth - 1) {
         await this._moveTo(i);
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   // _jumpInSiblings handles g / G / Ng / NG. The sibling group is the
@@ -1418,9 +1490,16 @@ class SfgaTree extends LitElement {
   //   Ng / NG → Nth (1-based); loads more if N > loaded and group is
   //             truncated, then lands on the sentinel (subsequent G
   //             takes you to the new last row).
-  async _jumpInSiblings(top) {
-    const count = this._pendingCount;
-    this._pendingCount = 0;
+  //
+  // `count` comes from the vim-style pending-count prefix — 1 when
+  // unspecified, otherwise the accumulated digit sequence.
+  async _jumpInSiblings(top, count) {
+    // Bare g/G (no count) is signaled by count === 1 from the
+    // dispatcher; internally we treat count === 1 as "no explicit
+    // target" so the top vs. bottom branches below pick their
+    // defaults. Callers wanting to jump to sibling 1 explicitly
+    // achieve it with plain g, which is already position 1.
+    if (count === 1) count = 0;
     const idx = this._cursorIndex();
     if (idx < 0) {
       // No cursor yet — g/G at start land on first / last visible taxon.

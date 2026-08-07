@@ -173,7 +173,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "tree-expand",
-			Description: "expand node, or step into first child",
+			Description: "expand and step into first child (Nl descends N)",
 			Display:     "→ / l / Enter",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"right", "l", "enter"}, []string{"ArrowRight", "l", "Enter"}),

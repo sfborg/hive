@@ -150,7 +150,15 @@ func (m referencesModel) View(width, height int) string {
 	detailW := width - listW - 1
 
 	list := m.renderList(listW, height)
-	sep := dimStyle.Render(strings.Repeat("│\n", height))
+	// Vertical separator: exactly `height` lines with no trailing
+	// newline. A trailing "\n" would push lipgloss.Height to
+	// height+1, and JoinHorizontal would then pad the whole row to
+	// that inflated height — overflowing the outer bordered pane and
+	// scrolling the menu bar off the top of the terminal.
+	sep := ""
+	if height > 0 {
+		sep = dimStyle.Render(strings.Repeat("│\n", height-1) + "│")
+	}
 	detail := m.renderDetail(detailW, height)
 	return lipgloss.JoinHorizontal(lipgloss.Top, list, sep, detail)
 }
