@@ -1,4 +1,4 @@
-// Package serve implements `hive serve <archive.db>` — the HTTP + PWA
+// Package serve implements `hive serve <archive.db>` — the HTTP + WUI
 // frontend. Runs the read-only API alongside a Lit-based single-page shell.
 //
 // v0 is deliberately narrow: read-only endpoints, localhost bind, no
@@ -81,7 +81,7 @@ func Run(archivePath string, opts Options) error {
 	s := &server{a: a, archivePath: archivePath}
 	mux := s.routes()
 
-	// Static PWA served from web/dist embed. The API routes above win first
+	// Static WUI served from web/dist embed. The API routes above win first
 	// (their patterns are more specific than "GET /"); everything else falls
 	// through to the file server.
 	staticFS, err := fs.Sub(web.DistFS, "dist")

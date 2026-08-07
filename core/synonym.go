@@ -40,7 +40,7 @@ type SynonymHit struct {
 // ListSynonymHits returns synonyms for a taxon with each row's name
 // rendered as a Label (canonical + authorship, italicized per rank). Same
 // ordering as ListSynonyms — alphabetical by canonical name — so the two
-// list views stay consistent across the TUI and PWA.
+// list views stay consistent across the TUI and WUI.
 func (a *Archive) ListSynonymHits(ctx context.Context, taxonID string) ([]SynonymHit, error) {
 	const q = `SELECT
 		COALESCE(s.col__id, ''),

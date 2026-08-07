@@ -66,7 +66,7 @@ func BuildLabel(canonical, authorship, rankID string, extinct bool) Label {
 // same italicization rule as BuildLabel does for its HTML output. The
 // TUI calls it to wrap canonical name spans in lipgloss italic before
 // rendering, giving the terminal the same visual hierarchy as the
-// PWA's HTML.
+// WUI's HTML.
 func ItalicForRank(rankID string) bool { return italicForRank(rankID) }
 
 // italicForRank reports whether names at the given sfga rank should be

@@ -1,5 +1,5 @@
 /**
- * hive PWA — walking-skeleton entry point.
+ * hive WUI — walking-skeleton entry point.
  *
  * Renders a two-pane layout: expandable taxon tree on the left, detail
  * view on the right. Data flows through /lib/api.js only — no fetch calls
@@ -84,7 +84,7 @@ const iconPaths = {
 };
 
 // matchesKey reports whether a DOM KeyboardEvent matches one of the
-// key strings from the shared keymap (core/ui.Shortcut.Keys["web"]).
+// key strings from the shared keymap (core/ui.Shortcut.Keys["wui"]).
 // Format is either a bare KeyboardEvent.key value ("ArrowUp", "g",
 // "?") or a "modifier+key" combination ("alt+t", "ctrl+s"). Shift
 // is implicit in the key value itself (KeyboardEvent.key already
@@ -104,12 +104,12 @@ function matchesKey(e, keyStr) {
 }
 
 // actionForEvent walks a scope-filtered shortcut list and returns
-// the Action string of the first entry whose web keys match the
+// the Action string of the first entry whose WUI keys match the
 // event, or null if none. The shared keymap lives in memory (loaded
 // by api.keymap.load() at boot) so this is a cheap in-process match.
 function actionForEvent(shortcuts, e) {
   for (const s of shortcuts) {
-    const keys = s.keys?.web || [];
+    const keys = s.keys?.wui || [];
     for (const k of keys) {
       if (matchesKey(e, k)) return s.action;
     }

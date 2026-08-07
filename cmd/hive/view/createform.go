@@ -336,7 +336,7 @@ func (m detailModel) renderCreatePreview() string {
 		hint := "[tab] next   [shift+tab] prev   " + save + "   [esc] back to verbatim"
 		// Offer the basionym follow-up only from the accepted-name
 		// path when the verbatim looks like a subsequent combination
-		// (parens present, matching the PWA's rule).
+		// (parens present, matching the WUI's rule).
 		if m.createBasionymForTaxonID == "" &&
 			(strings.Contains(m.createSciName.Value(), "(") ||
 				strings.TrimSpace(m.createPreviewInputs[cpfBasionymAuthor].Value()) != "" ||
@@ -351,7 +351,7 @@ func (m detailModel) renderCreatePreview() string {
 // previewRefLabel names the reference picker after whatever atomized
 // authorship fields the curator has filled in, so it's hard to mistake
 // which combination the reference is being attached to. Mirrors the
-// PWA's referenceLabelFor rule.
+// WUI's referenceLabelFor rule.
 func (m detailModel) previewRefLabel() string {
 	combA := strings.TrimSpace(m.createPreviewInputs[cpfCombAuthor].Value())
 	combY := strings.TrimSpace(m.createPreviewInputs[cpfCombYear].Value())

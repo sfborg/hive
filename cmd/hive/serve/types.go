@@ -14,7 +14,7 @@ import (
 // when absent, plain values when present).
 //
 // A dedicated API layer here keeps sql-flavored types out of JSON responses
-// and gives the PWA a predictable wire format. It also means we can evolve
+// and gives the WUI a predictable wire format. It also means we can evolve
 // the API shape without touching core or forcing changes upstream in sflib.
 //
 // The types intentionally cover only what the read-only endpoints need in
@@ -195,7 +195,7 @@ type apiNameHit struct {
 
 // apiLabel is the wire form of a rendered display string — plain text
 // plus HTML-styled variant. See core.BuildLabel for the formatting rules;
-// front-ends pick whichever form fits their medium (PWA renders `html`
+// front-ends pick whichever form fits their medium (WUI renders `html`
 // via unsafeHTML; TUI uses `text`).
 type apiLabel struct {
 	Text string `json:"text,omitempty"`
@@ -273,7 +273,7 @@ type apiName struct {
 	BasionymExAuthorship      string `json:"basionym_ex_authorship,omitempty"`
 	BasionymAuthorshipYear    string `json:"basionym_authorship_year,omitempty"`
 
-	// gn__ cache. Exposed but marked so the PWA can hide them behind a
+	// gn__ cache. Exposed but marked so the WUI can hide them behind a
 	// "parse details" affordance rather than treat them as editable.
 	CanonicalSimple  string `json:"canonical_simple,omitempty"`
 	CanonicalFull    string `json:"canonical_full,omitempty"`

@@ -12,7 +12,7 @@ import (
 )
 
 // treePageSize caps how many children we load per parent. Matches the
-// PWA's default (`limit=200` on /api/taxon/{id}/children) so both
+// WUI's default (`limit=200` on /api/taxon/{id}/children) so both
 // frontends handle wide-fanout taxa (Cladocera, some spider families
 // with cryptic species, undescribed-genus grab-bags) consistently.
 // Above the limit, a sentinel row hints that "use / search" is the way

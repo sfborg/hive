@@ -600,7 +600,7 @@ func (m *model) deleteTaxonCmd(id string) tea.Cmd {
 // View renders the menu bar, the active screen (Taxa is the two-pane
 // tree+detail; Metadata will be a single-pane form), and a status bar
 // underneath. The tree pane has a search combobox pinned above it —
-// same UX as the PWA.
+// same UX as the WUI.
 func (m *model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return ""

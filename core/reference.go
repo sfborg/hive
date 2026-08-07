@@ -14,7 +14,7 @@ import (
 
 // ReferenceLabel composes a compact "Author (Year) Title" display from
 // a coldp.Reference — the same format the /api/reference/search hits
-// use and the shape the TUI/PWA pickers show curators.
+// use and the shape the TUI/WUI pickers show curators.
 //
 // Falls back to Citation, then ID, when the structured fields are
 // empty so the picker never shows a blank line for a stored reference.

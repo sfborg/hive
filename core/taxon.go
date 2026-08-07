@@ -14,7 +14,7 @@ import (
 
 // TaxonHit is a thin projection returned by list/search endpoints. Callers
 // fetch the full coldp.Taxon only when opening a detail view. This split
-// matters for the PWA over HTTP as much as for TUI tree rendering.
+// matters for the WUI over HTTP as much as for TUI tree rendering.
 //
 // Label is server-rendered from Name+Authorship+Rank+Extinct via
 // BuildLabel; the individual fields are still exposed for callers that
@@ -204,7 +204,7 @@ func (a *Archive) CodeForParent(ctx context.Context, parentID string) (string, e
 
 // SearchTaxa returns up to `limit` taxa whose associated name canonical or
 // scientific-name string matches q as a case-insensitive substring. Returns
-// thin TaxonHit projections — same shape as ListChildren so the PWA's
+// thin TaxonHit projections — same shape as ListChildren so the WUI's
 // tree components can render either result set uniformly.
 //
 // Ordering is alphabetical by display name for a stable client experience.

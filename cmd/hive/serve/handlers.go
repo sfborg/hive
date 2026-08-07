@@ -114,10 +114,10 @@ func (s *server) handleNomenVocab(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKeymap returns the canonical shortcut list from core/ui.
-// Served whole so the PWA fetches once at boot and holds it in the
+// Served whole so the WUI fetches once at boot and holds it in the
 // module-level cache alongside the vocab / NOMEN bundles.
 //
-// The PWA filters client-side to web-available bindings; returning
+// The WUI filters client-side to WUI-available bindings; returning
 // the full list (including TUI-only rows) keeps the endpoint useful
 // to other consumers — future automation tooling, documentation
 // generators, or the eventual customization layer.
@@ -173,7 +173,7 @@ func (s *server) handlePatchMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleArchive returns the archive's identity: path, schema version, and
-// read-only mode. Cheap enough to be called on every PWA boot to display
+// read-only mode. Cheap enough to be called on every WUI boot to display
 // the current dataset.
 func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 	version, err := s.a.SchemaVersion(r.Context())
@@ -190,7 +190,7 @@ func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 
 // handleRoots is a paginated projection of root-level taxa. Alias of
 // /api/taxon/{id}/children with an empty parent ID; kept as a dedicated
-// endpoint so PWA/TUI code that wants the top of the tree doesn't need to
+// endpoint so WUI/TUI code that wants the top of the tree doesn't need to
 // invent a magic sentinel.
 func (s *server) handleRoots(w http.ResponseWriter, r *http.Request) {
 	s.writeChildren(w, r, "")
@@ -374,7 +374,7 @@ func (s *server) referenceLabel(ctx context.Context, id string) string {
 }
 
 // handleTaxonSearch returns taxa whose name matches q as a case-insensitive
-// substring. Backs the PWA parent picker; also useful as a generic tree
+// substring. Backs the WUI parent picker; also useful as a generic tree
 // navigation aid.
 func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
@@ -739,7 +739,7 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 
 // handleResolveDOI fetches an OpenAlex Work for the DOI in the `doi`
 // query param and returns the resulting coldp.Reference — *unsaved*.
-// The modal shows this as a preview form; on curator confirm the PWA
+// The modal shows this as a preview form; on curator confirm the WUI
 // POSTs to /api/reference to persist. Returns 404 with a distinguishing
 // problem type when OpenAlex has no match, 502 on upstream errors.
 func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
@@ -761,7 +761,7 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Clear the generated UUID from ResolveDOI — this is a preview, not
-	// a saved row. The PWA leaves ID empty on the POST so core.CreateReference
+	// a saved row. The WUI leaves ID empty on the POST so core.CreateReference
 	// mints a fresh one at write time. Sending a UUID here would be
 	// misleading (the curator might think it's already saved).
 	ref.ID = ""
@@ -876,7 +876,7 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 // an apiName-shaped preview with atomized col__ fields + gn__* cache + a
 // code-scoped rank guess. Nothing is written — the response's `id` is
 // empty and `modified` is unset. Drives the two-step name-add form: the
-// PWA/TUI collect the verbatim + code from the curator, POST here, then
+// WUI/TUI collect the verbatim + code from the curator, POST here, then
 // show the returned atomized breakdown as an editable form. On confirm
 // the form POSTs to /api/taxon (accepted) or the synonym write path.
 //

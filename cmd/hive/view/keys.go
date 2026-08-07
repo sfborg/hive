@@ -10,7 +10,7 @@ import (
 // keyMap holds every Bubble Tea binding used by the view TUI. Field
 // values are derived from core/ui.Keymap() at construction time via
 // defaultKeys(), so the shared keymap is the single source of truth
-// — the PWA reads the same list via GET /api/keymap and both frontends
+// — the WUI reads the same list via GET /api/keymap and both frontends
 // stay in sync.
 type keyMap struct {
 	Up          key.Binding

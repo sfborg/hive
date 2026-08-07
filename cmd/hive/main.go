@@ -305,7 +305,7 @@ Subcommands:
   edit [--orcid ID] [--openalex-email EMAIL] <archive.db>
                       Editing TUI
   serve [--bind host:port] [--readonly] [--orcid ID] [--openalex-email EMAIL] [--allow-unauthenticated] <archive.db>
-                      HTTP + PWA
+                      HTTP + WUI (browser)
   config <get|set|path> [args]
                       Read / write ~/.config/sfborg/hive/config.yml
   import <src> -o <archive.db>

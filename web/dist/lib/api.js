@@ -1,7 +1,7 @@
 /**
- * hive PWA API client.
+ * hive WUI API client.
  *
- * The only place in the PWA that talks to /api/*. Components take data as
+ * The only place in the WUI that talks to /api/*. Components take data as
  * properties and dispatch CustomEvents for actions; a top-level controller
  * calls this module and re-renders on responses.
  *
@@ -165,18 +165,18 @@ export const api = {
   keymap: {
     // load fetches the canonical shortcut list from /api/keymap once
     // and caches it in memory. Both frontends share the same source
-    // (core/ui.Keymap()) so the PWA's key handlers and help modal
+    // (core/ui.Keymap()) so the WUI's key handlers and help modal
     // render from the same table.
     load: async () => {
       if (keymapCache) return keymapCache;
       const resp = await j("GET", "/api/keymap");
-      // Filter to shortcuts with a web binding so callers don't have
-      // to guard every access; TUI-only rows are useless to the PWA.
+      // Filter to shortcuts with a WUI binding so callers don't have
+      // to guard every access; TUI-only rows are useless to the WUI.
       const all = resp.items || [];
-      keymapCache = all.filter((s) => (s.keys?.web || []).length > 0);
+      keymapCache = all.filter((s) => (s.keys?.wui || []).length > 0);
       return keymapCache;
     },
-    // all returns the cached, PWA-filtered list. [] before load() has
+    // all returns the cached, WUI-filtered list. [] before load() has
     // completed so first-render code paths don't crash on missing
     // data.
     all: () => keymapCache || [],

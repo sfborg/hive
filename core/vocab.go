@@ -34,7 +34,7 @@ type VocabTerm struct {
 //
 // Licenses is a hive-curated suggestion list — sfga's col__license is
 // a free TEXT column with no FK, so this vocab is display-only. The
-// PWA/TUI use it to populate a suggestions dropdown; curators can
+// WUI/TUI use it to populate a suggestions dropdown; curators can
 // still type a value that isn't in the list.
 type Vocabulary struct {
 	NomCode                []VocabTerm `json:"nom_code"`

@@ -13,7 +13,7 @@ import (
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
-// The TUI counterpart of the PWA's <sfga-add-reference-modal>. Same four
+// The TUI counterpart of the WUI's <sfga-add-reference-modal>. Same four
 // tabs, same in-process backing (core.OpenAlex / core.BHLnames /
 // core.ParseBibTeX / Tx.CreateReference) — the TUI just skips the HTTP
 // layer entirely because it already holds the *core.Archive.
@@ -656,7 +656,7 @@ func (m addRefModel) renderBibTeX() string {
 }
 
 // renderPreview draws the shared preview panel + action hints. Shows the
-// same field set as the PWA preview so the two modals feel like the same
+// same field set as the WUI preview so the two modals feel like the same
 // tool.
 func (m addRefModel) renderPreview() string {
 	r := m.preview

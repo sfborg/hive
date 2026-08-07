@@ -1,5 +1,5 @@
 // Package ui holds hive's shared UI descriptions — data that both the
-// TUI and the PWA render from, so a single edit propagates to both
+// TUI and the WUI render from, so a single edit propagates to both
 // frontends. See CLAUDE.md § Shared UI descriptions for the design
 // intent.
 //
@@ -33,11 +33,16 @@ const (
 	// FrontendTUI — the Bubble Tea terminal frontend. Key strings
 	// use Bubble Tea's notation ("up", "esc", "alt+t").
 	FrontendTUI = "tui"
-	// FrontendWeb — the browser-hosted frontend (the Lit PWA). Key
-	// strings use KeyboardEvent.key values with a "modifier+" prefix
-	// convention matching Bubble Tea ("ArrowUp", "Escape", "alt+t")
-	// so both frontends can share the same parsing convention.
-	FrontendWeb = "web"
+	// FrontendWUI — the browser-hosted web user interface (the Lit
+	// app under web/dist). Key strings use KeyboardEvent.key values
+	// with a "modifier+" prefix convention matching Bubble Tea
+	// ("ArrowUp", "Escape", "alt+t") so both frontends can share the
+	// same parsing convention. The "WUI" spelling is deliberately
+	// symmetric with TUI: hive calls its frontends by their medium
+	// (terminal / web) rather than by implementation detail (Bubble
+	// Tea / Lit). See CLAUDE.md for the reasoning; the app directory
+	// still lives at web/ pending a wider rename.
+	FrontendWUI = "wui"
 )
 
 // User overrides are deliberately not modeled as a Frontend value —
@@ -47,14 +52,13 @@ const (
 // this map two-valued (tui, web) so consumers can rely on that shape.
 
 // Shortcut describes one keyboard binding. Populated once in Keymap()
-// and consumed by both TUI keymap construction and the PWA via the
+// and consumed by both TUI keymap construction and the WUI via the
 // /api/keymap endpoint.
 //
 // Keys is a per-frontend map. Absence of a frontend key means the
 // binding is not available there — used for browser-preempted
 // combinations (Ctrl+S/A/O), TUI-only affordances (Tab, :, q), and
-// PWA-only affordances (? for help). Frontend-neutral customization
-// via FrontendUser is reserved for a future config-override layer.
+// WUI-only affordances (? for help).
 type Shortcut struct {
 	Action      string              `json:"action"`
 	Description string              `json:"description"`
@@ -71,10 +75,10 @@ func Keymap() []Shortcut {
 		return map[string][]string{FrontendTUI: keys}
 	}
 	wuiOnly := func(keys ...string) map[string][]string {
-		return map[string][]string{FrontendWeb: keys}
+		return map[string][]string{FrontendWUI: keys}
 	}
 	both := func(tui, wui []string) map[string][]string {
-		return map[string][]string{FrontendTUI: tui, FrontendWeb: wui}
+		return map[string][]string{FrontendTUI: tui, FrontendWUI: wui}
 	}
 
 	return []Shortcut{
@@ -123,7 +127,7 @@ func Keymap() []Shortcut {
 			Description: "open command mode (try :help)",
 			Display:     ":",
 			Scope:       ScopeGlobal,
-			// PWA has no command mode; discovery happens via the ?
+			// WUI has no command mode; discovery happens via the ?
 			// header button + shortcut instead.
 			Keys: tuiOnly(":"),
 		},
@@ -139,7 +143,7 @@ func Keymap() []Shortcut {
 			Description: "switch focus between panes",
 			Display:     "Tab",
 			Scope:       ScopeGlobal,
-			// PWA relies on browser-native Tab focus traversal; a
+			// WUI relies on browser-native Tab focus traversal; a
 			// bespoke pane-switch binding would fight it.
 			Keys: tuiOnly("tab"),
 		},
@@ -148,7 +152,7 @@ func Keymap() []Shortcut {
 			Description: "quit hive",
 			Display:     "q",
 			Scope:       ScopeGlobal,
-			// PWA has no quit — closing the tab is the browser's job.
+			// WUI has no quit — closing the tab is the browser's job.
 			Keys: tuiOnly("q", "ctrl+c"),
 		},
 
@@ -202,7 +206,7 @@ func Keymap() []Shortcut {
 			Description: "edit the selected taxon",
 			Display:     "e",
 			Scope:       ScopeDetail,
-			// PWA uses the on-screen Edit button.
+			// WUI uses the on-screen Edit button.
 			Keys: tuiOnly("e"),
 		},
 		{
@@ -226,7 +230,7 @@ func Keymap() []Shortcut {
 			Description: "save edits",
 			Display:     "Ctrl+S",
 			Scope:       ScopeForm,
-			// PWA uses on-screen Save; Ctrl+S is browser Save Page As.
+			// WUI uses on-screen Save; Ctrl+S is browser Save Page As.
 			Keys: tuiOnly("ctrl+s"),
 		},
 		{
@@ -234,7 +238,7 @@ func Keymap() []Shortcut {
 			Description: "add reference (in name edit form)",
 			Display:     "Ctrl+A",
 			Scope:       ScopeForm,
-			// PWA uses on-screen Add Reference; Ctrl+A is browser Select All.
+			// WUI uses on-screen Add Reference; Ctrl+A is browser Select All.
 			Keys: tuiOnly("ctrl+a"),
 		},
 		{
@@ -242,15 +246,15 @@ func Keymap() []Shortcut {
 			Description: "save + start adding original combination",
 			Display:     "Ctrl+O",
 			Scope:       ScopeForm,
-			// PWA uses on-screen affordance; Ctrl+O is browser Open File.
+			// WUI uses on-screen affordance; Ctrl+O is browser Open File.
 			Keys: tuiOnly("ctrl+o"),
 		},
 	}
 }
 
 // ForFrontend returns the subset of Keymap() available in the given
-// frontend (FrontendTUI or FrontendWeb). Both frontends' help
-// renderers use this to filter — a curator using the PWA shouldn't
+// frontend (FrontendTUI or FrontendWUI). Both frontends' help
+// renderers use this to filter — a curator using the WUI shouldn't
 // be shown TUI-only bindings that can't fire in the browser.
 func ForFrontend(frontend string) []Shortcut {
 	all := Keymap()

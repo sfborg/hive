@@ -110,7 +110,7 @@ func fieldIsPicker(f int) bool {
 
 
 // detailModel is the right pane — highlighted taxon detail plus, when
-// `editable` is on, an in-pane edit form. Feature parity with the PWA
+// `editable` is on, an in-pane edit form. Feature parity with the WUI
 // edit form: same field set, same tri-state extinct handling, same
 // optimistic-concurrency semantics via col__modified as If-Match.
 type detailModel struct {
@@ -292,7 +292,7 @@ func (m *detailModel) pickerFor(f int) *combobox {
 }
 
 // resolveParentName fires a background lookup for the parent taxon's
-// display name via core.TaxonRef (same server-side formatting the PWA
+// display name via core.TaxonRef (same server-side formatting the WUI
 // uses). Result arrives as a parentResolvedMsg which the Update method
 // plumbs into the parentPicker's committed name field.
 func (m *detailModel) resolveParentName(id string) tea.Cmd {
@@ -618,7 +618,7 @@ func (m *detailModel) EnterCreateModeCmd(parentID, parentLabel string) (tea.Cmd,
 // If the pane is mid-basionym (accepted taxon already saved, curator
 // hits Cancel before entering the original combination) the accepted
 // row stays committed — same "adding a basionym is optional" semantics
-// the PWA uses. Only the in-memory basionym draft is discarded.
+// the WUI uses. Only the in-memory basionym draft is discarded.
 func (m *detailModel) ExitCreateMode() {
 	m.creating = false
 	m.createStep = 0
@@ -1015,7 +1015,7 @@ func (m *detailModel) Save() tea.Cmd {
 		err := a.WithTx(ctx, func(tx *core.Tx) error {
 			// Order: MoveTaxon first (it bumps col__modified, which the
 			// If-Match on UpdateTaxon compares against), then UpdateTaxon,
-			// then UpdateName. Mirrors the PWA save flow so both frontends
+			// then UpdateName. Mirrors the WUI save flow so both frontends
 			// agree on the fresh-token propagation.
 			//
 			// After MoveTaxon fires, the taxon's Modified changes; if the
@@ -1643,7 +1643,7 @@ func pickerViewFor(m *detailModel, f int) string {
 }
 
 // headerLine renders the taxon heading with the same italicization rules
-// as the PWA's HTML label: canonical wrapped in italic when
+// as the WUI's HTML label: canonical wrapped in italic when
 // core.ItalicForRank says so, dagger prefix for extinct taxa, authorship
 // stays roman. Each segment is rendered separately with lipgloss so the
 // bold + italic combination works — a single outer lipgloss.Render would

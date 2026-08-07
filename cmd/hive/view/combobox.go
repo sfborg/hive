@@ -11,7 +11,7 @@ import (
 	"github.com/sfborg/hive/core"
 )
 
-// The TUI counterpart of the PWA's <sfga-combobox>: a text input with an
+// The TUI counterpart of the WUI's <sfga-combobox>: a text input with an
 // inline dropdown of filtered results. Same UX as the web version:
 //   * type to filter
 //   * ↓/↑ navigate the dropdown
@@ -262,7 +262,7 @@ func (c *combobox) Reset() {
 
 // vocabComboSource makes a source that filters the named controlled
 // vocabulary in memory. Empty query returns all terms — same "select-like
-// behavior on empty focus" as the PWA combobox for min-search-chars=0.
+// behavior on empty focus" as the WUI combobox for min-search-chars=0.
 func vocabComboSource(vocab *core.Vocabulary, name string) comboboxSource {
 	return func(q string) tea.Cmd {
 		return func() tea.Msg {
@@ -390,7 +390,7 @@ func referenceComboSource(a *core.Archive) comboboxSource {
 	}
 }
 
-// referenceHitLabel mirrors the PWA's composeReferenceLabel — "Author
+// referenceHitLabel mirrors the WUI's composeReferenceLabel — "Author
 // (Year) Title", falling back to citation or id when structured fields
 // are absent.
 func referenceHitLabel(h core.ReferenceHit) string {
