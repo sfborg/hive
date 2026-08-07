@@ -850,6 +850,48 @@ func (m treeModel) SelectedLabel() string {
 	return label
 }
 
+// SelectedParentID returns the parent id of the currently-highlighted
+// taxon, or "" when the cursor is on a root / sentinel / empty tree.
+// Used by the "new sister" flow to route the create form to the same
+// parent as the current selection.
+func (m treeModel) SelectedParentID() string {
+	if len(m.nodes) == 0 {
+		return ""
+	}
+	n := m.nodes[m.cursor]
+	if n.isSentinel() {
+		return ""
+	}
+	return n.parentID
+}
+
+// SelectedParentLabel returns a plain-text display of the currently-
+// highlighted taxon's parent, or "" if the parent isn't in the
+// visible tree (root, or an offscreen ancestor). Best-effort: the
+// parent row must be currently visible for the label to resolve,
+// which is the common case since the parent has to be expanded for
+// its child to be visible.
+func (m treeModel) SelectedParentLabel() string {
+	pid := m.SelectedParentID()
+	if pid == "" {
+		return ""
+	}
+	for i := range m.nodes {
+		if m.nodes[i].id == pid && !m.nodes[i].isSentinel() {
+			p := m.nodes[i]
+			label := p.canonical
+			if p.authorship != "" {
+				label = label + " " + p.authorship
+			}
+			if p.extinct {
+				label = "† " + label
+			}
+			return label
+		}
+	}
+	return ""
+}
+
 // View renders the tree pane. Very small styling for the walking skeleton;
 // theme.go can grow later.
 func (m treeModel) View() string {

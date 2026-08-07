@@ -682,11 +682,11 @@ func (m *detailModel) createAdvanceCmd() tea.Cmd {
 		m.saveError = "scientific name is required"
 		return nil
 	}
+	// Code is optional here — pre-filled from CodeForParent for the
+	// common inherit-from-parent case, empty for root taxa. Passing
+	// "" to ParseNamePreview just skips the suffix-rule tier of
+	// RankGuess (curator can adjust rank + code on the preview form).
 	codeID := m.createCodePicker.SelectedID()
-	if codeID == "" {
-		m.saveError = "code is required — pick ICZN / ICN / ICNP / ICVCN / ICNCP"
-		return nil
-	}
 	m.saveError = ""
 	m.saving = true
 	return m.parsePreviewCmd(sci, codeID)
@@ -1272,9 +1272,10 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 }
 
 // updateCreate routes keys in create mode, branching on step:
-//   step 0 (verbatim): 2 fields — sci-name input + code picker.
+//   step 0 (verbatim): 1 field — sci-name input. Code lives on
+//                      step 1's bottom row.
 //   step 1 (preview) : delegates to updateCreatePreview (many
-//                      textinputs + 3 pickers, see createform.go).
+//                      textinputs + 4 pickers, see createform.go).
 // Esc from step 1 rolls back to step 0 preserving the verbatim/code
 // so the curator can re-parse a corrected verbatim without retyping.
 func (m detailModel) updateCreate(msg tea.KeyMsg) (detailModel, tea.Cmd) {
@@ -1288,37 +1289,11 @@ func (m detailModel) updateCreate(msg tea.KeyMsg) (detailModel, tea.Cmd) {
 		}
 		return m.updateCreatePreview(msg)
 	}
-	// Step 0 — old two-field flow.
-	switch msg.String() {
-	case "tab":
-		return m.createFocusStep(1)
-	case "shift+tab":
-		return m.createFocusStep(-1)
-	}
-	if m.createFocus == 1 {
-		var cmd tea.Cmd
-		m.createCodePicker, cmd = m.createCodePicker.Update(msg)
-		return m, cmd
-	}
+	// Step 0 — single-field flow. Tab / Shift+Tab have nothing to
+	// cycle to; forward everything to the scientific-name input.
 	var cmd tea.Cmd
 	m.createSciName, cmd = m.createSciName.Update(msg)
 	return m, cmd
-}
-
-// createFocusStep cycles focus between step-0's two fields (sci-name
-// input + code picker). Step 1 has its own focus cycle handled by
-// createPreviewFocusStep in createform.go.
-func (m detailModel) createFocusStep(delta int) (detailModel, tea.Cmd) {
-	if m.createFocus == 0 {
-		m.createSciName.Blur()
-	} else {
-		m.createCodePicker.Blur()
-	}
-	m.createFocus = ((m.createFocus + delta) + 2) % 2
-	if m.createFocus == 0 {
-		return m, m.createSciName.Focus()
-	}
-	return m, m.createCodePicker.Focus()
 }
 
 // SetCurrent updates the ID the pane is displaying. Also drops any active
@@ -1376,10 +1351,12 @@ func (m detailModel) View() string {
 	return b.String()
 }
 
-// renderCreate draws the three-field new-taxon form (sci-name, rank,
-// code). The parent context header makes it obvious what the new taxon
-// will be a child of. Code is seeded from the parent's code by default
-// so ICZN work stays ICZN with no clicks; curator can override.
+// renderCreate draws step 0 of the new-taxon form: just the verbatim
+// scientific name. Code has moved to the bottom of step 1 (see
+// renderCreatePreview) so the common path — a curator adding children
+// under a parent whose code is already set — never focuses it. The
+// pre-filled code from CodeForParent still feeds ParseNamePreview
+// invisibly so rank guessing keeps its suffix-rule tier.
 func (m detailModel) renderCreate() string {
 	if m.createStep == 1 {
 		return m.renderCreatePreview()
@@ -1405,18 +1382,12 @@ func (m detailModel) renderCreate() string {
 
 	// Sci-name row. Required — the "*" is rendered in the same faint
 	// style but with a red-ish tint via errStyle so it draws the eye
-	// without shouting. Rank has moved to step 2 (comes from RankGuess).
+	// without shouting. Rank comes from RankGuess on step 2; code
+	// lives at the bottom of step 2.
 	sciLabel := labelStyle.Render(fmt.Sprintf("%-14s", "Scientific name")) +
 		errStyle.Render("* ") + labelStyle.Render(": ")
 	b.WriteString(sciLabel)
 	b.WriteString(m.createSciName.View())
-	b.WriteByte('\n')
-
-	// Code row. Required.
-	codeLabel := labelStyle.Render(fmt.Sprintf("%-14s", "Code")) +
-		errStyle.Render("* ") + labelStyle.Render(": ")
-	b.WriteString(codeLabel)
-	b.WriteString(m.createCodePicker.View())
 	b.WriteString("\n\n")
 
 	if m.saveError != "" {
@@ -1427,7 +1398,7 @@ func (m detailModel) renderCreate() string {
 	if m.saving {
 		b.WriteString(dimStyle.Render("parsing…"))
 	} else {
-		b.WriteString(dimStyle.Render("[tab] next field   [ctrl+s] next → preview   [esc] cancel"))
+		b.WriteString(dimStyle.Render("[ctrl+s] next → preview   [esc] cancel"))
 	}
 	return b.String()
 }

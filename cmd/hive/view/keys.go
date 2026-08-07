@@ -24,7 +24,8 @@ type keyMap struct {
 	Save        key.Binding // ctrl+s — save edits
 	Cancel      key.Binding // esc — cancel edits, back to view mode
 	Search      key.Binding // "/" — focus the search box above the tree
-	New         key.Binding // "n" — new child taxon under the selected one
+	New         key.Binding // "n" / "c" — new child taxon under the selected one
+	NewSister   key.Binding // "s" — new sister taxon at the same tree level
 	Delete      key.Binding // "d" — delete the selected taxon (with confirm)
 	LoadAll     key.Binding // "G" — vim-style: bottom of siblings (loads all if truncated)
 	Top         key.Binding // "g" — vim-style: top of siblings
@@ -83,6 +84,7 @@ func defaultKeys() keyMap {
 		Cancel:      bindingFor("cancel"),
 		Search:      bindingFor("search-focus"),
 		New:         bindingFor("detail-new-child"),
+		NewSister:   bindingFor("detail-new-sister"),
 		Delete:      bindingFor("detail-delete"),
 		LoadAll:     bindingFor("tree-last-sibling"),
 		Top:         bindingFor("tree-first-sibling"),

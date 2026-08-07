@@ -439,6 +439,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tree.focused = false
 				return m, cmd
 			}
+		case key.Matches(msg, m.keys.NewSister):
+			// New sister — attach to the current taxon's parent, so the
+			// new taxon slots in as a sibling. If the current taxon is a
+			// root (or the tree is empty), fall through to a root-level
+			// create the same as `n` on an empty tree.
+			parentID := m.tree.SelectedParentID()
+			parentLabel := m.tree.SelectedParentLabel()
+			if parentLabel == "" {
+				parentLabel = "(root)"
+			}
+			if cmd, ok := m.detail.EnterCreateModeCmd(parentID, parentLabel); ok {
+				m.focus = focusDetail
+				m.tree.focused = false
+				return m, cmd
+			}
 		case key.Matches(msg, m.keys.Delete):
 			if m.editable {
 				id := m.tree.SelectedID()
@@ -824,7 +839,7 @@ func (m *model) statusBar() string {
 	case m.focus == focusSearch:
 		right = "  type to search  ↑↓ nav  enter pick  esc cancel  "
 	case m.editable:
-		right = "  ↑↓ nav  → expand  g/G top/bot  / search  e edit  n new  d delete  :help  q quit  "
+		right = "  ↑↓ nav  → expand  g/G top/bot  / search  e edit  n/c new child  s new sister  d delete  :help  q quit  "
 	default:
 		right = "  ↑↓ nav  → expand  ← collapse  g/G top/bot  / search  tab switch  :help  q quit  "
 	}

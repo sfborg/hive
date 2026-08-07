@@ -212,9 +212,19 @@ func Keymap() []Shortcut {
 		{
 			Action:      "detail-new-child",
 			Description: "new child taxon under the selection",
-			Display:     "n",
+			Display:     "n / c",
 			Scope:       ScopeDetail,
-			Keys:        tuiOnly("n"),
+			// c is the mnemonic ([c]hild) that reads naturally alongside
+			// s ([s]ister); n is kept as an alias for muscle memory and
+			// so an empty archive's "n[ew]" reads as expected.
+			Keys: tuiOnly("n", "c"),
+		},
+		{
+			Action:      "detail-new-sister",
+			Description: "new sister taxon at the same tree level",
+			Display:     "s",
+			Scope:       ScopeDetail,
+			Keys:        tuiOnly("s"),
 		},
 		{
 			Action:      "detail-delete",

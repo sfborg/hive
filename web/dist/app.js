@@ -81,6 +81,67 @@ const iconPaths = {
     <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
     <path d="M12 17h.01" />
   `,
+  // pencil — edit the selected taxon
+  pencil: svg`
+    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+    <path d="m15 5 4 4" />
+  `,
+  // trash-2 — delete the selected taxon (with confirm)
+  "trash-2": svg`
+    <path d="M3 6h18" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <line x1="10" x2="10" y1="11" y2="17" />
+    <line x1="14" x2="14" y1="11" y2="17" />
+  `,
+};
+
+// iconPathsFilled — icons that render with fill instead of stroke.
+// Sourced from TaxonWorks (SpeciesFileGroup/taxonworks, MIT license,
+// same research group). Kept in a separate map from iconPaths so the
+// Lucide stroke set stays a single-style family; renderIcon picks the
+// right wrapper per icon.
+//
+// Paths are transcribed verbatim from taxonworks/app/assets/images
+// with only cosmetic changes: the original `fill="#FFFFFF"` gets
+// dropped so `currentColor` on the outer <svg> flows through. Each
+// entry declares its own viewBox because TW's icons ship in a mix of
+// authoring scales (create_* is 111.32×111.32; w_pencil is 12×12).
+//
+// The viewBox for the create_* icons is expanded ~13% beyond the
+// original 0 0 111.32 111.32 authoring bounds to add inner padding.
+// TW authored these to fill their canvas; when rendered next to
+// Lucide stroke icons at the same pixel size they read as visually
+// heavier. Adding whitespace inside the viewBox shrinks the drawn
+// content relative to the button footprint, evening out the weight.
+const iconPathsFilled = {
+  // create_child_icon.svg — parent circle top-left, child circle
+  // bottom-right, plus sign top-right, L-shape connector.
+  // Represents "add a new child under this taxon."
+  "tree-child-plus": {
+    viewBox: "-14 -14 139.32 139.32",
+    paths: svg`
+      <circle cx="23.73" cy="23.38" r="23.38" />
+      <circle cx="87.44" cy="87.94" r="23.38" />
+      <path d="M82.56,46.75V29.87H65.54V18.21h17.02V1.33H93.9v16.88h17.06v11.66H93.9v16.88H82.56z" />
+      <path d="M57.72,79.68H31.27V53.28c-2.42,0.61-4.93,0.97-7.54,0.97c-2.71,0-5.33-0.39-7.84-1.04v41.85h41.53
+        c-0.54-2.29-0.86-4.66-0.86-7.12C56.56,85.07,56.98,82.31,57.72,79.68z" />
+    `,
+  },
+  // create_sister_icon.svg — left vertical trunk, two circles stacked
+  // to its right with horizontal connectors, plus sign far right.
+  // Represents "add a new sister at the same tree level."
+  "tree-sister-plus": {
+    viewBox: "-14 -14 139.32 139.32",
+    paths: svg`
+      <circle cx="49.44" cy="24.95" r="20.95" />
+      <circle cx="49.44" cy="83.49" r="20.95" />
+      <path d="M85.64,74.39V59.26H70.39V48.81h15.25V33.68h10.17v15.13h15.29v10.45H95.81v15.13H85.64z" />
+      <rect x="0.21" y="17.68" width="13.79" height="72.7" />
+      <path d="M21.57,24.95c0-2.52,0.36-4.95,0.99-7.27H0.21v13.79h22.15C21.87,29.37,21.57,27.2,21.57,24.95z" />
+      <path d="M22.46,76.6H0.21v13.79h22.25c-0.56-2.21-0.89-4.51-0.89-6.89C21.57,81.11,21.9,78.81,22.46,76.6z" />
+    `,
+  },
 };
 
 // matchesKey reports whether a DOM KeyboardEvent matches one of the
@@ -119,8 +180,28 @@ function actionForEvent(shortcuts, e) {
 
 // renderIcon wraps a named icon in a properly-sized <svg>. Size is a
 // number (rendered as square width/height). currentColor lets the CSS
-// context set the stroke color, so theme flips just work.
+// context set the color, so theme flips just work.
+//
+// Two families of icons: Lucide stroke set (iconPaths) rendered with
+// fill=none stroke=currentColor, and the TaxonWorks-sourced filled
+// set (iconPathsFilled) rendered with fill=currentColor. The filled
+// set declares its own viewBox because TW authored at various scales;
+// stroke icons all share the standard Lucide 24×24 grid.
 function renderIcon(name, size = 20) {
+  const filled = iconPathsFilled[name];
+  if (filled) {
+    return html`
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width=${size}
+        height=${size}
+        viewBox=${filled.viewBox}
+        fill="currentColor"
+      >
+        ${filled.paths}
+      </svg>
+    `;
+  }
   const inner = iconPaths[name];
   if (!inner) return "";
   return html`
@@ -1684,6 +1765,12 @@ class SfgaDetail extends LitElement {
     // Display name for the header row while creating a basionym so the
     // curator sees which combination they're entering the original for.
     _creatingBasionymForName: { state: true },
+    // Parent id + label the pending create attaches to. Distinguishes
+    // "new child" (id = current taxon) from "new sister" (id = current
+    // taxon's parent). Stored at open time so _submitCreate has a
+    // stable target even if the tree selection moves underneath.
+    _createParentID: { state: true },
+    _createParentLabel: { state: true },
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
@@ -1760,6 +1847,54 @@ class SfgaDetail extends LitElement {
       color: var(--dim);
       font-style: italic;
     }
+    /* Detail-pane header: taxon name on the left, action icons on
+       the right. Matches TaxonWorks's convention of putting edit /
+       new / delete inline with the record heading so scrolling the
+       field list doesn't hide the primary actions. */
+    .detail-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 0.25rem;
+    }
+    .detail-header h2 {
+      margin: 0;
+    }
+    .header-actions {
+      display: inline-flex;
+      gap: 0.25rem;
+      flex-shrink: 0;
+    }
+    button.icon-btn {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 0.25rem;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    button.icon-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    button.icon-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    button.icon-btn:disabled:hover {
+      border-color: var(--border);
+      color: var(--fg);
+    }
+    button.icon-btn.icon-btn-danger:hover {
+      border-color: var(--error);
+      color: var(--error);
+    }
+    button.icon-btn svg { display: block; }
     /* Edit-mode UI. Deliberately plain: platform inputs, single-column,
        no fancy grid — the walking skeleton proves the wire flow, not
        visual polish. */
@@ -1999,6 +2134,8 @@ class SfgaDetail extends LitElement {
     this._createShowAtomized = false;
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
+    this._createParentID = "";
+    this._createParentLabel = "";
     this._editShowAtomized = false;
     this._confirmDelete = false;
     this._deleteError = "";
@@ -2087,19 +2224,47 @@ class SfgaDetail extends LitElement {
     this._editing = false;
   }
 
+  // _openCreate opens the create pane with the current taxon as the
+  // parent — the "new child" flow.
   async _openCreate() {
+    return this._openCreateWithParent(
+      this._taxon?.id || "",
+      this._taxon?.label?.text || this._taxon?.id || "(root)",
+    );
+  }
+
+  // _openCreateSister opens the create pane with the current taxon's
+  // parent as the parent — so the new taxon slots in as a sibling of
+  // the current one. If the current taxon is itself a root, the sister
+  // is also a root.
+  async _openCreateSister() {
+    const parentID = this._taxon?.parent_id || "";
+    const parentLabel = this._taxon?.parent
+      ? this._taxon.parent.label?.text || this._taxon.parent.id || "(root)"
+      : "(root)";
+    return this._openCreateWithParent(parentID, parentLabel);
+  }
+
+  // _openCreateWithParent is the shared open path. Records the intended
+  // parent id + label so _submitCreate can attach to the right parent
+  // and the pane's heading names it correctly. Code default is fetched
+  // for that parent — sisters share their parent's code, so a sister
+  // of an ICZN taxon defaults to ICZN too.
+  async _openCreateWithParent(parentID, parentLabel) {
     this._createDraft = { scientific_name: "", code: "" };
     this._createStep = 0;
     this._createError = "";
     this._createBusy = false;
+    this._createParentID = parentID;
+    this._createParentLabel = parentLabel;
     this._creating = true;
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
     // Seed the code picker from the parent's name so ICZN work stays
     // ICZN by default — matches the TUI's CodeForParent behavior.
-    if (this._taxon?.id) {
+    if (parentID) {
       try {
-        const { code } = await api.taxon.codeDefault(this._taxon.id);
+        const { code } = await api.taxon.codeDefault(parentID);
         if (this._creating && !this._createDraft.code) {
           this._createDraft = { ...this._createDraft, code: code || "" };
         }
@@ -2127,10 +2292,10 @@ class SfgaDetail extends LitElement {
       this._createError = "scientific name is required";
       return;
     }
-    if (!this._createDraft.code) {
-      this._createError = "code is required — pick ICZN / ICN / ICNP / ICVCN / ICNCP";
-      return;
-    }
+    // Code is optional here — pre-fetched from CodeForParent for the
+    // common inherit-from-parent case, empty for root taxa. Passing
+    // "" to /api/name/parse just skips the suffix-rule tier of
+    // RankGuess. Curator can set/override on step 1's bottom row.
     this._createBusy = true;
     this._createError = "";
     try {
@@ -2201,10 +2366,12 @@ class SfgaDetail extends LitElement {
           }),
         );
       } else {
-        // Normal accepted-name create.
+        // Normal accepted-name create. parent_id is fixed at open
+        // time so new-child and new-sister route to the right parent
+        // regardless of tree state.
         const body = {
           ...this._createDraft,
-          parent_id: this._taxon?.id || "",
+          parent_id: this._createParentID || "",
         };
         const created = await api.taxon.create(body);
         this._cancelCreate();
@@ -2295,8 +2462,10 @@ class SfgaDetail extends LitElement {
   }
 
   _renderCreatePane() {
-    const parent = this._taxon;
-    const parentLabel = parent?.label?.text || parent?.id || "(root)";
+    // Parent label was captured at open time (new-child vs new-sister)
+    // so the heading names the right ancestor regardless of any tree
+    // selection changes since.
+    const parentLabel = this._createParentLabel || "(root)";
     const heading = this._creatingBasionymFor
       ? html`Add original combination for
           <em>${this._creatingBasionymForName}</em>`
@@ -2321,8 +2490,11 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  // Step 0: verbatim scientific name + code picker. Curator hits "next"
-  // to run the server-side parse and advance to the atomized preview.
+  // Step 0: just the verbatim scientific name. Code has moved to the
+  // bottom of step 1 so the common inherit-from-parent path never
+  // requires focusing it. The pre-fetched default from
+  // api.taxon.codeDefault(parentId) still flows into ParseName's
+  // rank-guess so suffix rules work invisibly.
   _renderCreateStep0() {
     return html`
       <label>Scientific name <span class="req">*</span></label>
@@ -2337,15 +2509,6 @@ class SfgaDetail extends LitElement {
         }}
         autofocus
       />
-      <label>Code <span class="req">*</span></label>
-      <sfga-combobox
-        min-search-chars="0"
-        placeholder="nomenclatural code…"
-        .source=${vocabSource("nom_code")}
-        .resolver=${vocabResolver("nom_code")}
-        .value=${this._createDraft.code || ""}
-        @pick=${(e) => this._createFieldChange("code", e.detail.id)}
-      ></sfga-combobox>
       <div class="toolbar">
         <button
           class="primary"
@@ -2435,6 +2598,24 @@ class SfgaDetail extends LitElement {
         <input type="text" .value=${d.etymology || ""} @input=${set("etymology")} />
         <label>Remarks</label>
         <textarea .value=${d.remarks || ""} @input=${set("remarks")}></textarea>
+      </fieldset>
+
+      <!-- Nomenclatural code lives at the very bottom.
+           CodeForParent pre-fills it from the parent's name so the
+           common path never focuses this row; the affordance is here
+           for the exceptions (root taxa, deliberate mixed-code
+           subtrees like protists). Matches the TUI's placement. -->
+      <fieldset>
+        <legend>nomenclatural code</legend>
+        <label>Code</label>
+        <sfga-combobox
+          min-search-chars="0"
+          placeholder="nomenclatural code…"
+          .source=${vocabSource("nom_code")}
+          .resolver=${vocabResolver("nom_code")}
+          .value=${d.code || ""}
+          @pick=${(e) => this._createFieldChange("code", e.detail.id)}
+        ></sfga-combobox>
       </fieldset>
 
       <div class="toolbar">
@@ -2709,10 +2890,62 @@ class SfgaDetail extends LitElement {
         "(no name)";
 
     return html`
-      <h2>${heading}</h2>
+      <div class="detail-header">
+        <h2>${heading}</h2>
+        ${this.editable && !this._editing ? this._renderHeaderActions() : ""}
+      </div>
       <hr />
       ${this._editing ? this._renderEditForm() : this._renderViewFields()}
       ${this._renderSynonyms()}
+    `;
+  }
+
+  // _renderHeaderActions is the compact icon-button strip floated to
+  // the right of the taxon name in the detail-pane header. Kept out of
+  // the field list at the bottom so scrolling long records doesn't
+  // hide the primary actions.
+  //
+  // Matches the TaxonWorks convention of surfacing edit / new-child /
+  // new-sister / delete inline with the taxon name. Icons + tooltips
+  // rather than text — a curator picking up the pattern learns four
+  // symbols once and gets a much more scannable pane forever after.
+  _renderHeaderActions() {
+    return html`
+      <div class="header-actions">
+        <button
+          class="icon-btn"
+          @click=${() => this._startEdit()}
+          title="edit (e)"
+          aria-label="edit"
+        >
+          ${renderIcon("pencil", 18)}
+        </button>
+        <button
+          class="icon-btn"
+          @click=${() => this._openCreate()}
+          title="new child (n) — adds under this taxon"
+          aria-label="new child"
+        >
+          ${renderIcon("tree-child-plus", 18)}
+        </button>
+        <button
+          class="icon-btn"
+          @click=${() => this._openCreateSister()}
+          title="new sister — adds at the same level"
+          aria-label="new sister"
+          ?disabled=${!this._taxon}
+        >
+          ${renderIcon("tree-sister-plus", 18)}
+        </button>
+        <button
+          class="icon-btn icon-btn-danger"
+          @click=${() => this._askDelete()}
+          title="delete (d)"
+          aria-label="delete"
+        >
+          ${renderIcon("trash-2", 18)}
+        </button>
+      </div>
     `;
   }
 
@@ -2793,15 +3026,6 @@ class SfgaDetail extends LitElement {
                 ${row("Name mod. by", orcidLink(n.modified_by))}`
           : ""}
       </dl>
-      ${this.editable
-        ? html`
-            <div class="toolbar">
-              <button @click=${() => this._startEdit()}>edit</button>
-              <button @click=${() => this._openCreate()}>new child</button>
-              <button @click=${() => this._askDelete()}>delete</button>
-            </div>
-          `
-        : ""}
       ${this._confirmDelete ? this._renderDeleteModal() : ""}
     `;
   }

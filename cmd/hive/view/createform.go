@@ -56,11 +56,16 @@ const (
 )
 
 // createPreviewPicker enumerates the combobox slots on step 1. Ordered
-// after the textinputs in the tab cycle.
+// after the textinputs in the tab cycle. cppCode sits at the very
+// bottom deliberately: it's almost always inherited from the parent
+// via CodeForParent, so a curator working within one code never has
+// to focus it. Ships as the last stop on the tab cycle so it stays
+// out of the way for the common path.
 const (
 	cppRank    = cpfInputCount + iota // rank picker (pre-filled from guess)
 	cppStatus                         // NOMEN status picker
 	cppRefID                          // reference picker
+	cppCode                           // nomenclatural code picker (bottom)
 	cppFocusCount
 )
 
@@ -141,6 +146,8 @@ func (m *detailModel) blurPreviewFocus() {
 		m.createStatusPicker.Blur()
 	case m.createFocus == cppRefID:
 		m.createRefPicker.Blur()
+	case m.createFocus == cppCode:
+		m.createCodePicker.Blur()
 	}
 }
 
@@ -154,6 +161,8 @@ func (m *detailModel) focusPreviewCurrent() tea.Cmd {
 		return m.createStatusPicker.Focus()
 	case m.createFocus == cppRefID:
 		return m.createRefPicker.Focus()
+	case m.createFocus == cppCode:
+		return m.createCodePicker.Focus()
 	}
 	return nil
 }
@@ -181,6 +190,8 @@ func (m detailModel) updateCreatePreview(msg tea.KeyMsg) (detailModel, tea.Cmd) 
 		picker = &m.createStatusPicker
 	case cppRefID:
 		picker = &m.createRefPicker
+	case cppCode:
+		picker = &m.createCodePicker
 	}
 	if picker != nil {
 		newP, cmd := picker.Update(msg)
@@ -319,6 +330,17 @@ func (m detailModel) renderCreatePreview() string {
 	for _, f := range []int{cpfEtymology, cpfRemarks} {
 		b.WriteString(m.renderPreviewInputRow(f))
 	}
+
+	// Nomenclatural code lives at the very bottom of the form.
+	// CodeForParent pre-fills it from the parent's code so the common
+	// path never focuses this row — a curator working within one code
+	// tabs past everything else and commits. The affordance is here
+	// for the exceptions: setting the code on a root taxon, or
+	// overriding when a subtree needs a different code (e.g. a
+	// historically-mixed protist group).
+	b.WriteString(sectionHeaderStyle.Render("── nomenclatural code ──"))
+	b.WriteByte('\n')
+	b.WriteString(m.renderPreviewPickerRow("Code", &m.createCodePicker))
 
 	b.WriteByte('\n')
 	if m.saveError != "" {
