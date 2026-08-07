@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sfborg/hive/core"
+	"github.com/sfborg/hive/core/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -30,6 +31,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("GET /api/vocab", s.handleVocab)
 	mux.HandleFunc("GET /api/vocab/nomen", s.handleNomenVocab)
+	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 
 	mux.HandleFunc("GET /api/metadata", s.handleGetMetadata)
 	mux.HandleFunc("PATCH /api/metadata", s.handlePatchMetadata)
@@ -109,6 +111,20 @@ func (s *server) handleNomenVocab(w http.ResponseWriter, r *http.Request) {
 	// Immutable for the process lifetime — safe to cache aggressively.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	writeJSON(w, http.StatusOK, map[string]any{"items": terms})
+}
+
+// handleKeymap returns the canonical shortcut list from core/ui.
+// Served whole so the PWA fetches once at boot and holds it in the
+// module-level cache alongside the vocab / NOMEN bundles.
+//
+// The PWA filters client-side to web-available bindings; returning
+// the full list (including TUI-only rows) keeps the endpoint useful
+// to other consumers — future automation tooling, documentation
+// generators, or the eventual customization layer.
+func (s *server) handleKeymap(w http.ResponseWriter, r *http.Request) {
+	// Same immutable-for-process-lifetime story as vocab / NOMEN.
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, http.StatusOK, map[string]any{"items": ui.Keymap()})
 }
 
 // handleGetMetadata returns the dataset metadata row (title,
