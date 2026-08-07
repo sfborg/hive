@@ -619,18 +619,61 @@ class SfgaApp extends LitElement {
     history.pushState({}, "", wanted);
   }
 
-  // Alt+letter dispatches to the matching view. Runs even when a text
-  // input has focus, since Alt-modified keys don't collide with typing
-  // (browsers don't emit printable characters for Alt+letter on most
-  // layouts). Matches the TUI's screen-switch bindings so muscle
-  // memory transfers.
+  // _onGlobalKey handles shortcuts that fire regardless of which
+  // shadow tree currently owns focus. Kept deliberately small
+  // (PARITY.md § Focus semantics — global keys must be extremely
+  // obvious in intent). Anything more nuanced belongs on the
+  // focused component's own keydown handler.
+  //
+  // Bindings:
+  //   Alt+<letter> — view switch (Taxa / Metadata / References).
+  //     Runs even inside inputs since Alt-modified keys don't collide
+  //     with typing. Mirrors the TUI's screen-switch bindings.
+  //   /            — focus the search combobox on the Taxa screen.
+  //     Skipped when the curator is already typing in an input, so
+  //     "/" as literal text still works everywhere else.
   _onGlobalKey(e) {
-    if (!e.altKey || e.ctrlKey || e.metaKey) return;
-    const key = e.key.toLowerCase();
-    const hit = SfgaApp.views.find((v) => v.key === key);
-    if (!hit) return;
-    e.preventDefault();
-    this.screen = hit.id;
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const key = e.key.toLowerCase();
+      const hit = SfgaApp.views.find((v) => v.key === key);
+      if (hit) {
+        e.preventDefault();
+        this.screen = hit.id;
+      }
+      return;
+    }
+    if (e.key === "/" && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (this._isTypingInInput(e)) return;
+      if (this.screen !== "taxa") return;
+      const input = this._searchInput();
+      if (!input) return;
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  }
+
+  // _isTypingInInput returns true when the innermost focus target
+  // (across shadow boundaries) is a text-entry element — <input>,
+  // <textarea>, or contentEditable. Uses composedPath so a keydown
+  // targeting an input inside a nested shadow root is still detected.
+  _isTypingInInput(e) {
+    const path = e.composedPath ? e.composedPath() : [];
+    for (const node of path) {
+      if (!(node instanceof HTMLElement)) continue;
+      const tag = node.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return true;
+      if (node.isContentEditable) return true;
+    }
+    return false;
+  }
+
+  // _searchInput reaches through the shadow tree to the search
+  // combobox's inner <input>. Ships as a helper so `/` and any future
+  // "focus search" affordance route through one place.
+  _searchInput() {
+    const combo = this.renderRoot.querySelector("sfga-combobox.search");
+    return combo?.renderRoot?.querySelector("input") ?? null;
   }
 
   _toggleSidebar() {
@@ -863,6 +906,19 @@ class SfgaTree extends LitElement {
       list-style: none;
       margin: 0;
       padding: 0;
+      /* Suppress the default focus outline on the <ul> in favor of the
+         inset ring below — the default outline sits outside the element
+         and gets clipped by the scroll container. */
+      outline: none;
+    }
+    /* Focus ring signals that keyboard shortcuts are now scoped to the
+       tree. Inset so it stays visible inside overflow:auto containers.
+       Shown on both mouse-click and Tab-in (per PARITY.md § Focus
+       semantics), not just :focus-visible — the whole point is to make
+       the "keyboard-active" state obvious after a click. */
+    ul:focus {
+      box-shadow: inset 0 0 0 2px var(--accent);
+      border-radius: 2px;
     }
     li {
       padding: 0.15rem 0.35rem;
@@ -906,6 +962,10 @@ class SfgaTree extends LitElement {
     // fetch, sentinel below if more remain. Kept as a field so tests /
     // future config can override.
     this._pageSize = 200;
+    // Vim-style count prefix: digits typed before g/G accumulate here
+    // and are consumed by the next jump. Any other key resets it so
+    // stale counts don't leak into unrelated actions.
+    this._pendingCount = 0;
   }
 
   async connectedCallback() {
@@ -950,6 +1010,7 @@ class SfgaTree extends LitElement {
 
   _select(node) {
     if (node.sentinel) return;
+    if (this.selectedId === node.id) return;
     this.selectedId = node.id;
     this.dispatchEvent(
       new CustomEvent("taxon-selected", {
@@ -958,6 +1019,29 @@ class SfgaTree extends LitElement {
         composed: true,
       }),
     );
+  }
+
+  // _cursorIndex returns the index of the currently selected node in
+  // this.nodes, or -1 if selection is unset / no longer visible. Used
+  // by every keyboard motion as the anchor for its relative move.
+  _cursorIndex() {
+    if (!this.selectedId) return -1;
+    return this.nodes.findIndex((n) => !n.sentinel && n.id === this.selectedId);
+  }
+
+  // _moveTo selects the taxon at nodes[idx] (skipping sentinels) and
+  // scrolls it into view. Called by every arrow / vim jump so scroll
+  // and detail-pane load stay coupled to cursor position.
+  async _moveTo(idx) {
+    if (idx < 0 || idx >= this.nodes.length) return;
+    const node = this.nodes[idx];
+    if (node.sentinel) return;
+    this._select(node);
+    await this.updateComplete;
+    const el = this.renderRoot.querySelector("li.selected");
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
   }
 
   async _toggle(node) {
@@ -1060,11 +1144,275 @@ class SfgaTree extends LitElement {
 
   render() {
     if (this.error) return html`<div class="error">${this.error}</div>`;
+    // tabindex="0" makes the tree Tab-reachable and a valid focus target.
+    // mousedown promotes focus to the <ul> before the <li> click fires,
+    // so a click into the tree lands focus here (browsers don't focus
+    // non-input elements on click by default). The pane earns focus
+    // explicitly (PARITY.md § Focus semantics) so keyboard shortcuts
+    // don't fire while the curator is typing into an unrelated input.
     return html`
-      <ul>
+      <ul
+        tabindex="0"
+        @mousedown=${(e) => e.currentTarget.focus()}
+        @keydown=${(e) => this._onKeyDown(e)}
+      >
         ${this.nodes.map((n) => this._renderNode(n))}
       </ul>
     `;
+  }
+
+  // _onKeyDown handles tree-scoped shortcuts. Runs only when the <ul>
+  // has focus — outside that scope the keys have no effect on the tree.
+  // Bindings mirror the TUI (see cmd/hive/view/keys.go) so muscle
+  // memory transfers between frontends.
+  //
+  //   Escape           blur — return to pure mouse UX
+  //   ↑ / k            move cursor up one taxon
+  //   ↓ / j            move cursor down one taxon
+  //   → / l / Enter    expand current, or step into first child if
+  //                    already expanded (or trigger sentinel load)
+  //   ← / h            collapse current, or step out to parent if not
+  //                    expanded
+  //   0-9              accumulate into pending count for the next g/G
+  //   g / Ng           first / Nth sibling in the current group
+  //   G / NG           last loaded sibling (or trigger load-more if
+  //                    the group is truncated) / Nth
+  _onKeyDown(e) {
+    const k = e.key;
+
+    if (k === "Escape") {
+      e.preventDefault();
+      this._pendingCount = 0;
+      e.currentTarget.blur();
+      return;
+    }
+
+    // Digit prefix — accumulate into pendingCount, consumed by g/G.
+    // Only bare digits (no modifiers) count; alt/ctrl/meta digits are
+    // reserved for future shortcuts.
+    if (k.length === 1 && k >= "0" && k <= "9" && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      this._pendingCount = this._pendingCount * 10 + (k.charCodeAt(0) - 48);
+      return;
+    }
+
+    switch (k) {
+      case "ArrowUp":
+      case "k":
+        e.preventDefault();
+        this._pendingCount = 0;
+        this._moveCursor(-1);
+        return;
+      case "ArrowDown":
+      case "j":
+        e.preventDefault();
+        this._pendingCount = 0;
+        this._moveCursor(1);
+        return;
+      case "ArrowRight":
+      case "l":
+      case "Enter":
+        e.preventDefault();
+        this._pendingCount = 0;
+        this._expandOrEnter();
+        return;
+      case "ArrowLeft":
+      case "h":
+        e.preventDefault();
+        this._pendingCount = 0;
+        this._collapseOrParent();
+        return;
+      case "g":
+        e.preventDefault();
+        this._jumpInSiblings(true);
+        return;
+      case "G":
+        e.preventDefault();
+        this._jumpInSiblings(false);
+        return;
+    }
+
+    // Anything else — including modified keys — clears any pending
+    // count so it doesn't linger across unrelated actions.
+    this._pendingCount = 0;
+  }
+
+  // _moveCursor walks the visible taxa in this.nodes by `dir` steps
+  // (typically ±1), skipping sentinel rows. When moving down past the
+  // last taxon into a sentinel, triggers a load-more so the sentinel
+  // page-in happens without a separate keypress — mirrors the TUI's
+  // autoLoad-on-sentinel behavior.
+  async _moveCursor(dir) {
+    if (this.nodes.length === 0) return;
+    let idx = this._cursorIndex();
+    if (idx < 0) {
+      // Nothing selected yet — land on the first / last taxon.
+      idx = dir > 0 ? -1 : this.nodes.length;
+    }
+    let next = idx + dir;
+    while (next >= 0 && next < this.nodes.length && this.nodes[next].sentinel) {
+      next += dir;
+    }
+    if (next < 0 || next >= this.nodes.length) {
+      // Off the ends. If we ran off the bottom and the last node is a
+      // sentinel, trigger a load-more so subsequent presses can walk
+      // into the newly-loaded rows.
+      if (dir > 0) {
+        const last = this.nodes[this.nodes.length - 1];
+        if (last && last.sentinel) await this._loadMore(last);
+      }
+      return;
+    }
+    await this._moveTo(next);
+  }
+
+  // _expandOrEnter implements the →/l/Enter contract:
+  //   - Sentinel row     → load more.
+  //   - Leaf             → no-op.
+  //   - Collapsed parent → expand.
+  //   - Expanded parent  → step cursor into the first child.
+  async _expandOrEnter() {
+    const idx = this._cursorIndex();
+    if (idx < 0) return;
+    const node = this.nodes[idx];
+    if (!node.has_children) return;
+    if (!node.expanded) {
+      await this._expand(node);
+      return;
+    }
+    // Already expanded — first child is the next node, unless the
+    // child list is empty (rare — cache invariant says has_children
+    // implies at least one child).
+    const child = this.nodes[idx + 1];
+    if (child && !child.sentinel && child.depth === node.depth + 1) {
+      await this._moveTo(idx + 1);
+    }
+  }
+
+  // _collapseOrParent implements the ←/h contract:
+  //   - Expanded node   → collapse (children drop out).
+  //   - Anything else   → jump cursor to the parent one depth up.
+  async _collapseOrParent() {
+    const idx = this._cursorIndex();
+    if (idx < 0) return;
+    const node = this.nodes[idx];
+    if (node.expanded) {
+      this._collapse(node);
+      return;
+    }
+    if (node.depth === 0) return;
+    // Walk back through the flat list until we find the row at the
+    // parent's depth — that's the parent (siblings share depth, so
+    // the first shallower row above must be an ancestor at depth-1).
+    for (let i = idx - 1; i >= 0; i--) {
+      if (this.nodes[i].sentinel) continue;
+      if (this.nodes[i].depth === node.depth - 1) {
+        await this._moveTo(i);
+        return;
+      }
+    }
+  }
+
+  // _jumpInSiblings handles g / G / Ng / NG. The sibling group is the
+  // contiguous run of nodes at the current cursor's depth sharing the
+  // same parent — matches the TUI's siblingRange semantics so g/G feel
+  // group-local rather than file-wide.
+  //   g       → first sibling
+  //   G       → last loaded sibling (load more if group is truncated)
+  //   Ng / NG → Nth (1-based); loads more if N > loaded and group is
+  //             truncated, then lands on the sentinel (subsequent G
+  //             takes you to the new last row).
+  async _jumpInSiblings(top) {
+    const count = this._pendingCount;
+    this._pendingCount = 0;
+    const idx = this._cursorIndex();
+    if (idx < 0) {
+      // No cursor yet — g/G at start land on first / last visible taxon.
+      const target = top ? 0 : this.nodes.length - 1;
+      let t = target;
+      while (t >= 0 && t < this.nodes.length && this.nodes[t].sentinel) {
+        t += top ? 1 : -1;
+      }
+      if (t >= 0 && t < this.nodes.length) await this._moveTo(t);
+      return;
+    }
+    const [start, end] = this._siblingRange(idx);
+    const loaded = end - start;
+    const sentinelIdx = this._sentinelIndex(this.nodes[start].parent_id, this.nodes[start].depth);
+    const truncated = sentinelIdx >= 0;
+
+    // Target position within the group (1-based). -1 means "last."
+    let target;
+    if (count > 0) {
+      target = count;
+    } else if (top) {
+      target = 1;
+    } else {
+      target = -1;
+    }
+
+    if (target === 1) {
+      await this._moveTo(start);
+      return;
+    }
+    if (target > 0 && target <= loaded) {
+      await this._moveTo(start + target - 1);
+      return;
+    }
+    if (target === -1 && !truncated) {
+      await this._moveTo(end - 1);
+      return;
+    }
+    // Beyond the loaded window — trigger load-more on the group's
+    // sentinel. Cursor stays put; the freshly-loaded rows are then
+    // reachable by arrow-down or a second G.
+    if (truncated) {
+      await this._loadMore(this.nodes[sentinelIdx]);
+    }
+  }
+
+  // _siblingRange returns [start, end) — the contiguous run of nodes
+  // at nodes[idx]'s depth + parent. Mirrors cmd/hive/view/tree.go's
+  // siblingRange: "contiguous" is the operative word — if a preceding
+  // sibling has expanded children (depth+1 rows breaking the run),
+  // the range covers only the current visible run, not the full
+  // sibling set. Keeps g/G group-local rather than file-wide.
+  _siblingRange(idx) {
+    const cur = this.nodes[idx];
+    const depth = cur.depth;
+    const parent = cur.parent_id || "";
+    let start = idx;
+    while (start > 0) {
+      const p = this.nodes[start - 1];
+      if (p.sentinel) break;
+      if (p.depth !== depth) break;
+      if ((p.parent_id || "") !== parent) break;
+      start--;
+    }
+    let end = idx + 1;
+    while (end < this.nodes.length) {
+      const n = this.nodes[end];
+      if (n.sentinel) break;
+      if (n.depth !== depth) break;
+      if ((n.parent_id || "") !== parent) break;
+      end++;
+    }
+    return [start, end];
+  }
+
+  // _sentinelIndex returns the index of the sentinel row that paginates
+  // the given (parentID, depth) sibling group, or -1 if the group isn't
+  // truncated. The sentinel row is emitted by _pageToNodes when the API
+  // response carries a next_cursor.
+  _sentinelIndex(parentID, depth) {
+    const parent = parentID || "";
+    for (let i = 0; i < this.nodes.length; i++) {
+      const n = this.nodes[i];
+      if (n.sentinel && n.depth === depth && (n.parent_id || "") === parent) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   _renderNode(n) {
