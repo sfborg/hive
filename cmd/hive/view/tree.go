@@ -772,34 +772,42 @@ func (m treeModel) siblingsBefore(idx int) int {
 	return count
 }
 
+// collapseCurrent implements the ← / h contract, mirror-symmetric
+// with expandCurrent:
+//   - Expanded node → collapse AND move cursor to parent in one press.
+//   - Leaf / collapsed / root → move cursor to parent (or no-op at depth 0).
+//
+// Folding collapse + ascend into one press means `h h h h` walks the
+// ancestor chain efficiently and Nh ascends N levels in one action —
+// matching the semantics of the new `l`. "Collapse in place without
+// moving cursor" isn't available; add a distinct binding (z / -) if
+// it becomes wanted.
 func (m treeModel) collapseCurrent() treeModel {
 	if len(m.nodes) == 0 {
 		return m
 	}
 	cur := &m.nodes[m.cursor]
-	if !cur.expanded {
-		// If the cursor sits on a non-expanded child, jump the cursor to the
-		// parent (one level up in depth). This mirrors the borgtui feel.
-		targetDepth := cur.depth - 1
-		if targetDepth < 0 {
-			return m
+	// Collapse first when expanded, so descendants disappear before
+	// we walk up looking for the parent row.
+	if cur.expanded {
+		end := m.cursor + 1
+		for end < len(m.nodes) && m.nodes[end].depth > cur.depth {
+			end++
 		}
-		for i := m.cursor - 1; i >= 0; i-- {
-			if m.nodes[i].depth == targetDepth {
-				m.cursor = i
-				return m
-			}
-		}
+		m.nodes = append(m.nodes[:m.cursor+1], m.nodes[end:]...)
+		cur.expanded = false
+	}
+	// Ascend one level.
+	targetDepth := cur.depth - 1
+	if targetDepth < 0 {
 		return m
 	}
-	// Collapse: drop every subsequent node with depth > cur.depth, up until we
-	// hit one with depth <= cur.depth.
-	end := m.cursor + 1
-	for end < len(m.nodes) && m.nodes[end].depth > cur.depth {
-		end++
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.nodes[i].depth == targetDepth {
+			m.cursor = i
+			return m
+		}
 	}
-	m.nodes = append(m.nodes[:m.cursor+1], m.nodes[end:]...)
-	cur.expanded = false
 	return m
 }
 

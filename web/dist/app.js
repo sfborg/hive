@@ -1452,20 +1452,29 @@ class SfgaTree extends LitElement {
     return false;
   }
 
-  // _collapseOrParent implements the ←/h contract:
-  //   - Expanded node   → collapse (children drop out; cursor stays).
-  //   - Anything else   → jump cursor to the parent one depth up.
+  // _collapseOrParent implements the ←/h contract, mirror-symmetric
+  // with →/l's _expandOrEnter:
+  //   - Expanded node → collapse AND move cursor to parent in one press.
+  //   - Leaf / collapsed / root → move cursor to parent (or no-op at depth 0).
   //
-  // Returns true when h "did something" (either collapsed the current
-  // row or ascended). Used by the count-prefix loop to stop looping
-  // once we've reached an already-collapsed root.
+  // "Always ascend when there's somewhere to ascend to" — collapsing
+  // a subtree means the curator is done browsing it, so folding the
+  // two into one press means `h h h h` walks the ancestor chain
+  // efficiently and Nh ascends N levels in one action. "Collapse
+  // without moving cursor" is not available; if it becomes wanted
+  // later, a separate binding (z / -) can carry it.
+  //
+  // Returns true when the cursor moved or a subtree collapsed (used
+  // by the count-prefix loop to stop looping at an already-collapsed
+  // root).
   async _collapseOrParent() {
     const idx = this._cursorIndex();
     if (idx < 0) return false;
     const node = this.nodes[idx];
     if (node.expanded) {
       this._collapse(node);
-      return true;
+      // Now this node is collapsed with cursor still on it. Fall
+      // through to the ascend step below.
     }
     if (node.depth === 0) return false;
     // Walk back through the flat list until we find the row at the

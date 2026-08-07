@@ -180,7 +180,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "tree-collapse",
-			Description: "collapse node, or step out to parent",
+			Description: "collapse and step out to parent (Nh ascends N)",
 			Display:     "← / h",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"left", "h"}, []string{"ArrowLeft", "h"}),
