@@ -306,18 +306,31 @@ function vocabResolver(name) {
   };
 }
 
-// vocabSourceIn(name, allowedIDs) is vocabSource restricted to a
-// specific ID allowlist. Used by the create form's step-1 rank
-// picker to hide ranks that aren't valid children of the current
-// parent (per core/ui.ValidChildRankIDs). Pass null / undefined to
-// disable filtering — the full vocab flows through unchanged.
-function vocabSourceIn(name, allowedIDs) {
-  const base = vocabSource(name);
-  if (!allowedIDs || allowedIDs.length === 0) return base;
-  const allowed = new Set(allowedIDs);
+// childRankSource restricts the rank combobox to the ranks
+// core/ui.ValidChildRanks says are valid children of the current
+// create's parent. Behavior mirrors the TUI's childRankComboSource:
+//   - null / empty allow list → fall through to vocabSource("rank"),
+//     i.e. no filter (root taxon or code unknown).
+//   - Empty query → return only typical_use ranks (subgenus,
+//     species, etc.).
+//   - Non-empty query → return every allowed rank whose ID or name
+//     matches. Typing widens without needing a "show all" button.
+//
+// allowed is a list of {id, typical_use} objects as returned by
+// /api/taxon/{id}/child-ranks.
+function childRankSource(allowed) {
+  const base = vocabSource("rank");
+  if (!allowed || allowed.length === 0) return base;
+  const allowSet = new Set(allowed.map((r) => r.id));
+  const typicalSet = new Set(allowed.filter((r) => r.typical_use).map((r) => r.id));
   return async (q) => {
     const all = await base(q);
-    return all.filter((t) => allowed.has(t.id));
+    const needle = (q || "").toLowerCase().trim();
+    return all.filter((t) => {
+      if (!allowSet.has(t.id)) return false;
+      if (!needle) return typicalSet.has(t.id);
+      return true;
+    });
   };
 }
 
@@ -1845,11 +1858,13 @@ class SfgaDetail extends LitElement {
     // stable target even if the tree selection moves underneath.
     _createParentID: { state: true },
     _createParentLabel: { state: true },
-    // Rank IDs valid as a child of the intended parent (from
-    // core/ui.ValidChildRankIDs via GET /api/taxon/{id}/child-ranks).
-    // null = "no filter" (root taxon, or code unknown); array = allow
-    // only these. Step-1 rank picker uses to scope its dropdown.
-    _createChildRankIDs: { state: true },
+    // Ranks valid as a child of the intended parent (from
+    // core/ui.ValidChildRanks via GET /api/taxon/{id}/child-ranks).
+    // null = "no filter" (root taxon, or code unknown); array of
+    // {id, typical_use} = allow only these. Step-1 rank picker
+    // uses childRankSource to display typical ranks by default and
+    // widen on search.
+    _createChildRanks: { state: true },
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
@@ -2219,7 +2234,7 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._createParentID = "";
     this._createParentLabel = "";
-    this._createChildRankIDs = null;
+    this._createChildRanks = null;
     this._editShowAtomized = readAtomizedPref();
     this._confirmDelete = false;
     this._deleteError = "";
@@ -2366,7 +2381,7 @@ class SfgaDetail extends LitElement {
           // an empty list means every rank is invalid, which we treat
           // as "the server has no opinion" per handleChildRanks.
           const items = childRanksResp.items || [];
-          this._createChildRankIDs = items.length > 0 ? items : null;
+          this._createChildRanks = items.length > 0 ? items : null;
         }
       } catch (_) {
         /* leave defaults empty; curator will fill */
@@ -2659,7 +2674,7 @@ class SfgaDetail extends LitElement {
         <sfga-combobox
           min-search-chars="0"
           placeholder="rank…"
-          .source=${vocabSourceIn("rank", this._createChildRankIDs)}
+          .source=${childRankSource(this._createChildRanks)}
           .resolver=${vocabResolver("rank")}
           .value=${d.rank || ""}
           @pick=${(e) => this._createFieldChange("rank", e.detail.id)}

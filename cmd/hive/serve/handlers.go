@@ -285,22 +285,25 @@ func (s *server) handleCreateNamePrefix(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"prefix": prefix})
 }
 
-// handleChildRanks returns the rank IDs valid as children of the
-// given parent, per the TW-derived rank hierarchy filtered by the
-// parent's own rank + code. Empty items array means "no filter" —
-// front-ends should show the full rank vocab for that case.
-// See core.Archive.ValidChildRankIDs for filter logic.
+// handleChildRanks returns the ranks valid as children of the given
+// parent, per the TW-derived rank hierarchy filtered by the parent's
+// own rank + code. Each item is {"id": ..., "typical_use": bool}.
+// Empty items array means "no filter" — front-ends should show the
+// full rank vocab for that case. Typical_use lets the picker default
+// to the common ranks; the curator can widen via search or an
+// explicit "show all" toggle.
+// See core.Archive.ValidChildRanks for filter logic.
 func (s *server) handleChildRanks(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PathValue("id")
-	ids, err := s.a.ValidChildRankIDs(r.Context(), parentID)
+	ranks, err := s.a.ValidChildRanks(r.Context(), parentID)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
 	}
-	if ids == nil {
-		ids = []string{}
+	if ranks == nil {
+		ranks = []ui.ChildRank{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": ids})
+	writeJSON(w, http.StatusOK, map[string]any{"items": ranks})
 }
 
 // handleAncestors returns the taxon's parent chain in root-down order

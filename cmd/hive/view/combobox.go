@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sfborg/hive/core"
+	"github.com/sfborg/hive/core/ui"
 )
 
 // The TUI counterpart of the WUI's <sfga-combobox>: a text input with an
@@ -285,30 +286,42 @@ func vocabComboSource(vocab *core.Vocabulary, name string) comboboxSource {
 	}
 }
 
-// vocabComboSourceIn is vocabComboSource restricted to a specific ID
-// allowlist. Used by the create form's rank picker to hide ranks
-// that aren't valid children of the current parent (per
-// core/ui.ValidChildRankIDs). Empty / nil allow list disables
-// filtering — the full vocab flows through.
-func vocabComboSourceIn(vocab *core.Vocabulary, name string, allowed []string) comboboxSource {
+// childRankComboSource restricts the rank combobox to the ranks
+// core/ui.ValidChildRanks says are valid children of the current
+// create's parent. Behavior:
+//   - Empty allow list → fall through to vocabComboSource("rank"),
+//     i.e. no filter (root taxon or code unknown).
+//   - Empty query → return only typical_use ranks (the common
+//     picker set — subgenus, species, etc.).
+//   - Non-empty query → return every allowed rank whose ID or name
+//     matches, including non-typical ranks. Typing acts as the
+//     "show all" affordance without needing an explicit toggle.
+func childRankComboSource(vocab *core.Vocabulary, allowed []ui.ChildRank) comboboxSource {
 	if len(allowed) == 0 {
-		return vocabComboSource(vocab, name)
+		return vocabComboSource(vocab, "rank")
 	}
+	typical := make(map[string]bool, len(allowed))
 	allowSet := make(map[string]bool, len(allowed))
-	for _, id := range allowed {
-		allowSet[id] = true
+	for _, r := range allowed {
+		allowSet[r.ID] = true
+		if r.TypicalUse {
+			typical[r.ID] = true
+		}
 	}
 	return func(q string) tea.Cmd {
 		return func() tea.Msg {
-			terms := vocabTerms(vocab, name)
+			terms := vocabTerms(vocab, "rank")
 			needle := strings.ToLower(strings.TrimSpace(q))
 			var results []term
 			for _, t := range terms {
 				if !allowSet[t.ID] {
 					continue
 				}
-				if needle != "" &&
-					!strings.Contains(strings.ToLower(t.Name), needle) &&
+				if needle == "" {
+					if !typical[t.ID] {
+						continue
+					}
+				} else if !strings.Contains(strings.ToLower(t.Name), needle) &&
 					!strings.Contains(strings.ToLower(t.ID), needle) {
 					continue
 				}

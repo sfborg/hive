@@ -13,7 +13,7 @@
         "group": "family",
         "parent_rank_id": "EPIFAMILY",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "INFRAFAMILY",
@@ -41,7 +41,7 @@
           "FAMILY",
           "SUPERSUBFAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBTRIBE",
@@ -50,14 +50,14 @@
         "valid_parents_override": [
           "TRIBE"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUPERFAMILY",
         "group": "family",
         "parent_rank_id": "NANORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUPERSUBFAMILY",
@@ -85,14 +85,14 @@
           "SUPERTRIBE",
           "SUBFAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "GENUS",
         "group": "genus",
         "parent_rank_id": "SUPERGENUS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "INFRAGENUS",
@@ -110,7 +110,7 @@
         "valid_parents_override": [
           "GENUS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUPERGENUS",
@@ -142,7 +142,7 @@
         "group": "higher",
         "parent_rank_id": "SUPERCLASS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "COHORT",
@@ -192,7 +192,7 @@
         "group": "higher",
         "parent_rank_id": "SUPERKINGDOM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "MAGNORDER",
@@ -222,7 +222,7 @@
         "group": "higher",
         "parent_rank_id": "MIRORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "PARVORDER",
@@ -236,7 +236,7 @@
         "group": "higher",
         "parent_rank_id": "SUPERPHYLUM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBCLASS",
@@ -314,7 +314,7 @@
         "group": "species",
         "parent_rank_id": "SUBSUPERSPECIES",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBSPECIES",
@@ -357,7 +357,7 @@
         "group": "family",
         "parent_rank_id": "SUBORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBFAMILY",
@@ -366,7 +366,7 @@
         "valid_parents_override": [
           "FAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBTRIBE",
@@ -375,7 +375,7 @@
         "valid_parents_override": [
           "TRIBE"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "TRIBE",
@@ -384,14 +384,14 @@
         "valid_parents_override": [
           "SUBFAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "GENUS",
         "group": "genus",
         "parent_rank_id": "SUBTRIBE",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SECTION",
@@ -401,7 +401,7 @@
           "GENUS",
           "SUBGENUS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SERIES",
@@ -413,7 +413,7 @@
           "SECTION",
           "SUBSECTION"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBGENUS",
@@ -422,7 +422,7 @@
         "valid_parents_override": [
           "GENUS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBSECTION",
@@ -431,7 +431,7 @@
         "valid_parents_override": [
           "SECTION"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBSERIES",
@@ -440,35 +440,35 @@
         "valid_parents_override": [
           "SERIES"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "CLASS",
         "group": "higher",
         "parent_rank_id": "SUBPHYLUM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "KINGDOM",
         "group": "higher",
         "parent_rank_id": "",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "ORDER",
         "group": "higher",
         "parent_rank_id": "SUPERORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "PHYLUM",
         "group": "higher",
         "parent_rank_id": "SUBKINGDOM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBCLASS",
@@ -477,7 +477,7 @@
         "valid_parents_override": [
           "CLASS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBKINGDOM",
@@ -486,7 +486,7 @@
         "valid_parents_override": [
           "KINGDOM"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBORDER",
@@ -495,7 +495,7 @@
         "valid_parents_override": [
           "ORDER"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBPHYLUM",
@@ -504,14 +504,14 @@
         "valid_parents_override": [
           "PHYLUM"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUPERORDER",
         "group": "higher",
         "parent_rank_id": "SUBCLASS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "FORM",
@@ -523,14 +523,14 @@
           "VARIETY",
           "SUBVARIETY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SPECIES",
         "group": "species",
         "parent_rank_id": "SUBSERIES",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBFORM",
@@ -539,7 +539,7 @@
         "valid_parents_override": [
           "FORM"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBSPECIES",
@@ -548,7 +548,7 @@
         "valid_parents_override": [
           "SPECIES"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBVARIETY",
@@ -557,7 +557,7 @@
         "valid_parents_override": [
           "VARIETY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "VARIETY",
@@ -567,7 +567,7 @@
           "SPECIES",
           "SUBSPECIES"
         ],
-        "typical_use": false
+        "typical_use": true
       }
     ]
   },
@@ -578,7 +578,7 @@
         "group": "family",
         "parent_rank_id": "SUBORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBFAMILY",
@@ -587,7 +587,7 @@
         "valid_parents_override": [
           "FAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBTRIBE",
@@ -596,7 +596,7 @@
         "valid_parents_override": [
           "TRIBE"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "TRIBE",
@@ -605,14 +605,14 @@
         "valid_parents_override": [
           "SUBFAMILY"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "GENUS",
         "group": "genus",
         "parent_rank_id": "SUBTRIBE",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBGENUS",
@@ -621,35 +621,35 @@
         "valid_parents_override": [
           "GENUS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "CLASS",
         "group": "higher",
         "parent_rank_id": "PHYLUM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "KINGDOM",
         "group": "higher",
         "parent_rank_id": "",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "ORDER",
         "group": "higher",
         "parent_rank_id": "SUBCLASS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "PHYLUM",
         "group": "higher",
         "parent_rank_id": "KINGDOM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBCLASS",
@@ -658,7 +658,7 @@
         "valid_parents_override": [
           "CLASS"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBORDER",
@@ -667,14 +667,14 @@
         "valid_parents_override": [
           "ORDER"
         ],
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SPECIES",
         "group": "species",
         "parent_rank_id": "SUBGENUS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBSPECIES",
@@ -683,7 +683,7 @@
         "valid_parents_override": [
           "SPECIES"
         ],
-        "typical_use": false
+        "typical_use": true
       }
     ]
   },
@@ -694,63 +694,63 @@
         "group": "higher",
         "parent_rank_id": "PHYLUM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "FAMILY",
         "group": "family",
         "parent_rank_id": "ORDER",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "GENUS",
         "group": "genus",
         "parent_rank_id": "SUBFAMILY",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "KINGDOM",
         "group": "higher",
         "parent_rank_id": "REALM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "ORDER",
         "group": "higher",
         "parent_rank_id": "CLASS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "PHYLUM",
         "group": "higher",
         "parent_rank_id": "KINGDOM",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "REALM",
         "group": "higher",
         "parent_rank_id": "",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SPECIES",
         "group": "species",
         "parent_rank_id": "GENUS",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       },
       {
         "rank_id": "SUBFAMILY",
         "group": "family",
         "parent_rank_id": "FAMILY",
         "valid_parents_override": null,
-        "typical_use": false
+        "typical_use": true
       }
     ]
   }

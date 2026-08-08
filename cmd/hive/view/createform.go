@@ -111,13 +111,15 @@ func (m *detailModel) initPreviewInputs(preview *coldp.Name) {
 	m.createPreviewInputs[cpfRemarks].SetValue(preview.Remarks)
 
 	// Rank picker: pre-select the guess. Scoped to the parent's
-	// valid child ranks (per core/ui.ValidChildRankIDs) so the
-	// dropdown doesn't offer kingdoms as children of genera. Falls
-	// back to the full vocab when there's no filter (root taxon or
-	// code unknown). Fresh picker each entry so stale search state
-	// doesn't leak from an earlier session.
+	// valid child ranks (per core/ui.ValidChildRanks) so the
+	// dropdown doesn't offer kingdoms as children of genera. Empty
+	// query shows only typical_use ranks; typing widens to include
+	// less-common ranks. Falls back to the full vocab when there's
+	// no filter (root taxon or code unknown). Fresh picker each
+	// entry so stale search state doesn't leak from an earlier
+	// session.
 	m.createRankPicker = newCombobox(
-		vocabComboSourceIn(m.vocab, "rank", m.createChildRankIDs),
+		childRankComboSource(m.vocab, m.createChildRanks),
 		"rank…",
 	)
 	if rid := preview.Rank.ID(); rid != "" {

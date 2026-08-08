@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gnames/gnlib/ent/nomcode"
 	"github.com/sfborg/hive/core"
+	"github.com/sfborg/hive/core/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -187,11 +188,13 @@ type detailModel struct {
 	// Preview textinputs — one per atomized col__ field on step 1.
 	// Populated by initPreviewInputs after the parse lands.
 	createPreviewInputs [cpfInputCount]textinput.Model
-	// Valid child rank IDs for the current create's parent, per
-	// core/ui.ValidChildRankIDs (fetched once in EnterCreateModeCmd).
-	// nil / empty = no filter (root taxon or code unknown); populated
-	// = restrict the rank picker to these rank IDs.
-	createChildRankIDs []string
+	// Valid child ranks for the current create's parent, per
+	// core/ui.ValidChildRanks (fetched once in EnterCreateModeCmd).
+	// nil / empty = no filter (root taxon or code unknown);
+	// populated = restrict the rank picker to these ranks. Each
+	// entry carries a TypicalUse flag; the picker shows the
+	// typical set first and widens as the curator types.
+	createChildRanks []ui.ChildRank
 }
 
 // taxonFieldSnapshot captures the pre-edit values of taxon-writable fields
@@ -624,12 +627,13 @@ func (m *detailModel) EnterCreateModeCmd(parentID, parentLabel string) (tea.Cmd,
 	if parentCode, err := m.a.CodeForParent(context.Background(), parentID); err == nil && parentCode != "" {
 		m.createCodePicker.SetValue(parentCode, vocabLabelFor(m.vocab, "nom_code", parentCode))
 	}
-	// Cache the parent's valid child rank IDs so the step-1 rank
+	// Cache the parent's valid child ranks so the step-1 rank
 	// picker can filter its dropdown to code-appropriate ranks. nil
 	// slice = no filter (root taxon or code unknown); the picker
-	// falls back to the full vocab in that case.
-	if ids, err := m.a.ValidChildRankIDs(context.Background(), parentID); err == nil {
-		m.createChildRankIDs = ids
+	// falls back to the full vocab in that case. TypicalUse flags
+	// let the picker show a common subset first and widen on search.
+	if ranks, err := m.a.ValidChildRanks(context.Background(), parentID); err == nil {
+		m.createChildRanks = ranks
 	}
 	m.createFocus = 0
 	return m.createSciName.Focus(), true
