@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sfborg/hive/core/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -176,6 +177,39 @@ func (a *Archive) NameRef(ctx context.Context, id string) (Ref, error) {
 		ID:    id,
 		Label: BuildLabel(canonical, authorship, rank, false),
 	}, nil
+}
+
+// ValidChildRankIDs returns the rank IDs a new child of parentID
+// should be allowed to pick from — filtered per the parent's own
+// rank and nomenclatural code via the TaxonWorks-derived rank
+// hierarchy (core/ui.ValidChildRankIDs).
+//
+// An empty parentID or an archive whose parent lacks a rank / code
+// returns nil, signaling "no filter" so the frontend shows every
+// rank in the vocab. Curator overrides the guess on the form as
+// needed; filtering just removes the obviously wrong picks.
+func (a *Archive) ValidChildRankIDs(ctx context.Context, parentID string) ([]string, error) {
+	if parentID == "" {
+		return nil, nil
+	}
+	const q = `SELECT
+		COALESCE(n.col__rank_id, ''),
+		COALESCE(n.col__code_id, '')
+	FROM taxon t
+	LEFT JOIN name n ON n.col__id = t.col__name_id
+	WHERE t.col__id = ?`
+	var rankID, codeID string
+	err := a.db.QueryRowContext(ctx, q, parentID).Scan(&rankID, &codeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("core: valid child ranks for parent %s: %w", parentID, err)
+	}
+	if codeID == "" {
+		return nil, nil
+	}
+	return ui.ValidChildRankIDs(codeID, rankID), nil
 }
 
 // CreateNamePrefix returns the string a new child of parentID should

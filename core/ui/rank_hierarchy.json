@@ -1,0 +1,757 @@
+{
+  "iczn": {
+    "ranks": [
+      {
+        "rank_id": "EPIFAMILY",
+        "group": "family",
+        "parent_rank_id": "SUPERFAMILY",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "FAMILY",
+        "group": "family",
+        "parent_rank_id": "EPIFAMILY",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRAFAMILY",
+        "group": "family",
+        "parent_rank_id": "SUBFAMILY",
+        "valid_parents_override": [
+          "SUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRATRIBE",
+        "group": "family",
+        "parent_rank_id": "SUBTRIBE",
+        "valid_parents_override": [
+          "SUBTRIBE"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBFAMILY",
+        "group": "family",
+        "parent_rank_id": "SUPERSUBFAMILY",
+        "valid_parents_override": [
+          "FAMILY",
+          "SUPERSUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBTRIBE",
+        "group": "family",
+        "parent_rank_id": "TRIBE",
+        "valid_parents_override": [
+          "TRIBE"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERFAMILY",
+        "group": "family",
+        "parent_rank_id": "NANORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERSUBFAMILY",
+        "group": "family",
+        "parent_rank_id": "FAMILY",
+        "valid_parents_override": [
+          "FAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERTRIBE",
+        "group": "family",
+        "parent_rank_id": "INFRAFAMILY",
+        "valid_parents_override": [
+          "SUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "TRIBE",
+        "group": "family",
+        "parent_rank_id": "SUPERTRIBE",
+        "valid_parents_override": [
+          "SUPERTRIBE",
+          "SUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "GENUS",
+        "group": "genus",
+        "parent_rank_id": "SUPERGENUS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRAGENUS",
+        "group": "genus",
+        "parent_rank_id": "SUBGENUS",
+        "valid_parents_override": [
+          "SUBGENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBGENUS",
+        "group": "genus",
+        "parent_rank_id": "SUPERSUBGENUS",
+        "valid_parents_override": [
+          "GENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERGENUS",
+        "group": "genus",
+        "parent_rank_id": "INFRATRIBE",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERSUBGENUS",
+        "group": "genus",
+        "parent_rank_id": "SUPERSUPERSUBGENUS",
+        "valid_parents_override": [
+          "GENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERSUPERSUBGENUS",
+        "group": "genus",
+        "parent_rank_id": "GENUS",
+        "valid_parents_override": [
+          "GENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "CLASS",
+        "group": "higher",
+        "parent_rank_id": "SUPERCLASS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "COHORT",
+        "group": "higher",
+        "parent_rank_id": "SUPERCOHORT",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRACLASS",
+        "group": "higher",
+        "parent_rank_id": "SUBCLASS",
+        "valid_parents_override": [
+          "SUBCLASS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRAKINGDOM",
+        "group": "higher",
+        "parent_rank_id": "SUBKINGDOM",
+        "valid_parents_override": [
+          "SUBKINGDOM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRAORDER",
+        "group": "higher",
+        "parent_rank_id": "SUBORDER",
+        "valid_parents_override": [
+          "SUBORDER"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "INFRAPHYLUM",
+        "group": "higher",
+        "parent_rank_id": "SUBPHYLUM",
+        "valid_parents_override": [
+          "SUBPHYLUM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "KINGDOM",
+        "group": "higher",
+        "parent_rank_id": "SUPERKINGDOM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "MAGNORDER",
+        "group": "higher",
+        "parent_rank_id": "COHORT",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "MIRORDER",
+        "group": "higher",
+        "parent_rank_id": "SUPERORDER",
+        "valid_parents_override": [
+          "SUPERORDER"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "NANORDER",
+        "group": "higher",
+        "parent_rank_id": "PARVORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "ORDER",
+        "group": "higher",
+        "parent_rank_id": "MIRORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "PARVORDER",
+        "group": "higher",
+        "parent_rank_id": "INFRAORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "PHYLUM",
+        "group": "higher",
+        "parent_rank_id": "SUPERPHYLUM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBCLASS",
+        "group": "higher",
+        "parent_rank_id": "CLASS",
+        "valid_parents_override": [
+          "CLASS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBKINGDOM",
+        "group": "higher",
+        "parent_rank_id": "KINGDOM",
+        "valid_parents_override": [
+          "KINGDOM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBORDER",
+        "group": "higher",
+        "parent_rank_id": "ORDER",
+        "valid_parents_override": [
+          "ORDER"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBPHYLUM",
+        "group": "higher",
+        "parent_rank_id": "PHYLUM",
+        "valid_parents_override": [
+          "PHYLUM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERCLASS",
+        "group": "higher",
+        "parent_rank_id": "INFRAPHYLUM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERCOHORT",
+        "group": "higher",
+        "parent_rank_id": "INFRACLASS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERKINGDOM",
+        "group": "higher",
+        "parent_rank_id": "",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERORDER",
+        "group": "higher",
+        "parent_rank_id": "MAGNORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERPHYLUM",
+        "group": "higher",
+        "parent_rank_id": "INFRAKINGDOM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SPECIES",
+        "group": "species",
+        "parent_rank_id": "SUBSUPERSPECIES",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBSPECIES",
+        "group": "species",
+        "parent_rank_id": "SPECIES",
+        "valid_parents_override": [
+          "SPECIES"
+        ],
+        "typical_use": true
+      },
+      {
+        "rank_id": "SUBSUPERSPECIES",
+        "group": "species",
+        "parent_rank_id": "SUPERSPECIES",
+        "valid_parents_override": [
+          "SUPERSPECIES"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERSPECIES",
+        "group": "species",
+        "parent_rank_id": "SUPERSUPERSPECIES",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERSUPERSPECIES",
+        "group": "species",
+        "parent_rank_id": "INFRAGENUS",
+        "valid_parents_override": null,
+        "typical_use": false
+      }
+    ]
+  },
+  "icn": {
+    "ranks": [
+      {
+        "rank_id": "FAMILY",
+        "group": "family",
+        "parent_rank_id": "SUBORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBFAMILY",
+        "group": "family",
+        "parent_rank_id": "FAMILY",
+        "valid_parents_override": [
+          "FAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBTRIBE",
+        "group": "family",
+        "parent_rank_id": "TRIBE",
+        "valid_parents_override": [
+          "TRIBE"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "TRIBE",
+        "group": "family",
+        "parent_rank_id": "SUBFAMILY",
+        "valid_parents_override": [
+          "SUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "GENUS",
+        "group": "genus",
+        "parent_rank_id": "SUBTRIBE",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SECTION",
+        "group": "genus",
+        "parent_rank_id": "SUBGENUS",
+        "valid_parents_override": [
+          "GENUS",
+          "SUBGENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SERIES",
+        "group": "genus",
+        "parent_rank_id": "SUBSECTION",
+        "valid_parents_override": [
+          "GENUS",
+          "SUBGENUS",
+          "SECTION",
+          "SUBSECTION"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBGENUS",
+        "group": "genus",
+        "parent_rank_id": "GENUS",
+        "valid_parents_override": [
+          "GENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBSECTION",
+        "group": "genus",
+        "parent_rank_id": "SECTION",
+        "valid_parents_override": [
+          "SECTION"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBSERIES",
+        "group": "genus",
+        "parent_rank_id": "SERIES",
+        "valid_parents_override": [
+          "SERIES"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "CLASS",
+        "group": "higher",
+        "parent_rank_id": "SUBPHYLUM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "KINGDOM",
+        "group": "higher",
+        "parent_rank_id": "",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "ORDER",
+        "group": "higher",
+        "parent_rank_id": "SUPERORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "PHYLUM",
+        "group": "higher",
+        "parent_rank_id": "SUBKINGDOM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBCLASS",
+        "group": "higher",
+        "parent_rank_id": "CLASS",
+        "valid_parents_override": [
+          "CLASS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBKINGDOM",
+        "group": "higher",
+        "parent_rank_id": "KINGDOM",
+        "valid_parents_override": [
+          "KINGDOM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBORDER",
+        "group": "higher",
+        "parent_rank_id": "ORDER",
+        "valid_parents_override": [
+          "ORDER"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBPHYLUM",
+        "group": "higher",
+        "parent_rank_id": "PHYLUM",
+        "valid_parents_override": [
+          "PHYLUM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUPERORDER",
+        "group": "higher",
+        "parent_rank_id": "SUBCLASS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "FORM",
+        "group": "species",
+        "parent_rank_id": "SUBVARIETY",
+        "valid_parents_override": [
+          "SPECIES",
+          "SUBSPECIES",
+          "VARIETY",
+          "SUBVARIETY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SPECIES",
+        "group": "species",
+        "parent_rank_id": "SUBSERIES",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBFORM",
+        "group": "species",
+        "parent_rank_id": "FORM",
+        "valid_parents_override": [
+          "FORM"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBSPECIES",
+        "group": "species",
+        "parent_rank_id": "SPECIES",
+        "valid_parents_override": [
+          "SPECIES"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBVARIETY",
+        "group": "species",
+        "parent_rank_id": "VARIETY",
+        "valid_parents_override": [
+          "VARIETY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "VARIETY",
+        "group": "species",
+        "parent_rank_id": "SUBSPECIES",
+        "valid_parents_override": [
+          "SPECIES",
+          "SUBSPECIES"
+        ],
+        "typical_use": false
+      }
+    ]
+  },
+  "icnp": {
+    "ranks": [
+      {
+        "rank_id": "FAMILY",
+        "group": "family",
+        "parent_rank_id": "SUBORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBFAMILY",
+        "group": "family",
+        "parent_rank_id": "FAMILY",
+        "valid_parents_override": [
+          "FAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBTRIBE",
+        "group": "family",
+        "parent_rank_id": "TRIBE",
+        "valid_parents_override": [
+          "TRIBE"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "TRIBE",
+        "group": "family",
+        "parent_rank_id": "SUBFAMILY",
+        "valid_parents_override": [
+          "SUBFAMILY"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "GENUS",
+        "group": "genus",
+        "parent_rank_id": "SUBTRIBE",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBGENUS",
+        "group": "genus",
+        "parent_rank_id": "GENUS",
+        "valid_parents_override": [
+          "GENUS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "CLASS",
+        "group": "higher",
+        "parent_rank_id": "PHYLUM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "KINGDOM",
+        "group": "higher",
+        "parent_rank_id": "",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "ORDER",
+        "group": "higher",
+        "parent_rank_id": "SUBCLASS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "PHYLUM",
+        "group": "higher",
+        "parent_rank_id": "KINGDOM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBCLASS",
+        "group": "higher",
+        "parent_rank_id": "CLASS",
+        "valid_parents_override": [
+          "CLASS"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBORDER",
+        "group": "higher",
+        "parent_rank_id": "ORDER",
+        "valid_parents_override": [
+          "ORDER"
+        ],
+        "typical_use": false
+      },
+      {
+        "rank_id": "SPECIES",
+        "group": "species",
+        "parent_rank_id": "SUBGENUS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBSPECIES",
+        "group": "species",
+        "parent_rank_id": "SPECIES",
+        "valid_parents_override": [
+          "SPECIES"
+        ],
+        "typical_use": false
+      }
+    ]
+  },
+  "icvcn": {
+    "ranks": [
+      {
+        "rank_id": "CLASS",
+        "group": "higher",
+        "parent_rank_id": "PHYLUM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "FAMILY",
+        "group": "family",
+        "parent_rank_id": "ORDER",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "GENUS",
+        "group": "genus",
+        "parent_rank_id": "SUBFAMILY",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "KINGDOM",
+        "group": "higher",
+        "parent_rank_id": "REALM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "ORDER",
+        "group": "higher",
+        "parent_rank_id": "CLASS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "PHYLUM",
+        "group": "higher",
+        "parent_rank_id": "KINGDOM",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "REALM",
+        "group": "higher",
+        "parent_rank_id": "",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SPECIES",
+        "group": "species",
+        "parent_rank_id": "GENUS",
+        "valid_parents_override": null,
+        "typical_use": false
+      },
+      {
+        "rank_id": "SUBFAMILY",
+        "group": "family",
+        "parent_rank_id": "FAMILY",
+        "valid_parents_override": null,
+        "typical_use": false
+      }
+    ]
+  }
+}

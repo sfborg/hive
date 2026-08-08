@@ -51,6 +51,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/code-default", s.handleCodeDefault)
 	mux.HandleFunc("GET /api/taxon/{id}/create-name-prefix", s.handleCreateNamePrefix)
+	mux.HandleFunc("GET /api/taxon/{id}/child-ranks", s.handleChildRanks)
 
 	mux.HandleFunc("GET /api/name/search", s.handleNameSearch)
 	mux.HandleFunc("POST /api/name/parse", s.handleParseName)
@@ -282,6 +283,24 @@ func (s *server) handleCreateNamePrefix(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"prefix": prefix})
+}
+
+// handleChildRanks returns the rank IDs valid as children of the
+// given parent, per the TW-derived rank hierarchy filtered by the
+// parent's own rank + code. Empty items array means "no filter" —
+// front-ends should show the full rank vocab for that case.
+// See core.Archive.ValidChildRankIDs for filter logic.
+func (s *server) handleChildRanks(w http.ResponseWriter, r *http.Request) {
+	parentID := r.PathValue("id")
+	ids, err := s.a.ValidChildRankIDs(r.Context(), parentID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": ids})
 }
 
 // handleAncestors returns the taxon's parent chain in root-down order

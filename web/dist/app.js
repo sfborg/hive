@@ -306,6 +306,21 @@ function vocabResolver(name) {
   };
 }
 
+// vocabSourceIn(name, allowedIDs) is vocabSource restricted to a
+// specific ID allowlist. Used by the create form's step-1 rank
+// picker to hide ranks that aren't valid children of the current
+// parent (per core/ui.ValidChildRankIDs). Pass null / undefined to
+// disable filtering — the full vocab flows through unchanged.
+function vocabSourceIn(name, allowedIDs) {
+  const base = vocabSource(name);
+  if (!allowedIDs || allowedIDs.length === 0) return base;
+  const allowed = new Set(allowedIDs);
+  return async (q) => {
+    const all = await base(q);
+    return all.filter((t) => allowed.has(t.id));
+  };
+}
+
 // nomenSource(codeID) returns a combobox source that filters NOMEN
 // terms by the current name's nomenclatural code. Empty codeID → all
 // terms. Matches against label or short local identifier.
@@ -1830,6 +1845,11 @@ class SfgaDetail extends LitElement {
     // stable target even if the tree selection moves underneath.
     _createParentID: { state: true },
     _createParentLabel: { state: true },
+    // Rank IDs valid as a child of the intended parent (from
+    // core/ui.ValidChildRankIDs via GET /api/taxon/{id}/child-ranks).
+    // null = "no filter" (root taxon, or code unknown); array = allow
+    // only these. Step-1 rank picker uses to scope its dropdown.
+    _createChildRankIDs: { state: true },
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
@@ -2199,6 +2219,7 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._createParentID = "";
     this._createParentLabel = "";
+    this._createChildRankIDs = null;
     this._editShowAtomized = readAtomizedPref();
     this._confirmDelete = false;
     this._deleteError = "";
@@ -2330,9 +2351,10 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     if (parentID) {
       try {
-        const [codeResp, prefixResp] = await Promise.all([
+        const [codeResp, prefixResp, childRanksResp] = await Promise.all([
           api.taxon.codeDefault(parentID).catch(() => ({ code: "" })),
           api.taxon.createNamePrefix(parentID).catch(() => ({ prefix: "" })),
+          api.taxon.childRanks(parentID).catch(() => ({ items: [] })),
         ]);
         if (this._creating) {
           this._createDraft = {
@@ -2340,6 +2362,11 @@ class SfgaDetail extends LitElement {
             code: this._createDraft.code || codeResp.code || "",
             scientific_name: this._createDraft.scientific_name || prefixResp.prefix || "",
           };
+          // items === [] and items === null both signal "no filter" —
+          // an empty list means every rank is invalid, which we treat
+          // as "the server has no opinion" per handleChildRanks.
+          const items = childRanksResp.items || [];
+          this._createChildRankIDs = items.length > 0 ? items : null;
         }
       } catch (_) {
         /* leave defaults empty; curator will fill */
@@ -2632,7 +2659,7 @@ class SfgaDetail extends LitElement {
         <sfga-combobox
           min-search-chars="0"
           placeholder="rank…"
-          .source=${vocabSource("rank")}
+          .source=${vocabSourceIn("rank", this._createChildRankIDs)}
           .resolver=${vocabResolver("rank")}
           .value=${d.rank || ""}
           @pick=${(e) => this._createFieldChange("rank", e.detail.id)}

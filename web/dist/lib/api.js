@@ -197,6 +197,8 @@ export const api = {
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/code-default`),
     createNamePrefix: (parentId) =>
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/create-name-prefix`),
+    childRanks: (parentId) =>
+      j("GET", `/api/taxon/${encodeURIComponent(parentId)}/child-ranks`),
     search: (opts) => j("GET", `/api/taxon/search${qs(opts)}`),
     patch: (id, patch, ifMatch) =>
       j("PATCH", `/api/taxon/${encodeURIComponent(id)}`, patch, ifMatch ? { "If-Match": ifMatch } : {}),

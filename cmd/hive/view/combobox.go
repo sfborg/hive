@@ -285,6 +285,43 @@ func vocabComboSource(vocab *core.Vocabulary, name string) comboboxSource {
 	}
 }
 
+// vocabComboSourceIn is vocabComboSource restricted to a specific ID
+// allowlist. Used by the create form's rank picker to hide ranks
+// that aren't valid children of the current parent (per
+// core/ui.ValidChildRankIDs). Empty / nil allow list disables
+// filtering — the full vocab flows through.
+func vocabComboSourceIn(vocab *core.Vocabulary, name string, allowed []string) comboboxSource {
+	if len(allowed) == 0 {
+		return vocabComboSource(vocab, name)
+	}
+	allowSet := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		allowSet[id] = true
+	}
+	return func(q string) tea.Cmd {
+		return func() tea.Msg {
+			terms := vocabTerms(vocab, name)
+			needle := strings.ToLower(strings.TrimSpace(q))
+			var results []term
+			for _, t := range terms {
+				if !allowSet[t.ID] {
+					continue
+				}
+				if needle != "" &&
+					!strings.Contains(strings.ToLower(t.Name), needle) &&
+					!strings.Contains(strings.ToLower(t.ID), needle) {
+					continue
+				}
+				results = append(results, term{
+					ID:    t.ID,
+					Label: vocabLabel(t),
+				})
+			}
+			return comboboxResultsMsg{query: q, results: results}
+		}
+	}
+}
+
 // vocabLabel picks the human-facing label for a vocab term, falling back
 // to the id when the schema didn't ship a col__name and finally to
 // "(unset)" for the empty-string seed row.
