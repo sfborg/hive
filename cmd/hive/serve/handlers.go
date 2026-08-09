@@ -660,7 +660,7 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 }
 
 // validationWarnings runs gsvalidator against the given name row and
-// returns the soft-warning results wrapped for the wire. Best-effort
+// returns advisory (non-blocking) results wrapped for the wire. Best-effort
 // — a validator failure yields an empty list so the create response
 // still succeeds; the caller doesn't lose data because a rule crashed.
 func validationWarnings(a *core.Archive, ctx context.Context, nameID string) []apiValidationWarning {
@@ -673,16 +673,7 @@ func validationWarnings(a *core.Archive, ctx context.Context, nameID string) []a
 	}
 	var out []apiValidationWarning
 	for _, r := range results {
-		// gsvalidator's Rule.ValidationType uses "hard" / "soft";
-		// the sfga custom validators copy that value through to
-		// Result.ValidationType unchanged, but Result.IsWarning()
-		// only matches "warn". Accept either name-set here so
-		// warnings surface regardless of which convention a rule
-		// author picked.
-		if r.Passed {
-			continue
-		}
-		if r.ValidationType != "soft" && r.ValidationType != "warn" {
+		if !r.IsWarning() && !r.IsInfo() {
 			continue
 		}
 		out = append(out, apiValidationWarning{
