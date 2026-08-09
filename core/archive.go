@@ -126,6 +126,13 @@ func openReadWrite(path string) (*Archive, error) {
 		db.Close()
 		return nil, err
 	}
+	// Add hive-managed tables (hive__* prefix). Idempotent — subsequent
+	// Opens are a no-op. Skipped on read-only archives; the read paths
+	// tolerate a missing hive__validation_issue table on legacy files.
+	if err := ensureHiveTables(context.Background(), db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	a := &Archive{
 		sf:   sf,
 		db:   db,
@@ -230,6 +237,11 @@ func (a *Archive) SchemaVersion(ctx context.Context) (string, error) {
 //
 // WithTx returns ErrReadOnly on a read-only archive without opening a
 // transaction. It always uses the provided context for both begin and commit.
+//
+// After a successful commit, WithTx runs each name-side validation sync
+// requested via Tx.markNameDirty. Sync errors are swallowed: the write
+// already committed, and a stale issue set is preferable to failing the
+// caller's request. A future reindex flow will backfill any misses.
 func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	if a.readOnly {
 		return ErrReadOnly
@@ -246,6 +258,9 @@ func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	if err := sqlTx.Commit(); err != nil {
 		return fmt.Errorf("core: commit: %w", err)
 	}
+	for id := range tx.dirtyNames {
+		_ = a.syncNameIssues(ctx, id)
+	}
 	return nil
 }
 
@@ -258,6 +273,26 @@ type Tx struct {
 	tx      *sql.Tx
 	ctx     context.Context
 	actor   string
+
+	// dirtyNames collects the col__id of every name row that was
+	// created or updated during this transaction. After WithTx commits,
+	// each entry drives a post-commit call to syncNameIssues so the
+	// hive__validation_issue cache stays fresh. Sync is best-effort;
+	// see WithTx for the failure semantics.
+	dirtyNames map[string]bool
+}
+
+// markNameDirty records that a name row was touched in this transaction
+// so WithTx can refresh its validation-issue cache after commit. Called
+// from CreateName and UpdateName.
+func (t *Tx) markNameDirty(id string) {
+	if id == "" {
+		return
+	}
+	if t.dirtyNames == nil {
+		t.dirtyNames = make(map[string]bool)
+	}
+	t.dirtyNames[id] = true
 }
 
 // Actor returns the actor string carried by this transaction, taken from the

@@ -140,31 +140,29 @@ type ValidationWarning struct {
 	Message   string
 }
 
-// NameWarnings runs the name-table rule set for the given id and
-// returns only the non-blocking results — the wire/UI-friendly subset
-// that a create/update flow attaches to a successful save. Runs
-// best-effort: a validator error yields nil so a rule crash never
-// masks the successful commit.
+// NameWarnings returns the persisted non-blocking issue set for a
+// name row. Backed by hive__validation_issue; write paths keep the
+// cache fresh via post-commit syncNameIssues. Read path filters to
+// warn/info severities — hard errors would surface via a different
+// channel (RFC 7807 problem) and aren't attached to a successful
+// GET response.
+//
+// Empty result set may mean "clean" or "not yet synced" (legacy row).
+// The store makes no distinction; a future reindex will backfill.
 func (a *Archive) NameWarnings(ctx context.Context, nameID string) []ValidationWarning {
 	if nameID == "" {
 		return nil
 	}
-	results, err := a.ValidateName(ctx, nameID)
+	rows, err := a.readNameIssues(ctx, nameID)
 	if err != nil {
 		return nil
 	}
 	var out []ValidationWarning
-	for _, r := range results {
-		if !r.IsWarning() && !r.IsInfo() {
-			continue
+	for _, r := range rows {
+		switch r.Severity {
+		case "warn", "info":
+			out = append(out, r)
 		}
-		out = append(out, ValidationWarning{
-			RuleID:    r.RuleID,
-			RuleName:  r.RuleName,
-			FieldName: r.FieldName,
-			Severity:  string(r.Severity),
-			Message:   r.Message,
-		})
 	}
 	return out
 }

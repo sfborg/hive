@@ -488,6 +488,7 @@ func (t *Tx) CreateName(n coldp.Name) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("core: insert name %s: %w", n.ID, err)
 	}
+	t.markNameDirty(n.ID)
 	return n.ID, nil
 }
 
@@ -628,6 +629,7 @@ func (t *Tx) UpdateName(n coldp.Name) error {
 	if rows == 0 {
 		return fmt.Errorf("core: update name %s: %w", n.ID, ErrNotFound)
 	}
+	t.markNameDirty(n.ID)
 	return nil
 }
 
