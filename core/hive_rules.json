@@ -23,6 +23,20 @@
       "warning_message": "Species attached to a parent that isn't a genus-group rank. Under ICZN this is a legitimate incertae sedis placement; consider marking the record explicitly so downstream consumers render it correctly.",
       "is_active": true,
       "priority": 10
+    },
+    {
+      "rule_id": "hive_parse_quality",
+      "table_name": "name",
+      "field_name": "gn__parse_quality",
+      "rule_name": "gnparser flagged the scientific name",
+      "validator_type": "sfga_parse_quality",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
     }
   ]
 }

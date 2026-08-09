@@ -108,6 +108,7 @@ func newHiveValidator(db *sql.DB) *usecase.ValidateRecordUseCase {
 	registry.Register(&sfga.SourceYearValidator{})
 	registry.Register(&sfga.SourceAuthorValidator{})
 	registry.Register(&sfga.TypeDesignationValidator{})
+	registry.Register(&sfga.ParseQualityValidator{})
 
 	loader := newEmbeddedRuleLoader(hiveRulesJSON)
 	mapper := gateway.NewSFGAMapper()
