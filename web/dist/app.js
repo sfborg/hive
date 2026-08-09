@@ -3137,7 +3137,7 @@ class SfgaDetail extends LitElement {
     if (warnings.length === 0 || this._editing) return "";
     return html`
       <div class="warning-banner">
-        <strong>Saved with ${warnings.length} note${warnings.length > 1 ? "s" : ""}:</strong>
+        <strong>Saved with ${warnings.length} issue${warnings.length > 1 ? "s" : ""}:</strong>
         <ul>
           ${warnings.map(
             (w) => html`<li>

@@ -1410,9 +1410,9 @@ func (m detailModel) renderWarningBanner() string {
 		return ""
 	}
 	var b strings.Builder
-	noun := "note"
+	noun := "issue"
 	if len(m.pendingWarnings) > 1 {
-		noun = "notes"
+		noun = "issues"
 	}
 	b.WriteString(dimStyle.Render(fmt.Sprintf("Saved with %d %s:", len(m.pendingWarnings), noun)))
 	b.WriteByte('\n')
