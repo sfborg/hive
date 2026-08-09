@@ -74,6 +74,9 @@ func (s *server) routes() *http.ServeMux {
 
 	mux.HandleFunc("POST /api/reindex/validation", s.handleReindexValidation)
 
+	mux.HandleFunc("GET /api/issue/summary", s.handleIssueSummary)
+	mux.HandleFunc("GET /api/issue", s.handleIssueList)
+
 	return mux
 }
 
@@ -1164,5 +1167,113 @@ type apiReindexResult struct {
 	Table     string `json:"table"`
 	Records   int    `json:"records"`
 	ElapsedMS int64  `json:"elapsed_ms"`
+}
+
+// handleIssueSummary returns per-rule / per-severity counts across the
+// archive so a dashboard can render totals broken down by both axes
+// without paging through the issue list itself.
+func (s *server) handleIssueSummary(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.a.IssueSummary(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := make([]apiIssueSummaryRow, len(rows))
+	for i, row := range rows {
+		out[i] = apiIssueSummaryRow{
+			Table:    row.TableName,
+			RuleID:   row.RuleID,
+			RuleName: row.RuleName,
+			Severity: row.Severity,
+			Count:    row.Count,
+		}
+	}
+	writeJSON(w, http.StatusOK, apiIssueSummary{Items: out})
+}
+
+// handleIssueList returns a page of issues matching the query filters.
+// Recognised query params: table, rule_id, severity (repeatable),
+// hide_acknowledged (bool), limit, offset. All optional.
+func (s *server) handleIssueList(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := core.IssueFilter{
+		TableName:        q.Get("table"),
+		RuleID:           q.Get("rule_id"),
+		Severities:       q["severity"],
+		HideAcknowledged: q.Get("hide_acknowledged") == "true",
+	}
+	limit, offset, err := parseLimitOffset(r)
+	if err != nil {
+		writeBadRequest(w, r, err.Error())
+		return
+	}
+	issues, total, err := s.a.ListIssues(r.Context(), f, limit, offset)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiIssue, len(issues))
+	for i, is := range issues {
+		items[i] = apiIssue{
+			ID:             is.ID,
+			Table:          is.TableName,
+			RecordID:       is.RecordID,
+			RecordLabel:    is.RecordLabel,
+			LinkTaxonID:    is.LinkTaxonID,
+			RuleID:         is.RuleID,
+			RuleName:       is.RuleName,
+			FieldName:      is.FieldName,
+			Severity:       is.Severity,
+			Enforcement:    is.Enforcement,
+			Message:        is.Message,
+			ActualValue:    is.ActualValue,
+			ExpectedValue:  is.ExpectedValue,
+			CreatedAt:      is.CreatedAt,
+			AcknowledgedBy: is.AcknowledgedBy,
+			AcknowledgedAt: is.AcknowledgedAt,
+		}
+	}
+	page := apiPage[apiIssue]{Items: items, Total: &total}
+	if len(issues) == limit && offset+limit < total {
+		page.NextCursor = encodeCursor(offset + limit)
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// apiIssueSummary is the wire envelope for /api/issue/summary. Items
+// live under a key rather than being the top-level array so the shape
+// can grow later (totals, timestamps) without breaking clients.
+type apiIssueSummary struct {
+	Items []apiIssueSummaryRow `json:"items"`
+}
+
+type apiIssueSummaryRow struct {
+	Table    string `json:"table"`
+	RuleID   string `json:"rule_id"`
+	RuleName string `json:"rule_name,omitempty"`
+	Severity string `json:"severity"`
+	Count    int    `json:"count"`
+}
+
+// apiIssue is the wire shape of a single stored issue. Includes both
+// the raw record_id and the pre-resolved record_label + link_taxon_id
+// so the list renders without follow-up lookups.
+type apiIssue struct {
+	ID             string `json:"id"`
+	Table          string `json:"table"`
+	RecordID       string `json:"record_id"`
+	RecordLabel    string `json:"record_label,omitempty"`
+	LinkTaxonID    string `json:"link_taxon_id,omitempty"`
+	RuleID         string `json:"rule_id"`
+	RuleName       string `json:"rule_name,omitempty"`
+	FieldName      string `json:"field_name,omitempty"`
+	Severity       string `json:"severity"`
+	Enforcement    string `json:"enforcement"`
+	Message        string `json:"message"`
+	ActualValue    string `json:"actual_value,omitempty"`
+	ExpectedValue  string `json:"expected_value,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	AcknowledgedBy string `json:"acknowledged_by,omitempty"`
+	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
 }
 
