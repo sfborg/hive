@@ -9,10 +9,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sfborg/hive/cmd/hive/serve"
 	"github.com/sfborg/hive/cmd/hive/view"
@@ -44,6 +46,11 @@ func main() {
 	case "config":
 		if err := runConfig(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "hive config:", err)
+			os.Exit(1)
+		}
+	case "validate":
+		if err := runValidate(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "hive validate:", err)
 			os.Exit(1)
 		}
 	case "-h", "--help", "help":
@@ -221,6 +228,65 @@ func prompt(r *bufio.Reader, msg string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// runValidate re-runs every validation rule over an archive and
+// rewrites the hive__validation_issue cache. Backfills legacy rows
+// (edited before persistence landed), repairs the cache after adding
+// or tuning a rule, and prunes issues from removed rules.
+//
+// Reports progress to stderr in a "Done/Total  rule (rate/s)"
+// carriage-return line — quiet enough to pipe stdout somewhere,
+// visible enough to see at a glance. --quiet suppresses it entirely.
+func runValidate(args []string) error {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: hive validate [--quiet] <archive.db>")
+		fs.PrintDefaults()
+	}
+	quiet := fs.Bool("quiet", false, "suppress progress output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return fmt.Errorf("expected exactly one archive path")
+	}
+	a, err := core.Open(rest[0])
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	start := time.Now()
+	var lastReport time.Time
+	err = a.ReindexValidation(context.Background(), func(p core.ReindexProgress) {
+		if *quiet {
+			return
+		}
+		// Throttle to at most 20 updates per second so a fast archive
+		// doesn't spend more time on stderr writes than on validation.
+		now := time.Now()
+		if p.Done < p.Total && now.Sub(lastReport) < 50*time.Millisecond {
+			return
+		}
+		lastReport = now
+		elapsed := now.Sub(start).Seconds()
+		rate := float64(p.Done) / elapsed
+		fmt.Fprintf(os.Stderr, "\rvalidating %s: %d/%d (%.0f/s)     ",
+			p.Table, p.Done, p.Total, rate)
+	})
+	if !*quiet {
+		fmt.Fprintln(os.Stderr)
+	}
+	if err != nil {
+		return err
+	}
+	if !*quiet {
+		fmt.Fprintf(os.Stderr, "done in %s\n", time.Since(start).Round(time.Millisecond))
+	}
+	return nil
+}
+
 // runConfig implements the hive config subcommand.
 //
 //	hive config get <key>
@@ -310,8 +376,8 @@ Subcommands:
                       Read / write ~/.config/sfborg/hive/config.yml
   import <src> -o <archive.db>
                       Import via sflib (not yet)
-  validate <archive.db>
-                      Run gsvalidator (not yet)
+  validate [--quiet] <archive.db>
+                      Re-run every rule and rewrite hive__validation_issue
   reindex <archive.db>
                       Bulk gnparser refresh (not yet)`)
 }

@@ -122,6 +122,67 @@ func (a *Archive) readNameIssues(ctx context.Context, nameID string) ([]Validati
 	return out, rows.Err()
 }
 
+// ReindexProgress reports the state of a long-running reindex to the
+// caller. Sent once per row plus a final call with Done == Total.
+type ReindexProgress struct {
+	Table   string
+	Done    int
+	Total   int
+	Current string // record ID that just finished; empty on the summary tick
+}
+
+// ReindexValidation walks every row in every hive-validated table and
+// rewrites its hive__validation_issue rows to match the current rule
+// set. Backfills archives edited before persistence landed and repairs
+// caches when a rule is added, tuned, or removed. Progress fires
+// once per row so a CLI or SSE stream can render a live counter;
+// pass nil to skip reporting.
+//
+// Runs one row at a time in its own tx via syncNameIssues — the write
+// lock is held briefly, curators editing the archive in parallel see
+// only per-row contention. Cancellation via ctx stops between rows;
+// rows already synced stay synced.
+func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexProgress)) error {
+	if a.readOnly {
+		return ErrReadOnly
+	}
+	rows, err := a.db.QueryContext(ctx, `SELECT col__id FROM name ORDER BY col__id`)
+	if err != nil {
+		return fmt.Errorf("core: reindex list names: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("core: reindex scan name id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	total := len(ids)
+	for i, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := a.syncNameIssues(ctx, id); err != nil {
+			return fmt.Errorf("core: reindex name %s: %w", id, err)
+		}
+		if progress != nil {
+			progress(ReindexProgress{
+				Table:   "name",
+				Done:    i + 1,
+				Total:   total,
+				Current: id,
+			})
+		}
+	}
+	return nil
+}
+
 // nullableString turns any value from a validator result into a TEXT
 // column value, using NULL when the value is nil or empty. Numeric
 // values coerce via fmt so ranged / length rules store their actual
