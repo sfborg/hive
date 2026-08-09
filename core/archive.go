@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gnames/gnparser"
 	"github.com/sfborg/sflib"
 	"github.com/sfborg/sflib/pkg/sfga"
@@ -50,6 +51,13 @@ type Archive struct {
 	vocab     *Vocabulary
 	vocabErr  error
 	vocabOnce sync.Once
+
+	// validator is hive's gsvalidator use case, wired at Open with the
+	// embedded rule set + sfga schema mapper + built-in and sfga-custom
+	// validators. Callers reach it via Archive.ValidateName /
+	// ValidateTaxon. See core/validation.go and PLANNING.md §
+	// Validation engine.
+	validator *usecase.ValidateRecordUseCase
 }
 
 // OpenOption configures Open. Options are functional; pass them variadically.
@@ -92,7 +100,9 @@ func openReadOnly(path string) (*Archive, error) {
 		db.Close()
 		return nil, fmt.Errorf("core: enable foreign_keys: %w", err)
 	}
-	return &Archive{db: db, path: path, readOnly: true}, nil
+	a := &Archive{db: db, path: path, readOnly: true}
+	a.validator = newHiveValidator(db)
+	return a, nil
 }
 
 func openReadWrite(path string) (*Archive, error) {
@@ -116,17 +126,19 @@ func openReadWrite(path string) (*Archive, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Archive{
-		sf:     sf,
-		db:     db,
-		path:   path,
+	a := &Archive{
+		sf:   sf,
+		db:   db,
+		path: path,
 		// WithDetails is required for Flatten() to populate the atomized
 		// fields (genus, species, basionym_authorship, …). Without it,
 		// only top-level fields (canonical, cardinality, authorship,
 		// authors) come through — enough for the gn__* cache, not
 		// enough for the col__* structural columns hive fills on write.
 		parser: gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
-	}, nil
+	}
+	a.validator = newHiveValidator(db)
+	return a, nil
 }
 
 // Create creates a new sfga archive at path by applying the embedded schema

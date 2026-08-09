@@ -1,0 +1,28 @@
+{
+  "name": "Hive-native validation rules",
+  "version": "v0.1.0",
+  "description": "Rules hive authors and ships in addition to the TaxonWorks and ChecklistBank derived rulesets. Loaded on Archive.Open into hive__validation_rules.",
+  "domain": "biodiversity",
+  "created_at": "2026-08-08",
+  "rules": [
+    {
+      "rule_id": "hive_probable_incertae_sedis",
+      "table_name": "name",
+      "field_name": "",
+      "rule_name": "Probable incertae sedis (ICZN species under non-genus)",
+      "validator_type": "sfga_parent_rank",
+      "validation_type": "soft",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+      ],
+      "parameters": {
+        "rank_hierarchy": {"SPECIES": ["GENUS", "SUBGENUS", "INFRAGENUS"]}
+      },
+      "error_message": "",
+      "warning_message": "Species attached to a parent that isn't a genus-group rank. Under ICZN this is a legitimate incertae sedis placement; consider marking the record explicitly so downstream consumers render it correctly.",
+      "is_active": true,
+      "priority": 10
+    }
+  ]
+}
