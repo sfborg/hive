@@ -260,6 +260,7 @@ type detailLoadedMsg struct {
 	taxon       *coldp.Taxon
 	name        *coldp.Name
 	parentLabel string
+	warnings    []core.ValidationWarning
 	err         error
 }
 
@@ -355,7 +356,13 @@ func (m detailModel) Load(taxonID string) tea.Cmd {
 				parentLabel = ref.Label.Text
 			}
 		}
-		return detailLoadedMsg{taxonID: taxonID, taxon: t, name: n, parentLabel: parentLabel}
+		return detailLoadedMsg{
+			taxonID:     taxonID,
+			taxon:       t,
+			name:        n,
+			parentLabel: parentLabel,
+			warnings:    a.NameWarnings(ctx, t.NameID),
+		}
 	}
 }
 
@@ -1185,6 +1192,12 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 		m.name = msg.name
 		m.parentLabel = msg.parentLabel
 		m.loading = false
+		// Don't overwrite freshly saved warnings (which are the same rule
+		// set anyway, but include any race-free just-committed changes).
+		if m.pendingWarningTaxon != msg.taxonID {
+			m.pendingWarnings = msg.warnings
+			m.pendingWarningTaxon = msg.taxonID
+		}
 		return m, nil
 
 	case savedMsg:
@@ -1348,6 +1361,8 @@ func (m *detailModel) SetCurrent(id string) {
 	m.name = nil
 	m.parentLabel = ""
 	m.err = nil
+	// Drop any banner that belonged to a different taxon; the load
+	// path repopulates from NameWarnings if this one has any.
 	if id != m.pendingWarningTaxon {
 		m.pendingWarnings = nil
 		m.pendingWarningTaxon = ""
@@ -1414,7 +1429,7 @@ func (m detailModel) renderWarningBanner() string {
 	if len(m.pendingWarnings) > 1 {
 		noun = "issues"
 	}
-	b.WriteString(dimStyle.Render(fmt.Sprintf("Saved with %d %s:", len(m.pendingWarnings), noun)))
+	b.WriteString(dimStyle.Render(fmt.Sprintf("%d open %s:", len(m.pendingWarnings), noun)))
 	b.WriteByte('\n')
 	for _, w := range m.pendingWarnings {
 		b.WriteString("  ")

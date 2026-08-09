@@ -3127,17 +3127,22 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  // _renderPendingWarnings shows the gsvalidator soft warnings that
-  // came back with the most recent create/update, if any. Cleared by
-  // the shell when the curator navigates to a different taxon; also
-  // hidden while the edit form is open so the banner doesn't fight
-  // the form for attention.
+  // _renderPendingWarnings shows the gsvalidator soft warnings for the
+  // currently displayed taxon. Prefers shell-supplied `pendingWarnings`
+  // (freshest — set by the just-completed create/update round-trip);
+  // falls back to `_taxon.warnings` from the GET response so the banner
+  // reappears when a curator returns to the record later. Hidden while
+  // the edit form is open so it doesn't fight the form for attention.
   _renderPendingWarnings() {
-    const warnings = this.pendingWarnings || [];
-    if (warnings.length === 0 || this._editing) return "";
+    const fresh = (this.pendingWarnings && this.pendingWarnings.length)
+      ? this.pendingWarnings
+      : (this._taxon?.warnings || []);
+    if (fresh.length === 0 || this._editing) return "";
+    const warnings = fresh;
+    const heading = `${warnings.length} open issue${warnings.length > 1 ? "s" : ""}:`;
     return html`
       <div class="warning-banner">
-        <strong>Saved with ${warnings.length} issue${warnings.length > 1 ? "s" : ""}:</strong>
+        <strong>${heading}</strong>
         <ul>
           ${warnings.map(
             (w) => html`<li>

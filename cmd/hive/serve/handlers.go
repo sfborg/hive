@@ -224,6 +224,7 @@ func (s *server) handleGetTaxon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	body.Warnings = validationWarnings(s.a, r.Context(), t.NameID)
 	writeJSON(w, http.StatusOK, body)
 }
 
