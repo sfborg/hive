@@ -21,6 +21,20 @@
   --accent-fg: #fff;
   --error: #a00;
 
+  /* Severity palette (traffic-light default). Used by validation warning
+     chips, issue lists, and any UI that needs to rank a diagnostic. Each
+     level gets a foreground color for text/borders and a tinted background.
+     A colorblind-safe alternate palette is available via
+     html[data-severity-palette="cvd"] (see below). */
+  --sev-error: #dc2626;
+  --sev-warn:  #ea580c;
+  --sev-info:  #a16207;
+  --sev-debug: #16a34a;
+  --sev-error-bg: color-mix(in oklab, var(--sev-error) 12%, var(--bg));
+  --sev-warn-bg:  color-mix(in oklab, var(--sev-warn)  12%, var(--bg));
+  --sev-info-bg:  color-mix(in oklab, var(--sev-info)  12%, var(--bg));
+  --sev-debug-bg: color-mix(in oklab, var(--sev-debug) 12%, var(--bg));
+
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -34,6 +48,11 @@
     --accent: #4ea3e8;
     --accent-fg: #000;
     --error: #ff6b6b;
+
+    --sev-error: #f87171;
+    --sev-warn:  #fb923c;
+    --sev-info:  #facc15;
+    --sev-debug: #4ade80;
   }
 }
 
@@ -56,6 +75,24 @@ html[data-theme="dark"] {
   --accent: #4ea3e8;
   --accent-fg: #000;
   --error: #ff6b6b;
+
+  --sev-error: #f87171;
+  --sev-warn:  #fb923c;
+  --sev-info:  #facc15;
+  --sev-debug: #4ade80;
+}
+
+/* Colorblind-safe severity palette. Swaps traffic-light hues for a
+   red / amber / blue / slate ramp where lightness carries most of the
+   signal so red-green colorblind curators can still rank diagnostics.
+   Set via html[data-severity-palette="cvd"] — persist through a user
+   preference (localStorage). Icons are always paired with the color in
+   markup so severity is legible even with total color loss. */
+html[data-severity-palette="cvd"] {
+  --sev-error: #c62828;
+  --sev-warn:  #d97706;
+  --sev-info:  #2563eb;
+  --sev-debug: #64748b;
 }
 
 *,

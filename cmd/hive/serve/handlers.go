@@ -659,29 +659,23 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// validationWarnings runs gsvalidator against the given name row and
-// returns advisory (non-blocking) results wrapped for the wire. Best-effort
-// — a validator failure yields an empty list so the create response
-// still succeeds; the caller doesn't lose data because a rule crashed.
+// validationWarnings adapts core.NameWarnings into the wire type used by
+// create/update responses. Core does the actual filtering; the shape
+// mirrors it 1:1.
 func validationWarnings(a *core.Archive, ctx context.Context, nameID string) []apiValidationWarning {
-	if nameID == "" {
+	ws := a.NameWarnings(ctx, nameID)
+	if len(ws) == 0 {
 		return nil
 	}
-	results, err := a.ValidateName(ctx, nameID)
-	if err != nil {
-		return nil
-	}
-	var out []apiValidationWarning
-	for _, r := range results {
-		if !r.IsWarning() && !r.IsInfo() {
-			continue
+	out := make([]apiValidationWarning, len(ws))
+	for i, w := range ws {
+		out[i] = apiValidationWarning{
+			RuleID:    w.RuleID,
+			RuleName:  w.RuleName,
+			FieldName: w.FieldName,
+			Severity:  w.Severity,
+			Message:   w.Message,
 		}
-		out = append(out, apiValidationWarning{
-			RuleID:    r.RuleID,
-			RuleName:  r.RuleName,
-			FieldName: r.FieldName,
-			Message:   r.Message,
-		})
 	}
 	return out
 }

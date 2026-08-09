@@ -127,3 +127,43 @@ func (a *Archive) ValidateName(ctx context.Context, nameID string) ([]*domain.Re
 	}
 	return a.validator.Execute(ctx, "name", nameID)
 }
+
+// ValidationWarning is the frontend-facing shape of a non-blocking
+// validation result. Both TUI and WUI consume this so they can render
+// warnings the same way without touching gsvalidator's domain package.
+type ValidationWarning struct {
+	RuleID    string
+	RuleName  string
+	FieldName string
+	Severity  string // "warn" | "info" | "debug"
+	Message   string
+}
+
+// NameWarnings runs the name-table rule set for the given id and
+// returns only the non-blocking results — the wire/UI-friendly subset
+// that a create/update flow attaches to a successful save. Runs
+// best-effort: a validator error yields nil so a rule crash never
+// masks the successful commit.
+func (a *Archive) NameWarnings(ctx context.Context, nameID string) []ValidationWarning {
+	if nameID == "" {
+		return nil
+	}
+	results, err := a.ValidateName(ctx, nameID)
+	if err != nil {
+		return nil
+	}
+	var out []ValidationWarning
+	for _, r := range results {
+		if !r.IsWarning() && !r.IsInfo() {
+			continue
+		}
+		out = append(out, ValidationWarning{
+			RuleID:    r.RuleID,
+			RuleName:  r.RuleName,
+			FieldName: r.FieldName,
+			Severity:  string(r.Severity),
+			Message:   r.Message,
+		})
+	}
+	return out
+}

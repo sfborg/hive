@@ -245,6 +245,24 @@ function renderLabel(label, fallback = "") {
   return label.text || fallback;
 }
 
+// severityChip renders a small pill for a gsvalidator result severity.
+// Color comes from --sev-* CSS custom properties (traffic-light default,
+// swap via html[data-severity-palette="cvd"]). A leading glyph carries
+// the signal too so severity is legible under color loss.
+const SEV_META = {
+  error: { glyph: "✕",  label: "error" },  // ✕
+  warn:  { glyph: "⚠",  label: "warn"  },  // ⚠
+  info:  { glyph: "ⓘ",  label: "info"  },  // ⓘ
+  debug: { glyph: "🐛", label: "debug" },  // 🐛
+};
+function severityChip(severity) {
+  const key = (severity || "warn").toLowerCase();
+  const meta = SEV_META[key] || SEV_META.warn;
+  return html`<span class="sev-chip sev-${key}"
+    ><span class="sev-glyph">${meta.glyph}</span>${meta.label}</span
+  >`;
+}
+
 // orcidLink turns a bare ORCID iD (0000-0002-1825-0097) into an anchor to
 // orcid.org. Non-ORCID scrutinizer strings fall through unchanged.
 const orcidRE = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/;
@@ -1963,13 +1981,13 @@ class SfgaDetail extends LitElement {
       color: var(--dim);
       font-style: italic;
     }
-    /* Soft-validation warning banner shown at the top of the detail
-       pane after a save that produced warnings from gsvalidator.
-       Amber palette signals "worth reviewing" without the alarm
-       weight of an error state. */
+    /* Soft-validation banner shown at the top of the detail pane after
+       a save that produced non-blocking results from gsvalidator. The
+       banner itself is neutral; each item carries its own severity chip
+       so a mixed batch (warn + info) still ranks visually. */
     .warning-banner {
-      border: 1px solid #d4a017;
-      background: color-mix(in oklab, #d4a017 15%, var(--bg));
+      border: 1px solid var(--border);
+      background: color-mix(in oklab, var(--fg) 4%, var(--bg));
       color: var(--fg);
       padding: 0.5rem 0.75rem;
       border-radius: 3px;
@@ -1977,16 +1995,43 @@ class SfgaDetail extends LitElement {
       font-size: 0.95em;
     }
     .warning-banner ul {
-      margin: 0.25rem 0 0 1.25rem;
+      list-style: none;
+      margin: 0.4rem 0 0 0;
       padding: 0;
     }
     .warning-banner li {
-      margin: 0.15rem 0;
+      margin: 0.25rem 0;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.5rem;
+      align-items: baseline;
     }
     .warning-banner .warning-rule {
       font-weight: 600;
-      color: color-mix(in oklab, #d4a017 80%, var(--fg));
+      color: var(--fg);
     }
+    /* Severity chip: colored glyph + label. Color always pairs with the
+       glyph so severity is readable under color loss. Backgrounds are
+       tinted at ~12% opacity so the chip stays legible in both themes.
+       See styles.css for --sev-* palette (traffic-light default, CVD
+       alternate via html[data-severity-palette="cvd"]). */
+    .sev-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      font-size: 0.8em;
+      font-weight: 600;
+      line-height: 1;
+      border: 1px solid currentColor;
+      white-space: nowrap;
+    }
+    .sev-chip.sev-error { color: var(--sev-error); background: var(--sev-error-bg); }
+    .sev-chip.sev-warn  { color: var(--sev-warn);  background: var(--sev-warn-bg);  }
+    .sev-chip.sev-info  { color: var(--sev-info);  background: var(--sev-info-bg);  }
+    .sev-chip.sev-debug { color: var(--sev-debug); background: var(--sev-debug-bg); }
+    .sev-chip .sev-glyph { font-weight: 700; }
     /* Detail-pane header: taxon name on the left, action icons on
        the right. Matches TaxonWorks's convention of putting edit /
        new / delete inline with the record heading so scrolling the
@@ -3092,12 +3137,15 @@ class SfgaDetail extends LitElement {
     if (warnings.length === 0 || this._editing) return "";
     return html`
       <div class="warning-banner">
-        <strong>Saved with ${warnings.length} warning${warnings.length > 1 ? "s" : ""}:</strong>
+        <strong>Saved with ${warnings.length} note${warnings.length > 1 ? "s" : ""}:</strong>
         <ul>
           ${warnings.map(
             (w) => html`<li>
-              <span class="warning-rule">${w.rule_name || w.rule_id}</span>:
-              ${w.message}
+              ${severityChip(w.severity)}
+              <span>
+                <span class="warning-rule">${w.rule_name || w.rule_id}</span>:
+                ${w.message}
+              </span>
             </li>`,
           )}
         </ul>

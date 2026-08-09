@@ -248,6 +248,7 @@ type apiValidationWarning struct {
 	RuleID    string `json:"rule_id"`
 	RuleName  string `json:"rule_name,omitempty"`
 	FieldName string `json:"field_name,omitempty"`
+	Severity  string `json:"severity,omitempty"` // warn | info | debug
 	Message   string `json:"message"`
 }
 

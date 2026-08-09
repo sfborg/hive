@@ -126,6 +126,14 @@ type detailModel struct {
 	err           error
 	loading       bool
 
+	// pendingWarnings holds soft validation results attached to the most
+	// recent create/update commit. Rendered above the field list until the
+	// curator navigates away or opens the edit form. Cleared on select /
+	// entering edit mode so an older save's warnings don't cling to an
+	// unrelated pane.
+	pendingWarnings      []core.ValidationWarning
+	pendingWarningTaxon  string // taxon id these warnings belong to
+
 	// Edit-mode state
 	editing        bool
 	inputs         [fieldCount]textinput.Model
@@ -266,6 +274,7 @@ type savedMsg struct {
 	name        *coldp.Name
 	parentLabel string
 	parentMoved bool
+	warnings    []core.ValidationWarning
 	err         error
 }
 
@@ -767,6 +776,7 @@ func (m *detailModel) createCommitCmd() tea.Cmd {
 			taxon:       fresh,
 			name:        freshName,
 			parentLabel: parentLabel,
+			warnings:    a.NameWarnings(ctx, fresh.NameID),
 			// parentMoved reuses the reveal path — the newly-created
 			// taxon needs the same "expand the tree down to me" treatment
 			// as a reparented one.
@@ -1190,6 +1200,13 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 		m.parentLabel = msg.parentLabel
 		m.editing = false
 		m.creating = false
+		if msg.taxon != nil {
+			m.pendingWarnings = msg.warnings
+			m.pendingWarningTaxon = msg.taxon.ID
+		} else {
+			m.pendingWarnings = nil
+			m.pendingWarningTaxon = ""
+		}
 		for i := range m.inputs {
 			m.inputs[i].Blur()
 		}
@@ -1331,6 +1348,10 @@ func (m *detailModel) SetCurrent(id string) {
 	m.name = nil
 	m.parentLabel = ""
 	m.err = nil
+	if id != m.pendingWarningTaxon {
+		m.pendingWarnings = nil
+		m.pendingWarningTaxon = ""
+	}
 	m.ExitEditMode()
 }
 
@@ -1371,7 +1392,42 @@ func (m detailModel) View() string {
 	if m.editing {
 		b.WriteString(m.renderForm())
 	} else {
+		if banner := m.renderWarningBanner(); banner != "" {
+			b.WriteString(banner)
+			b.WriteByte('\n')
+		}
 		b.WriteString(m.renderFields())
+	}
+	return b.String()
+}
+
+// renderWarningBanner draws the soft-validation results attached to the
+// most recent create/update commit. Rendered above the field list in
+// view mode; hidden while the edit form is open so the banner doesn't
+// fight the form for attention.
+func (m detailModel) renderWarningBanner() string {
+	if len(m.pendingWarnings) == 0 || m.pendingWarningTaxon != m.current {
+		return ""
+	}
+	var b strings.Builder
+	noun := "note"
+	if len(m.pendingWarnings) > 1 {
+		noun = "notes"
+	}
+	b.WriteString(dimStyle.Render(fmt.Sprintf("Saved with %d %s:", len(m.pendingWarnings), noun)))
+	b.WriteByte('\n')
+	for _, w := range m.pendingWarnings {
+		b.WriteString("  ")
+		b.WriteString(severityChipStyle(w.Severity))
+		b.WriteByte(' ')
+		if w.RuleName != "" {
+			b.WriteString(labelStyle.Render(w.RuleName))
+		} else {
+			b.WriteString(labelStyle.Render(w.RuleID))
+		}
+		b.WriteString(labelStyle.Render(": "))
+		b.WriteString(w.Message)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -1778,4 +1834,28 @@ var (
 	// Yellow-ish for filled, dim for the empty pips.
 	starFilledStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	starEmptyStyle  = lipgloss.NewStyle().Faint(true)
+
+	// Severity styles mirror the WUI palette in adaptive form so both
+	// dark and light terminals get a readable hue. Traffic-light default
+	// (red / orange / yellow / green). Glyphs match the WUI chip so a
+	// curator switching frontends sees the same badge.
+	sevErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"}).Bold(true)
+	sevWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#ea580c", Dark: "#fb923c"}).Bold(true)
+	sevInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#a16207", Dark: "#facc15"}).Bold(true)
+	sevDebugStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}).Bold(true)
 )
+
+// severityChipStyle renders a small colored severity marker (glyph + name)
+// for a validation result. Unknown severity strings fall back to warn.
+func severityChipStyle(severity string) string {
+	switch strings.ToLower(severity) {
+	case "error":
+		return sevErrorStyle.Render("✕ error")
+	case "info":
+		return sevInfoStyle.Render("ⓘ info")
+	case "debug":
+		return sevDebugStyle.Render("🐛 debug")
+	default:
+		return sevWarnStyle.Render("⚠ warn")
+	}
+}
