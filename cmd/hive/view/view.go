@@ -530,7 +530,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail, detailCmd = m.detail.Update(msg)
 		return m, tea.Batch(searchCmd, detailCmd)
 
-	case detailLoadedMsg, parentResolvedMsg:
+	case detailLoadedMsg, parentResolvedMsg, parsePreviewMsg, createdForBasionymMsg:
 		var cmd tea.Cmd
 		m.detail, cmd = m.detail.Update(msg)
 		return m, cmd
