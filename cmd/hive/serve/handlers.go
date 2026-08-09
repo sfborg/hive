@@ -608,7 +608,7 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var newID string
+	var newID, newNameID string
 	err := s.a.WithTx(r.Context(), func(tx *core.Tx) error {
 		nameID, err := tx.CreateName(body.toColdpName())
 		if err != nil {
@@ -623,6 +623,7 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		newID = id
+		newNameID = nameID
 		return nil
 	})
 	if err != nil {
@@ -649,9 +650,49 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Attach soft warnings from gsvalidator to the response. Runs
+	// post-commit — this slice only surfaces warnings, doesn't
+	// block save on hard errors yet.
+	resp.Warnings = validationWarnings(s.a, r.Context(), newNameID)
 	w.Header().Set("ETag", t.Modified)
 	w.Header().Set("Location", "/api/taxon/"+t.ID)
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// validationWarnings runs gsvalidator against the given name row and
+// returns the soft-warning results wrapped for the wire. Best-effort
+// — a validator failure yields an empty list so the create response
+// still succeeds; the caller doesn't lose data because a rule crashed.
+func validationWarnings(a *core.Archive, ctx context.Context, nameID string) []apiValidationWarning {
+	if nameID == "" {
+		return nil
+	}
+	results, err := a.ValidateName(ctx, nameID)
+	if err != nil {
+		return nil
+	}
+	var out []apiValidationWarning
+	for _, r := range results {
+		// gsvalidator's Rule.ValidationType uses "hard" / "soft";
+		// the sfga custom validators copy that value through to
+		// Result.ValidationType unchanged, but Result.IsWarning()
+		// only matches "warn". Accept either name-set here so
+		// warnings surface regardless of which convention a rule
+		// author picked.
+		if r.Passed {
+			continue
+		}
+		if r.ValidationType != "soft" && r.ValidationType != "warn" {
+			continue
+		}
+		out = append(out, apiValidationWarning{
+			RuleID:    r.RuleID,
+			RuleName:  r.RuleName,
+			FieldName: r.FieldName,
+			Message:   r.Message,
+		})
+	}
+	return out
 }
 
 // handleDeleteTaxon removes the taxon and its per-taxon associations.

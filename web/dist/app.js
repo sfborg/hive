@@ -485,6 +485,9 @@ class SfgaApp extends LitElement {
     screen: { state: true },
     sidebarCollapsed: { state: true },
     helpOpen: { state: true },
+    // Warnings from the most recent create/update, if any. Cleared
+    // when the selection moves to a different taxon. See _onMoved.
+    _pendingWarnings: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -668,6 +671,7 @@ class SfgaApp extends LitElement {
     this.screen = "taxa";
     this.sidebarCollapsed = localStorage.getItem("hive-sidebar") === "collapsed";
     this.helpOpen = false;
+    this._pendingWarnings = null;
     this._applyTheme();
     this._onGlobalKey = this._onGlobalKey.bind(this);
   }
@@ -987,6 +991,9 @@ class SfgaApp extends LitElement {
   }
 
   _onSelected(e) {
+    // User clicked a different taxon — drop any create/update
+    // warning that was hanging around from the previous save.
+    this._pendingWarnings = null;
     this.selectedId = e.detail.id;
   }
 
@@ -997,6 +1004,12 @@ class SfgaApp extends LitElement {
   // child" workflows — otherwise the next create would still attach
   // under the previous parent).
   async _onMoved(e) {
+    // Cache the create/update warnings so the detail pane can render
+    // them as a banner. Keyed on the taxon id — a subsequent
+    // selection change to another taxon clears the banner naturally
+    // because pendingWarnings.taxonId no longer matches selectedId.
+    const warnings = e.detail.warnings || [];
+    this._pendingWarnings = warnings.length ? { taxonId: e.detail.id, warnings } : null;
     this.selectedId = e.detail.id;
     await this._revealInTree(e.detail.id);
   }
@@ -1167,6 +1180,11 @@ class SfgaApp extends LitElement {
               <sfga-detail
                 .taxonId=${this.selectedId}
                 .editable=${this.archive ? !this.archive.read_only : false}
+                .pendingWarnings=${
+                  this._pendingWarnings && this._pendingWarnings.taxonId === this.selectedId
+                    ? this._pendingWarnings.warnings
+                    : []
+                }
                 @taxon-moved=${(e) => this._onMoved(e)}
                 @taxon-deleted=${(e) => this._onDeleted(e)}
               ></sfga-detail>
@@ -1810,6 +1828,10 @@ class SfgaDetail extends LitElement {
   static properties = {
     taxonId: { type: String, attribute: false },
     editable: { type: Boolean, attribute: false },
+    // Soft warnings passed in from the shell after a successful
+    // create/update, keyed to this.taxonId. Rendered as a banner
+    // above the field list. Empty array = no banner.
+    pendingWarnings: { attribute: false },
     _taxon: { state: true },
     _name: { state: true },
     _etag: { state: true },
@@ -1940,6 +1962,30 @@ class SfgaDetail extends LitElement {
     .empty {
       color: var(--dim);
       font-style: italic;
+    }
+    /* Soft-validation warning banner shown at the top of the detail
+       pane after a save that produced warnings from gsvalidator.
+       Amber palette signals "worth reviewing" without the alarm
+       weight of an error state. */
+    .warning-banner {
+      border: 1px solid #d4a017;
+      background: color-mix(in oklab, #d4a017 15%, var(--bg));
+      color: var(--fg);
+      padding: 0.5rem 0.75rem;
+      border-radius: 3px;
+      margin: 0.5rem 0 0.75rem 0;
+      font-size: 0.95em;
+    }
+    .warning-banner ul {
+      margin: 0.25rem 0 0 1.25rem;
+      padding: 0;
+    }
+    .warning-banner li {
+      margin: 0.15rem 0;
+    }
+    .warning-banner .warning-rule {
+      font-weight: 600;
+      color: color-mix(in oklab, #d4a017 80%, var(--fg));
     }
     /* Detail-pane header: taxon name on the left, action icons on
        the right. Matches TaxonWorks's convention of putting edit /
@@ -2238,6 +2284,7 @@ class SfgaDetail extends LitElement {
     this._editShowAtomized = readAtomizedPref();
     this._confirmDelete = false;
     this._deleteError = "";
+    this.pendingWarnings = [];
   }
 
   updated(changed) {
@@ -2507,7 +2554,7 @@ class SfgaDetail extends LitElement {
         this._cancelCreate();
         this.dispatchEvent(
           new CustomEvent("taxon-moved", {
-            detail: { id: created.id },
+            detail: { id: created.id, warnings: created.warnings || [] },
             bubbles: true,
             composed: true,
           }),
@@ -3029,8 +3076,32 @@ class SfgaDetail extends LitElement {
         ${this.editable && !this._editing ? this._renderHeaderActions() : ""}
       </div>
       <hr />
+      ${this._renderPendingWarnings()}
       ${this._editing ? this._renderEditForm() : this._renderViewFields()}
       ${this._renderSynonyms()}
+    `;
+  }
+
+  // _renderPendingWarnings shows the gsvalidator soft warnings that
+  // came back with the most recent create/update, if any. Cleared by
+  // the shell when the curator navigates to a different taxon; also
+  // hidden while the edit form is open so the banner doesn't fight
+  // the form for attention.
+  _renderPendingWarnings() {
+    const warnings = this.pendingWarnings || [];
+    if (warnings.length === 0 || this._editing) return "";
+    return html`
+      <div class="warning-banner">
+        <strong>Saved with ${warnings.length} warning${warnings.length > 1 ? "s" : ""}:</strong>
+        <ul>
+          ${warnings.map(
+            (w) => html`<li>
+              <span class="warning-rule">${w.rule_name || w.rule_id}</span>:
+              ${w.message}
+            </li>`,
+          )}
+        </ul>
+      </div>
     `;
   }
 

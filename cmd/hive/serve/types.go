@@ -234,6 +234,21 @@ type apiTaxon struct {
 	Remarks         string   `json:"remarks,omitempty"`
 	Modified        string   `json:"modified"`
 	ModifiedBy      string   `json:"modified_by,omitempty"`
+	// Soft warnings from gsvalidator, populated on create/update
+	// responses. Empty / omitted on GET reads. See PLANNING.md §
+	// Validation engine.
+	Warnings []apiValidationWarning `json:"warnings,omitempty"`
+}
+
+// apiValidationWarning is the wire shape of a soft validation
+// result — the rule id, human message, and which field triggered it
+// (empty when the rule is record-level). Hard errors take a
+// different shape (RFC 7807 problem), not this one.
+type apiValidationWarning struct {
+	RuleID    string `json:"rule_id"`
+	RuleName  string `json:"rule_name,omitempty"`
+	FieldName string `json:"field_name,omitempty"`
+	Message   string `json:"message"`
 }
 
 // apiName is the detail-view projection for GET /api/name/{id}. Field set
