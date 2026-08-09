@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sfborg/hive/core"
 	"github.com/sfborg/hive/core/ui"
@@ -70,6 +71,8 @@ func (s *server) routes() *http.ServeMux {
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
+
+	mux.HandleFunc("POST /api/reindex/validation", s.handleReindexValidation)
 
 	return mux
 }
@@ -1117,5 +1120,49 @@ func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 	body.ReferenceLabel = s.referenceLabel(r.Context(), body.ReferenceID)
 	body.Basionym = s.resolveBasionym(r.Context(), body.ID)
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleReindexValidation walks every hive-validated table and rewrites
+// hive__validation_issue. Backs a "recompute all issues" button on the
+// Issues screen and mirrors the `hive validate` CLI. Runs synchronously
+// — the current rule set is small enough that a full pass returns in
+// milliseconds for a typical archive. A streaming SSE variant is
+// deferred until the long-running-ops plumbing lands (see PLANNING.md
+// § Long-running operations).
+//
+// Refuses (409) on a read-only archive. Response body is a small
+// summary; consumers can render a toast or refresh the issue list.
+func (s *server) handleReindexValidation(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, core.ErrReadOnly)
+		return
+	}
+	var (
+		count int
+		table string
+	)
+	start := time.Now()
+	err := s.a.ReindexValidation(r.Context(), func(p core.ReindexProgress) {
+		count = p.Done
+		table = p.Table
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiReindexResult{
+		Table:     table,
+		Records:   count,
+		ElapsedMS: time.Since(start).Milliseconds(),
+	})
+}
+
+// apiReindexResult is the wire shape of a reindex response. Small on
+// purpose — the client already knows what triggered the reindex and
+// just needs to confirm it finished and refresh whatever view was open.
+type apiReindexResult struct {
+	Table     string `json:"table"`
+	Records   int    `json:"records"`
+	ElapsedMS int64  `json:"elapsed_ms"`
 }
 

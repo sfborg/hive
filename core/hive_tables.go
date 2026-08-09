@@ -28,16 +28,20 @@ const hiveSchemaDDL = `
 -- length rule compared (TEXT so any type coerces cleanly).
 --
 -- The row is a snapshot, not a live query: after a name is edited
--- SyncNameIssues is called to replace all rows for that record. Rules
--- deactivated or removed later leave stale rows until a reindex sweeps
--- them out.
+-- syncNameIssues is called to upsert its issues in place. The unique
+-- key (table_name, record_id, rule_id, field_name) is the identity of
+-- an issue — that tuple should always map to at most one row — so
+-- re-syncs update the mutable columns (message, severity, actual /
+-- expected value) without disturbing created_at or acknowledgment
+-- state. Rules that stopped firing are DELETEd by the sync path
+-- before the upsert loop runs.
 CREATE TABLE IF NOT EXISTS hive__validation_issue (
 	id                 TEXT PRIMARY KEY,     -- UUID
 	table_name         TEXT NOT NULL,
 	record_id          TEXT NOT NULL,
 	rule_id            TEXT NOT NULL,
 	rule_name          TEXT,
-	field_name         TEXT,
+	field_name         TEXT NOT NULL DEFAULT '',
 	severity           TEXT NOT NULL,
 	enforcement        TEXT NOT NULL,
 	message            TEXT NOT NULL,
@@ -47,6 +51,13 @@ CREATE TABLE IF NOT EXISTS hive__validation_issue (
 	acknowledged_by    TEXT,
 	acknowledged_at    TEXT
 );
+
+-- Separate unique index (not a table-level constraint) so upgrades of
+-- archives created before this index existed can pick it up on next
+-- open. CREATE TABLE IF NOT EXISTS would not add the constraint
+-- retroactively; CREATE UNIQUE INDEX IF NOT EXISTS does.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hive__validation_issue_identity
+	ON hive__validation_issue(table_name, record_id, rule_id, field_name);
 
 CREATE INDEX IF NOT EXISTS ix_hive__validation_issue_record
 	ON hive__validation_issue(table_name, record_id);

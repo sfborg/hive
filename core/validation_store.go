@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -10,14 +11,19 @@ import (
 )
 
 // syncNameIssues runs the validator against the given name row and
-// replaces every hive__validation_issue row for that (table, record)
-// tuple with the freshly-computed set. Runs in its own short
-// transaction so a sync failure never rolls back the write that
-// triggered it — the read path shows the last successful sync's issues
-// until a subsequent write re-syncs.
+// reconciles hive__validation_issue with the freshly-computed set.
 //
-// A validator returning no failures still triggers a DELETE, so a rule
-// that used to fire and no longer does gets its stale row cleared.
+// Semantics: rules that still fire are upserted in place (INSERT ...
+// ON CONFLICT DO UPDATE on the (table_name, record_id, rule_id,
+// field_name) identity). Rules that stopped firing since the previous
+// sync are DELETEd. This preserves created_at and any acknowledgment
+// state (acknowledged_by / acknowledged_at) across reindex runs — a
+// curator who has muted a rule doesn't lose that decision when the
+// engine re-runs.
+//
+// Runs in its own short transaction so a sync failure never rolls
+// back the write that triggered it — the read path shows the last
+// successful sync's issues until a subsequent write re-syncs.
 func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 	if a.readOnly || a.validator == nil || nameID == "" {
 		return nil
@@ -32,18 +38,16 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM hive__validation_issue WHERE table_name = ? AND record_id = ?`,
-		"name", nameID,
-	); err != nil {
-		return fmt.Errorf("core: clear issues for name %s: %w", nameID, err)
-	}
-
+	// Build the "keep" set — every (rule_id, field_name) that fires
+	// this pass — so we can delete rows for rules that no longer do.
+	keep := make(map[[2]string]bool, len(results))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, r := range results {
 		if r.Passed {
 			continue
 		}
+		keep[[2]string{r.RuleID, r.FieldName}] = true
+
 		enf := string(r.Enforcement)
 		if enf == "" {
 			if r.IsHardFailure() {
@@ -67,13 +71,23 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 				sev = string(domain.SeverityWarn)
 			}
 		}
+		// Upsert on the identity tuple. New rows get a fresh UUID +
+		// created_at; existing rows keep both (excluded.id and
+		// excluded.created_at are ignored in the update clause).
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO hive__validation_issue (
 				id, table_name, record_id,
 				rule_id, rule_name, field_name,
 				severity, enforcement, message,
 				actual_value, expected_value, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (table_name, record_id, rule_id, field_name) DO UPDATE SET
+				rule_name      = excluded.rule_name,
+				severity       = excluded.severity,
+				enforcement    = excluded.enforcement,
+				message        = excluded.message,
+				actual_value   = excluded.actual_value,
+				expected_value = excluded.expected_value`,
 			uuid.NewString(), "name", nameID,
 			r.RuleID, r.RuleName, r.FieldName,
 			sev, enf, r.Message,
@@ -82,12 +96,57 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 			now,
 		)
 		if err != nil {
-			return fmt.Errorf("core: insert issue for name %s rule %s: %w",
+			return fmt.Errorf("core: upsert issue for name %s rule %s: %w",
 				nameID, r.RuleID, err)
 		}
 	}
+
+	// Prune rows for rules that no longer fire on this record.
+	if err := pruneStaleIssues(ctx, tx, "name", nameID, keep); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("core: commit sync tx: %w", err)
+	}
+	return nil
+}
+
+// pruneStaleIssues deletes hive__validation_issue rows for the given
+// record whose (rule_id, field_name) key is not in keep. Called by
+// syncNameIssues after upserting every current rule so rules that
+// stopped firing (or were removed from the rule set) get cleaned up
+// without touching the ones that still fire.
+func pruneStaleIssues(ctx context.Context, tx *sql.Tx, table, recordID string, keep map[[2]string]bool) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, rule_id, field_name
+		 FROM hive__validation_issue
+		 WHERE table_name = ? AND record_id = ?`,
+		table, recordID,
+	)
+	if err != nil {
+		return fmt.Errorf("core: list stale issues for %s %s: %w", table, recordID, err)
+	}
+	defer rows.Close()
+	var stale []string
+	for rows.Next() {
+		var id, ruleID, fieldName string
+		if err := rows.Scan(&id, &ruleID, &fieldName); err != nil {
+			return fmt.Errorf("core: scan stale issue: %w", err)
+		}
+		if !keep[[2]string{ruleID, fieldName}] {
+			stale = append(stale, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range stale {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM hive__validation_issue WHERE id = ?`, id,
+		); err != nil {
+			return fmt.Errorf("core: delete stale issue %s: %w", id, err)
+		}
 	}
 	return nil
 }
