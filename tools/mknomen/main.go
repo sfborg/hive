@@ -10,7 +10,7 @@
 // Usage:  go run ./tools/mknomen [taxonworks-checkout]
 //
 // Default checkout path is /home/gdo/taxonworks. Output goes to
-// core/nomen_tw.json.
+// pkg/nomen_tw.json.
 package main
 
 import (
@@ -53,7 +53,7 @@ func main() {
 	if len(os.Args) > 1 {
 		twRoot = os.Args[1]
 	}
-	out := "core/nomen_tw.json"
+	out := "pkg/nomen_tw.json"
 
 	var entries []Entry
 	entries = append(entries, scanKind(twRoot, "taxon_name_classification", "classification")...)

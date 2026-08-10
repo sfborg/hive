@@ -8,12 +8,12 @@ default:
 # Build hive and the mkdemo helper into ./bin/
 build:
     @mkdir -p bin
-    go build -o bin/hive ./cmd/hive
+    go build -o bin/hive .
     go build -o bin/mkdemo ./tools/mkdemo
 
 # Install the hive binary to $GOPATH/bin (or GOBIN).
 install:
-    go install ./cmd/hive
+    go install .
 
 # Run the full test suite with race detection.
 test:
@@ -76,8 +76,8 @@ serve path='./demo.db': build
     ./bin/hive serve {{path}}
 
 # Stop any running hive serve, rebuild, and start a fresh one. Useful
-# during frontend iteration: web/dist/ is embedded into the binary via
-# //go:embed, so JS/CSS changes only reach the browser after a rebuild.
+# during frontend iteration: internal/wui/dist/ is embedded into the binary
+# via //go:embed, so JS/CSS changes only reach the browser after a rebuild.
 #
 # Uses `pkill -x hive` (exact process-name match) rather than a
 # full-command grep — greping for "bin/hive serve" also matches the
@@ -98,14 +98,15 @@ run *ARGS: build
     ./bin/hive {{ARGS}}
 
 # Fetch the pinned Lit bundle and print its SHA-256 for verification.
-# The recipe deliberately does NOT auto-update web/dist/vendor/README.md —
-# hash-mismatch reviews are how we catch supply-chain surprises. Compare the
-# printed SHA against the README before committing an upgrade.
+# The recipe deliberately does NOT auto-update
+# internal/wui/dist/vendor/README.md — hash-mismatch reviews are how we
+# catch supply-chain surprises. Compare the printed SHA against the README
+# before committing an upgrade.
 vendor-lit:
     #!/usr/bin/env bash
     set -euo pipefail
     url="https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js"
-    dest="web/dist/vendor/lit-3.x.x.min.js"
+    dest="internal/wui/dist/vendor/lit-3.x.x.min.js"
     tmp="$(mktemp)"
     echo "fetching $url"
     curl -sSfL -o "$tmp" "$url"
@@ -116,7 +117,7 @@ vendor-lit:
     echo "Size:    $size bytes"
     echo ""
     mv "$tmp" "$dest"
-    echo "wrote $dest — verify SHA-256 against web/dist/vendor/README.md before committing"
+    echo "wrote $dest — verify SHA-256 against internal/wui/dist/vendor/README.md before committing"
 
 # Remove build outputs and demo archives (including SQLite WAL sidecars).
 clean:

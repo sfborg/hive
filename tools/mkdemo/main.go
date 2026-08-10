@@ -11,7 +11,7 @@ import (
 	"os"
 
 	"github.com/gnames/gnlib/ent/nomcode"
-	"github.com/sfborg/hive/core"
+	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -30,16 +30,16 @@ func main() {
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
 
-	a, err := core.Create(path)
+	a, err := hive.Create(path)
 	if err != nil {
 		die("create: %v", err)
 	}
 	defer a.Close()
 
-	ctx := core.WithActor(context.Background(), "0000-0002-1825-0097")
+	ctx := hive.WithActor(context.Background(), "0000-0002-1825-0097")
 
-	err = a.WithTx(ctx, func(tx *core.Tx) error {
-		if err := tx.UpdateMetadata(core.Metadata{
+	err = a.WithTx(ctx, func(tx *hive.Tx) error {
+		if err := tx.UpdateMetadata(hive.Metadata{
 			Title:       "Hive demo — Felidae",
 			Alias:       "demo",
 			Description: "A tiny zoological subtree (Animalia → Felidae) used to smoke-test hive frontends.",
@@ -59,7 +59,7 @@ func main() {
 // populate inserts a small Animalia subtree ending in Panthera / Felis, plus
 // a synonym on Panthera leo so that later slices (synonym tab, search) have
 // something to render.
-func populate(tx *core.Tx) error {
+func populate(tx *hive.Tx) error {
 	type step struct {
 		label      string
 		scientific string
@@ -134,7 +134,7 @@ func populate(tx *core.Tx) error {
 // seedReferences drops a few references into the demo archive via the
 // core write layer (Tx.CreateReference). Earlier revisions used raw
 // SQL because CreateReference didn't exist yet.
-func seedReferences(tx *core.Tx) error {
+func seedReferences(tx *hive.Tx) error {
 	refs := []coldp.Reference{
 		{
 			ID:       "ref-linnaeus-1758",
