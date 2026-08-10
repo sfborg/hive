@@ -527,9 +527,14 @@ class SfgaApp extends LitElement {
   // TUI's screen enum. New views append here; the sidebar and shortcut
   // handler pick them up automatically. Icon is a Lucide icon name
   // registered in the iconPaths map above.
+  // Sidebar order puts Metadata first so a curator scanning the nav is
+  // reminded that the archive has editable metadata. Taxa remains the
+  // default screen on open (see the `screen` state default) because
+  // that's where editing time actually gets spent; the sidebar is a
+  // menu, not a startup route.
   static views = [
-    { id: "taxa", label: "Taxa", icon: "network", key: "t" },
     { id: "metadata", label: "Metadata", icon: "info", key: "m" },
+    { id: "taxa", label: "Taxa", icon: "network", key: "t" },
     { id: "references", label: "References", icon: "book", key: "r" },
     { id: "issues", label: "Issues", icon: "triangle-alert", key: "i" },
   ];

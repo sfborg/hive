@@ -764,10 +764,14 @@ func (m *model) renderMenuBar() string {
 		before, letter, after string
 		active                bool
 	}{
-		{"", "T", "axa", m.screen == viewTaxa},
+		// Menu order puts Metadata first so a curator scanning the top
+		// strip is reminded the archive has editable metadata. Taxa
+		// remains the default screen at launch (see model.screen zero
+		// value) because that's where editing time is actually spent.
 		// Metadata gets alt+m (every project has metadata; not every
 		// project has media). Media, when it lands, takes alt+shift+m.
 		{"", "M", "etadata", m.screen == viewMetadata},
+		{"", "T", "axa", m.screen == viewTaxa},
 		{"", "R", "eferences", m.screen == viewReferences},
 		{"", "I", "ssues", m.screen == viewIssues},
 	}
