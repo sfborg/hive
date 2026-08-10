@@ -32,6 +32,7 @@ type keyMap struct {
 	ViewTaxa    key.Binding // "alt+t" — switch to the Taxa view
 	ViewMeta    key.Binding // "alt+m" — switch to the Metadata view
 	ViewRefs    key.Binding // "alt+r" — switch to the References view
+	ViewIssues  key.Binding // "alt+i" — switch to the Issues view
 	AddRef      key.Binding // "ctrl+a" — open the add-reference modal from the name edit form
 	AddBasionym key.Binding // "ctrl+o" — from the create pane: save current + start adding the original combination
 	Command     key.Binding // ":" — open command mode (opens the status-bar prompt)
@@ -91,6 +92,7 @@ func defaultKeys() keyMap {
 		ViewTaxa:    bindingFor("view-taxa"),
 		ViewMeta:    bindingFor("view-metadata"),
 		ViewRefs:    bindingFor("view-references"),
+		ViewIssues:  bindingFor("view-issues"),
 		AddRef:      bindingFor("form-add-ref"),
 		AddBasionym: bindingFor("form-add-basionym"),
 		Command:     bindingFor("command-open"),

@@ -94,6 +94,21 @@ const iconPaths = {
     <line x1="10" x2="10" y1="11" y2="17" />
     <line x1="14" x2="14" y1="11" y2="17" />
   `,
+  // triangle-alert — warning triangle → Issues screen. Neutral hue
+  // in the sidebar; the screen itself carries the severity color via
+  // per-row chips. Lucide's triangle-alert.
+  "triangle-alert": svg`
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  `,
+  // refresh-cw — clockwise circular arrow → Recompute button
+  "refresh-cw": svg`
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+    <path d="M8 16H3v5" />
+  `,
 };
 
 // iconPathsFilled — icons that render with fill instead of stroke.
@@ -516,6 +531,7 @@ class SfgaApp extends LitElement {
     { id: "taxa", label: "Taxa", icon: "network", key: "t" },
     { id: "metadata", label: "Metadata", icon: "info", key: "m" },
     { id: "references", label: "References", icon: "book", key: "r" },
+    { id: "issues", label: "Issues", icon: "triangle-alert", key: "i" },
   ];
 
   static styles = css`
@@ -891,8 +907,9 @@ class SfgaApp extends LitElement {
     switch (action) {
       case "view-taxa":
       case "view-metadata":
-      case "view-references": {
-        const wanted = action.slice("view-".length); // "taxa" / "metadata" / "references"
+      case "view-references":
+      case "view-issues": {
+        const wanted = action.slice("view-".length); // "taxa" / "metadata" / "references" / "issues"
         e.preventDefault();
         this.screen = wanted;
         return;
@@ -1052,6 +1069,19 @@ class SfgaApp extends LitElement {
     }
   }
 
+  // Row click from the Issues screen: switch to the Taxa view and
+  // reveal the flagged record in the tree. Rows carry a link_taxon_id
+  // resolved server-side (see /api/issue). Issues on records without
+  // an owning taxon don't dispatch this event, so the guard below is
+  // a defence-in-depth check.
+  async _onIssueNavigate(e) {
+    const taxonId = e.detail?.taxon_id;
+    if (!taxonId) return;
+    this.screen = "taxa";
+    this.selectedId = taxonId;
+    await this._revealInTree(taxonId);
+  }
+
   // Search box above the tree picks a taxon; reveal it in the tree AND
   // open its detail pane. Empty id (× clear) is a no-op — we don't want
   // to collapse the tree just because the search input was cleared.
@@ -1175,6 +1205,14 @@ class SfgaApp extends LitElement {
         return html`
           <div class="screen references">
             <sfga-references></sfga-references>
+          </div>
+        `;
+      case "issues":
+        return html`
+          <div class="screen issues">
+            <sfga-issues
+              @issue-navigate=${(e) => this._onIssueNavigate(e)}
+            ></sfga-issues>
           </div>
         `;
       default:
@@ -5265,11 +5303,500 @@ class SfgaHelpModal extends LitElement {
   }
 }
 
+// SfgaIssues is the Alt+I "Issues" screen — a dashboard over
+// hive__validation_issue backed by GET /api/issue/summary + /api/issue.
+//
+// Layout (two panes):
+//   left  — summary sidebar: per-rule counts within the active
+//           severity filter, plus model-scope tabs. Clicking a row
+//           narrows the list on the right to that rule.
+//   right — paginated issue list: severity chip + rule label + record
+//           label + emit-time message. Row click dispatches
+//           `issue-navigate` with a taxon_id when link_taxon_id is set;
+//           orphan rows are dim and non-clickable.
+//
+// Facets:
+//   • severity chips (error / warn / info / debug). Default set is
+//     error + warn per CLAUDE.md § Validation — "diagnostic" chips
+//     start off and require an explicit click to reveal info + debug
+//     issues, so a curator eyeballing the screen isn't misled into
+//     "fixing" dev-oriented signals like parse quality tier 2.
+//   • model tabs (Name / — future: Taxon, Reference). Inactive tabs
+//     with zero issues render dim; hive currently only fires
+//     name-scoped rules, so the tab bar has one active entry.
+//
+// Recompute button (top-right) fires POST /api/reindex/validation,
+// refreshes both summary and list. Same target as the `hive validate`
+// CLI.
+class SfgaIssues extends LitElement {
+  static properties = {
+    _summary: { state: true },
+    _issues: { state: true },
+    _total: { state: true },
+    _loading: { state: true },
+    _reindexing: { state: true },
+    _error: { state: true },
+
+    // Filter state — severities is a Set for cheap chip toggle;
+    // ruleFilter and tableFilter are plain strings ("" means "all").
+    _severities: { state: true },
+    _ruleFilter: { state: true },
+    _tableFilter: { state: true },
+    _offset: { state: true },
+  };
+
+  static PAGE_SIZE = 50;
+  static DEFAULT_SEVERITIES = new Set(["error", "warn"]);
+
+  static styles = css`
+    :host {
+      display: grid;
+      grid-template-columns: minmax(18rem, 28%) 1fr;
+      overflow: hidden;
+      height: 100%;
+    }
+    aside,
+    section {
+      overflow: auto;
+      padding: 0.75rem;
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+    }
+    h3 {
+      margin: 0 0 0.5rem 0;
+      font-size: 0.95em;
+      color: var(--dim);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .toolbar .grow {
+      flex: 1;
+    }
+    button.filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.15rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.85em;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--bg);
+      color: var(--dim);
+      border: 1px solid var(--border);
+      font-family: inherit;
+    }
+    button.filter-chip.on {
+      color: var(--fg);
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+      border-color: color-mix(in oklab, var(--fg) 30%, var(--border));
+    }
+    button.filter-chip.on.sev-error { color: var(--sev-error); border-color: var(--sev-error); background: var(--sev-error-bg); }
+    button.filter-chip.on.sev-warn  { color: var(--sev-warn);  border-color: var(--sev-warn);  background: var(--sev-warn-bg); }
+    button.filter-chip.on.sev-info  { color: var(--sev-info);  border-color: var(--sev-info);  background: var(--sev-info-bg); }
+    button.filter-chip.on.sev-debug { color: var(--sev-debug); border-color: var(--sev-debug); background: var(--sev-debug-bg); }
+    button.icon-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.55rem;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.85em;
+    }
+    button.icon-btn:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
+    button.icon-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    ul.rules {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    ul.rules li {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0.4rem 0.5rem;
+      cursor: pointer;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+    }
+    ul.rules li:hover {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
+    ul.rules li.selected {
+      background: color-mix(in oklab, var(--accent) 20%, transparent);
+    }
+    ul.rules .rule-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    ul.rules .count {
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+    }
+    ul.issues {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    ul.issues li {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.5rem;
+      padding: 0.6rem 0.5rem;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+      cursor: pointer;
+    }
+    ul.issues li:hover:not(.orphan) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
+    ul.issues li.orphan {
+      cursor: default;
+      opacity: 0.75;
+    }
+    .issue-record {
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .issue-record.orphan-label {
+      color: var(--dim);
+      font-style: italic;
+    }
+    .issue-rule {
+      color: var(--dim);
+      font-size: 0.85em;
+      margin-top: 0.15rem;
+    }
+    .issue-msg {
+      margin-top: 0.25rem;
+      color: var(--fg);
+      line-height: 1.35;
+    }
+    .pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 0.75rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--dim);
+      font-size: 0.9em;
+    }
+    .empty { color: var(--dim); padding: 0.5rem; font-style: italic; }
+    .error { color: var(--error); font-family: var(--font-mono); padding: 0.5rem; }
+    .diag-note {
+      margin-top: 0.5rem;
+      color: var(--dim);
+      font-size: 0.85em;
+      line-height: 1.35;
+    }
+  `;
+
+  constructor() {
+    super();
+    this._summary = [];
+    this._issues = [];
+    this._total = 0;
+    this._loading = false;
+    this._reindexing = false;
+    this._error = "";
+    this._severities = new Set(SfgaIssues.DEFAULT_SEVERITIES);
+    this._ruleFilter = "";
+    this._tableFilter = "";
+    this._offset = 0;
+  }
+
+  async connectedCallback() {
+    super.connectedCallback();
+    await this._refresh();
+  }
+
+  async _refresh() {
+    this._loading = true;
+    this._error = "";
+    try {
+      const [summary, page] = await Promise.all([
+        api.issue.summary(),
+        this._fetchPage(),
+      ]);
+      this._summary = summary.items || [];
+      this._issues = page.items || [];
+      this._total = page.total ?? this._issues.length;
+    } catch (err) {
+      this._error = err instanceof Problem ? err.detail || err.title : String(err);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  _fetchPage() {
+    return api.issue.list({
+      table: this._tableFilter || undefined,
+      rule_id: this._ruleFilter || undefined,
+      severity: [...this._severities],
+      limit: SfgaIssues.PAGE_SIZE,
+      offset: this._offset,
+    });
+  }
+
+  async _reloadList() {
+    try {
+      const page = await this._fetchPage();
+      this._issues = page.items || [];
+      this._total = page.total ?? this._issues.length;
+    } catch (err) {
+      this._error = err instanceof Problem ? err.detail || err.title : String(err);
+    }
+  }
+
+  _toggleSeverity(sev) {
+    const next = new Set(this._severities);
+    if (next.has(sev)) next.delete(sev);
+    else next.add(sev);
+    this._severities = next;
+    this._offset = 0;
+    this._reloadList();
+  }
+
+  _selectRule(row) {
+    // Clicking the currently-selected rule clears the filter, matching
+    // the "same-key toggles" chip convention elsewhere in the app.
+    const already =
+      this._ruleFilter === row.rule_id && this._tableFilter === row.table;
+    if (already) {
+      this._ruleFilter = "";
+      this._tableFilter = "";
+    } else {
+      this._ruleFilter = row.rule_id;
+      this._tableFilter = row.table;
+    }
+    this._offset = 0;
+    this._reloadList();
+  }
+
+  async _reindex() {
+    if (this._reindexing) return;
+    this._reindexing = true;
+    try {
+      await api.issue.reindex();
+      this._offset = 0;
+      await this._refresh();
+    } catch (err) {
+      this._error = err instanceof Problem ? err.detail || err.title : String(err);
+    } finally {
+      this._reindexing = false;
+    }
+  }
+
+  _pagePrev() {
+    if (this._offset === 0) return;
+    this._offset = Math.max(0, this._offset - SfgaIssues.PAGE_SIZE);
+    this._reloadList();
+  }
+
+  _pageNext() {
+    if (this._offset + SfgaIssues.PAGE_SIZE >= this._total) return;
+    this._offset += SfgaIssues.PAGE_SIZE;
+    this._reloadList();
+  }
+
+  // Sum the summary rows that pass the current severity filter, so
+  // the rule list on the left shows counts that agree with the paged
+  // result on the right (rather than the archive-wide totals).
+  _filteredRuleRows() {
+    return this._summary
+      .filter((r) => this._severities.has(r.severity))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  _openIssue(issue) {
+    if (!issue.link_taxon_id) return;
+    this.dispatchEvent(
+      new CustomEvent("issue-navigate", {
+        detail: { taxon_id: issue.link_taxon_id, record_id: issue.record_id },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  render() {
+    if (this._loading && this._summary.length === 0 && this._issues.length === 0) {
+      return html`<div class="empty">loading…</div>`;
+    }
+    if (this._error) {
+      return html`<div class="error">${this._error}</div>`;
+    }
+    return html`
+      ${this._renderSidebar()}
+      ${this._renderList()}
+    `;
+  }
+
+  _renderSidebar() {
+    const rows = this._filteredRuleRows();
+    const totalShown = rows.reduce((sum, r) => sum + r.count, 0);
+    const anyDiag = this._severities.has("info") || this._severities.has("debug");
+    return html`
+      <aside>
+        <h3>Filter by severity</h3>
+        <div class="toolbar">
+          ${["error", "warn", "info", "debug"].map((sev) => this._renderSevChip(sev))}
+        </div>
+        ${anyDiag
+          ? html`<div class="diag-note">
+              Diagnostic issues (info, debug) surface parser and validator hints
+              that are usually not curator-fixable. Editing records to silence
+              them can degrade data quality.
+            </div>`
+          : ""}
+        <h3 style="margin-top:1rem;">
+          Rules (${totalShown} issue${totalShown === 1 ? "" : "s"})
+        </h3>
+        ${rows.length === 0
+          ? html`<div class="empty">No issues match the current filter.</div>`
+          : html`<ul class="rules">
+              ${rows.map((r) => this._renderRuleRow(r))}
+            </ul>`}
+      </aside>
+    `;
+  }
+
+  _renderSevChip(sev) {
+    const on = this._severities.has(sev);
+    const meta = SEV_META[sev] || SEV_META.warn;
+    return html`
+      <button
+        class="filter-chip ${on ? "on" : ""} sev-${sev}"
+        @click=${() => this._toggleSeverity(sev)}
+        title="toggle ${sev} issues"
+      >
+        <span>${meta.glyph}</span>${meta.label}
+      </button>
+    `;
+  }
+
+  _renderRuleRow(r) {
+    const selected =
+      this._ruleFilter === r.rule_id && this._tableFilter === r.table;
+    return html`
+      <li
+        class=${selected ? "selected" : ""}
+        @click=${() => this._selectRule(r)}
+        title="${r.rule_id} (${r.table})"
+      >
+        <span class="rule-label">
+          ${severityChip(r.severity)}
+          ${r.rule_name || r.rule_id}
+        </span>
+        <span class="count">${r.count}</span>
+      </li>
+    `;
+  }
+
+  _renderList() {
+    const from = this._issues.length === 0 ? 0 : this._offset + 1;
+    const to = this._offset + this._issues.length;
+    const canPrev = this._offset > 0;
+    const canNext = this._offset + this._issues.length < this._total;
+    return html`
+      <section>
+        <div class="toolbar">
+          <div class="grow">
+            <strong>${this._ruleFilter
+              ? this._summary.find((r) => r.rule_id === this._ruleFilter)?.rule_name || this._ruleFilter
+              : "All rules"}</strong>
+            <span style="color:var(--dim); margin-left:0.5rem;">
+              ${this._total > 0 ? `${from}-${to} of ${this._total}` : "no issues"}
+            </span>
+          </div>
+          <button
+            class="icon-btn"
+            @click=${() => this._reindex()}
+            ?disabled=${this._reindexing}
+            title="re-run every rule and rewrite the issue cache"
+          >
+            ${renderIcon("refresh-cw", 14)}
+            ${this._reindexing ? "recomputing…" : "Recompute"}
+          </button>
+        </div>
+        ${this._issues.length === 0
+          ? html`<div class="empty">No issues match the current filter.</div>`
+          : html`<ul class="issues">
+              ${this._issues.map((i) => this._renderIssueRow(i))}
+            </ul>`}
+        ${this._total > SfgaIssues.PAGE_SIZE
+          ? html`<div class="pager">
+              <button
+                class="icon-btn"
+                @click=${() => this._pagePrev()}
+                ?disabled=${!canPrev}
+              >
+                ← Previous
+              </button>
+              <span>${from}-${to} of ${this._total}</span>
+              <button
+                class="icon-btn"
+                @click=${() => this._pageNext()}
+                ?disabled=${!canNext}
+              >
+                Next →
+              </button>
+            </div>`
+          : ""}
+      </section>
+    `;
+  }
+
+  _renderIssueRow(i) {
+    const orphan = !i.link_taxon_id;
+    const label = i.record_label || `(record ${i.record_id.slice(0, 8)}…)`;
+    return html`
+      <li
+        class=${orphan ? "orphan" : ""}
+        @click=${() => this._openIssue(i)}
+        title=${orphan ? "no owning taxon — cannot navigate" : "open this record"}
+      >
+        ${severityChip(i.severity)}
+        <div>
+          <div class="issue-record ${orphan ? "orphan-label" : ""}">${label}</div>
+          <div class="issue-rule">
+            ${i.rule_name || i.rule_id}${i.field_name ? ` · ${i.field_name}` : ""}
+          </div>
+          <div class="issue-msg">${i.message}</div>
+        </div>
+      </li>
+    `;
+  }
+}
+
 customElements.define("sfga-app", SfgaApp);
 customElements.define("sfga-tree", SfgaTree);
 customElements.define("sfga-detail", SfgaDetail);
 customElements.define("sfga-metadata", SfgaMetadata);
 customElements.define("sfga-references", SfgaReferences);
+customElements.define("sfga-issues", SfgaIssues);
 customElements.define("sfga-combobox", SfgaCombobox);
 customElements.define("sfga-add-reference-modal", SfgaAddReferenceModal);
 customElements.define("sfga-help-modal", SfgaHelpModal);

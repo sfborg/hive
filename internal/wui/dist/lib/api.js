@@ -55,11 +55,20 @@ async function j(method, url, body, headers = {}) {
   return body_;
 }
 
-/** Query-string helper: skips undefined/null values. */
+/** Query-string helper: skips undefined/null values. Arrays become
+ * repeated params (?severity=warn&severity=error) so multi-select
+ * filters like the issue endpoint's severity axis work naturally. */
 function qs(params = {}) {
   const usp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === "") continue;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item === undefined || item === null || item === "") continue;
+        usp.append(k, String(item));
+      }
+      continue;
+    }
     usp.set(k, String(v));
   }
   const s = usp.toString();
@@ -230,6 +239,22 @@ export const api = {
     // guess. Drives the two-step name-add form.
     parse: (scientific_name, code) =>
       j("POST", `/api/name/parse`, { scientific_name, code }),
+  },
+
+  // Issues (hive__validation_issue). summary returns per-rule/severity
+  // counts across the archive; list returns a paginated page of issues
+  // with the flagged record's label + a link_taxon_id navigation hint
+  // pre-resolved server-side so the row renders in one round-trip.
+  //
+  // reindex re-runs every rule and rewrites hive__validation_issue.
+  // Backfills legacy rows, repairs the cache after rule changes, and
+  // prunes issues from removed rules. Synchronous — small archives
+  // return in milliseconds. See PLANNING.md § Long-running operations
+  // for the eventual SSE progress plan.
+  issue: {
+    summary: () => j("GET", "/api/issue/summary"),
+    list: (opts) => j("GET", `/api/issue${qs(opts)}`),
+    reindex: () => j("POST", "/api/reindex/validation"),
   },
 
   reference: {

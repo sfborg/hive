@@ -128,6 +128,7 @@ const (
 	viewTaxa screen = iota
 	viewMetadata
 	viewReferences
+	viewIssues
 )
 
 // model is the top-level Bubble Tea model. It owns the two panes, the
@@ -141,6 +142,7 @@ type model struct {
 	detail      detailModel
 	metadata    metadataModel
 	references  referencesModel
+	issues      issuesModel
 	search      combobox
 	keys        keyMap
 	focus       focused
@@ -194,6 +196,7 @@ func newModel(a *hive.Archive, archivePath string, editable bool, actor string) 
 		detail:      newDetailModel(a, editable, actor),
 		metadata:    newMetadataModel(a, editable, actor),
 		references:  newReferencesModel(a),
+		issues:      newIssuesModel(a),
 		search:      newCombobox(taxonComboSource(a), "/ to search taxa…"),
 		keys:        defaultKeys(),
 		focus:       focusTree,
@@ -207,7 +210,7 @@ func newModel(a *hive.Archive, archivePath string, editable bool, actor string) 
 // and makes alt+m instant. The detail pane waits until a taxon is
 // highlighted before fetching anything.
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.tree.Init(), m.metadata.Load(), m.references.Load())
+	return tea.Batch(m.tree.Init(), m.metadata.Load(), m.references.Load(), m.issues.Load())
 }
 
 // Update dispatches on message type. Key events flow to the focused pane;
@@ -267,6 +270,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, m.keys.ViewRefs):
 			m.screen = viewReferences
+			return m, nil
+		case key.Matches(msg, m.keys.ViewIssues):
+			m.screen = viewIssues
 			return m, nil
 		}
 		// Any key clears a lingering delete error banner and is consumed
@@ -332,6 +338,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.references, cmd = m.references.Update(msg, m.keys)
+			return m, cmd
+		}
+		// Issues screen: filter chips (1-4, d), reindex (r), pane
+		// switching (Tab), and cursor movement all belong to the
+		// screen. Quit still bails out; navigation from an issue row
+		// dispatches issueNavigateMsg (handled below) so the shell
+		// switches to Taxa and reveals the taxon.
+		if m.screen == viewIssues {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, tea.Quit
+			}
+			var cmd tea.Cmd
+			m.issues, cmd = m.issues.Update(msg, m.keys)
 			return m, cmd
 		}
 		// Add-reference modal owns every key while it's open — including
@@ -546,6 +565,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.references, cmd = m.references.Update(msg, m.keys)
 		return m, cmd
 
+	case issuesSummaryMsg, issuesPageMsg, issueReindexMsg:
+		var cmd tea.Cmd
+		m.issues, cmd = m.issues.Update(msg, m.keys)
+		return m, cmd
+
+	case issueNavigateMsg:
+		// Row Enter from the Issues screen: hop to Taxa and reveal
+		// the flagged taxon in the tree. Same effect as the WUI's
+		// _onIssueNavigate handler.
+		m.screen = viewTaxa
+		m.detail.SetCurrent(msg.TaxonID)
+		return m, tea.Batch(m.tree.RevealCmd(msg.TaxonID), m.detail.Load(msg.TaxonID))
+
 	case commandExecuteMsg:
 		// Fan out the parsed command's payload. Each recognized payload
 		// type gets one case here; unknown payloads (nil, from an
@@ -636,6 +668,8 @@ func (m *model) View() string {
 		content = m.renderMetadataView(contentH)
 	case viewReferences:
 		content = m.renderReferencesView(contentH)
+	case viewIssues:
+		content = m.renderIssuesView(contentH)
 	default: // viewTaxa
 		content = m.renderTaxaView(contentH)
 	}
@@ -707,6 +741,21 @@ func (m *model) renderReferencesView(contentH int) string {
 		Render(inner)
 }
 
+// renderIssuesView delegates to the issuesModel. Same border pattern
+// as References so alt+i lands in a pane visually consistent with the
+// other read-oriented screens.
+func (m *model) renderIssuesView(contentH int) string {
+	border := detailPaneStyle
+	if m.screen == viewIssues {
+		border = focusedBorderStyle
+	}
+	inner := m.issues.View(m.width-4, contentH-2)
+	return border.
+		Width(m.width - 2).
+		Height(contentH - 2).
+		Render(inner)
+}
+
 // renderMenuBar draws the borgtui-style top strip: view names with the
 // mnemonic letter underlined, active view highlighted. Screen-switch
 // keys are Alt-mnemonic; the underline hints at which letter binds.
@@ -720,6 +769,7 @@ func (m *model) renderMenuBar() string {
 		// project has media). Media, when it lands, takes alt+shift+m.
 		{"", "M", "etadata", m.screen == viewMetadata},
 		{"", "R", "eferences", m.screen == viewReferences},
+		{"", "I", "ssues", m.screen == viewIssues},
 	}
 	var parts []string
 	for _, it := range items {

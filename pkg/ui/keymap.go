@@ -105,6 +105,13 @@ func Keymap() []Shortcut {
 			Keys:        both([]string{"alt+r"}, []string{"alt+r"}),
 		},
 		{
+			Action:      "view-issues",
+			Description: "switch to Issues view",
+			Display:     "Alt+I",
+			Scope:       ScopeGlobal,
+			Keys:        both([]string{"alt+i"}, []string{"alt+i"}),
+		},
+		{
 			Action:      "search-focus",
 			Description: "focus the taxon search box",
 			Display:     "/",
