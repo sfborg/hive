@@ -1,4 +1,4 @@
-package core
+package bhlnames
 
 import (
 	"context"
@@ -11,12 +11,12 @@ import (
 	"testing"
 )
 
-// TestBHLnamesLookupMapping runs the client against an httptest server
-// that echoes a canned /name_refs response, and asserts the JSON →
-// BHLnameHit projection is correct. Covers both the "specific part"
-// path (article in a journal) and the "no part" path (whole item /
-// book) without hitting the live BHLnames service.
-func TestBHLnamesLookupMapping(t *testing.T) {
+// TestLookupMapping runs the client against an httptest server that
+// echoes a canned /name_refs response, and asserts the JSON → Hit
+// projection is correct. Covers both the "specific part" path
+// (article in a journal) and the "no part" path (whole item / book)
+// without hitting the live BHLnames service.
+func TestLookupMapping(t *testing.T) {
 	const canned = `{
 		"references": [
 			{
@@ -70,8 +70,8 @@ func TestBHLnamesLookupMapping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewBHLnames(srv.URL)
-	hits, err := client.LookupName(context.Background(), "Panthera leo", "Linnaeus", 1758, BHLnameLookupOpts{})
+	client := New(srv.URL)
+	hits, err := client.LookupName(context.Background(), "Panthera leo", "Linnaeus", 1758, LookupOpts{})
 	if err != nil {
 		t.Fatalf("LookupName: %v", err)
 	}
@@ -139,39 +139,38 @@ func TestBHLnamesLookupMapping(t *testing.T) {
 	}
 }
 
-// TestBHLnamesEmptyCanonical proves the input-validation guard —
-// canonical is required, otherwise we'd shoot a garbage request at
-// BHLnames.
-func TestBHLnamesEmptyCanonical(t *testing.T) {
-	client := NewBHLnames("http://example.invalid")
-	_, err := client.LookupName(context.Background(), "   ", "", 0, BHLnameLookupOpts{})
+// TestEmptyCanonical proves the input-validation guard — canonical is
+// required, otherwise we'd shoot a garbage request at BHLnames.
+func TestEmptyCanonical(t *testing.T) {
+	client := New("http://example.invalid")
+	_, err := client.LookupName(context.Background(), "   ", "", 0, LookupOpts{})
 	if err == nil || !strings.Contains(err.Error(), "canonical") {
 		t.Errorf("empty canonical: got %v, want a 'canonical required' error", err)
 	}
 }
 
-// TestBHLnamesLive hits the real BHLnames service. Skipped by default
-// so hive's test suite doesn't depend on network; run with
-// `HIVE_BHLNAMES_LIVE=1 go test ./core/ -run TestBHLnamesLive`.
+// TestLive hits the real BHLnames service. Skipped by default so
+// hive's test suite doesn't depend on network; run with
+// `HIVE_BHLNAMES_LIVE=1 go test ./pkg/bhlnames/ -run TestLive`.
 //
 // Uses Pardosa moesta Banks 1892 — the API doc's own example, so BHL
 // definitely has confident matches for it. Runs both flavors:
 //
-//	- Non-nomen mode: broader match set, no quality score.
-//	- Nomen-event mode: strict protologue matching, scored 1-5.
+//   - Non-nomen mode: broader match set, no quality score.
+//   - Nomen-event mode: strict protologue matching, scored 1-5.
 //
 // If either query fails outright (network / API error) the test
 // fails. Zero hits from nomen mode is not a failure — that's a valid
 // "we don't know" answer from BHLnames.
-func TestBHLnamesLive(t *testing.T) {
+func TestLive(t *testing.T) {
 	if os.Getenv("HIVE_BHLNAMES_LIVE") == "" {
 		t.Skip("set HIVE_BHLNAMES_LIVE=1 to hit bhlnames.globalnames.org")
 	}
-	client := BHLnames()
+	client := New(DefaultBaseURL)
 	ctx := context.Background()
 
 	broad, err := client.LookupName(ctx, "Pardosa moesta", "Banks", 1892,
-		BHLnameLookupOpts{RefsLimit: 3})
+		LookupOpts{RefsLimit: 3})
 	if err != nil {
 		t.Fatalf("live LookupName (broad): %v", err)
 	}
@@ -184,7 +183,7 @@ func TestBHLnamesLive(t *testing.T) {
 	}
 
 	nomen, err := client.LookupName(ctx, "Pardosa moesta", "Banks", 1892,
-		BHLnameLookupOpts{RefsLimit: 3, NomenEvent: true})
+		LookupOpts{RefsLimit: 3, NomenEvent: true})
 	if err != nil {
 		t.Fatalf("live LookupName (nomen): %v", err)
 	}

@@ -1,15 +1,15 @@
-package core
+package openalex
 
 import (
 	"encoding/json"
 	"testing"
 )
 
-// TestOpenAlexToReference exercises the JSON → coldp.Reference
-// mapping without hitting the network. The fixture is a trimmed
+// TestToReference exercises the JSON → coldp.Reference mapping without
+// hitting the network. The fixture is a trimmed
 // GET /works/doi:10.7717/peerj.4375 response — real fields, fake
 // values, enough to cover the mapping paths.
-func TestOpenAlexToReference(t *testing.T) {
+func TestToReference(t *testing.T) {
 	const fixture = `{
 		"id": "https://openalex.org/W2741809807",
 		"doi": "https://doi.org/10.7717/peerj.4375",
@@ -37,7 +37,7 @@ func TestOpenAlexToReference(t *testing.T) {
 			"last_page": null
 		}
 	}`
-	var w openAlexWork
+	var w work
 	if err := json.Unmarshal([]byte(fixture), &w); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -72,9 +72,9 @@ func TestOpenAlexToReference(t *testing.T) {
 	}
 }
 
-// TestMapOpenAlexType covers the OpenAlex → sfga reference_type
-// translation. Unknown types map to empty (curator picks).
-func TestMapOpenAlexType(t *testing.T) {
+// TestMapType covers the OpenAlex → sfga reference_type translation.
+// Unknown types map to empty (curator picks).
+func TestMapType(t *testing.T) {
 	cases := []struct {
 		oa, container, want string
 	}{
@@ -86,23 +86,23 @@ func TestMapOpenAlexType(t *testing.T) {
 		{"dataset", "", "DATASET"},
 		{"conference-paper", "", "PAPER_CONFERENCE"},
 		{"preprint", "", "ARTICLE"},
-		{"nonsense", "", ""}, // unknown → empty
+		{"nonsense", "", ""},
 	}
 	for _, c := range cases {
-		if got := mapOpenAlexType(c.oa, c.container); got != c.want {
-			t.Errorf("mapOpenAlexType(%q, %q) = %q, want %q",
+		if got := mapType(c.oa, c.container); got != c.want {
+			t.Errorf("mapType(%q, %q) = %q, want %q",
 				c.oa, c.container, got, c.want)
 		}
 	}
 }
 
-// TestOpenAlexUserAgent covers the polite-pool signal shape.
-func TestOpenAlexUserAgent(t *testing.T) {
-	withEmail := NewOpenAlex("curator@example.org").userAgent()
+// TestUserAgent covers the polite-pool signal shape.
+func TestUserAgent(t *testing.T) {
+	withEmail := New("curator@example.org").userAgent()
 	if withEmail != "hive/0.1 (mailto:curator@example.org)" {
 		t.Errorf("with-email UA = %q", withEmail)
 	}
-	anon := NewOpenAlex("").userAgent()
+	anon := New("").userAgent()
 	if anon != "hive/0.1 (+https://github.com/sfborg/hive)" {
 		t.Errorf("anonymous UA = %q", anon)
 	}
