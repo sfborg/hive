@@ -1074,17 +1074,22 @@ class SfgaApp extends LitElement {
     }
   }
 
-  // Row click from the Issues screen: switch to the Taxa view and
-  // reveal the flagged record in the tree. Rows carry a link_taxon_id
-  // resolved server-side (see /api/issue). Issues on records without
-  // an owning taxon don't dispatch this event, so the guard below is
-  // a defence-in-depth check.
+  // Row click from the Issues screen. Routing depends on the target
+  // table: taxon-linked issues open the Taxa screen and reveal in
+  // the tree; metadata-scoped issues open the Metadata screen.
+  // Other tables get a fallback that just switches to Taxa without
+  // reveal (nothing sensible to navigate to yet).
   async _onIssueNavigate(e) {
-    const taxonId = e.detail?.taxon_id;
-    if (!taxonId) return;
-    this.screen = "taxa";
-    this.selectedId = taxonId;
-    await this._revealInTree(taxonId);
+    const detail = e.detail || {};
+    if (detail.table === "metadata") {
+      this.screen = "metadata";
+      return;
+    }
+    if (detail.taxon_id) {
+      this.screen = "taxa";
+      this.selectedId = detail.taxon_id;
+      await this._revealInTree(detail.taxon_id);
+    }
   }
 
   // Search box above the tree picks a taxon; reveal it in the tree AND
@@ -5635,11 +5640,23 @@ class SfgaIssues extends LitElement {
       .sort((a, b) => b.count - a.count);
   }
 
+  // _openIssue asks the shell to navigate to the flagged record's
+  // natural detail view. Payload varies by target: taxon-linked
+  // issues carry a taxon_id + reveal the tree; metadata-scoped
+  // issues carry only the table so the shell jumps to the Metadata
+  // screen. Orphan rows (no owning taxon and not a special table)
+  // are silently ignored — the row was already rendered dim to hint
+  // that clicking won't do anything.
   _openIssue(issue) {
-    if (!issue.link_taxon_id) return;
+    const detail = { table: issue.table, record_id: issue.record_id };
+    if (issue.link_taxon_id) {
+      detail.taxon_id = issue.link_taxon_id;
+    } else if (issue.table !== "metadata") {
+      return;
+    }
     this.dispatchEvent(
       new CustomEvent("issue-navigate", {
-        detail: { taxon_id: issue.link_taxon_id, record_id: issue.record_id },
+        detail,
         bubbles: true,
         composed: true,
       }),

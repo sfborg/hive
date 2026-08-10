@@ -52,6 +52,10 @@ type apiMetadata struct {
 	Label           string `json:"label,omitempty"`
 	Citation        string `json:"citation,omitempty"`
 	Private         *bool  `json:"private,omitempty"`
+
+	// Warnings surfaces stored issues that apply to the metadata row
+	// (e.g. hive_stale_metadata). Same shape as apiTaxon.Warnings.
+	Warnings []apiValidationWarning `json:"warnings,omitempty"`
 }
 
 // apiMetadataPatch is the PATCH body. Pointer-optional throughout so

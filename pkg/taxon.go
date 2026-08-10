@@ -496,6 +496,7 @@ func (t *Tx) CreateTaxon(taxon coldp.Taxon) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("core: insert taxon %s: %w", taxon.ID, err)
 	}
+	t.markTaxonDirty(taxon.ID)
 	return taxon.ID, nil
 }
 
@@ -623,6 +624,7 @@ func (t *Tx) UpdateTaxon(taxon coldp.Taxon) error {
 	if rows == 0 {
 		return fmt.Errorf("core: update taxon %s: %w", taxon.ID, ErrNotFound)
 	}
+	t.markTaxonDirty(taxon.ID)
 	return nil
 }
 
@@ -688,6 +690,7 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 	if rows == 0 {
 		return fmt.Errorf("core: move taxon %s: %w", id, ErrNotFound)
 	}
+	t.markTaxonDirty(id)
 	return nil
 }
 

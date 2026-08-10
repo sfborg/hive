@@ -261,6 +261,12 @@ func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	for id := range tx.dirtyNames {
 		_ = a.syncNameIssues(ctx, id)
 	}
+	for id := range tx.dirtyTaxa {
+		_ = a.syncTaxonIssues(ctx, id)
+	}
+	for id := range tx.dirtyMetadata {
+		_ = a.syncMetadataIssues(ctx, id)
+	}
 	return nil
 }
 
@@ -274,17 +280,22 @@ type Tx struct {
 	ctx     context.Context
 	actor   string
 
-	// dirtyNames collects the col__id of every name row that was
-	// created or updated during this transaction. After WithTx commits,
-	// each entry drives a post-commit call to syncNameIssues so the
+	// dirtyNames / dirtyTaxa / dirtyMetadata collect the ids of rows
+	// created or updated during this transaction, one map per
+	// hive-validated table. After WithTx commits, each entry drives a
+	// post-commit call to the corresponding syncXIssues so the
 	// hive__validation_issue cache stays fresh. Sync is best-effort;
 	// see WithTx for the failure semantics.
-	dirtyNames map[string]bool
+	dirtyNames    map[string]bool
+	dirtyTaxa     map[string]bool
+	dirtyMetadata map[int]bool
 }
 
 // markNameDirty records that a name row was touched in this transaction
 // so WithTx can refresh its validation-issue cache after commit. Called
-// from CreateName and UpdateName.
+// from CreateName and UpdateName. markTaxonDirty / markMetadataDirty
+// serve the same role for their tables; each aggregate's mutation
+// methods call the matching helper.
 func (t *Tx) markNameDirty(id string) {
 	if id == "" {
 		return
@@ -293,6 +304,23 @@ func (t *Tx) markNameDirty(id string) {
 		t.dirtyNames = make(map[string]bool)
 	}
 	t.dirtyNames[id] = true
+}
+
+func (t *Tx) markTaxonDirty(id string) {
+	if id == "" {
+		return
+	}
+	if t.dirtyTaxa == nil {
+		t.dirtyTaxa = make(map[string]bool)
+	}
+	t.dirtyTaxa[id] = true
+}
+
+func (t *Tx) markMetadataDirty(id int) {
+	if t.dirtyMetadata == nil {
+		t.dirtyMetadata = make(map[int]bool)
+	}
+	t.dirtyMetadata[id] = true
 }
 
 // Actor returns the actor string carried by this transaction, taken from the

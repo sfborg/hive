@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Metadata is the dataset-level metadata row (title, description,
@@ -147,6 +148,10 @@ func (t *Tx) UpdateMetadata(m Metadata) error {
 	if n == 0 {
 		return fmt.Errorf("core: update metadata id=%d: %w", targetID, ErrNotFound)
 	}
+	if err := touchMetadata(t.ctx, t.tx, targetID); err != nil {
+		return err
+	}
+	t.markMetadataDirty(targetID)
 	return nil
 }
 
@@ -159,7 +164,7 @@ func (t *Tx) insertMetadata(m Metadata) error {
 		col__license, col__url, col__logo, col__label, col__citation,
 		col__private
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := t.tx.ExecContext(t.ctx, insert,
+	res, err := t.tx.ExecContext(t.ctx, insert,
 		m.DOI, m.Title, m.Alias, m.Description,
 		m.Issued, m.Version, m.Keywords,
 		m.GeographicScope, m.TaxonomicScope, m.TemporalScope,
@@ -169,6 +174,33 @@ func (t *Tx) insertMetadata(m Metadata) error {
 	)
 	if err != nil {
 		return fmt.Errorf("core: insert metadata: %w", err)
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("core: insert metadata last id: %w", err)
+	}
+	if err := touchMetadata(t.ctx, t.tx, int(newID)); err != nil {
+		return err
+	}
+	t.markMetadataDirty(int(newID))
+	return nil
+}
+
+// touchMetadata upserts hive__metadata_touched with the current time
+// for the given metadata id. Called from every metadata write path so
+// the sfga_stale_metadata validator has a modification timestamp to
+// reason about. sfga's metadata table lacks col__modified and
+// CLAUDE.md § Schema handling forbids extending sfga tables, so hive
+// keeps the timestamp in a namespaced sidecar.
+func touchMetadata(ctx context.Context, tx *sql.Tx, id int) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO hive__metadata_touched (id, touched_at) VALUES (?, ?)
+		 ON CONFLICT (id) DO UPDATE SET touched_at = excluded.touched_at`,
+		id, now,
+	)
+	if err != nil {
+		return fmt.Errorf("core: touch metadata %d: %w", id, err)
 	}
 	return nil
 }

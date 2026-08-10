@@ -144,7 +144,9 @@ func (s *server) handleGetMetadata(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, metadataToAPI(m))
+	body := metadataToAPI(m)
+	body.Warnings = metadataWarnings(s.a, r.Context(), m.ID)
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handlePatchMetadata applies a partial update to the metadata row.
@@ -230,7 +232,7 @@ func (s *server) handleGetTaxon(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	body.Warnings = validationWarnings(s.a, r.Context(), t.NameID)
+	body.Warnings = validationWarnings(s.a, r.Context(), t.ID, t.NameID)
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -660,17 +662,45 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 	// Attach soft warnings from gsvalidator to the response. Runs
 	// post-commit — this slice only surfaces warnings, doesn't
 	// block save on hard errors yet.
-	resp.Warnings = validationWarnings(s.a, r.Context(), newNameID)
+	resp.Warnings = validationWarnings(s.a, r.Context(), t.ID, newNameID)
 	w.Header().Set("ETag", t.Modified)
 	w.Header().Set("Location", "/api/taxon/"+t.ID)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// validationWarnings adapts hive.NameWarnings into the wire type used by
-// create/update responses. Core does the actual filtering; the shape
-// mirrors it 1:1.
-func validationWarnings(a *hive.Archive, ctx context.Context, nameID string) []apiValidationWarning {
+// validationWarnings adapts hive.NameWarnings + hive.TaxonWarnings
+// into the wire type used by create/update/get taxon responses. Core
+// does the actual filtering; the shape mirrors it 1:1. Both sources
+// are folded into a single list so the per-record banner surfaces
+// name-scoped and taxon-scoped rules together — a curator viewing a
+// taxon detail doesn't care which side of the taxon↔name pair a
+// warning was attached to.
+func validationWarnings(a *hive.Archive, ctx context.Context, taxonID, nameID string) []apiValidationWarning {
 	ws := a.NameWarnings(ctx, nameID)
+	if taxonID != "" {
+		ws = append(ws, a.TaxonWarnings(ctx, taxonID)...)
+	}
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]apiValidationWarning, len(ws))
+	for i, w := range ws {
+		out[i] = apiValidationWarning{
+			RuleID:    w.RuleID,
+			RuleName:  w.RuleName,
+			FieldName: w.FieldName,
+			Severity:  w.Severity,
+			Message:   w.Message,
+		}
+	}
+	return out
+}
+
+// metadataWarnings adapts hive.MetadataWarnings for the metadata GET
+// response. Kept as a distinct helper because metadata is
+// singleton-scoped (int id, not a taxon+name pair).
+func metadataWarnings(a *hive.Archive, ctx context.Context, id int) []apiValidationWarning {
+	ws := a.MetadataWarnings(ctx, id)
 	if len(ws) == 0 {
 		return nil
 	}

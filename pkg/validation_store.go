@@ -4,14 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/gdower/gsvalidator/domain"
 	"github.com/google/uuid"
 )
 
-// syncNameIssues runs the validator against the given name row and
-// reconciles hive__validation_issue with the freshly-computed set.
+// syncIssues runs the validator against a single record of the named
+// table and reconciles hive__validation_issue with the freshly-computed
+// set.
 //
 // Semantics: rules that still fire are upserted in place (INSERT ...
 // ON CONFLICT DO UPDATE on the (table_name, record_id, rule_id,
@@ -24,13 +26,13 @@ import (
 // Runs in its own short transaction so a sync failure never rolls
 // back the write that triggered it — the read path shows the last
 // successful sync's issues until a subsequent write re-syncs.
-func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
-	if a.readOnly || a.validator == nil || nameID == "" {
+func (a *Archive) syncIssues(ctx context.Context, table, recordID string) error {
+	if a.readOnly || a.validator == nil || table == "" || recordID == "" {
 		return nil
 	}
-	results, err := a.validator.Execute(ctx, "name", nameID)
+	results, err := a.validator.Execute(ctx, table, recordID)
 	if err != nil {
-		return fmt.Errorf("core: sync issues for name %s: %w", nameID, err)
+		return fmt.Errorf("core: sync issues for %s %s: %w", table, recordID, err)
 	}
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -88,7 +90,7 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 				message        = excluded.message,
 				actual_value   = excluded.actual_value,
 				expected_value = excluded.expected_value`,
-			uuid.NewString(), "name", nameID,
+			uuid.NewString(), table, recordID,
 			r.RuleID, r.RuleName, r.FieldName,
 			sev, enf, r.Message,
 			nullableString(r.ActualValue),
@@ -96,13 +98,13 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 			now,
 		)
 		if err != nil {
-			return fmt.Errorf("core: upsert issue for name %s rule %s: %w",
-				nameID, r.RuleID, err)
+			return fmt.Errorf("core: upsert issue for %s %s rule %s: %w",
+				table, recordID, r.RuleID, err)
 		}
 	}
 
 	// Prune rows for rules that no longer fire on this record.
-	if err := pruneStaleIssues(ctx, tx, "name", nameID, keep); err != nil {
+	if err := pruneStaleIssues(ctx, tx, table, recordID, keep); err != nil {
 		return err
 	}
 
@@ -110,6 +112,21 @@ func (a *Archive) syncNameIssues(ctx context.Context, nameID string) error {
 		return fmt.Errorf("core: commit sync tx: %w", err)
 	}
 	return nil
+}
+
+// Per-aggregate sync helpers so mutation methods can express intent
+// at the call site (Tx.CreateName → syncNameIssues) without knowing
+// the "name" table string. Metadata takes an int id because the sfga
+// metadata table's col__id is INTEGER, not the string UUID that name
+// and taxon use — the id gets stringified for storage.
+func (a *Archive) syncNameIssues(ctx context.Context, id string) error {
+	return a.syncIssues(ctx, "name", id)
+}
+func (a *Archive) syncTaxonIssues(ctx context.Context, id string) error {
+	return a.syncIssues(ctx, "taxon", id)
+}
+func (a *Archive) syncMetadataIssues(ctx context.Context, id int) error {
+	return a.syncIssues(ctx, "metadata", strconv.Itoa(id))
 }
 
 // pruneStaleIssues deletes hive__validation_issue rows for the given
@@ -151,11 +168,11 @@ func pruneStaleIssues(ctx context.Context, tx *sql.Tx, table, recordID string, k
 	return nil
 }
 
-// readNameIssues returns the persisted issue set for a name row.
+// readIssues returns the persisted issue set for a single record.
 // Empty when the row has never been synced or has no known problems —
 // callers cannot distinguish those two states from this function alone.
-func (a *Archive) readNameIssues(ctx context.Context, nameID string) ([]ValidationWarning, error) {
-	if nameID == "" {
+func (a *Archive) readIssues(ctx context.Context, table, recordID string) ([]ValidationWarning, error) {
+	if table == "" || recordID == "" {
 		return nil, nil
 	}
 	rows, err := a.db.QueryContext(ctx,
@@ -164,10 +181,10 @@ func (a *Archive) readNameIssues(ctx context.Context, nameID string) ([]Validati
 		 FROM hive__validation_issue
 		 WHERE table_name = ? AND record_id = ?
 		 ORDER BY severity, rule_id`,
-		"name", nameID,
+		table, recordID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("core: read issues for name %s: %w", nameID, err)
+		return nil, fmt.Errorf("core: read issues for %s %s: %w", table, recordID, err)
 	}
 	defer rows.Close()
 	var out []ValidationWarning
@@ -179,6 +196,20 @@ func (a *Archive) readNameIssues(ctx context.Context, nameID string) ([]Validati
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+// readNameIssues / readTaxonIssues / readMetadataIssues are thin
+// per-aggregate wrappers used by Archive.NameWarnings / TaxonWarnings /
+// MetadataWarnings. Kept as separate call sites so the intent is
+// legible where the read happens.
+func (a *Archive) readNameIssues(ctx context.Context, id string) ([]ValidationWarning, error) {
+	return a.readIssues(ctx, "name", id)
+}
+func (a *Archive) readTaxonIssues(ctx context.Context, id string) ([]ValidationWarning, error) {
+	return a.readIssues(ctx, "taxon", id)
+}
+func (a *Archive) readMetadataIssues(ctx context.Context, id int) ([]ValidationWarning, error) {
+	return a.readIssues(ctx, "metadata", strconv.Itoa(id))
 }
 
 // ReindexProgress reports the state of a long-running reindex to the
@@ -197,42 +228,90 @@ type ReindexProgress struct {
 // once per row so a CLI or SSE stream can render a live counter;
 // pass nil to skip reporting.
 //
-// Runs one row at a time in its own tx via syncNameIssues — the write
-// lock is held briefly, curators editing the archive in parallel see
-// only per-row contention. Cancellation via ctx stops between rows;
-// rows already synced stay synced.
+// Iteration order: name → taxon → metadata. Each table walks one row
+// at a time in its own tx via syncIssues — the write lock is held
+// briefly, curators editing the archive in parallel see only per-row
+// contention. Cancellation via ctx stops between rows; rows already
+// synced stay synced.
 func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexProgress)) error {
 	if a.readOnly {
 		return ErrReadOnly
 	}
-	rows, err := a.db.QueryContext(ctx, `SELECT col__id FROM name ORDER BY col__id`)
+	// Every hive-validated table is walked in a uniform loop so
+	// adding a new table (e.g. reference) is a one-line change.
+	tables := []struct {
+		name   string
+		listQ  string
+		syncFn func(context.Context, string) error
+	}{
+		{
+			name:   "name",
+			listQ:  `SELECT col__id FROM name ORDER BY col__id`,
+			syncFn: a.syncNameIssues,
+		},
+		{
+			name:   "taxon",
+			listQ:  `SELECT col__id FROM taxon ORDER BY col__id`,
+			syncFn: a.syncTaxonIssues,
+		},
+		{
+			name:  "metadata",
+			listQ: `SELECT col__id FROM metadata ORDER BY col__id`,
+			// Metadata ids are ints in the source schema; wrap so
+			// the loop stays string-typed like the others.
+			syncFn: func(ctx context.Context, id string) error {
+				n, err := strconv.Atoi(id)
+				if err != nil {
+					return fmt.Errorf("core: metadata id %q not numeric: %w", id, err)
+				}
+				return a.syncMetadataIssues(ctx, n)
+			},
+		},
+	}
+	for _, t := range tables {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := a.reindexTable(ctx, t.name, t.listQ, t.syncFn, progress); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Archive) reindexTable(
+	ctx context.Context,
+	table, listQuery string,
+	sync func(context.Context, string) error,
+	progress func(ReindexProgress),
+) error {
+	rows, err := a.db.QueryContext(ctx, listQuery)
 	if err != nil {
-		return fmt.Errorf("core: reindex list names: %w", err)
+		return fmt.Errorf("core: reindex list %s: %w", table, err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return fmt.Errorf("core: reindex scan name id: %w", err)
+			return fmt.Errorf("core: reindex scan %s id: %w", table, err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
-
 	total := len(ids)
 	for i, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := a.syncNameIssues(ctx, id); err != nil {
-			return fmt.Errorf("core: reindex name %s: %w", id, err)
+		if err := sync(ctx, id); err != nil {
+			return fmt.Errorf("core: reindex %s %s: %w", table, id, err)
 		}
 		if progress != nil {
 			progress(ReindexProgress{
-				Table:   "name",
+				Table:   table,
 				Done:    i + 1,
 				Total:   total,
 				Current: id,

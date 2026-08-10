@@ -185,13 +185,17 @@ func (a *Archive) ListIssues(ctx context.Context, f IssueFilter, limit, offset i
 		return nil, 0, err
 	}
 
-	// Resolve record labels + navigation hints per row. Currently only
-	// name-scoped rules exist; the switch grows as taxon / reference
-	// rules join.
+	// Resolve record labels + navigation hints per row. One resolver
+	// per table; each writes RecordLabel and (when applicable)
+	// LinkTaxonID so the Issues list renders in a single round-trip.
 	for i := range out {
 		switch out[i].TableName {
 		case "name":
 			resolveNameIssue(ctx, a.db, &out[i])
+		case "taxon":
+			resolveTaxonIssue(ctx, a.db, &out[i])
+		case "metadata":
+			resolveMetadataIssue(ctx, a.db, &out[i])
 		}
 	}
 
@@ -232,5 +236,55 @@ func resolveNameIssue(ctx context.Context, db *sql.DB, i *Issue) {
 		i.RecordID,
 	).Scan(&taxonID, &count); err == nil && count == 1 {
 		i.LinkTaxonID = taxonID
+	}
+}
+
+// resolveTaxonIssue fills RecordLabel with the taxon's canonical name
+// (fetched from its associated name row) and LinkTaxonID with the
+// taxon id itself so a click on the row opens the taxon detail pane.
+func resolveTaxonIssue(ctx context.Context, db *sql.DB, i *Issue) {
+	// Set the navigation target unconditionally — a taxon-scoped
+	// issue always knows how to route back to its own detail pane.
+	i.LinkTaxonID = i.RecordID
+	var (
+		canonicalFull  sql.NullString
+		scientificName sql.NullString
+	)
+	err := db.QueryRowContext(ctx,
+		`SELECT COALESCE(n.gn__canonical_full, ''),
+		        COALESCE(n.col__scientific_name, '')
+		 FROM taxon t
+		 LEFT JOIN name n ON n.col__id = t.col__name_id
+		 WHERE t.col__id = ?`,
+		i.RecordID,
+	).Scan(&canonicalFull, &scientificName)
+	if err != nil {
+		return
+	}
+	switch {
+	case canonicalFull.String != "":
+		i.RecordLabel = canonicalFull.String
+	case scientificName.String != "":
+		i.RecordLabel = scientificName.String
+	}
+}
+
+// resolveMetadataIssue fills RecordLabel with the archive's metadata
+// title. LinkTaxonID stays empty — clicking a metadata-scoped issue
+// should route to the Metadata screen instead of a taxon detail
+// pane; the frontend handles that dispatch.
+func resolveMetadataIssue(ctx context.Context, db *sql.DB, i *Issue) {
+	var title sql.NullString
+	err := db.QueryRowContext(ctx,
+		`SELECT COALESCE(col__title, '') FROM metadata WHERE col__id = ?`,
+		i.RecordID,
+	).Scan(&title)
+	if err != nil {
+		return
+	}
+	if title.String != "" {
+		i.RecordLabel = "Archive metadata: " + title.String
+	} else {
+		i.RecordLabel = "Archive metadata"
 	}
 }

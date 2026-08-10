@@ -140,20 +140,33 @@ type ValidationWarning struct {
 	Message   string
 }
 
-// NameWarnings returns the persisted non-blocking issue set for a
-// name row. Backed by hive__validation_issue; write paths keep the
-// cache fresh via post-commit syncNameIssues. Read path filters to
-// warn/info severities — hard errors would surface via a different
-// channel (RFC 7807 problem) and aren't attached to a successful
-// GET response.
+// NameWarnings / TaxonWarnings / MetadataWarnings return the persisted
+// non-blocking issue set for a single record of the corresponding
+// table. Backed by hive__validation_issue; write paths keep the cache
+// fresh via post-commit syncXIssues. Read path filters to warn/info
+// severities — hard errors would surface via a different channel (RFC
+// 7807 problem) and aren't attached to a successful GET response;
+// debug is diagnostic-only and hidden unless the curator explicitly
+// opts in from the Issues screen.
 //
 // Empty result set may mean "clean" or "not yet synced" (legacy row).
-// The store makes no distinction; a future reindex will backfill.
+// The store makes no distinction; a hive validate reindex backfills.
 func (a *Archive) NameWarnings(ctx context.Context, nameID string) []ValidationWarning {
-	if nameID == "" {
-		return nil
-	}
-	rows, err := a.readNameIssues(ctx, nameID)
+	return filterWarnings(a.readNameIssues(ctx, nameID))
+}
+
+func (a *Archive) TaxonWarnings(ctx context.Context, taxonID string) []ValidationWarning {
+	return filterWarnings(a.readTaxonIssues(ctx, taxonID))
+}
+
+func (a *Archive) MetadataWarnings(ctx context.Context, metadataID int) []ValidationWarning {
+	return filterWarnings(a.readMetadataIssues(ctx, metadataID))
+}
+
+// filterWarnings keeps warn + info severities and drops the rest.
+// Errors are not "warnings"; debug is diagnostic noise not meant for
+// per-record banners.
+func filterWarnings(rows []ValidationWarning, err error) []ValidationWarning {
 	if err != nil {
 		return nil
 	}
