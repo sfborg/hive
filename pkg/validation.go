@@ -91,8 +91,10 @@ func (l *embeddedRuleLoader) LoadRulesForTable(ctx context.Context, table string
 // hive's embedded rule set, the sfga schema mapper, and every
 // validator hive currently uses (built-in plus the sfga-custom
 // set). One Archive gets one use case; per-record checks route
-// through it.
-func newHiveValidator(db *sql.DB) *usecase.ValidateRecordUseCase {
+// through it. Also returns the rule loader so the caller can attach
+// it to the Archive for time-based scheduling (which reads rule
+// metadata directly rather than through the use case).
+func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *embeddedRuleLoader) {
 	registry := validator.NewRegistry()
 	// Built-in validators.
 	registry.Register(&validator.PresenceValidator{})
@@ -112,7 +114,7 @@ func newHiveValidator(db *sql.DB) *usecase.ValidateRecordUseCase {
 
 	loader := newEmbeddedRuleLoader(hiveRulesJSON)
 	mapper := gateway.NewSFGAMapper()
-	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
+	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry), loader
 }
 
 // ValidateName runs every rule that applies to the name table

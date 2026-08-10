@@ -110,6 +110,15 @@ func Run(archivePath string, opts Options) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Time-based rule refresh: an hourly ticker keeps stale-metadata
+	// (and future time-based rules) firing even during long-running
+	// server sessions that don't restart. RefreshTimeBasedIssues is
+	// cheap when nothing is due — one SELECT per rule against a small
+	// state table. No-op on read-only archives.
+	if !opts.ReadOnly {
+		go refreshTicker(ctx, a)
+	}
+
 	serverErr := make(chan error, 1)
 	go func() {
 		mode := "read-write"
@@ -132,6 +141,24 @@ func Run(archivePath string, opts Options) error {
 		return srv.Shutdown(shutdownCtx)
 	case err := <-serverErr:
 		return err
+	}
+}
+
+// refreshTicker re-evaluates time-based rules once an hour for the
+// server's lifetime. Covers long-running processes where openReadWrite's
+// one-shot call is not enough to catch rules that come due mid-session.
+// Exits when ctx is done (SIGINT/SIGTERM). No-op if the archive is
+// read-only (RefreshTimeBasedIssues checks that internally too).
+func refreshTicker(ctx context.Context, a *hive.Archive) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = a.RefreshTimeBasedIssues(context.Background())
+		}
 	}
 }
 

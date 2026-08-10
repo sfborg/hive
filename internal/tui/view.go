@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -210,8 +211,29 @@ func newModel(a *hive.Archive, archivePath string, editable bool, actor string) 
 // and makes alt+m instant. The detail pane waits until a taxon is
 // highlighted before fetching anything.
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.tree.Init(), m.metadata.Load(), m.references.Load(), m.issues.Load())
+	return tea.Batch(
+		m.tree.Init(), m.metadata.Load(), m.references.Load(), m.issues.Load(),
+		m.timeBasedRefreshTick(),
+	)
 }
+
+// timeBasedRefreshTick schedules an hourly re-evaluation of time-based
+// rules for the TUI's lifetime. Covers long-running sessions where
+// openReadWrite's one-shot call is not enough — a curator who leaves
+// the app open for weeks still gets stale-metadata reminders when the
+// cadence elapses.
+func (m *model) timeBasedRefreshTick() tea.Cmd {
+	return tea.Tick(time.Hour, func(time.Time) tea.Msg {
+		return refreshTimeBasedMsg{}
+	})
+}
+
+// refreshTimeBasedMsg is delivered by the hourly ticker. Handled by
+// dispatching to RefreshTimeBasedIssues (no-op when nothing is due)
+// and rescheduling the next tick. The refresh runs off the tea loop
+// so a slow evaluation doesn't stall the UI.
+type refreshTimeBasedMsg struct{}
+type refreshTimeBasedDoneMsg struct{}
 
 // Update dispatches on message type. Key events flow to the focused pane;
 // pane-agnostic events (window resize, quit) are handled here.
@@ -569,6 +591,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.issues, cmd = m.issues.Update(msg, m.keys)
 		return m, cmd
+
+	case refreshTimeBasedMsg:
+		// Kick off the refresh in a background goroutine so a slow
+		// validator doesn't block the tea loop, then reschedule.
+		a := m.a
+		return m, tea.Batch(
+			func() tea.Msg {
+				_ = a.RefreshTimeBasedIssues(context.Background())
+				return refreshTimeBasedDoneMsg{}
+			},
+			m.timeBasedRefreshTick(),
+		)
+
+	case refreshTimeBasedDoneMsg:
+		// A completed refresh may have written new issues. Reload the
+		// Issues screen's summary so its counters reflect them.
+		return m, m.issues.Load()
 
 	case issueNavigateMsg:
 		// Row Enter from the Issues screen: hop to Taxa and reveal

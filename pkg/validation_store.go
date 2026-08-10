@@ -321,6 +321,102 @@ func (a *Archive) reindexTable(
 	return nil
 }
 
+// defaultRecheckDays is the fallback cadence when a time-based rule
+// leaves RecheckDays unset. Weekly matches the "not too chatty, not
+// too silent" middle ground for the current rule set.
+const defaultRecheckDays = 7
+
+// RefreshTimeBasedIssues evaluates every enabled time-based rule
+// whose cooldown has elapsed and re-syncs its target records. Called
+// from Archive.Open (covers restart), periodic tickers in the server
+// and TUI (covers long-running sessions), and implicitly by
+// ReindexValidation (which walks everything unconditionally).
+//
+// State lives in hive__rule_state.last_run_at, keyed by rule id.
+// A rule missing from that table (never run) is treated as due.
+// Successful evaluation updates the timestamp; failure leaves the
+// previous value in place so a transient error doesn't push the
+// next check by another RecheckDays.
+//
+// Currently limited to rules whose TableName is one of the tables
+// hive has issue infrastructure for (name / taxon / metadata) — a
+// rule targeting an unknown table is silently skipped.
+func (a *Archive) RefreshTimeBasedIssues(ctx context.Context) error {
+	if a.readOnly || a.validator == nil || a.ruleLoader == nil {
+		return nil
+	}
+	rules, err := a.ruleLoader.LoadRules(ctx)
+	if err != nil {
+		return fmt.Errorf("core: refresh time-based: load rules: %w", err)
+	}
+	now := time.Now().UTC()
+	for _, rule := range rules {
+		if !rule.IsActive || rule.EffectiveTrigger() != domain.TriggerTimeBased {
+			continue
+		}
+		cadence := rule.RecheckDays
+		if cadence <= 0 {
+			cadence = defaultRecheckDays
+		}
+		var lastRunStr sql.NullString
+		if err := a.db.QueryRowContext(ctx,
+			`SELECT last_run_at FROM hive__rule_state WHERE rule_id = ?`,
+			rule.ID,
+		).Scan(&lastRunStr); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("core: refresh time-based: read state %s: %w", rule.ID, err)
+		}
+		if lastRunStr.Valid {
+			last, parseErr := time.Parse(time.RFC3339Nano, lastRunStr.String)
+			if parseErr == nil && now.Sub(last) < time.Duration(cadence)*24*time.Hour {
+				continue // still within cooldown
+			}
+		}
+		if err := a.evaluateTimeBasedRule(ctx, rule); err != nil {
+			// Log-worthy but non-fatal: one bad rule shouldn't stop
+			// the sweep. Skip updating last_run_at so the next call
+			// retries.
+			continue
+		}
+		if _, err := a.db.ExecContext(ctx,
+			`INSERT INTO hive__rule_state (rule_id, last_run_at) VALUES (?, ?)
+			 ON CONFLICT (rule_id) DO UPDATE SET last_run_at = excluded.last_run_at`,
+			rule.ID, now.Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("core: refresh time-based: update state %s: %w", rule.ID, err)
+		}
+	}
+	return nil
+}
+
+// evaluateTimeBasedRule syncs issues for every record the rule's
+// scope selects. For per-record tables (name, taxon) that's every
+// row in the table; for metadata (singleton) it's the one row. The
+// downstream syncIssues call handles per-row upsert/prune via the
+// usual gsvalidator pass.
+func (a *Archive) evaluateTimeBasedRule(ctx context.Context, rule *domain.Rule) error {
+	switch rule.TableName {
+	case "name":
+		return a.reindexTable(ctx, "name",
+			`SELECT col__id FROM name ORDER BY col__id`,
+			a.syncNameIssues, nil)
+	case "taxon":
+		return a.reindexTable(ctx, "taxon",
+			`SELECT col__id FROM taxon ORDER BY col__id`,
+			a.syncTaxonIssues, nil)
+	case "metadata":
+		return a.reindexTable(ctx, "metadata",
+			`SELECT col__id FROM metadata ORDER BY col__id`,
+			func(ctx context.Context, id string) error {
+				n, err := strconv.Atoi(id)
+				if err != nil {
+					return fmt.Errorf("core: metadata id %q not numeric: %w", id, err)
+				}
+				return a.syncMetadataIssues(ctx, n)
+			}, nil)
+	}
+	return nil
+}
+
 // nullableString turns any value from a validator result into a TEXT
 // column value, using NULL when the value is nil or empty. Numeric
 // values coerce via fmt so ranged / length rules store their actual

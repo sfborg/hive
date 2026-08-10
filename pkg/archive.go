@@ -58,6 +58,12 @@ type Archive struct {
 	// ValidateTaxon. See pkg/validation.go and PLANNING.md §
 	// Validation engine.
 	validator *usecase.ValidateRecordUseCase
+
+	// ruleLoader is the same loader wired into `validator`. Kept as a
+	// direct reference so RefreshTimeBasedIssues can read Rule metadata
+	// (Trigger, RecheckDays) without going through the use case,
+	// which only exposes evaluation.
+	ruleLoader *embeddedRuleLoader
 }
 
 // OpenOption configures Open. Options are functional; pass them variadically.
@@ -101,7 +107,7 @@ func openReadOnly(path string) (*Archive, error) {
 		return nil, fmt.Errorf("core: enable foreign_keys: %w", err)
 	}
 	a := &Archive{db: db, path: path, readOnly: true}
-	a.validator = newHiveValidator(db)
+	a.validator, a.ruleLoader = newHiveValidator(db)
 	return a, nil
 }
 
@@ -144,7 +150,14 @@ func openReadWrite(path string) (*Archive, error) {
 		// enough for the col__* structural columns hive fills on write.
 		parser: gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
 	}
-	a.validator = newHiveValidator(db)
+	a.validator, a.ruleLoader = newHiveValidator(db)
+	// Evaluate any time-based rules whose cooldown has elapsed since
+	// the last recorded run. Cheap on a small rule set — an empty
+	// return in normal conditions. Long-running processes cover the
+	// "session outlasts a rule's cadence" case via periodic tickers
+	// (see internal/server for the HTTP-side loop, internal/tui for
+	// Bubble Tea's tea.Every).
+	_ = a.RefreshTimeBasedIssues(context.Background())
 	return a, nil
 }
 
