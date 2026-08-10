@@ -1851,13 +1851,13 @@ var (
 	starEmptyStyle  = lipgloss.NewStyle().Faint(true)
 
 	// Severity styles mirror the WUI palette in adaptive form so both
-	// dark and light terminals get a readable hue. Traffic-light default
-	// (red / orange / yellow / green). Glyphs match the WUI chip so a
-	// curator switching frontends sees the same badge.
+	// dark and light terminals get a readable hue. Ramp: red (error),
+	// orange (warn), green (info), blue (debug). Glyphs match the WUI
+	// chip so a curator switching frontends sees the same badge.
 	sevErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"}).Bold(true)
 	sevWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#ea580c", Dark: "#fb923c"}).Bold(true)
-	sevInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#a16207", Dark: "#facc15"}).Bold(true)
-	sevDebugStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}).Bold(true)
+	sevInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#16a34a", Dark: "#4ade80"}).Bold(true)
+	sevDebugStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#2563eb", Dark: "#60a5fa"}).Bold(true)
 )
 
 // severityChipStyle renders a small colored severity marker (glyph + name)

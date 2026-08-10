@@ -28,8 +28,8 @@
      html[data-severity-palette="cvd"] (see below). */
   --sev-error: #dc2626;
   --sev-warn:  #ea580c;
-  --sev-info:  #a16207;
-  --sev-debug: #16a34a;
+  --sev-info:  #16a34a;
+  --sev-debug: #2563eb;
   --sev-error-bg: color-mix(in oklab, var(--sev-error) 12%, var(--bg));
   --sev-warn-bg:  color-mix(in oklab, var(--sev-warn)  12%, var(--bg));
   --sev-info-bg:  color-mix(in oklab, var(--sev-info)  12%, var(--bg));
@@ -51,8 +51,8 @@
 
     --sev-error: #f87171;
     --sev-warn:  #fb923c;
-    --sev-info:  #facc15;
-    --sev-debug: #4ade80;
+    --sev-info:  #4ade80;
+    --sev-debug: #60a5fa;
   }
 }
 
@@ -78,8 +78,8 @@ html[data-theme="dark"] {
 
   --sev-error: #f87171;
   --sev-warn:  #fb923c;
-  --sev-info:  #facc15;
-  --sev-debug: #4ade80;
+  --sev-info:  #4ade80;
+  --sev-debug: #60a5fa;
 }
 
 /* Colorblind-safe severity palette. Swaps traffic-light hues for a
