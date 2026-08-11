@@ -33,7 +33,8 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	if err != nil {
 		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
 	}
-	resolver := joins.NewRelationResolver(pkg.Relations)
+	mapper := sfgarules.NewSFGAMapper()
+	resolver := joins.NewRelationResolver(pkg.Relations, mapper)
 
 	registry := validator.NewRegistry()
 	// Built-in generic validators from gsvalidator.
@@ -55,7 +56,6 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(&sfgarules.TypeDesignationValidator{})
 	registry.Register(&sfgarules.ParseQualityValidator{})
 
-	mapper := sfgarules.NewSFGAMapper()
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)
 	return uc, loader, nil
