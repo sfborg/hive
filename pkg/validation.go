@@ -57,6 +57,8 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// Walk parent chain, find matching ancestor, compare a field on
 	// self against a field on that ancestor.
 	registry.Register(validator.NewAncestorFieldCheckValidator(mapper))
+	// FK column resolves via a declared relation (skips on empty).
+	registry.Register(validator.NewForeignKeyExistsValidator(resolver))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

@@ -71,6 +71,23 @@
       "priority": 5
     },
     {
+      "rule_id": "hive_name_reference_id_invalid",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "Name references a nonexistent reference row",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "error",
+      "parameters": {
+        "field": "col__reference_id",
+        "relation": "name:reference"
+      },
+      "error_message": "col__reference_id points at a reference row that does not exist. Fix the reference id or clear the field.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 8
+    },
+    {
       "rule_id": "hive_published_before_genus",
       "table_name": "taxon",
       "field_name": "col__published_in_year",
