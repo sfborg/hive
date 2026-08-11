@@ -561,6 +561,8 @@ func (t *Tx) UpdateTaxon(taxon coldp.Taxon) error {
 		return fmt.Errorf("core: update taxon: %w: ID required", ErrValidation)
 	}
 
+	preSnapshot, _ := t.snapshotTaxon(taxon.ID)
+
 	// Optimistic concurrency check.
 	if taxon.Modified != "" {
 		var currentModified string
@@ -624,7 +626,7 @@ func (t *Tx) UpdateTaxon(taxon coldp.Taxon) error {
 	if rows == 0 {
 		return fmt.Errorf("core: update taxon %s: %w", taxon.ID, ErrNotFound)
 	}
-	t.markTaxonDirty(taxon.ID)
+	t.markTaxonDirtyWithPre(taxon.ID, preSnapshot)
 	return nil
 }
 
@@ -656,6 +658,8 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 			id, ErrValidation,
 		)
 	}
+
+	preSnapshot, _ := t.snapshotTaxon(id)
 
 	// Cycle detection: newParentID must not be id or a descendant of id.
 	if newParentID != "" {
@@ -690,7 +694,7 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 	if rows == 0 {
 		return fmt.Errorf("core: move taxon %s: %w", id, ErrNotFound)
 	}
-	t.markTaxonDirty(id)
+	t.markTaxonDirtyWithPre(id, preSnapshot)
 	return nil
 }
 
@@ -772,6 +776,8 @@ func (t *Tx) DeleteTaxon(id string) error {
 		return fmt.Errorf("core: delete taxon: %w: id required", ErrValidation)
 	}
 
+	preSnapshot, _ := t.snapshotTaxon(id)
+
 	// Refuse if children exist.
 	var childCount int
 	if err := t.tx.QueryRowContext(t.ctx,
@@ -835,5 +841,6 @@ func (t *Tx) DeleteTaxon(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("core: delete taxon %s: %w", id, ErrNotFound)
 	}
+	t.markTaxonDeleted(id, preSnapshot)
 	return nil
 }

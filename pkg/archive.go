@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/gdower/gsvalidator/adapter/repository"
@@ -297,14 +298,14 @@ func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	if err := sqlTx.Commit(); err != nil {
 		return fmt.Errorf("core: commit: %w", err)
 	}
-	for id := range tx.dirtyNames {
-		_ = a.syncNameIssues(ctx, id)
+	for id, entry := range tx.dirtyNames {
+		_ = a.syncNameIssuesWithSnapshot(ctx, id, entry)
 	}
-	for id := range tx.dirtyTaxa {
-		_ = a.syncTaxonIssues(ctx, id)
+	for id, entry := range tx.dirtyTaxa {
+		_ = a.syncTaxonIssuesWithSnapshot(ctx, id, entry)
 	}
-	for id := range tx.dirtyMetadata {
-		_ = a.syncMetadataIssues(ctx, id)
+	for id, entry := range tx.dirtyMetadata {
+		_ = a.syncMetadataIssuesWithSnapshot(ctx, id, entry)
 	}
 	return nil
 }
@@ -320,46 +321,193 @@ type Tx struct {
 	actor   string
 
 	// dirtyNames / dirtyTaxa / dirtyMetadata collect the ids of rows
-	// created or updated during this transaction, one map per
-	// hive-validated table. After WithTx commits, each entry drives a
-	// post-commit call to the corresponding syncXIssues so the
-	// __gsvalidator_results cache stays fresh. Sync is best-effort;
-	// see WithTx for the failure semantics.
-	dirtyNames    map[string]bool
-	dirtyTaxa     map[string]bool
-	dirtyMetadata map[int]bool
+	// created, updated, or deleted during this transaction plus a
+	// pre-mutation snapshot when one was captured. After WithTx
+	// commits, each entry drives a post-commit sync that reconciles
+	// the record's own __gsvalidator_results AND propagates re-sync
+	// to both new-side neighbors (derived from the current record)
+	// and old-side neighbors (derived from the snapshot, when set).
+	// Sync is best-effort; see WithTx for the failure semantics.
+	dirtyNames    map[string]dirtyEntry
+	dirtyTaxa     map[string]dirtyEntry
+	dirtyMetadata map[int]dirtyEntry
+}
+
+// dirtyEntry carries the pre-mutation snapshot of a record touched
+// by a mutation, plus a flag indicating whether the record was
+// deleted (in which case syncIssuesLocal on the record itself would
+// fail to load — the post-commit path skips the local sync and only
+// propagates to old-side neighbors + prunes the deleted record's
+// own issue rows).
+//
+// A nil preRecord means "no snapshot captured" — either a CREATE
+// (no pre-state exists) or a mutation path that hasn't been
+// updated to capture one yet. Post-commit falls back to
+// current-value-only neighborhood propagation.
+type dirtyEntry struct {
+	preRecord map[string]interface{}
+	deleted   bool
 }
 
 // markNameDirty records that a name row was touched in this transaction
 // so WithTx can refresh its validation-issue cache after commit. Called
-// from CreateName and UpdateName. markTaxonDirty / markMetadataDirty
-// serve the same role for their tables; each aggregate's mutation
-// methods call the matching helper.
+// from CreateName. Update paths call markNameDirtyWithPre so old-side
+// aggregate neighbors get re-synced too.
 func (t *Tx) markNameDirty(id string) {
+	t.markNameDirtyWithPre(id, nil)
+}
+
+// markNameDirtyWithPre records a mutation with an optional
+// pre-mutation snapshot. Later dirty marks on the same id preserve
+// whichever snapshot arrives first (typically captured before the
+// mutation runs).
+func (t *Tx) markNameDirtyWithPre(id string, pre map[string]interface{}) {
 	if id == "" {
 		return
 	}
 	if t.dirtyNames == nil {
-		t.dirtyNames = make(map[string]bool)
+		t.dirtyNames = make(map[string]dirtyEntry)
 	}
-	t.dirtyNames[id] = true
+	existing, seen := t.dirtyNames[id]
+	if seen && existing.preRecord != nil {
+		pre = existing.preRecord
+	}
+	t.dirtyNames[id] = dirtyEntry{preRecord: pre, deleted: existing.deleted}
+}
+
+// markNameDeleted records a name deletion. Post-commit skips the
+// local sync (record no longer exists) but still propagates to
+// the pre-neighborhood and prunes the record's own issue rows.
+func (t *Tx) markNameDeleted(id string, pre map[string]interface{}) {
+	if id == "" {
+		return
+	}
+	if t.dirtyNames == nil {
+		t.dirtyNames = make(map[string]dirtyEntry)
+	}
+	t.dirtyNames[id] = dirtyEntry{preRecord: pre, deleted: true}
 }
 
 func (t *Tx) markTaxonDirty(id string) {
+	t.markTaxonDirtyWithPre(id, nil)
+}
+
+func (t *Tx) markTaxonDirtyWithPre(id string, pre map[string]interface{}) {
 	if id == "" {
 		return
 	}
 	if t.dirtyTaxa == nil {
-		t.dirtyTaxa = make(map[string]bool)
+		t.dirtyTaxa = make(map[string]dirtyEntry)
 	}
-	t.dirtyTaxa[id] = true
+	existing, seen := t.dirtyTaxa[id]
+	if seen && existing.preRecord != nil {
+		pre = existing.preRecord
+	}
+	t.dirtyTaxa[id] = dirtyEntry{preRecord: pre, deleted: existing.deleted}
+}
+
+func (t *Tx) markTaxonDeleted(id string, pre map[string]interface{}) {
+	if id == "" {
+		return
+	}
+	if t.dirtyTaxa == nil {
+		t.dirtyTaxa = make(map[string]dirtyEntry)
+	}
+	t.dirtyTaxa[id] = dirtyEntry{preRecord: pre, deleted: true}
 }
 
 func (t *Tx) markMetadataDirty(id int) {
+	t.markMetadataDirtyWithPre(id, nil)
+}
+
+func (t *Tx) markMetadataDirtyWithPre(id int, pre map[string]interface{}) {
 	if t.dirtyMetadata == nil {
-		t.dirtyMetadata = make(map[int]bool)
+		t.dirtyMetadata = make(map[int]dirtyEntry)
 	}
-	t.dirtyMetadata[id] = true
+	existing, seen := t.dirtyMetadata[id]
+	if seen && existing.preRecord != nil {
+		pre = existing.preRecord
+	}
+	t.dirtyMetadata[id] = dirtyEntry{preRecord: pre, deleted: existing.deleted}
+}
+
+// snapshotRow reads every column of one row into a map suitable for
+// gsvalidator's NeighborhoodsFromRecord. Uses the tx (not the raw
+// db) so the snapshot reflects any prior write in the same
+// transaction. Returns nil + no error when the row doesn't exist —
+// the caller is a mutation path that will surface the "missing
+// record" case through its own error path, and the snapshot is
+// just best-effort for propagation.
+func (t *Tx) snapshotRow(table, pkColumn, id string) (map[string]interface{}, error) {
+	if err := safeSnapshotIdent(table); err != nil {
+		return nil, err
+	}
+	if err := safeSnapshotIdent(pkColumn); err != nil {
+		return nil, err
+	}
+	q := `SELECT * FROM "` + table + `" WHERE "` + pkColumn + `" = ?`
+	rows, err := t.tx.QueryContext(t.ctx, q, id)
+	if err != nil {
+		return nil, fmt.Errorf("core: snapshot %s %s: %w", table, id, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, nil
+	}
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	values := make([]interface{}, len(cols))
+	ptrs := make([]interface{}, len(cols))
+	for i := range values {
+		ptrs[i] = &values[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return nil, err
+	}
+	out := make(map[string]interface{}, len(cols))
+	for i, name := range cols {
+		v := values[i]
+		if b, ok := v.([]byte); ok {
+			out[name] = string(b)
+		} else {
+			out[name] = v
+		}
+	}
+	return out, nil
+}
+
+// snapshotName / snapshotTaxon / snapshotMetadata wrap snapshotRow
+// for the three hive-validated tables. Called by mutation methods
+// before executing their write so the pre-mutation record is
+// captured for post-commit old-side neighbor propagation.
+func (t *Tx) snapshotName(id string) (map[string]interface{}, error) {
+	return t.snapshotRow("name", "col__id", id)
+}
+func (t *Tx) snapshotTaxon(id string) (map[string]interface{}, error) {
+	return t.snapshotRow("taxon", "col__id", id)
+}
+func (t *Tx) snapshotMetadata(id int) (map[string]interface{}, error) {
+	return t.snapshotRow("metadata", "col__id", strconv.Itoa(id))
+}
+
+// safeSnapshotIdent restricts identifier characters mirror of the
+// safeIdent helpers in gsvalidator (letters, digits, underscore) so
+// snapshotRow's string-interpolated SQL stays injection-safe.
+// Duplicated here because the mutation path is inside hive, not
+// gsvalidator.
+func safeSnapshotIdent(s string) error {
+	if s == "" {
+		return fmt.Errorf("core: snapshot identifier empty")
+	}
+	for _, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return fmt.Errorf("core: snapshot identifier %q unsafe", s)
+	}
+	return nil
 }
 
 // Actor returns the actor string carried by this transaction, taken from the

@@ -512,6 +512,13 @@ func (t *Tx) UpdateName(n coldp.Name) error {
 		return fmt.Errorf("core: update name: %w: ID required", ErrValidation)
 	}
 
+	// Snapshot pre-mutation state so post-commit propagation can
+	// find old-side aggregate neighbors (records that used to match
+	// this name's fields and now don't). Best-effort — a snapshot
+	// failure logs no error and falls back to current-value-only
+	// propagation.
+	preSnapshot, _ := t.snapshotName(n.ID)
+
 	if n.Modified != "" {
 		var current string
 		err := t.tx.QueryRowContext(t.ctx,
@@ -630,7 +637,7 @@ func (t *Tx) UpdateName(n coldp.Name) error {
 	if rows == 0 {
 		return fmt.Errorf("core: update name %s: %w", n.ID, ErrNotFound)
 	}
-	t.markNameDirty(n.ID)
+	t.markNameDirtyWithPre(n.ID, preSnapshot)
 	return nil
 }
 
@@ -683,6 +690,11 @@ func (t *Tx) DeleteName(id string) error {
 		return fmt.Errorf("core: delete name: %w: id required", ErrValidation)
 	}
 
+	// Snapshot pre-delete so post-commit can find aggregate
+	// neighbors that used to match this name and now don't (and
+	// prune the deleted name's own issue rows).
+	preSnapshot, _ := t.snapshotName(id)
+
 	// Refuse if any taxon or synonym still points at this name.
 	var refCount int
 	if err := t.tx.QueryRowContext(t.ctx,
@@ -731,5 +743,6 @@ func (t *Tx) DeleteName(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("core: delete name %s: %w", id, ErrNotFound)
 	}
+	t.markNameDeleted(id, preSnapshot)
 	return nil
 }

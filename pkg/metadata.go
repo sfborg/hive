@@ -151,6 +151,9 @@ func (t *Tx) UpdateMetadata(m Metadata) error {
 	if err := touchMetadata(t.ctx, t.tx, targetID); err != nil {
 		return err
 	}
+	// Metadata is a singleton with a small field set; no active
+	// aggregate rules currently target it, so we don't snapshot —
+	// current-value propagation is sufficient.
 	t.markMetadataDirty(targetID)
 	return nil
 }

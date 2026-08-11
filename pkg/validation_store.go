@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gdower/gsvalidator/domain"
+	"github.com/gdower/gsvalidator/usecase/validator"
 	"github.com/google/uuid"
 )
 
@@ -16,31 +17,88 @@ import (
 // a NeighborhoodProvider, it finds the records whose results may
 // have changed and re-syncs each of them (locally, no further
 // propagation). Only "new-side" neighbors are discoverable — a
-// record that USED to match but no longer does won't be re-synced
-// until the next full reindex. Full pre/post coverage needs a
-// pre-mutation snapshot hook that doesn't exist yet.
+// record that USED to match but no longer does needs a pre-mutation
+// snapshot; call syncIssuesWithSnapshot for that path.
 //
-// Call sites: mutation methods (Tx.CreateName, Tx.UpdateName, …).
-// Bulk reindex uses syncIssuesLocal directly to avoid the redundant
-// propagation work.
+// Call sites: any mutation that doesn't need old-side coverage
+// (currently the CREATE paths that have no pre-state). Bulk reindex
+// uses syncIssuesLocal directly to avoid the redundant propagation
+// work.
 func (a *Archive) syncIssues(ctx context.Context, table, recordID string) error {
-	if err := a.syncIssuesLocal(ctx, table, recordID); err != nil {
-		return err
+	return a.syncIssuesWithSnapshot(ctx, table, recordID, dirtyEntry{})
+}
+
+// syncIssuesWithSnapshot runs syncIssuesLocal on the record (unless
+// entry.deleted, in which case it just prunes the record's own
+// __gsvalidator_results rows), then propagates to BOTH new-side
+// neighbors (derived from the current record) and old-side
+// neighbors (derived from entry.preRecord). Deduplicates so any
+// given neighbor is synced at most once per call.
+func (a *Archive) syncIssuesWithSnapshot(ctx context.Context, table, recordID string, entry dirtyEntry) error {
+	if entry.deleted {
+		if err := a.deleteRecordIssues(ctx, table, recordID); err != nil {
+			return err
+		}
+	} else {
+		if err := a.syncIssuesLocal(ctx, table, recordID); err != nil {
+			return err
+		}
 	}
 	if a.validator == nil {
 		return nil
 	}
-	neighbors, err := a.validator.Neighborhoods(ctx, table, recordID)
-	if err != nil {
-		return fmt.Errorf("core: neighborhood scan for %s %s: %w", table, recordID, err)
+
+	touched := map[[2]string]bool{{table, recordID}: true}
+	syncNeighbor := func(n validator.NeighborRef) error {
+		key := [2]string{n.TableName, n.RecordID}
+		if touched[key] {
+			return nil
+		}
+		touched[key] = true
+		return a.syncIssuesLocal(ctx, n.TableName, n.RecordID)
 	}
-	for _, n := range neighbors {
-		if n.TableName == table && n.RecordID == recordID {
-			continue // guard, though NeighborhoodProvider should exclude self
+
+	// New-side: neighbors implied by the record's current values.
+	// Skipped when the record was deleted — nothing to load from.
+	if !entry.deleted {
+		post, err := a.validator.Neighborhoods(ctx, table, recordID)
+		if err != nil {
+			return fmt.Errorf("core: neighborhood scan for %s %s: %w", table, recordID, err)
 		}
-		if err := a.syncIssuesLocal(ctx, n.TableName, n.RecordID); err != nil {
-			return fmt.Errorf("core: propagate sync to %s %s: %w", n.TableName, n.RecordID, err)
+		for _, n := range post {
+			if err := syncNeighbor(n); err != nil {
+				return fmt.Errorf("core: propagate sync to %s %s: %w", n.TableName, n.RecordID, err)
+			}
 		}
+	}
+
+	// Old-side: neighbors implied by the record's pre-mutation values.
+	// Skipped when we have no snapshot (CREATE, or an update path that
+	// hasn't captured one yet).
+	if entry.preRecord != nil {
+		pre, err := a.validator.NeighborhoodsFromRecord(ctx, table, recordID, entry.preRecord)
+		if err != nil {
+			return fmt.Errorf("core: pre-neighborhood scan for %s %s: %w", table, recordID, err)
+		}
+		for _, n := range pre {
+			if err := syncNeighbor(n); err != nil {
+				return fmt.Errorf("core: propagate pre-sync to %s %s: %w", n.TableName, n.RecordID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// deleteRecordIssues removes every __gsvalidator_results row for a
+// record that no longer exists. Runs when the write path marks the
+// record as deleted (see Tx.markNameDeleted / markTaxonDeleted).
+func (a *Archive) deleteRecordIssues(ctx context.Context, table, recordID string) error {
+	_, err := a.db.ExecContext(ctx,
+		`DELETE FROM __gsvalidator_results WHERE table_name = ? AND record_id = ?`,
+		table, recordID,
+	)
+	if err != nil {
+		return fmt.Errorf("core: delete issues for %s %s: %w", table, recordID, err)
 	}
 	return nil
 }
@@ -162,6 +220,19 @@ func (a *Archive) syncTaxonIssues(ctx context.Context, id string) error {
 }
 func (a *Archive) syncMetadataIssues(ctx context.Context, id int) error {
 	return a.syncIssues(ctx, "metadata", strconv.Itoa(id))
+}
+
+// The -WithSnapshot variants let WithTx's post-commit loop pass the
+// captured dirtyEntry through so aggregate rules see both old-side
+// and new-side neighbors.
+func (a *Archive) syncNameIssuesWithSnapshot(ctx context.Context, id string, entry dirtyEntry) error {
+	return a.syncIssuesWithSnapshot(ctx, "name", id, entry)
+}
+func (a *Archive) syncTaxonIssuesWithSnapshot(ctx context.Context, id string, entry dirtyEntry) error {
+	return a.syncIssuesWithSnapshot(ctx, "taxon", id, entry)
+}
+func (a *Archive) syncMetadataIssuesWithSnapshot(ctx context.Context, id int, entry dirtyEntry) error {
+	return a.syncIssuesWithSnapshot(ctx, "metadata", strconv.Itoa(id), entry)
 }
 
 // pruneStaleIssues deletes __gsvalidator_results rows for the given
