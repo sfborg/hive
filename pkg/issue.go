@@ -8,7 +8,7 @@ import (
 )
 
 // Issue is a stored validation result read back from
-// hive__validation_issue. Frontends consume this directly on both the
+// __gsvalidator_results. Frontends consume this directly on both the
 // per-record detail banner (via NameWarnings) and the Issues screen
 // (via ListIssues). Includes the record's owning-taxon id when the
 // rule fired on a name row and that name is used by exactly one
@@ -70,7 +70,7 @@ type IssueFilter struct {
 func (a *Archive) IssueSummary(ctx context.Context) ([]IssueSummaryRow, error) {
 	rows, err := a.db.QueryContext(ctx,
 		`SELECT table_name, rule_id, COALESCE(rule_name, ''), severity, COUNT(*)
-		 FROM hive__validation_issue
+		 FROM __gsvalidator_results
 		 GROUP BY table_name, rule_id, rule_name, severity
 		 ORDER BY COUNT(*) DESC, table_name, rule_id, severity`,
 	)
@@ -137,7 +137,7 @@ func (a *Archive) ListIssues(ctx context.Context, f IssueFilter, limit, offset i
 	// render a "1-50 of 2892" indicator without a second call.
 	var total int
 	if err := a.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM hive__validation_issue `+whereSQL, args...,
+		`SELECT COUNT(*) FROM __gsvalidator_results `+whereSQL, args...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("core: count issues: %w", err)
 	}
@@ -147,11 +147,11 @@ func (a *Archive) ListIssues(ctx context.Context, f IssueFilter, limit, offset i
 	// bucket. Ties broken by rule_id + created_at desc so a curator
 	// scanning the list sees related issues near each other.
 	listQuery := `
-		SELECT id, table_name, record_id, rule_id, COALESCE(rule_name, ''),
+		SELECT result_id, table_name, record_id, rule_id, COALESCE(rule_name, ''),
 		       COALESCE(field_name, ''), severity, enforcement, message,
 		       COALESCE(actual_value, ''), COALESCE(expected_value, ''),
 		       created_at, COALESCE(acknowledged_by, ''), COALESCE(acknowledged_at, '')
-		FROM hive__validation_issue
+		FROM __gsvalidator_results
 		` + whereSQL + `
 		ORDER BY CASE severity
 		    WHEN 'error' THEN 0

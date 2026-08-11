@@ -241,12 +241,12 @@ export const api = {
       j("POST", `/api/name/parse`, { scientific_name, code }),
   },
 
-  // Issues (hive__validation_issue). summary returns per-rule/severity
+  // Issues (__gsvalidator_results). summary returns per-rule/severity
   // counts across the archive; list returns a paginated page of issues
   // with the flagged record's label + a link_taxon_id navigation hint
   // pre-resolved server-side so the row renders in one round-trip.
   //
-  // reindex re-runs every rule and rewrites hive__validation_issue.
+  // reindex re-runs every rule and rewrites __gsvalidator_results.
   // Backfills legacy rows, repairs the cache after rule changes, and
   // prunes issues from removed rules. Synchronous — small archives
   // return in milliseconds. See PLANNING.md § Long-running operations

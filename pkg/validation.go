@@ -144,7 +144,7 @@ type ValidationWarning struct {
 
 // NameWarnings / TaxonWarnings / MetadataWarnings return the persisted
 // non-blocking issue set for a single record of the corresponding
-// table. Backed by hive__validation_issue; write paths keep the cache
+// table. Backed by __gsvalidator_results; write paths keep the cache
 // fresh via post-commit syncXIssues. Read path filters to warn/info
 // severities — hard errors would surface via a different channel (RFC
 // 7807 problem) and aren't attached to a successful GET response;

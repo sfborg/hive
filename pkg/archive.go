@@ -134,7 +134,7 @@ func openReadWrite(path string) (*Archive, error) {
 	}
 	// Add hive-managed tables (hive__* prefix). Idempotent — subsequent
 	// Opens are a no-op. Skipped on read-only archives; the read paths
-	// tolerate a missing hive__validation_issue table on legacy files.
+	// tolerate a missing __gsvalidator_results table on legacy files.
 	if err := ensureHiveTables(context.Background(), db); err != nil {
 		db.Close()
 		return nil, err
@@ -297,7 +297,7 @@ type Tx struct {
 	// created or updated during this transaction, one map per
 	// hive-validated table. After WithTx commits, each entry drives a
 	// post-commit call to the corresponding syncXIssues so the
-	// hive__validation_issue cache stays fresh. Sync is best-effort;
+	// __gsvalidator_results cache stays fresh. Sync is best-effort;
 	// see WithTx for the failure semantics.
 	dirtyNames    map[string]bool
 	dirtyTaxa     map[string]bool

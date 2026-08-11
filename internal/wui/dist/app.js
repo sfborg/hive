@@ -5314,7 +5314,7 @@ class SfgaHelpModal extends LitElement {
 }
 
 // SfgaIssues is the Alt+I "Issues" screen — a dashboard over
-// hive__validation_issue backed by GET /api/issue/summary + /api/issue.
+// __gsvalidator_results backed by GET /api/issue/summary + /api/issue.
 //
 // Layout (two panes):
 //   left  — summary sidebar: per-rule counts within the active

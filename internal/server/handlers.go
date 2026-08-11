@@ -1156,7 +1156,7 @@ func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReindexValidation walks every hive-validated table and rewrites
-// hive__validation_issue. Backs a "recompute all issues" button on the
+// __gsvalidator_results. Backs a "recompute all issues" button on the
 // Issues screen and mirrors the `hive validate` CLI. Runs synchronously
 // — the current rule set is small enough that a full pass returns in
 // milliseconds for a typical archive. A streaming SSE variant is

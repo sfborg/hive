@@ -12,7 +12,7 @@ import (
 )
 
 // syncIssues runs the validator against a single record of the named
-// table and reconciles hive__validation_issue with the freshly-computed
+// table and reconciles __gsvalidator_results with the freshly-computed
 // set.
 //
 // Semantics: rules that still fire are upserted in place (INSERT ...
@@ -74,11 +74,11 @@ func (a *Archive) syncIssues(ctx context.Context, table, recordID string) error 
 			}
 		}
 		// Upsert on the identity tuple. New rows get a fresh UUID +
-		// created_at; existing rows keep both (excluded.id and
+		// created_at; existing rows keep both (excluded.result_id and
 		// excluded.created_at are ignored in the update clause).
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO hive__validation_issue (
-				id, table_name, record_id,
+			`INSERT INTO __gsvalidator_results (
+				result_id, table_name, record_id,
 				rule_id, rule_name, field_name,
 				severity, enforcement, message,
 				actual_value, expected_value, created_at
@@ -129,15 +129,15 @@ func (a *Archive) syncMetadataIssues(ctx context.Context, id int) error {
 	return a.syncIssues(ctx, "metadata", strconv.Itoa(id))
 }
 
-// pruneStaleIssues deletes hive__validation_issue rows for the given
+// pruneStaleIssues deletes __gsvalidator_results rows for the given
 // record whose (rule_id, field_name) key is not in keep. Called by
-// syncNameIssues after upserting every current rule so rules that
+// syncIssues after upserting every current rule so rules that
 // stopped firing (or were removed from the rule set) get cleaned up
 // without touching the ones that still fire.
 func pruneStaleIssues(ctx context.Context, tx *sql.Tx, table, recordID string, keep map[[2]string]bool) error {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, rule_id, field_name
-		 FROM hive__validation_issue
+		`SELECT result_id, rule_id, field_name
+		 FROM __gsvalidator_results
 		 WHERE table_name = ? AND record_id = ?`,
 		table, recordID,
 	)
@@ -160,7 +160,7 @@ func pruneStaleIssues(ctx context.Context, tx *sql.Tx, table, recordID string, k
 	}
 	for _, id := range stale {
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM hive__validation_issue WHERE id = ?`, id,
+			`DELETE FROM __gsvalidator_results WHERE result_id = ?`, id,
 		); err != nil {
 			return fmt.Errorf("core: delete stale issue %s: %w", id, err)
 		}
@@ -178,7 +178,7 @@ func (a *Archive) readIssues(ctx context.Context, table, recordID string) ([]Val
 	rows, err := a.db.QueryContext(ctx,
 		`SELECT rule_id, COALESCE(rule_name, ''), COALESCE(field_name, ''),
 		        severity, message
-		 FROM hive__validation_issue
+		 FROM __gsvalidator_results
 		 WHERE table_name = ? AND record_id = ?
 		 ORDER BY severity, rule_id`,
 		table, recordID,
@@ -222,7 +222,7 @@ type ReindexProgress struct {
 }
 
 // ReindexValidation walks every row in every hive-validated table and
-// rewrites its hive__validation_issue rows to match the current rule
+// rewrites its __gsvalidator_results rows to match the current rule
 // set. Backfills archives edited before persistence landed and repairs
 // caches when a rule is added, tuned, or removed. Progress fires
 // once per row so a CLI or SSE stream can render a live counter;
@@ -332,7 +332,7 @@ const defaultRecheckDays = 7
 // and TUI (covers long-running sessions), and implicitly by
 // ReindexValidation (which walks everything unconditionally).
 //
-// State lives in hive__rule_state.last_run_at, keyed by rule id.
+// State lives in __gsvalidator_rule_state.last_run_at, keyed by rule id.
 // A rule missing from that table (never run) is treated as due.
 // Successful evaluation updates the timestamp; failure leaves the
 // previous value in place so a transient error doesn't push the
@@ -360,7 +360,7 @@ func (a *Archive) RefreshTimeBasedIssues(ctx context.Context) error {
 		}
 		var lastRunStr sql.NullString
 		if err := a.db.QueryRowContext(ctx,
-			`SELECT last_run_at FROM hive__rule_state WHERE rule_id = ?`,
+			`SELECT last_run_at FROM __gsvalidator_rule_state WHERE rule_id = ?`,
 			rule.ID,
 		).Scan(&lastRunStr); err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("core: refresh time-based: read state %s: %w", rule.ID, err)
@@ -378,7 +378,7 @@ func (a *Archive) RefreshTimeBasedIssues(ctx context.Context) error {
 			continue
 		}
 		if _, err := a.db.ExecContext(ctx,
-			`INSERT INTO hive__rule_state (rule_id, last_run_at) VALUES (?, ?)
+			`INSERT INTO __gsvalidator_rule_state (rule_id, last_run_at) VALUES (?, ?)
 			 ON CONFLICT (rule_id) DO UPDATE SET last_run_at = excluded.last_run_at`,
 			rule.ID, now.Format(time.RFC3339Nano),
 		); err != nil {
