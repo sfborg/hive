@@ -39,6 +39,7 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry := validator.NewRegistry()
 	// Built-in generic validators from gsvalidator.
 	registry.Register(&validator.PresenceValidator{})
+	registry.Register(&validator.AbsenceValidator{})
 	registry.Register(validator.NewRegexValidator())
 	registry.Register(&validator.LengthValidator{})
 	registry.Register(&validator.RangeValidator{})
