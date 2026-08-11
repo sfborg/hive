@@ -55,6 +55,22 @@
   },
   "rules": [
     {
+      "rule_id": "hive_taxon_parent_cycle",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Taxon sits on a parent-chain cycle",
+      "validator_type": "no_self_cycle",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {
+        "parent_column": "col__parent_id"
+      },
+      "error_message": "This taxon's parent chain loops back to itself. Break the cycle by re-parenting one of the taxa on the loop.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
       "rule_id": "hive_probable_incertae_sedis",
       "table_name": "taxon",
       "field_name": "",

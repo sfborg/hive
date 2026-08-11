@@ -50,6 +50,8 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// range-check the count. Uses mapper's PK-per-table for
 	// exclude_self.
 	registry.Register(validator.NewCountAcrossValidator(mapper))
+	// Cycle detection over a self-referencing parent column.
+	registry.Register(validator.NewNoSelfCycleValidator(mapper))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)
