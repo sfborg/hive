@@ -7,11 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gdower/gsvalidator/adapter/gateway"
 	"github.com/gdower/gsvalidator/domain"
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gdower/gsvalidator/usecase/validator"
-	"github.com/gdower/gsvalidator/usecase/validator/custom/sfga"
+	"github.com/sfborg/hive/pkg/sfgarules"
 )
 
 //go:embed hive_rules.json
@@ -89,31 +88,38 @@ func (l *embeddedRuleLoader) LoadRulesForTable(ctx context.Context, table string
 
 // newHiveValidator builds a gsvalidator use case pre-wired with
 // hive's embedded rule set, the sfga schema mapper, and every
-// validator hive currently uses (built-in plus the sfga-custom
-// set). One Archive gets one use case; per-record checks route
-// through it. Also returns the rule loader so the caller can attach
-// it to the Archive for time-based scheduling (which reads rule
-// metadata directly rather than through the use case).
+// validator hive currently uses (built-in generics from gsvalidator
+// plus the sfga-specific set from pkg/sfgarules). One Archive gets
+// one use case; per-record checks route through it. Also returns
+// the rule loader so the caller can attach it to the Archive for
+// time-based scheduling (which reads rule metadata directly rather
+// than through the use case).
+//
+// The sfga-specific validators + SFGAMapper live in
+// pkg/sfgarules — hive's temporary landing spot for logic that
+// gsvalidator was carrying but doesn't belong upstream in a
+// truly generic validation service. See SCHEMA_COMMONS_REFACTOR.md
+// for the eventual JSON-decomposition plan.
 func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *embeddedRuleLoader) {
 	registry := validator.NewRegistry()
-	// Built-in validators.
+	// Built-in generic validators from gsvalidator.
 	registry.Register(&validator.PresenceValidator{})
 	registry.Register(validator.NewRegexValidator())
 	registry.Register(&validator.LengthValidator{})
 	registry.Register(&validator.RangeValidator{})
-	// SFGA-specific custom validators.
-	registry.Register(&sfga.ParentRankValidator{})
-	registry.Register(&sfga.HomonymValidator{})
-	registry.Register(&sfga.DuplicateValidator{})
-	registry.Register(&sfga.CoordinatedNamesValidator{})
-	registry.Register(&sfga.RelationshipValidator{})
-	registry.Register(&sfga.SourceYearValidator{})
-	registry.Register(&sfga.SourceAuthorValidator{})
-	registry.Register(&sfga.TypeDesignationValidator{})
-	registry.Register(&sfga.ParseQualityValidator{})
+	// SFGA-specific validators from hive's pkg/sfgarules.
+	registry.Register(&sfgarules.ParentRankValidator{})
+	registry.Register(&sfgarules.HomonymValidator{})
+	registry.Register(&sfgarules.DuplicateValidator{})
+	registry.Register(&sfgarules.CoordinatedNamesValidator{})
+	registry.Register(&sfgarules.RelationshipValidator{})
+	registry.Register(&sfgarules.SourceYearValidator{})
+	registry.Register(&sfgarules.SourceAuthorValidator{})
+	registry.Register(&sfgarules.TypeDesignationValidator{})
+	registry.Register(&sfgarules.ParseQualityValidator{})
 
 	loader := newEmbeddedRuleLoader(hiveRulesJSON)
-	mapper := gateway.NewSFGAMapper()
+	mapper := sfgarules.NewSFGAMapper()
 	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry), loader
 }
 
