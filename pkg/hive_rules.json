@@ -7,7 +7,7 @@
   "created_at": "2026-08-11T00:00:00Z",
   "tables": [],
   "requires": {
-    "tables": ["name", "taxon", "metadata", "reference"],
+    "tables": ["name", "taxon", "metadata", "reference", "name_relation"],
     "columns": {
       "name.col__id": "text",
       "name.col__code_id": "text",
@@ -22,6 +22,8 @@
       "taxon.col__parent_id": "text",
       "reference.col__id": "text",
       "reference.col__issued": "text",
+      "name_relation.col__name_id": "text",
+      "name_relation.col__related_name_id": "text",
       "metadata.col__id": "integer"
     },
     "relations": ["taxon:owning-name", "taxon:parent-owning-name", "name:reference"]
@@ -69,6 +71,27 @@
       "warning_message": "",
       "is_active": true,
       "priority": 5
+    },
+    {
+      "rule_id": "hive_name_on_self_relation",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Name appears on both sides of a name_relation row",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "error",
+      "parameters": {
+        "table": "name_relation",
+        "match": [
+          {"target": "col__name_id",         "self": "col__id"},
+          {"target": "col__related_name_id", "self": "col__id"}
+        ],
+        "expected": {"max": 0}
+      },
+      "error_message": "This name appears on both sides of a name_relation row (self-referenced relation). Delete the row or repoint one side to a different name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 6
     },
     {
       "rule_id": "hive_name_reference_id_invalid",
