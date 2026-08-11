@@ -52,6 +52,8 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(validator.NewCountAcrossValidator(mapper))
 	// Cycle detection over a self-referencing parent column.
 	registry.Register(validator.NewNoSelfCycleValidator(mapper))
+	// Walk parent chain and check for an ancestor matching a predicate.
+	registry.Register(validator.NewAncestorExistsValidator(mapper))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

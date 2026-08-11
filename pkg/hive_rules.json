@@ -71,6 +71,56 @@
       "priority": 5
     },
     {
+      "rule_id": "hive_species_missing_genus_ancestor",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Species taxon has no genus-group ancestor",
+      "validator_type": "ancestor_exists",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "match": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "INFRAGENUS"]
+        }
+      },
+      "error_message": "",
+      "warning_message": "Species taxon has no genus-group (GENUS / SUBGENUS / INFRAGENUS) ancestor in its parent chain. Reparent so the placement resolves under a genus.",
+      "is_active": true,
+      "priority": 12
+    },
+    {
+      "rule_id": "hive_infraspecies_missing_species_ancestor",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Infraspecific taxon has no species ancestor",
+      "validator_type": "ancestor_exists",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "in", "value": ["SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "match": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "equals",
+          "value": "SPECIES"
+        }
+      },
+      "error_message": "",
+      "warning_message": "Infraspecific taxon has no species ancestor in its parent chain. Reparent so the placement resolves under a species.",
+      "is_active": true,
+      "priority": 12
+    },
+    {
       "rule_id": "hive_probable_incertae_sedis",
       "table_name": "taxon",
       "field_name": "",
