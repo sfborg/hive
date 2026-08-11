@@ -63,6 +63,9 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// ordered lists (data injected via inline rule params, kept in
 	// sync with pkg/ui/rank_hierarchy.json by tools/mkrankorder).
 	registry.Register(validator.NewParentRankHigherValidator(mapper))
+	// Check-digit verification for common identifier formats
+	// (orcid, issn, isbn10, isbn13, luhn).
+	registry.Register(validator.NewCheckDigitValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

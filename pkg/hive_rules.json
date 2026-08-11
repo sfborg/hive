@@ -22,6 +22,9 @@
       "taxon.col__parent_id": "text",
       "reference.col__id": "text",
       "reference.col__issued": "text",
+      "reference.col__isbn": "text",
+      "reference.col__issn": "text",
+      "reference.col__doi": "text",
       "name_relation.col__name_id": "text",
       "name_relation.col__related_name_id": "text",
       "metadata.col__id": "integer"
@@ -56,6 +59,38 @@
     }
   },
   "rules": [
+    {
+      "rule_id": "hive_reference_isbn_check_digit",
+      "table_name": "reference",
+      "field_name": "col__isbn",
+      "rule_name": "Reference ISBN check digit invalid",
+      "validator_type": "check_digit",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "algorithm": "isbn10"
+      },
+      "error_message": "",
+      "warning_message": "ISBN check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "hive_reference_issn_check_digit",
+      "table_name": "reference",
+      "field_name": "col__issn",
+      "rule_name": "Reference ISSN check digit invalid",
+      "validator_type": "check_digit",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "algorithm": "issn"
+      },
+      "error_message": "",
+      "warning_message": "ISSN check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "is_active": true,
+      "priority": 30
+    },
     {
       "rule_id": "hive_taxon_parent_cycle",
       "table_name": "taxon",

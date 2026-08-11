@@ -379,6 +379,18 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 				return a.syncIssuesLocal(ctx, "metadata", id)
 			},
 		},
+		{
+			// Reference is read-only from the validation cache's
+			// perspective for now — reindex walks its rows so `hive
+			// validate` picks up check-digit issues, but write-path
+			// syncing (Tx.CreateReference / UpdateReference) is a
+			// separate follow-up.
+			name:  "reference",
+			listQ: `SELECT col__id FROM reference ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "reference", id)
+			},
+		},
 	}
 	for _, t := range tables {
 		if err := ctx.Err(); err != nil {
