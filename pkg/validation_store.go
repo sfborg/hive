@@ -11,9 +11,44 @@ import (
 	"github.com/google/uuid"
 )
 
-// syncIssues runs the validator against a single record of the named
-// table and reconciles __gsvalidator_results with the freshly-computed
-// set.
+// syncIssues runs syncIssuesLocal on the record, then propagates
+// one hop: for every aggregate-shaped rule whose validator exposes
+// a NeighborhoodProvider, it finds the records whose results may
+// have changed and re-syncs each of them (locally, no further
+// propagation). Only "new-side" neighbors are discoverable — a
+// record that USED to match but no longer does won't be re-synced
+// until the next full reindex. Full pre/post coverage needs a
+// pre-mutation snapshot hook that doesn't exist yet.
+//
+// Call sites: mutation methods (Tx.CreateName, Tx.UpdateName, …).
+// Bulk reindex uses syncIssuesLocal directly to avoid the redundant
+// propagation work.
+func (a *Archive) syncIssues(ctx context.Context, table, recordID string) error {
+	if err := a.syncIssuesLocal(ctx, table, recordID); err != nil {
+		return err
+	}
+	if a.validator == nil {
+		return nil
+	}
+	neighbors, err := a.validator.Neighborhoods(ctx, table, recordID)
+	if err != nil {
+		return fmt.Errorf("core: neighborhood scan for %s %s: %w", table, recordID, err)
+	}
+	for _, n := range neighbors {
+		if n.TableName == table && n.RecordID == recordID {
+			continue // guard, though NeighborhoodProvider should exclude self
+		}
+		if err := a.syncIssuesLocal(ctx, n.TableName, n.RecordID); err != nil {
+			return fmt.Errorf("core: propagate sync to %s %s: %w", n.TableName, n.RecordID, err)
+		}
+	}
+	return nil
+}
+
+// syncIssuesLocal runs the validator against a single record and
+// reconciles __gsvalidator_results with the freshly-computed set,
+// without propagating to related records. Intended for reindex
+// sweeps and as the inner step of syncIssues.
 //
 // Semantics: rules that still fire are upserted in place (INSERT ...
 // ON CONFLICT DO UPDATE on the (table_name, record_id, rule_id,
@@ -26,7 +61,7 @@ import (
 // Runs in its own short transaction so a sync failure never rolls
 // back the write that triggered it — the read path shows the last
 // successful sync's issues until a subsequent write re-syncs.
-func (a *Archive) syncIssues(ctx context.Context, table, recordID string) error {
+func (a *Archive) syncIssuesLocal(ctx context.Context, table, recordID string) error {
 	if a.readOnly || a.validator == nil || table == "" || recordID == "" {
 		return nil
 	}
@@ -238,33 +273,39 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 		return ErrReadOnly
 	}
 	// Every hive-validated table is walked in a uniform loop so
-	// adding a new table (e.g. reference) is a one-line change.
+	// adding a new table (e.g. reference) is a one-line change. Uses
+	// syncIssuesLocal (no per-row neighborhood propagation) because
+	// the outer loop already visits every row — propagating from each
+	// would produce O(rows^2) work with the same end state.
 	tables := []struct {
 		name   string
 		listQ  string
 		syncFn func(context.Context, string) error
 	}{
 		{
-			name:   "name",
-			listQ:  `SELECT col__id FROM name ORDER BY col__id`,
-			syncFn: a.syncNameIssues,
+			name:  "name",
+			listQ: `SELECT col__id FROM name ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "name", id)
+			},
 		},
 		{
-			name:   "taxon",
-			listQ:  `SELECT col__id FROM taxon ORDER BY col__id`,
-			syncFn: a.syncTaxonIssues,
+			name:  "taxon",
+			listQ: `SELECT col__id FROM taxon ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "taxon", id)
+			},
 		},
 		{
 			name:  "metadata",
 			listQ: `SELECT col__id FROM metadata ORDER BY col__id`,
-			// Metadata ids are ints in the source schema; wrap so
-			// the loop stays string-typed like the others.
+			// Metadata ids are ints in the source schema but reindex
+			// walks strings for uniformity; validate the coercion.
 			syncFn: func(ctx context.Context, id string) error {
-				n, err := strconv.Atoi(id)
-				if err != nil {
+				if _, err := strconv.Atoi(id); err != nil {
 					return fmt.Errorf("core: metadata id %q not numeric: %w", id, err)
 				}
-				return a.syncMetadataIssues(ctx, n)
+				return a.syncIssuesLocal(ctx, "metadata", id)
 			},
 		},
 	}
@@ -390,28 +431,32 @@ func (a *Archive) RefreshTimeBasedIssues(ctx context.Context) error {
 
 // evaluateTimeBasedRule syncs issues for every record the rule's
 // scope selects. For per-record tables (name, taxon) that's every
-// row in the table; for metadata (singleton) it's the one row. The
-// downstream syncIssues call handles per-row upsert/prune via the
-// usual gsvalidator pass.
+// row in the table; for metadata (singleton) it's the one row. Uses
+// syncIssuesLocal for the same reason ReindexValidation does — the
+// full sweep already covers every record, so per-row propagation is
+// wasted work.
 func (a *Archive) evaluateTimeBasedRule(ctx context.Context, rule *domain.Rule) error {
 	switch rule.TableName {
 	case "name":
 		return a.reindexTable(ctx, "name",
 			`SELECT col__id FROM name ORDER BY col__id`,
-			a.syncNameIssues, nil)
+			func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "name", id)
+			}, nil)
 	case "taxon":
 		return a.reindexTable(ctx, "taxon",
 			`SELECT col__id FROM taxon ORDER BY col__id`,
-			a.syncTaxonIssues, nil)
+			func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "taxon", id)
+			}, nil)
 	case "metadata":
 		return a.reindexTable(ctx, "metadata",
 			`SELECT col__id FROM metadata ORDER BY col__id`,
 			func(ctx context.Context, id string) error {
-				n, err := strconv.Atoi(id)
-				if err != nil {
+				if _, err := strconv.Atoi(id); err != nil {
 					return fmt.Errorf("core: metadata id %q not numeric: %w", id, err)
 				}
-				return a.syncMetadataIssues(ctx, n)
+				return a.syncIssuesLocal(ctx, "metadata", id)
 			}, nil)
 	}
 	return nil
