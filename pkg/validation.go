@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 
+	"github.com/gdower/gsvalidator/adapter/repository"
 	"github.com/gdower/gsvalidator/domain"
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gdower/gsvalidator/usecase/validator"
@@ -16,91 +16,17 @@ import (
 //go:embed hive_rules.json
 var hiveRulesJSON []byte
 
-// embeddedRuleLoader is a hive-local RuleLoader that reads its rule
-// set from an in-memory byte slice (hive_rules.json, embedded at
-// build time). Same semantics as gsvalidator's JSONRuleLoader but
-// without the os.ReadFile boundary.
-//
-// Longer-term the ruleset lives in hive__validation_rules inside the
-// archive (per PLANNING.md § Validation engine); this loader is the
-// bootstrap seed for archives that don't have any rules yet.
-type embeddedRuleLoader struct {
-	raw   []byte
-	rules []*domain.Rule
-	byID  map[string]*domain.Rule
-}
-
-func newEmbeddedRuleLoader(raw []byte) *embeddedRuleLoader {
-	return &embeddedRuleLoader{raw: raw, byID: map[string]*domain.Rule{}}
-}
-
-func (l *embeddedRuleLoader) load() error {
-	if len(l.rules) > 0 {
-		return nil
-	}
-	var rules []*domain.Rule
-	if err := json.Unmarshal(l.raw, &rules); err != nil {
-		var wrapper struct {
-			Rules []*domain.Rule `json:"rules"`
-		}
-		if err2 := json.Unmarshal(l.raw, &wrapper); err2 != nil {
-			return fmt.Errorf("hive rules: %w", err)
-		}
-		rules = wrapper.Rules
-	}
-	l.rules = rules
-	for _, r := range rules {
-		l.byID[r.ID] = r
-	}
-	return nil
-}
-
-func (l *embeddedRuleLoader) LoadRules(ctx context.Context) ([]*domain.Rule, error) {
-	if err := l.load(); err != nil {
-		return nil, err
-	}
-	return l.rules, nil
-}
-
-func (l *embeddedRuleLoader) LoadRuleByID(ctx context.Context, id string) (*domain.Rule, error) {
-	if err := l.load(); err != nil {
-		return nil, err
-	}
-	r, ok := l.byID[id]
-	if !ok {
-		return nil, fmt.Errorf("hive rules: rule %s not found", id)
-	}
-	return r, nil
-}
-
-func (l *embeddedRuleLoader) LoadRulesForTable(ctx context.Context, table string) ([]*domain.Rule, error) {
-	if err := l.load(); err != nil {
-		return nil, err
-	}
-	var out []*domain.Rule
-	for _, r := range l.rules {
-		if r.TableName == table {
-			out = append(out, r)
-		}
-	}
-	return out, nil
-}
-
 // newHiveValidator builds a gsvalidator use case pre-wired with
-// hive's embedded rule set, the sfga schema mapper, and every
-// validator hive currently uses (built-in generics from gsvalidator
-// plus the sfga-specific set from pkg/sfgarules). One Archive gets
-// one use case; per-record checks route through it. Also returns
-// the rule loader so the caller can attach it to the Archive for
-// time-based scheduling (which reads rule metadata directly rather
-// than through the use case).
+// hive's embedded rule bundle, the sfga schema mapper, and every
+// validator hive currently uses (built-in generics plus the
+// sfga-specific set from pkg/sfgarules). Also returns the bundle
+// loader so callers can inspect rule metadata (Trigger,
+// RecheckDays) for time-based scheduling.
 //
-// The sfga-specific validators + SFGAMapper live in
-// pkg/sfgarules — hive's temporary landing spot for logic that
-// gsvalidator was carrying but doesn't belong upstream in a
-// truly generic validation service. See SCHEMA_COMMONS_REFACTOR.md
-// for the eventual JSON-decomposition plan.
-func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *embeddedRuleLoader) {
+// The bundle (hive_rules.json embedded via //go:embed) is loaded
+// eagerly so a malformed bundle fails at Archive open rather than
+// on the first validation call.
+func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
 	registry := validator.NewRegistry()
 	// Built-in generic validators from gsvalidator.
 	registry.Register(&validator.PresenceValidator{})
@@ -118,9 +44,13 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *embeddedRule
 	registry.Register(&sfgarules.TypeDesignationValidator{})
 	registry.Register(&sfgarules.ParseQualityValidator{})
 
-	loader := newEmbeddedRuleLoader(hiveRulesJSON)
+	loader := repository.NewBytesBundleLoader(hiveRulesJSON)
+	// Eager parse so bad JSON surfaces at Archive open.
+	if _, err := loader.LoadPackage(context.Background()); err != nil {
+		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
+	}
 	mapper := sfgarules.NewSFGAMapper()
-	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry), loader
+	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry), loader, nil
 }
 
 // ValidateName runs every rule that applies to the name table

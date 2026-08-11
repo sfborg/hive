@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/gdower/gsvalidator/adapter/repository"
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gnames/gnparser"
 	"github.com/sfborg/sflib"
@@ -59,11 +60,11 @@ type Archive struct {
 	// Validation engine.
 	validator *usecase.ValidateRecordUseCase
 
-	// ruleLoader is the same loader wired into `validator`. Kept as a
-	// direct reference so RefreshTimeBasedIssues can read Rule metadata
-	// (Trigger, RecheckDays) without going through the use case,
-	// which only exposes evaluation.
-	ruleLoader *embeddedRuleLoader
+	// ruleLoader is the same bundle loader wired into `validator`.
+	// Kept as a direct reference so RefreshTimeBasedIssues can read
+	// Rule metadata (Trigger, RecheckDays) without going through the
+	// use case, which only exposes evaluation.
+	ruleLoader *repository.BundleLoader
 }
 
 // OpenOption configures Open. Options are functional; pass them variadically.
@@ -107,7 +108,12 @@ func openReadOnly(path string) (*Archive, error) {
 		return nil, fmt.Errorf("core: enable foreign_keys: %w", err)
 	}
 	a := &Archive{db: db, path: path, readOnly: true}
-	a.validator, a.ruleLoader = newHiveValidator(db)
+	var vErr error
+	a.validator, a.ruleLoader, vErr = newHiveValidator(db)
+	if vErr != nil {
+		db.Close()
+		return nil, vErr
+	}
 	return a, nil
 }
 
@@ -150,7 +156,21 @@ func openReadWrite(path string) (*Archive, error) {
 		// enough for the col__* structural columns hive fills on write.
 		parser: gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
 	}
-	a.validator, a.ruleLoader = newHiveValidator(db)
+	var vErr error
+	a.validator, a.ruleLoader, vErr = newHiveValidator(db)
+	if vErr != nil {
+		db.Close()
+		return nil, vErr
+	}
+	// Verify the bundle's Requires block is satisfied by the archive.
+	// Failure aborts open — better to refuse than silently misapply
+	// rules against an incompatible schema.
+	if pkg, err := a.ruleLoader.LoadPackage(context.Background()); err == nil {
+		if err := usecase.CheckRequires(context.Background(), db, pkg.Requires, nil); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("core: hive_sfga bundle: %w", err)
+		}
+	}
 	// Evaluate any time-based rules whose cooldown has elapsed since
 	// the last recorded run. Cheap on a small rule set — an empty
 	// return in normal conditions. Long-running processes cover the

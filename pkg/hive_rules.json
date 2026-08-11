@@ -1,9 +1,24 @@
 {
-  "name": "Hive-native validation rules",
-  "version": "v0.1.0",
-  "description": "Rules hive authors and ships in addition to the TaxonWorks and ChecklistBank derived rulesets. Loaded on Archive.Open into hive__validation_rules.",
+  "name": "hive_sfga",
+  "version": "0.1.0",
   "domain": "biodiversity",
-  "created_at": "2026-08-08",
+  "author": "sfborg/hive",
+  "description": "hive-authored validation rules against SFGA archives.",
+  "created_at": "2026-08-11T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": ["name", "taxon", "metadata"],
+    "columns": {
+      "name.col__id": "text",
+      "name.col__code_id": "text",
+      "name.col__rank_id": "text",
+      "name.gn__parse_quality": "integer",
+      "taxon.col__id": "text",
+      "taxon.col__name_id": "text",
+      "taxon.col__parent_id": "text",
+      "metadata.col__id": "integer"
+    }
+  },
   "rules": [
     {
       "rule_id": "hive_probable_incertae_sedis",
