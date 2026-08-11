@@ -96,13 +96,13 @@
       "priority": 30
     },
     {
-      "rule_id": "hive_duplicate_canonical",
+      "rule_id": "hive_duplicate_name",
       "table_name": "name",
       "field_name": "gn__canonical_simple",
-      "rule_name": "Canonical name shared with another record",
+      "rule_name": "Duplicate scientific name",
       "validator_type": "count_across",
       "enforcement": "soft",
-      "severity": "warn",
+      "severity": "info",
       "parameters": {
         "table": "name",
         "match": [
@@ -112,7 +112,7 @@
         "expected": {"max": 0}
       },
       "error_message": "",
-      "warning_message": "Another name record has the same canonical form. Confirm whether these are separate nomenclatural acts (potential homonyms) or duplicate entries that should be merged.",
+      "warning_message": "Another name record shares this scientific name (ignoring authorship). Confirm whether these are separate nomenclatural acts (potential homonyms) or duplicate entries that should be merged.",
       "is_active": true,
       "priority": 40
     },
