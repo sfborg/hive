@@ -17,22 +17,46 @@
       "taxon.col__name_id": "text",
       "taxon.col__parent_id": "text",
       "metadata.col__id": "integer"
+    },
+    "relations": ["taxon:owning-name", "taxon:parent-owning-name"]
+  },
+  "relations": {
+    "taxon:owning-name": {
+      "target_table": "name",
+      "cardinality": "one",
+      "join": [
+        {"from": "taxon.col__name_id", "to": "name.col__id"}
+      ],
+      "description": "From a taxon row, walk to its owning name."
+    },
+    "taxon:parent-owning-name": {
+      "target_table": "name",
+      "cardinality": "one",
+      "join": [
+        {"from": "taxon.col__parent_id", "to": "taxon.col__id", "alias": "parent"},
+        {"from": "parent.col__name_id", "to": "name.col__id"}
+      ],
+      "description": "From a source taxon, walk to its parent taxon then to the parent's owning name."
     }
   },
   "rules": [
     {
       "rule_id": "hive_probable_incertae_sedis",
-      "table_name": "name",
+      "table_name": "taxon",
       "field_name": "",
       "rule_name": "Probable incertae sedis (ICZN species under non-genus)",
-      "validator_type": "sfga_parent_rank",
-      "validation_type": "soft",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
       "conditions": [
-        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
-        {"field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+        {"relation": "taxon:owning-name", "field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
       ],
       "parameters": {
-        "rank_hierarchy": {"SPECIES": ["GENUS", "SUBGENUS", "INFRAGENUS"]}
+        "relation": "taxon:parent-owning-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS", "INFRAGENUS"],
+        "skip_if_empty": true
       },
       "error_message": "",
       "warning_message": "Species attached to a parent that isn't a genus-group rank. Under ICZN this is a legitimate incertae sedis placement; consider marking the record explicitly so downstream consumers render it correctly.",

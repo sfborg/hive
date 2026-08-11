@@ -166,7 +166,13 @@ func openReadWrite(path string) (*Archive, error) {
 	// Failure aborts open — better to refuse than silently misapply
 	// rules against an incompatible schema.
 	if pkg, err := a.ruleLoader.LoadPackage(context.Background()); err == nil {
-		if err := usecase.CheckRequires(context.Background(), db, pkg.Requires, nil); err != nil {
+		// availableRelations is the union of what this bundle
+		// declares (later layered bundles will contribute their own).
+		available := make(map[string]bool, len(pkg.Relations))
+		for name := range pkg.Relations {
+			available[name] = true
+		}
+		if err := usecase.CheckRequires(context.Background(), db, pkg.Requires, available); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("core: hive_sfga bundle: %w", err)
 		}

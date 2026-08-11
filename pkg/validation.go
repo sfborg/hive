@@ -9,6 +9,7 @@ import (
 	"github.com/gdower/gsvalidator/adapter/repository"
 	"github.com/gdower/gsvalidator/domain"
 	"github.com/gdower/gsvalidator/usecase"
+	"github.com/gdower/gsvalidator/usecase/joins"
 	"github.com/gdower/gsvalidator/usecase/validator"
 	"github.com/sfborg/hive/pkg/sfgarules"
 )
@@ -27,14 +28,24 @@ var hiveRulesJSON []byte
 // eagerly so a malformed bundle fails at Archive open rather than
 // on the first validation call.
 func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
+	loader := repository.NewBytesBundleLoader(hiveRulesJSON)
+	pkg, err := loader.LoadPackage(context.Background())
+	if err != nil {
+		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
+	}
+	resolver := joins.NewRelationResolver(pkg.Relations)
+
 	registry := validator.NewRegistry()
 	// Built-in generic validators from gsvalidator.
 	registry.Register(&validator.PresenceValidator{})
 	registry.Register(validator.NewRegexValidator())
 	registry.Register(&validator.LengthValidator{})
 	registry.Register(&validator.RangeValidator{})
-	// SFGA-specific validators from hive's pkg/sfgarules.
-	registry.Register(&sfgarules.ParentRankValidator{})
+	// Generic mechanisms that traverse the bundle's relations.
+	registry.Register(validator.NewRelatedFieldEqualsValidator(resolver))
+	registry.Register(validator.NewRelatedFieldInSetValidator(resolver))
+	// SFGA-specific validators from hive's pkg/sfgarules — still
+	// referenced by rules that haven't been decomposed to JSON.
 	registry.Register(&sfgarules.HomonymValidator{})
 	registry.Register(&sfgarules.DuplicateValidator{})
 	registry.Register(&sfgarules.CoordinatedNamesValidator{})
@@ -44,13 +55,10 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(&sfgarules.TypeDesignationValidator{})
 	registry.Register(&sfgarules.ParseQualityValidator{})
 
-	loader := repository.NewBytesBundleLoader(hiveRulesJSON)
-	// Eager parse so bad JSON surfaces at Archive open.
-	if _, err := loader.LoadPackage(context.Background()); err != nil {
-		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
-	}
 	mapper := sfgarules.NewSFGAMapper()
-	return usecase.NewValidateRecordUseCase(db, loader, mapper, registry), loader, nil
+	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
+	uc.SetRelationResolver(resolver)
+	return uc, loader, nil
 }
 
 // ValidateName runs every rule that applies to the name table
