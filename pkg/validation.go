@@ -54,6 +54,9 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(validator.NewNoSelfCycleValidator(mapper))
 	// Walk parent chain and check for an ancestor matching a predicate.
 	registry.Register(validator.NewAncestorExistsValidator(mapper))
+	// Walk parent chain, find matching ancestor, compare a field on
+	// self against a field on that ancestor.
+	registry.Register(validator.NewAncestorFieldCheckValidator(mapper))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

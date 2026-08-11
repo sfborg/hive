@@ -71,6 +71,38 @@
       "priority": 5
     },
     {
+      "rule_id": "hive_published_before_genus",
+      "table_name": "taxon",
+      "field_name": "col__published_in_year",
+      "rule_name": "Species published before its parent genus",
+      "validator_type": "ancestor_field_check",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "stop_when": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "equals",
+          "value": "GENUS"
+        },
+        "assert": {
+          "self_join": {"from": "col__name_id", "to": "name.col__id"},
+          "self_field": "col__published_in_year",
+          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
+          "ancestor_field": "col__published_in_year",
+          "operator": "greater_than_or_equals"
+        }
+      },
+      "error_message": "",
+      "warning_message": "Species publication year predates the parent genus's publication year. Verify both years and the taxonomic placement.",
+      "is_active": true,
+      "priority": 25
+    },
+    {
       "rule_id": "hive_species_missing_genus_ancestor",
       "table_name": "taxon",
       "field_name": "col__parent_id",
