@@ -45,6 +45,10 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// Generic mechanisms that traverse the bundle's relations.
 	registry.Register(validator.NewRelatedFieldEqualsValidator(resolver))
 	registry.Register(validator.NewRelatedFieldInSetValidator(resolver))
+	// Generic cross-record aggregate — count rows matching predicates,
+	// range-check the count. Uses mapper's PK-per-table for
+	// exclude_self.
+	registry.Register(validator.NewCountAcrossValidator(mapper))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

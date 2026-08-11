@@ -14,6 +14,7 @@
       "name.col__rank_id": "text",
       "name.col__reference_id": "text",
       "name.col__published_in_year": "text",
+      "name.gn__canonical_simple": "text",
       "name.gn__parse_quality": "integer",
       "taxon.col__id": "text",
       "taxon.col__name_id": "text",
@@ -93,6 +94,27 @@
       "warning_message": "Publication year on the name doesn't match the year on the referenced source. Check whether the name or the reference carries the wrong year.",
       "is_active": true,
       "priority": 30
+    },
+    {
+      "rule_id": "hive_duplicate_canonical",
+      "table_name": "name",
+      "field_name": "gn__canonical_simple",
+      "rule_name": "Canonical name shared with another record",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "table": "name",
+        "match": [
+          {"target": "gn__canonical_simple", "self": "gn__canonical_simple"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "",
+      "warning_message": "Another name record has the same canonical form. Confirm whether these are separate nomenclatural acts (potential homonyms) or duplicate entries that should be merged.",
+      "is_active": true,
+      "priority": 40
     },
     {
       "rule_id": "hive_parse_failed",
