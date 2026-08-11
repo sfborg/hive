@@ -25,6 +25,8 @@
       "reference.col__isbn": "text",
       "reference.col__issn": "text",
       "reference.col__doi": "text",
+      "creator.col__id": "integer",
+      "creator.col__orcid": "text",
       "name_relation.col__name_id": "text",
       "name_relation.col__related_name_id": "text",
       "metadata.col__id": "integer"
@@ -59,6 +61,22 @@
     }
   },
   "rules": [
+    {
+      "rule_id": "hive_creator_orcid_check_digit",
+      "table_name": "creator",
+      "field_name": "col__orcid",
+      "rule_name": "Creator ORCID check digit invalid",
+      "validator_type": "check_digit",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "algorithm": "orcid"
+      },
+      "error_message": "",
+      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "is_active": true,
+      "priority": 30
+    },
     {
       "rule_id": "hive_reference_isbn_check_digit",
       "table_name": "reference",

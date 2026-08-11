@@ -391,6 +391,16 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 				return a.syncIssuesLocal(ctx, "reference", id)
 			},
 		},
+		{
+			// Creator carries per-agent ORCIDs (and other identifier
+			// fields) that benefit from check-digit rules. Reindex
+			// walks its rows; per-mutation sync is a follow-up.
+			name:  "creator",
+			listQ: `SELECT col__id FROM creator ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "creator", id)
+			},
+		},
 	}
 	for _, t := range tables {
 		if err := ctx.Err(); err != nil {
