@@ -7,18 +7,22 @@
   "created_at": "2026-08-11T00:00:00Z",
   "tables": [],
   "requires": {
-    "tables": ["name", "taxon", "metadata"],
+    "tables": ["name", "taxon", "metadata", "reference"],
     "columns": {
       "name.col__id": "text",
       "name.col__code_id": "text",
       "name.col__rank_id": "text",
+      "name.col__reference_id": "text",
+      "name.col__published_in_year": "text",
       "name.gn__parse_quality": "integer",
       "taxon.col__id": "text",
       "taxon.col__name_id": "text",
       "taxon.col__parent_id": "text",
+      "reference.col__id": "text",
+      "reference.col__issued": "text",
       "metadata.col__id": "integer"
     },
-    "relations": ["taxon:owning-name", "taxon:parent-owning-name"]
+    "relations": ["taxon:owning-name", "taxon:parent-owning-name", "name:reference"]
   },
   "relations": {
     "taxon:owning-name": {
@@ -37,6 +41,14 @@
         {"from": "parent.col__name_id", "to": "name.col__id"}
       ],
       "description": "From a source taxon, walk to its parent taxon then to the parent's owning name."
+    },
+    "name:reference": {
+      "target_table": "reference",
+      "cardinality": "one",
+      "join": [
+        {"from": "name.col__reference_id", "to": "reference.col__id"}
+      ],
+      "description": "From a name row, walk to its publication reference."
     }
   },
   "rules": [
@@ -64,16 +76,55 @@
       "priority": 10
     },
     {
-      "rule_id": "hive_parse_quality",
+      "rule_id": "hive_source_year_mismatch",
       "table_name": "name",
-      "field_name": "gn__parse_quality",
-      "rule_name": "gnparser flagged the scientific name",
-      "validator_type": "sfga_parse_quality",
+      "field_name": "col__published_in_year",
+      "rule_name": "Publication year matches source reference",
+      "validator_type": "related_field_equals",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {},
+      "parameters": {
+        "relation": "name:reference",
+        "field": "col__published_in_year",
+        "related_field": "col__issued",
+        "skip_if_either_empty": true
+      },
       "error_message": "",
-      "warning_message": "",
+      "warning_message": "Publication year on the name doesn't match the year on the referenced source. Check whether the name or the reference carries the wrong year.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "hive_parse_failed",
+      "table_name": "name",
+      "field_name": "gn__parse_quality",
+      "rule_name": "Scientific name could not be parsed",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "error",
+      "conditions": [
+        {"field": "gn__parse_quality", "operator": "equals", "value": 0}
+      ],
+      "parameters": {"min": 1},
+      "error_message": "",
+      "warning_message": "Scientific name could not be parsed. Check for typos, stray characters, or missing spaces.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_parse_warnings",
+      "table_name": "name",
+      "field_name": "gn__parse_quality",
+      "rule_name": "Parser recorded warnings on the scientific name",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "gn__parse_quality", "operator": "greater_than", "value": 1}
+      ],
+      "parameters": {"min": 1, "max": 1},
+      "error_message": "",
+      "warning_message": "Parser recorded warnings on this name. Open the record and confirm the atomized fields (canonical, epithets, authorship) match what you intended.",
       "is_active": true,
       "priority": 20
     }

@@ -45,16 +45,6 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// Generic mechanisms that traverse the bundle's relations.
 	registry.Register(validator.NewRelatedFieldEqualsValidator(resolver))
 	registry.Register(validator.NewRelatedFieldInSetValidator(resolver))
-	// SFGA-specific validators from hive's pkg/sfgarules — still
-	// referenced by rules that haven't been decomposed to JSON.
-	registry.Register(&sfgarules.HomonymValidator{})
-	registry.Register(&sfgarules.DuplicateValidator{})
-	registry.Register(&sfgarules.CoordinatedNamesValidator{})
-	registry.Register(&sfgarules.RelationshipValidator{})
-	registry.Register(&sfgarules.SourceYearValidator{})
-	registry.Register(&sfgarules.SourceAuthorValidator{})
-	registry.Register(&sfgarules.TypeDesignationValidator{})
-	registry.Register(&sfgarules.ParseQualityValidator{})
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)

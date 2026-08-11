@@ -4,3 +4,6 @@
 *.db-shm
 /hive
 /bin/
+
+# Local-only survey notes
+/docs/

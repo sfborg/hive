@@ -1,16 +1,10 @@
-// Package sfgarules is hive's temporary landing spot for
-// sfga-specific validation logic that hasn't yet been decomposed
-// into pure JSON rules against gsvalidator generic mechanisms.
-// See SCHEMA_COMMONS_REFACTOR.md — the target end state is that
-// this package disappears, with every rule authored as JSON in a
-// SchemaCommons bundle and every schema-specific relation
-// declared in the sfga bundle's `relations` block.
-//
-// Until then: this is where the 8 legacy sfga validators
-// (parent_rank, homonym, duplicate, coordinated_names,
-// relationship, source_consistency, type_designation,
-// parse_quality) and the SFGAMapper live. hive registers them
-// with gsvalidator's engine in pkg/validation.go.
+// Package sfgarules holds the SFGAMapper — hive's implementation
+// of gsvalidator's SchemaMapper and joins.PrimaryKeyProvider
+// interfaces for the sfga schema (col__ / gn__ / sf__ prefixes,
+// col__id as the primary key across every table). The package name
+// is a legacy of when it also carried sfga-specific Go validators;
+// those have all been decomposed into JSON rules that use
+// gsvalidator's generic mechanisms.
 package sfgarules
 
 import (
