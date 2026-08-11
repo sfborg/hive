@@ -193,6 +193,31 @@
       "priority": 12
     },
     {
+      "rule_id": "hive_parent_rank_higher",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Parent taxon has a rank at or below the child",
+      "validator_type": "parent_rank_higher",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "rank_column": "col__rank_id",
+        "code_column": "col__code_id",
+        "join": {"from": "col__name_id", "to": "name.col__id"},
+        "rank_order": {
+          "BACTERIAL": ["KINGDOM", "PHYLUM", "CLASS", "SUBCLASS", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SPECIES", "SUBSPECIES"],
+          "BOTANICAL": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SUBSECTION", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+          "VIRUS": ["REALM", "KINGDOM", "PHYLUM", "CLASS", "ORDER", "FAMILY", "SUBFAMILY", "GENUS", "SPECIES"],
+          "ZOOLOGICAL": ["SUPERKINGDOM", "KINGDOM", "SUBKINGDOM", "INFRAKINGDOM", "SUPERPHYLUM", "PHYLUM", "SUBPHYLUM", "INFRAPHYLUM", "SUPERCLASS", "CLASS", "SUBCLASS", "INFRACLASS", "SUPERCOHORT", "COHORT", "MAGNORDER", "SUPERORDER", "MIRORDER", "ORDER", "SUBORDER", "INFRAORDER", "PARVORDER", "NANORDER", "SUPERFAMILY", "EPIFAMILY", "FAMILY", "SUPERSUBFAMILY", "SUBFAMILY", "INFRAFAMILY", "SUPERTRIBE", "TRIBE", "SUBTRIBE", "INFRATRIBE", "SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
+        }
+      },
+      "error_message": "",
+      "warning_message": "Parent taxon's rank is at or below this taxon's rank. Reparent under a higher-rank taxon.",
+      "is_active": true,
+      "priority": 10
+    },
+    {
       "rule_id": "hive_probable_incertae_sedis",
       "table_name": "taxon",
       "field_name": "",

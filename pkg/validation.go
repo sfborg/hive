@@ -59,6 +59,10 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(validator.NewAncestorFieldCheckValidator(mapper))
 	// FK column resolves via a declared relation (skips on empty).
 	registry.Register(validator.NewForeignKeyExistsValidator(resolver))
+	// Parent's rank must be higher than self's rank per per-code
+	// ordered lists (data injected via inline rule params, kept in
+	// sync with pkg/ui/rank_hierarchy.json by tools/mkrankorder).
+	registry.Register(validator.NewParentRankHigherValidator(mapper))
 
 	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
 	uc.SetRelationResolver(resolver)
