@@ -9,7 +9,7 @@ import (
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
-// TestParentRankHigher exercises hive_parent_rank_higher end-to-end.
+// TestParentRankHigher exercises clb_classification_rank_order_invalid end-to-end.
 // Builds a fresh archive with two parent/child pairs:
 //   - OK: Genus "Panthera" parents Species "Panthera leo"
 //   - Violation: Genus "Foo" parents Order "Foo-order" (impossibly
@@ -84,7 +84,7 @@ func TestParentRankHigher(t *testing.T) {
 		var n int
 		if err := a.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM __gsvalidator_results
-			 WHERE table_name = 'taxon' AND record_id = ? AND rule_id = 'hive_parent_rank_higher'`,
+			 WHERE table_name = 'taxon' AND record_id = ? AND rule_id = 'clb_classification_rank_order_invalid'`,
 			taxonID,
 		).Scan(&n); err != nil {
 			t.Fatalf("query: %v", err)
@@ -96,7 +96,7 @@ func TestParentRankHigher(t *testing.T) {
 		t.Errorf("species under genus should be clean; got a rank-order issue")
 	}
 	if !hasIssue(tOrderBADID) {
-		t.Errorf("order under genus should fire hive_parent_rank_higher; got zero")
+		t.Errorf("order under genus should fire clb_classification_rank_order_invalid; got zero")
 	}
 	// Roots and unaffected taxa shouldn't fire either.
 	if hasIssue(tGenusOKID) {

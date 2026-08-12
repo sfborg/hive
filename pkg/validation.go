@@ -17,22 +17,64 @@ import (
 //go:embed hive_rules.json
 var hiveRulesJSON []byte
 
+//go:embed clb_rules.json
+var clbRulesJSON []byte
+
+//go:embed tw_rules.json
+var twRulesJSON []byte
+
+// rulesetSource identifies where a bundle of rules came from —
+// visible in rule_id prefixes (hive_ / clb_ / tw_) and used by
+// per-ruleset enable/disable when that surface lands. Currently
+// all three sources load unconditionally; a curator-facing toggle
+// is a follow-up.
+type rulesetSource struct {
+	name    string
+	bundle  []byte
+	enabled bool
+}
+
 // newHiveValidator builds a gsvalidator use case pre-wired with
-// hive's embedded rule bundle, the sfga schema mapper, and every
-// validator hive currently uses (built-in generics plus the
-// sfga-specific set from pkg/sfgarules). Also returns the bundle
-// loader so callers can inspect rule metadata (Trigger,
-// RecheckDays) for time-based scheduling.
+// hive's embedded rule bundles (hive-native + CLB-derived + TW-
+// derived), the sfga schema mapper, and every validator hive
+// currently uses.
 //
-// The bundle (hive_rules.json embedded via //go:embed) is loaded
-// eagerly so a malformed bundle fails at Archive open rather than
-// on the first validation call.
+// Each bundle is loaded eagerly so a malformed bundle fails at
+// Archive open rather than on the first validation call. Relations
+// live in the hive_rules.json bundle as shared infrastructure —
+// clb and tw bundles reference them by name without redeclaring.
+//
+// Returns the primary (hive) bundle loader so callers can inspect
+// rule metadata (Trigger, RecheckDays) for time-based scheduling.
+// Rules from all enabled bundles are merged into a single
+// mergedRuleLoader wired into the use case.
 func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
-	loader := repository.NewBytesBundleLoader(hiveRulesJSON)
-	pkg, err := loader.LoadPackage(context.Background())
+	sources := []rulesetSource{
+		{name: "hive", bundle: hiveRulesJSON, enabled: true},
+		{name: "clb", bundle: clbRulesJSON, enabled: true},
+		{name: "tw", bundle: twRulesJSON, enabled: true},
+	}
+
+	primaryLoader := repository.NewBytesBundleLoader(hiveRulesJSON)
+	pkg, err := primaryLoader.LoadPackage(context.Background())
 	if err != nil {
 		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
 	}
+	// Merge rules across enabled bundles. Relations come from the
+	// primary (hive) bundle only.
+	var mergedRules []*domain.Rule
+	for _, src := range sources {
+		if !src.enabled {
+			continue
+		}
+		bl := repository.NewBytesBundleLoader(src.bundle)
+		bundle, err := bl.LoadPackage(context.Background())
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
+		}
+		mergedRules = append(mergedRules, bundle.Rules...)
+	}
+	mergedLoader := &mergedRuleLoader{rules: mergedRules}
 	mapper := sfgarules.NewSFGAMapper()
 	resolver := joins.NewRelationResolver(pkg.Relations, mapper)
 
@@ -67,9 +109,40 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// (orcid, issn, isbn10, isbn13, luhn).
 	registry.Register(validator.NewCheckDigitValidator())
 
-	uc := usecase.NewValidateRecordUseCase(db, loader, mapper, registry)
+	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)
-	return uc, loader, nil
+	return uc, primaryLoader, nil
+}
+
+// mergedRuleLoader satisfies usecase.RuleLoader by returning a
+// pre-computed rule slice merged from every enabled bundle. Kept
+// in-memory because bundles are embedded (no I/O to re-do), and
+// the merge cost is trivial (~42 rules today).
+type mergedRuleLoader struct {
+	rules []*domain.Rule
+}
+
+func (l *mergedRuleLoader) LoadRules(ctx context.Context) ([]*domain.Rule, error) {
+	return l.rules, nil
+}
+
+func (l *mergedRuleLoader) LoadRuleByID(ctx context.Context, ruleID string) (*domain.Rule, error) {
+	for _, r := range l.rules {
+		if r.ID == ruleID {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+func (l *mergedRuleLoader) LoadRulesForTable(ctx context.Context, tableName string) ([]*domain.Rule, error) {
+	var out []*domain.Rule
+	for _, r := range l.rules {
+		if r.TableName == tableName {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // ValidateName runs every rule that applies to the name table

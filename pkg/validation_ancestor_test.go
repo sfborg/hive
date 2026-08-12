@@ -11,12 +11,12 @@ import (
 // TestAncestorExistsValidator_WalksMultipleHops builds a small
 // classification — Family → Genus → Species → Subspecies — then
 // verifies that:
-//   - The subspecies passes hive_infraspecies_missing_species_ancestor
+//   - The subspecies passes clb_parent_species_missing
 //     (SPECIES ancestor found at hop 1)
-//   - The species passes hive_species_missing_genus_ancestor
+//   - The species passes clb_parent_genus_missing
 //     (GENUS ancestor found at hop 1)
 //   - A separate species placed directly under the Family (no
-//     intervening genus) fires hive_species_missing_genus_ancestor.
+//     intervening genus) fires clb_parent_genus_missing.
 //
 // The multi-hop walk is exactly the case the user called out:
 // PARENT_GENUS_MISSING has to look through subgenera and infraspecific
@@ -117,11 +117,11 @@ func TestAncestorExistsValidator_WalksMultipleHops(t *testing.T) {
 	}
 
 	// Properly-placed species: genus is the immediate parent (1 hop).
-	assertNoIssue(tSpeciesID, "hive_species_missing_genus_ancestor")
+	assertNoIssue(tSpeciesID, "clb_parent_genus_missing")
 	// Subspecies has a species parent (1 hop) AND a genus grand-parent
 	// (2 hops) — should pass both rules.
-	assertNoIssue(tSubspeciesID, "hive_infraspecies_missing_species_ancestor")
+	assertNoIssue(tSubspeciesID, "clb_parent_species_missing")
 	// Orphan species is placed directly under the family — no genus
 	// anywhere in the parent chain, rule fires.
-	assertHasIssue(tOrphanSpeciesID, "hive_species_missing_genus_ancestor")
+	assertHasIssue(tOrphanSpeciesID, "clb_parent_genus_missing")
 }

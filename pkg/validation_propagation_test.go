@@ -73,7 +73,7 @@ func hasDuplicateNameIssue(ctx context.Context, a *Archive, nameID string) (bool
 	err := a.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM __gsvalidator_results
 		 WHERE table_name = ? AND record_id = ? AND rule_id = ?`,
-		"name", nameID, "hive_duplicate_name",
+		"name", nameID, "clb_duplicate_name",
 	).Scan(&count)
 	if err != nil {
 		return false, err

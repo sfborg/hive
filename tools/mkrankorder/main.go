@@ -1,9 +1,9 @@
 // mkrankorder regenerates the rank_order parameter block in
-// pkg/hive_rules.json by walking pkg/ui/rank_hierarchy.json (the
+// pkg/clb_rules.json by walking pkg/ui/rank_hierarchy.json (the
 // TW-derived rank data hive already uses for its child-rank picker).
 //
 // This is the codegen backing the "put ranks in rules, keep DRY via
-// tooling" trade — pkg/hive_rules.json stays self-contained (an
+// tooling" trade — pkg/clb_rules.json stays self-contained (an
 // external gsvalidator consumer can load it and validate against it
 // without needing hive's internals), and this tool keeps its
 // rank_order in sync with the rank data that already lives in
@@ -12,8 +12,8 @@
 // Usage: go run ./tools/mkrankorder
 //
 // Design note: only the single `"rank_order": {...}` block on the
-// hive_parent_rank_higher rule is rewritten. The rest of
-// pkg/hive_rules.json is preserved byte-for-byte so hand-authored
+// clb_classification_rank_order_invalid rule is rewritten. The rest of
+// pkg/clb_rules.json is preserved byte-for-byte so hand-authored
 // key ordering, indentation, and inline formatting survive.
 package main
 
@@ -57,7 +57,7 @@ var twToSfga = map[string]string{
 
 func main() {
 	hierarchyPath := "pkg/ui/rank_hierarchy.json"
-	rulesPath := "pkg/hive_rules.json"
+	rulesPath := "pkg/clb_rules.json"
 
 	rankOrder, err := loadRankOrder(hierarchyPath)
 	if err != nil {
@@ -142,11 +142,11 @@ func buildOrderedChain(ranks []rankRow, group string) []string {
 }
 
 // patchRulesFile does byte-level surgery on the `"rank_order":`
-// value of the hive_parent_rank_higher rule. Every other byte in
+// value of the clb_classification_rank_order_invalid rule. Every other byte in
 // the file is preserved.
 //
 // The file is scanned once to find:
-//  1. The `"rule_id": "hive_parent_rank_higher"` marker.
+//  1. The `"rule_id": "clb_classification_rank_order_invalid"` marker.
 //  2. The nearest following `"rank_order":` key on the same rule.
 //  3. The `{` opening the rank_order value, and its matching `}`.
 //
@@ -159,7 +159,7 @@ func patchRulesFile(path string, rankOrder map[string][]string) error {
 	if err != nil {
 		return err
 	}
-	ruleMarker := []byte(`"rule_id": "hive_parent_rank_higher"`)
+	ruleMarker := []byte(`"rule_id": "clb_classification_rank_order_invalid"`)
 	ruleIdx := bytes.Index(src, ruleMarker)
 	if ruleIdx < 0 {
 		return fmt.Errorf(`no %q found`, string(ruleMarker))

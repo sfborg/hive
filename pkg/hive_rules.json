@@ -7,7 +7,13 @@
   "created_at": "2026-08-11T00:00:00Z",
   "tables": [],
   "requires": {
-    "tables": ["name", "taxon", "metadata", "reference", "name_relation"],
+    "tables": [
+      "name",
+      "taxon",
+      "metadata",
+      "reference",
+      "name_relation"
+    ],
     "columns": {
       "name.col__id": "text",
       "name.col__code_id": "text",
@@ -54,14 +60,21 @@
       "name_relation.col__related_name_id": "text",
       "metadata.col__id": "integer"
     },
-    "relations": ["taxon:owning-name", "taxon:parent-owning-name", "name:reference"]
+    "relations": [
+      "taxon:owning-name",
+      "taxon:parent-owning-name",
+      "name:reference"
+    ]
   },
   "relations": {
     "taxon:owning-name": {
       "target_table": "name",
       "cardinality": "one",
       "join": [
-        {"from": "taxon.col__name_id", "to": "name.col__id"}
+        {
+          "from": "taxon.col__name_id",
+          "to": "name.col__id"
+        }
       ],
       "description": "From a taxon row, walk to its owning name."
     },
@@ -69,8 +82,15 @@
       "target_table": "name",
       "cardinality": "one",
       "join": [
-        {"from": "taxon.col__parent_id", "to": "taxon.col__id", "alias": "parent"},
-        {"from": "parent.col__name_id", "to": "name.col__id"}
+        {
+          "from": "taxon.col__parent_id",
+          "to": "taxon.col__id",
+          "alias": "parent"
+        },
+        {
+          "from": "parent.col__name_id",
+          "to": "name.col__id"
+        }
       ],
       "description": "From a source taxon, walk to its parent taxon then to the parent's owning name."
     },
@@ -78,7 +98,10 @@
       "target_table": "reference",
       "cardinality": "one",
       "join": [
-        {"from": "name.col__reference_id", "to": "reference.col__id"}
+        {
+          "from": "name.col__reference_id",
+          "to": "reference.col__id"
+        }
       ],
       "description": "From a name row, walk to its publication reference."
     }
@@ -108,7 +131,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "orcid"},
+      "parameters": {
+        "algorithm": "orcid"
+      },
       "error_message": "",
       "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -122,7 +147,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "orcid"},
+      "parameters": {
+        "algorithm": "orcid"
+      },
       "error_message": "",
       "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -136,7 +163,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "orcid"},
+      "parameters": {
+        "algorithm": "orcid"
+      },
       "error_message": "",
       "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -150,7 +179,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "orcid"},
+      "parameters": {
+        "algorithm": "orcid"
+      },
       "error_message": "",
       "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -164,7 +195,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "rorid"},
+      "parameters": {
+        "algorithm": "rorid"
+      },
       "error_message": "",
       "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -178,7 +211,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "rorid"},
+      "parameters": {
+        "algorithm": "rorid"
+      },
       "error_message": "",
       "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -192,7 +227,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "rorid"},
+      "parameters": {
+        "algorithm": "rorid"
+      },
       "error_message": "",
       "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -206,7 +243,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "rorid"},
+      "parameters": {
+        "algorithm": "rorid"
+      },
       "error_message": "",
       "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -220,7 +259,9 @@
       "validator_type": "check_digit",
       "enforcement": "soft",
       "severity": "warn",
-      "parameters": {"algorithm": "rorid"},
+      "parameters": {
+        "algorithm": "rorid"
+      },
       "error_message": "",
       "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
@@ -235,7 +276,11 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__email", "operator": "not_equals", "value": ""}
+        {
+          "field": "col__email",
+          "operator": "not_equals",
+          "value": ""
+        }
       ],
       "parameters": {
         "pattern": "^[a-zA-Z0-9._+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
@@ -254,7 +299,11 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__email", "operator": "not_equals", "value": ""}
+        {
+          "field": "col__email",
+          "operator": "not_equals",
+          "value": ""
+        }
       ],
       "parameters": {
         "pattern": "^[a-zA-Z0-9._+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
@@ -273,7 +322,11 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__email", "operator": "not_equals", "value": ""}
+        {
+          "field": "col__email",
+          "operator": "not_equals",
+          "value": ""
+        }
       ],
       "parameters": {
         "pattern": "^[a-zA-Z0-9._+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
@@ -292,7 +345,11 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__email", "operator": "not_equals", "value": ""}
+        {
+          "field": "col__email",
+          "operator": "not_equals",
+          "value": ""
+        }
       ],
       "parameters": {
         "pattern": "^[a-zA-Z0-9._+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
@@ -311,7 +368,11 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__email", "operator": "not_equals", "value": ""}
+        {
+          "field": "col__email",
+          "operator": "not_equals",
+          "value": ""
+        }
       ],
       "parameters": {
         "pattern": "^[a-zA-Z0-9._+-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
@@ -380,139 +441,23 @@
       "parameters": {
         "table": "name_relation",
         "match": [
-          {"target": "col__name_id",         "self": "col__id"},
-          {"target": "col__related_name_id", "self": "col__id"}
+          {
+            "target": "col__name_id",
+            "self": "col__id"
+          },
+          {
+            "target": "col__related_name_id",
+            "self": "col__id"
+          }
         ],
-        "expected": {"max": 0}
+        "expected": {
+          "max": 0
+        }
       },
       "error_message": "This name appears on both sides of a name-relation link. Delete the link or repoint one side to a different name.",
       "warning_message": "",
       "is_active": true,
       "priority": 6
-    },
-    {
-      "rule_id": "hive_name_reference_id_invalid",
-      "table_name": "name",
-      "field_name": "col__reference_id",
-      "rule_name": "Name references a nonexistent reference row",
-      "validator_type": "foreign_key_exists",
-      "enforcement": "soft",
-      "severity": "error",
-      "parameters": {
-        "field": "col__reference_id",
-        "relation": "name:reference"
-      },
-      "error_message": "Reference id doesn't match any known reference. Fix the id or clear the field.",
-      "warning_message": "",
-      "is_active": true,
-      "priority": 8
-    },
-    {
-      "rule_id": "hive_published_before_genus",
-      "table_name": "taxon",
-      "field_name": "col__published_in_year",
-      "rule_name": "Species published before its parent genus",
-      "validator_type": "ancestor_field_check",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
-      ],
-      "parameters": {
-        "parent_column": "col__parent_id",
-        "stop_when": {
-          "join": {"from": "col__name_id", "to": "name.col__id"},
-          "field": "col__rank_id",
-          "operator": "equals",
-          "value": "GENUS"
-        },
-        "assert": {
-          "self_join": {"from": "col__name_id", "to": "name.col__id"},
-          "self_field": "col__published_in_year",
-          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
-          "ancestor_field": "col__published_in_year",
-          "operator": "greater_than_or_equals"
-        }
-      },
-      "error_message": "",
-      "warning_message": "Species publication year predates the parent genus's publication year. Verify both years and the taxonomic placement.",
-      "is_active": true,
-      "priority": 25
-    },
-    {
-      "rule_id": "hive_species_missing_genus_ancestor",
-      "table_name": "taxon",
-      "field_name": "col__parent_id",
-      "rule_name": "Species taxon has no genus-group ancestor",
-      "validator_type": "ancestor_exists",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
-      ],
-      "parameters": {
-        "parent_column": "col__parent_id",
-        "match": {
-          "join": {"from": "col__name_id", "to": "name.col__id"},
-          "field": "col__rank_id",
-          "operator": "in",
-          "value": ["GENUS", "SUBGENUS", "INFRAGENUS"]
-        }
-      },
-      "error_message": "",
-      "warning_message": "Species has no genus (or subgenus) ancestor in its parent chain. Reparent under a genus.",
-      "is_active": true,
-      "priority": 12
-    },
-    {
-      "rule_id": "hive_infraspecies_missing_species_ancestor",
-      "table_name": "taxon",
-      "field_name": "col__parent_id",
-      "rule_name": "Infraspecific taxon has no species ancestor",
-      "validator_type": "ancestor_exists",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "in", "value": ["SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
-      ],
-      "parameters": {
-        "parent_column": "col__parent_id",
-        "match": {
-          "join": {"from": "col__name_id", "to": "name.col__id"},
-          "field": "col__rank_id",
-          "operator": "equals",
-          "value": "SPECIES"
-        }
-      },
-      "error_message": "",
-      "warning_message": "Infraspecific taxon has no species in its parent chain. Reparent under a species.",
-      "is_active": true,
-      "priority": 12
-    },
-    {
-      "rule_id": "hive_parent_rank_higher",
-      "table_name": "taxon",
-      "field_name": "col__parent_id",
-      "rule_name": "Parent taxon has a rank at or below the child",
-      "validator_type": "parent_rank_higher",
-      "enforcement": "soft",
-      "severity": "warn",
-      "parameters": {
-        "parent_column": "col__parent_id",
-        "rank_column": "col__rank_id",
-        "code_column": "col__code_id",
-        "join": {"from": "col__name_id", "to": "name.col__id"},
-        "rank_order": {
-          "BACTERIAL": ["KINGDOM", "PHYLUM", "CLASS", "SUBCLASS", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SPECIES", "SUBSPECIES"],
-          "BOTANICAL": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SUBSECTION", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
-          "VIRUS": ["REALM", "KINGDOM", "PHYLUM", "CLASS", "ORDER", "FAMILY", "SUBFAMILY", "GENUS", "SPECIES"],
-          "ZOOLOGICAL": ["SUPERKINGDOM", "KINGDOM", "SUBKINGDOM", "INFRAKINGDOM", "SUPERPHYLUM", "PHYLUM", "SUBPHYLUM", "INFRAPHYLUM", "SUPERCLASS", "CLASS", "SUBCLASS", "INFRACLASS", "SUPERCOHORT", "COHORT", "MAGNORDER", "SUPERORDER", "MIRORDER", "ORDER", "SUBORDER", "INFRAORDER", "PARVORDER", "NANORDER", "SUPERFAMILY", "EPIFAMILY", "FAMILY", "SUPERSUBFAMILY", "SUBFAMILY", "INFRAFAMILY", "SUPERTRIBE", "TRIBE", "SUBTRIBE", "INFRATRIBE", "SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
-        }
-      },
-      "error_message": "",
-      "warning_message": "Parent taxon's rank is at or below this taxon's rank. Reparent under a higher-rank taxon.",
-      "is_active": true,
-      "priority": 10
     },
     {
       "rule_id": "hive_probable_incertae_sedis",
@@ -523,13 +468,27 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"relation": "taxon:owning-name", "field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
-        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+        {
+          "relation": "taxon:owning-name",
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "ZOOLOGICAL"
+        },
+        {
+          "relation": "taxon:owning-name",
+          "field": "col__rank_id",
+          "operator": "equals",
+          "value": "SPECIES"
+        }
       ],
       "parameters": {
         "relation": "taxon:parent-owning-name",
         "related_field": "col__rank_id",
-        "allowed_values": ["GENUS", "SUBGENUS", "INFRAGENUS"],
+        "allowed_values": [
+          "GENUS",
+          "SUBGENUS",
+          "INFRAGENUS"
+        ],
         "skip_if_empty": true
       },
       "error_message": "",
@@ -565,238 +524,24 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "col__rank_id", "operator": "not_in", "value": ["SPECIES","SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
+        {
+          "field": "col__rank_id",
+          "operator": "not_in",
+          "value": [
+            "SPECIES",
+            "SUBSPECIES",
+            "VARIETY",
+            "FORM",
+            "SUBVARIETY",
+            "SUBFORM"
+          ]
+        }
       ],
       "parameters": {},
       "error_message": "",
       "warning_message": "Specific epithet is set on a name whose rank is above species. Check the rank or clear the epithet.",
       "is_active": true,
       "priority": 45
-    },
-    {
-      "rule_id": "hive_wrong_monomial_case_uninomial",
-      "table_name": "name",
-      "field_name": "col__uninomial",
-      "rule_name": "WRONG_MONOMIAL_CASE (uninomial)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
-      "error_message": "",
-      "warning_message": "Uninomial should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_wrong_monomial_case_genus",
-      "table_name": "name",
-      "field_name": "col__genus",
-      "rule_name": "WRONG_MONOMIAL_CASE (genus)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__genus", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
-      "error_message": "",
-      "warning_message": "Genus should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_uppercase_epithet_specific",
-      "table_name": "name",
-      "field_name": "col__specific_epithet",
-      "rule_name": "UPPERCASE_EPITHET (specific)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
-      "error_message": "",
-      "warning_message": "Specific epithet should be lowercase (e.g. leo, not Leo).",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_uppercase_epithet_infraspecific",
-      "table_name": "name",
-      "field_name": "col__infraspecific_epithet",
-      "rule_name": "UPPERCASE_EPITHET (infraspecific)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
-      "error_message": "",
-      "warning_message": "Infraspecific epithet should be lowercase.",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_multi_word_monomial_uninomial",
-      "table_name": "name",
-      "field_name": "col__uninomial",
-      "rule_name": "MULTI_WORD_MONOMIAL (uninomial)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^\\S+$"},
-      "error_message": "",
-      "warning_message": "Uninomial should be a single word (no spaces).",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_multi_word_epithet_specific",
-      "table_name": "name",
-      "field_name": "col__specific_epithet",
-      "rule_name": "MULTI_WORD_EPITHET (specific)",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^\\S+$"},
-      "error_message": "",
-      "warning_message": "Specific epithet should be a single word (no spaces).",
-      "is_active": true,
-      "priority": 40
-    },
-    {
-      "rule_id": "hive_missing_genus",
-      "table_name": "name",
-      "field_name": "col__genus",
-      "rule_name": "MISSING_GENUS",
-      "validator_type": "presence",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {},
-      "error_message": "",
-      "warning_message": "This name has a specific epithet but no genus. A binomial name needs both.",
-      "is_active": true,
-      "priority": 20
-    },
-    {
-      "rule_id": "hive_infraspecific_needs_specific",
-      "table_name": "name",
-      "field_name": "col__specific_epithet",
-      "rule_name": "INCONSISTENT_NAME (infraspecific without specific)",
-      "validator_type": "presence",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {},
-      "error_message": "",
-      "warning_message": "This name has an infraspecific epithet but no specific epithet. An infraspecific name needs a species too.",
-      "is_active": true,
-      "priority": 20
-    },
-    {
-      "rule_id": "hive_species_rank_needs_specific",
-      "table_name": "name",
-      "field_name": "col__specific_epithet",
-      "rule_name": "INCONSISTENT_NAME (species rank without specific epithet)",
-      "validator_type": "presence",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES","SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
-      ],
-      "parameters": {},
-      "error_message": "",
-      "warning_message": "Species-group rank set but no specific epithet. Fill in the epithet or fix the rank.",
-      "is_active": true,
-      "priority": 20
-    },
-    {
-      "rule_id": "hive_suprageneric_needs_uninomial",
-      "table_name": "name",
-      "field_name": "col__uninomial",
-      "rule_name": "INCONSISTENT_NAME (suprageneric without uninomial)",
-      "validator_type": "presence",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY","SUPERFAMILY","SUBFAMILY","ORDER","SUPERORDER","SUBORDER","INFRAORDER","CLASS","SUPERCLASS","SUBCLASS","PHYLUM","SUPERPHYLUM","SUBPHYLUM","KINGDOM","SUBKINGDOM","SUPERKINGDOM","DOMAIN"]}
-      ],
-      "parameters": {},
-      "error_message": "",
-      "warning_message": "Rank above genus but no uninomial set. Fill in the uninomial name.",
-      "is_active": true,
-      "priority": 20
-    },
-    {
-      "rule_id": "hive_unlikely_year",
-      "table_name": "name",
-      "field_name": "col__published_in_year",
-      "rule_name": "UNLIKELY_YEAR",
-      "validator_type": "range",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__published_in_year", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"min": 1753, "max": 2100},
-      "error_message": "",
-      "warning_message": "Publication year outside the expected range (1753 for zoological / botanical priority through the present).",
-      "is_active": true,
-      "priority": 30
-    },
-    {
-      "rule_id": "hive_doi_invalid",
-      "table_name": "reference",
-      "field_name": "col__doi",
-      "rule_name": "DOI_INVALID",
-      "validator_type": "regex",
-      "enforcement": "soft",
-      "severity": "warn",
-      "conditions": [
-        {"field": "col__doi", "operator": "not_equals", "value": ""}
-      ],
-      "parameters": {"pattern": "^(?:https?://(?:dx\\.)?doi\\.org/)?(?:urn:)?(?:doi:)?10\\.[0-9]+(?:\\.[0-9]+)*/.+$"},
-      "error_message": "",
-      "warning_message": "DOI doesn't look like a valid identifier. Expected form: 10.XXXX/YYYY, optionally prefixed with https://doi.org/ or doi:.",
-      "is_active": true,
-      "priority": 30
-    },
-    {
-      "rule_id": "hive_duplicate_name",
-      "table_name": "name",
-      "field_name": "gn__canonical_simple",
-      "rule_name": "Duplicate scientific name",
-      "validator_type": "count_across",
-      "enforcement": "soft",
-      "severity": "info",
-      "parameters": {
-        "table": "name",
-        "match": [
-          {"target": "gn__canonical_simple", "self": "gn__canonical_simple"}
-        ],
-        "exclude_self": true,
-        "expected": {"max": 0}
-      },
-      "error_message": "",
-      "warning_message": "Another name record shares this scientific name (ignoring authorship). Confirm whether these are separate nomenclatural acts (potential homonyms) or duplicate entries that should be merged.",
-      "is_active": true,
-      "priority": 40
     },
     {
       "rule_id": "hive_parse_failed",
@@ -807,9 +552,15 @@
       "enforcement": "soft",
       "severity": "error",
       "conditions": [
-        {"field": "gn__parse_quality", "operator": "equals", "value": 0}
+        {
+          "field": "gn__parse_quality",
+          "operator": "equals",
+          "value": 0
+        }
       ],
-      "parameters": {"min": 1},
+      "parameters": {
+        "min": 1
+      },
       "error_message": "",
       "warning_message": "Scientific name could not be parsed. Check for typos, stray characters, or missing spaces.",
       "is_active": true,
@@ -824,9 +575,16 @@
       "enforcement": "soft",
       "severity": "warn",
       "conditions": [
-        {"field": "gn__parse_quality", "operator": "greater_than", "value": 1}
+        {
+          "field": "gn__parse_quality",
+          "operator": "greater_than",
+          "value": 1
+        }
       ],
-      "parameters": {"min": 1, "max": 1},
+      "parameters": {
+        "min": 1,
+        "max": 1
+      },
       "error_message": "",
       "warning_message": "Parser flagged this name. Open the record and confirm the parsed fields (canonical form, epithets, authorship) match what you intended.",
       "is_active": true,

@@ -98,7 +98,7 @@ func TestAncestorFieldCheck_PublishedBeforeGenus(t *testing.T) {
 		var n int
 		if err := a.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM __gsvalidator_results
-			 WHERE table_name = 'taxon' AND record_id = ? AND rule_id = 'hive_published_before_genus'`,
+			 WHERE table_name = 'taxon' AND record_id = ? AND rule_id = 'clb_published_before_genus'`,
 			taxonID,
 		).Scan(&n); err != nil {
 			t.Fatalf("query: %v", err)

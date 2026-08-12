@@ -1,0 +1,16 @@
+{
+  "name": "tw_sfga",
+  "version": "0.1.0",
+  "domain": "biodiversity",
+  "author": "sfborg/hive",
+  "description": "TaxonWorks-derived validation rules. Rule ids and names track TW's validation identifiers so a curator can cross-reference against TW's own soft-validation output. Schema compatibility: SFGA v0.3.x — bundle references the shared schema declared in hive_rules.json rather than redeclaring it.",
+  "created_at": "2026-08-12T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": [],
+    "columns": {},
+    "relations": []
+  },
+  "relations": {},
+  "rules": []
+}

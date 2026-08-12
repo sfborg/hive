@@ -1,0 +1,366 @@
+{
+  "name": "clb_sfga",
+  "version": "0.1.0",
+  "domain": "biodiversity",
+  "author": "sfborg/hive",
+  "description": "ChecklistBank-derived validation rules. Rule ids and names match CoL Issue enum values so a curator can cross-reference hive's Issues screen against a CoL dashboard for the same dataset. Schema compatibility: SFGA v0.3.x — bundle references the shared schema declared in hive_rules.json rather than redeclaring it.",
+  "created_at": "2026-08-12T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": [],
+    "columns": {},
+    "relations": []
+  },
+  "relations": {},
+  "rules": [
+    {
+      "rule_id": "clb_reference_id_invalid",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "REFERENCE_ID_INVALID",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "error",
+      "parameters": {
+        "field": "col__reference_id",
+        "relation": "name:reference"
+      },
+      "error_message": "Reference id doesn't match any known reference. Fix the id or clear the field.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 8
+    },
+    {
+      "rule_id": "clb_published_before_genus",
+      "table_name": "taxon",
+      "field_name": "col__published_in_year",
+      "rule_name": "PUBLISHED_BEFORE_GENUS",
+      "validator_type": "ancestor_field_check",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "stop_when": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "equals",
+          "value": "GENUS"
+        },
+        "assert": {
+          "self_join": {"from": "col__name_id", "to": "name.col__id"},
+          "self_field": "col__published_in_year",
+          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
+          "ancestor_field": "col__published_in_year",
+          "operator": "greater_than_or_equals"
+        }
+      },
+      "error_message": "",
+      "warning_message": "Species publication year predates the parent genus's publication year. Verify both years and the taxonomic placement.",
+      "is_active": true,
+      "priority": 25
+    },
+    {
+      "rule_id": "clb_parent_genus_missing",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "PARENT_GENUS_MISSING",
+      "validator_type": "ancestor_exists",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "equals", "value": "SPECIES"}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "match": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "INFRAGENUS"]
+        }
+      },
+      "error_message": "",
+      "warning_message": "Species has no genus (or subgenus) ancestor in its parent chain. Reparent under a genus.",
+      "is_active": true,
+      "priority": 12
+    },
+    {
+      "rule_id": "clb_parent_species_missing",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "PARENT_SPECIES_MISSING",
+      "validator_type": "ancestor_exists",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"relation": "taxon:owning-name", "field": "col__rank_id", "operator": "in", "value": ["SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "match": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "equals",
+          "value": "SPECIES"
+        }
+      },
+      "error_message": "",
+      "warning_message": "Infraspecific taxon has no species in its parent chain. Reparent under a species.",
+      "is_active": true,
+      "priority": 12
+    },
+    {
+      "rule_id": "clb_classification_rank_order_invalid",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "CLASSIFICATION_RANK_ORDER_INVALID",
+      "validator_type": "parent_rank_higher",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "rank_column": "col__rank_id",
+        "code_column": "col__code_id",
+        "join": {"from": "col__name_id", "to": "name.col__id"},
+        "rank_order": {
+          "BACTERIAL": ["KINGDOM", "PHYLUM", "CLASS", "SUBCLASS", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SPECIES", "SUBSPECIES"],
+          "BOTANICAL": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SUBSECTION", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+          "VIRUS": ["REALM", "KINGDOM", "PHYLUM", "CLASS", "ORDER", "FAMILY", "SUBFAMILY", "GENUS", "SPECIES"],
+          "ZOOLOGICAL": ["SUPERKINGDOM", "KINGDOM", "SUBKINGDOM", "INFRAKINGDOM", "SUPERPHYLUM", "PHYLUM", "SUBPHYLUM", "INFRAPHYLUM", "SUPERCLASS", "CLASS", "SUBCLASS", "INFRACLASS", "SUPERCOHORT", "COHORT", "MAGNORDER", "SUPERORDER", "MIRORDER", "ORDER", "SUBORDER", "INFRAORDER", "PARVORDER", "NANORDER", "SUPERFAMILY", "EPIFAMILY", "FAMILY", "SUPERSUBFAMILY", "SUBFAMILY", "INFRAFAMILY", "SUPERTRIBE", "TRIBE", "SUBTRIBE", "INFRATRIBE", "SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
+        }
+      },
+      "error_message": "",
+      "warning_message": "Parent taxon's rank is at or below this taxon's rank. Reparent under a higher-rank taxon.",
+      "is_active": true,
+      "priority": 10
+    },
+    {
+      "rule_id": "clb_duplicate_name",
+      "table_name": "name",
+      "field_name": "gn__canonical_simple",
+      "rule_name": "DUPLICATE_NAME",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "info",
+      "parameters": {
+        "table": "name",
+        "match": [
+          {"target": "gn__canonical_simple", "self": "gn__canonical_simple"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "",
+      "warning_message": "Another name record shares this scientific name (ignoring authorship). Confirm whether these are separate nomenclatural acts (potential homonyms) or duplicate entries that should be merged.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_wrong_monomial_case_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "WRONG_MONOMIAL_CASE (uninomial)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
+      "error_message": "",
+      "warning_message": "Uninomial should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_wrong_monomial_case_genus",
+      "table_name": "name",
+      "field_name": "col__genus",
+      "rule_name": "WRONG_MONOMIAL_CASE (genus)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__genus", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
+      "error_message": "",
+      "warning_message": "Genus should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_uppercase_epithet_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "UPPERCASE_EPITHET (specific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
+      "error_message": "",
+      "warning_message": "Specific epithet should be lowercase (e.g. leo, not Leo).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_uppercase_epithet_infraspecific",
+      "table_name": "name",
+      "field_name": "col__infraspecific_epithet",
+      "rule_name": "UPPERCASE_EPITHET (infraspecific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
+      "error_message": "",
+      "warning_message": "Infraspecific epithet should be lowercase.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_multi_word_monomial_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "MULTI_WORD_MONOMIAL (uninomial)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\S+$"},
+      "error_message": "",
+      "warning_message": "Uninomial should be a single word (no spaces).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_multi_word_epithet_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "MULTI_WORD_EPITHET (specific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\S+$"},
+      "error_message": "",
+      "warning_message": "Specific epithet should be a single word (no spaces).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "clb_missing_genus",
+      "table_name": "name",
+      "field_name": "col__genus",
+      "rule_name": "MISSING_GENUS",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has a specific epithet but no genus. A binomial name needs both.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "clb_infraspecific_needs_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "INCONSISTENT_NAME (infraspecific without specific)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has an infraspecific epithet but no specific epithet. An infraspecific name needs a species too.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "clb_species_rank_needs_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "INCONSISTENT_NAME (species rank without specific epithet)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES","SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Species-group rank set but no specific epithet. Fill in the epithet or fix the rank.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "clb_suprageneric_needs_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "INCONSISTENT_NAME (suprageneric without uninomial)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY","SUPERFAMILY","SUBFAMILY","ORDER","SUPERORDER","SUBORDER","INFRAORDER","CLASS","SUPERCLASS","SUBCLASS","PHYLUM","SUPERPHYLUM","SUBPHYLUM","KINGDOM","SUBKINGDOM","SUPERKINGDOM","DOMAIN"]}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Rank above genus but no uninomial set. Fill in the uninomial name.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "clb_unlikely_year",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "UNLIKELY_YEAR",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__published_in_year", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"min": 1753, "max": 2100},
+      "error_message": "",
+      "warning_message": "Publication year outside the expected range (1753 for zoological / botanical priority through the present).",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "clb_doi_invalid",
+      "table_name": "reference",
+      "field_name": "col__doi",
+      "rule_name": "DOI_INVALID",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__doi", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^(?:https?://(?:dx\\.)?doi\\.org/)?(?:urn:)?(?:doi:)?10\\.[0-9]+(?:\\.[0-9]+)*/.+$"},
+      "error_message": "",
+      "warning_message": "DOI doesn't look like a valid identifier. Expected form: 10.XXXX/YYYY, optionally prefixed with https://doi.org/ or doi:.",
+      "is_active": true,
+      "priority": 30
+    }
+  ]
+}

@@ -10,7 +10,7 @@ import (
 
 // TestForeignKeyExistsValidator_FiresOnDanglingReference creates a
 // name whose col__reference_id points at a nonexistent reference,
-// then asserts hive_name_reference_id_invalid fires. Direct SQL is
+// then asserts clb_reference_id_invalid fires. Direct SQL is
 // used to bypass sfga's FK constraint — the same shape an archive
 // arrives in after an import bug or hand-edit that turned off
 // PRAGMA foreign_keys.
@@ -70,7 +70,7 @@ func TestForeignKeyExistsValidator_FiresOnDanglingReference(t *testing.T) {
 		var n int
 		if err := a.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM __gsvalidator_results
-			 WHERE table_name = 'name' AND record_id = ? AND rule_id = 'hive_name_reference_id_invalid'`,
+			 WHERE table_name = 'name' AND record_id = ? AND rule_id = 'clb_reference_id_invalid'`,
 			nameID,
 		).Scan(&n); err != nil {
 			t.Fatalf("query: %v", err)
@@ -82,6 +82,6 @@ func TestForeignKeyExistsValidator_FiresOnDanglingReference(t *testing.T) {
 		t.Errorf("good name (empty reference_id) should not fire — skip on empty")
 	}
 	if !hasIssue(danglingID) {
-		t.Errorf("dangling name should fire hive_name_reference_id_invalid")
+		t.Errorf("dangling name should fire clb_reference_id_invalid")
 	}
 }
