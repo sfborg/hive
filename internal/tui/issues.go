@@ -192,15 +192,24 @@ func (m issuesModel) handleKey(msg tea.KeyMsg, keys keyMap) (issuesModel, tea.Cm
 		m.statusMsg = ""
 	}
 
+	// Note on the pattern below: applyRuleFilter / toggleSeverity have
+	// value receivers, so they return a modified copy without mutating
+	// m. loadPage also has a value receiver and reads its filter from
+	// its own m — so we must call it on the *updated* model, not the
+	// pre-change m, or the fetch uses stale selection.
 	switch msg.String() {
 	case "1":
-		return m.toggleSeverity("error"), m.loadPage()
+		updated := m.toggleSeverity("error")
+		return updated, updated.loadPage()
 	case "2":
-		return m.toggleSeverity("warn"), m.loadPage()
+		updated := m.toggleSeverity("warn")
+		return updated, updated.loadPage()
 	case "3":
-		return m.toggleSeverity("info"), m.loadPage()
+		updated := m.toggleSeverity("info")
+		return updated, updated.loadPage()
 	case "4":
-		return m.toggleSeverity("debug"), m.loadPage()
+		updated := m.toggleSeverity("debug")
+		return updated, updated.loadPage()
 	case "d":
 		// Convenience toggle for info + debug together — same effect as
 		// pressing 3 and 4 in sequence but easier to reach for.
@@ -255,7 +264,8 @@ func (m issuesModel) handleKey(msg tea.KeyMsg, keys keyMap) (issuesModel, tea.Cm
 
 	case msg.String() == "enter":
 		if m.focus == issuesFocusRules {
-			return m.applyRuleFilter(), m.loadPage()
+			updated := m.applyRuleFilter()
+			return updated, updated.loadPage()
 		}
 		return m, m.navigateFromCurrent()
 
