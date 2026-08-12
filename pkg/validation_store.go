@@ -402,6 +402,38 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 				return a.syncIssuesLocal(ctx, "creator", id)
 			},
 		},
+		{
+			// contact/contributor/editor/publisher share creator's
+			// shape (each has col__orcid, col__rorid, col__email).
+			// Wired here so per-table check-digit / regex rules can
+			// target them.
+			name:  "contact",
+			listQ: `SELECT col__id FROM contact ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "contact", id)
+			},
+		},
+		{
+			name:  "contributor",
+			listQ: `SELECT col__id FROM contributor ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "contributor", id)
+			},
+		},
+		{
+			name:  "editor",
+			listQ: `SELECT col__id FROM editor ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "editor", id)
+			},
+		},
+		{
+			name:  "publisher",
+			listQ: `SELECT col__id FROM publisher ORDER BY col__id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "publisher", id)
+			},
+		},
 	}
 	for _, t := range tables {
 		if err := ctx.Err(); err != nil {
