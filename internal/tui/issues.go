@@ -574,6 +574,21 @@ func (m issuesModel) renderIssueList(width, height int) string {
 		} else {
 			labelStyled = headerStyle.Render(label)
 		}
+		// Truncate the visible label so row1 (indent + chip + label)
+		// fits the pane width. Long taxon names would otherwise wrap
+		// into the next line.
+		row1Budget := width - lipgloss.Width(chip) - 2 // 1 leading space + 1 chip separator
+		if row1Budget < 8 {
+			row1Budget = 8
+		}
+		if len([]rune(label)) > row1Budget {
+			label = string([]rune(label)[:row1Budget-1]) + "…"
+			if orphan {
+				labelStyled = dimStyle.Render(label + "  (no owning taxon)")
+			} else {
+				labelStyled = headerStyle.Render(label)
+			}
+		}
 		row1 := fmt.Sprintf(" %s %s", chip, labelStyled)
 		row2Rule := issue.RuleName
 		if row2Rule == "" {
@@ -586,14 +601,31 @@ func (m issuesModel) renderIssueList(width, height int) string {
 		if row2Msg == "" {
 			row2Msg = row2Rule
 		}
-		maxMsgLen := width - 4
-		if maxMsgLen < 20 {
-			maxMsgLen = 20
+		// The whole row2 (indent + rule label + ": " + message) must
+		// stay under the pane width or the terminal wraps it and the
+		// wrapped tail spills into whatever pane the horizontal-join
+		// puts underneath. Compute the message budget by subtracting
+		// the fixed prefix width from the pane width.
+		row2Indent := "    "
+		row2Prefix := row2Indent + row2Rule + ": "
+		prefixLen := len([]rune(row2Prefix))
+		maxTotal := width
+		if maxTotal < 20 {
+			maxTotal = 20
 		}
-		if len([]rune(row2Msg)) > maxMsgLen {
-			row2Msg = string([]rune(row2Msg)[:maxMsgLen-1]) + "…"
+		var row2 string
+		if prefixLen >= maxTotal {
+			// Even the prefix overflows — truncate the prefix itself
+			// and drop the message; the row1 header already carries
+			// the record label so the curator sees enough context.
+			row2 = string([]rune(row2Prefix)[:maxTotal-1]) + "…"
+		} else {
+			availMsg := maxTotal - prefixLen
+			if len([]rune(row2Msg)) > availMsg {
+				row2Msg = string([]rune(row2Msg)[:availMsg-1]) + "…"
+			}
+			row2 = row2Indent + dimStyle.Render(row2Rule+": ") + row2Msg
 		}
-		row2 := "    " + dimStyle.Render(row2Rule+": ") + row2Msg
 		if i == m.issuesCursor && m.focus == issuesFocusList {
 			b.WriteString(lipgloss.NewStyle().Reverse(true).Render(row1))
 			b.WriteByte('\n')
