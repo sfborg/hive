@@ -304,6 +304,9 @@ func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	for id, entry := range tx.dirtyTaxa {
 		_ = a.syncTaxonIssuesWithSnapshot(ctx, id, entry)
 	}
+	for id, entry := range tx.dirtyRefs {
+		_ = a.syncReferenceIssuesWithSnapshot(ctx, id, entry)
+	}
 	for id, entry := range tx.dirtyMetadata {
 		_ = a.syncMetadataIssuesWithSnapshot(ctx, id, entry)
 	}
@@ -330,6 +333,7 @@ type Tx struct {
 	// Sync is best-effort; see WithTx for the failure semantics.
 	dirtyNames    map[string]dirtyEntry
 	dirtyTaxa     map[string]dirtyEntry
+	dirtyRefs     map[string]dirtyEntry
 	dirtyMetadata map[int]dirtyEntry
 }
 
@@ -416,6 +420,34 @@ func (t *Tx) markTaxonDeleted(id string, pre map[string]interface{}) {
 	t.dirtyTaxa[id] = dirtyEntry{preRecord: pre, deleted: true}
 }
 
+func (t *Tx) markReferenceDirty(id string) {
+	t.markReferenceDirtyWithPre(id, nil)
+}
+
+func (t *Tx) markReferenceDirtyWithPre(id string, pre map[string]interface{}) {
+	if id == "" {
+		return
+	}
+	if t.dirtyRefs == nil {
+		t.dirtyRefs = make(map[string]dirtyEntry)
+	}
+	existing, seen := t.dirtyRefs[id]
+	if seen && existing.preRecord != nil {
+		pre = existing.preRecord
+	}
+	t.dirtyRefs[id] = dirtyEntry{preRecord: pre, deleted: existing.deleted}
+}
+
+func (t *Tx) markReferenceDeleted(id string, pre map[string]interface{}) {
+	if id == "" {
+		return
+	}
+	if t.dirtyRefs == nil {
+		t.dirtyRefs = make(map[string]dirtyEntry)
+	}
+	t.dirtyRefs[id] = dirtyEntry{preRecord: pre, deleted: true}
+}
+
 func (t *Tx) markMetadataDirty(id int) {
 	t.markMetadataDirtyWithPre(id, nil)
 }
@@ -487,6 +519,9 @@ func (t *Tx) snapshotName(id string) (map[string]interface{}, error) {
 }
 func (t *Tx) snapshotTaxon(id string) (map[string]interface{}, error) {
 	return t.snapshotRow("taxon", "col__id", id)
+}
+func (t *Tx) snapshotReference(id string) (map[string]interface{}, error) {
+	return t.snapshotRow("reference", "col__id", id)
 }
 func (t *Tx) snapshotMetadata(id int) (map[string]interface{}, error) {
 	return t.snapshotRow("metadata", "col__id", strconv.Itoa(id))

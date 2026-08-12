@@ -272,6 +272,7 @@ func (t *Tx) CreateReference(r coldp.Reference) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("core: insert reference %s: %w", r.ID, err)
 	}
+	t.markReferenceDirty(r.ID)
 	return r.ID, nil
 }
 
@@ -287,6 +288,7 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 	if r.ID == "" {
 		return fmt.Errorf("core: update reference: %w: ID required", ErrValidation)
 	}
+	preSnapshot, _ := t.snapshotReference(r.ID)
 	if r.Modified != "" {
 		var current string
 		err := t.tx.QueryRowContext(t.ctx,
@@ -348,6 +350,7 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 	if n == 0 {
 		return fmt.Errorf("core: update reference %s: %w", r.ID, ErrNotFound)
 	}
+	t.markReferenceDirtyWithPre(r.ID, preSnapshot)
 	return nil
 }
 
@@ -362,6 +365,7 @@ func (t *Tx) DeleteReference(id string) error {
 	if id == "" {
 		return fmt.Errorf("core: delete reference: %w: id required", ErrValidation)
 	}
+	preSnapshot, _ := t.snapshotReference(id)
 	// Refuse if any dependent row exists. First-match reporting keeps
 	// the error message actionable ("dependency in vernacular") without
 	// enumerating every table.
@@ -389,5 +393,6 @@ func (t *Tx) DeleteReference(id string) error {
 	if n == 0 {
 		return fmt.Errorf("core: delete reference %s: %w", id, ErrNotFound)
 	}
+	t.markReferenceDeleted(id, preSnapshot)
 	return nil
 }

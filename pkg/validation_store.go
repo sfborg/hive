@@ -218,6 +218,9 @@ func (a *Archive) syncNameIssues(ctx context.Context, id string) error {
 func (a *Archive) syncTaxonIssues(ctx context.Context, id string) error {
 	return a.syncIssues(ctx, "taxon", id)
 }
+func (a *Archive) syncReferenceIssues(ctx context.Context, id string) error {
+	return a.syncIssues(ctx, "reference", id)
+}
 func (a *Archive) syncMetadataIssues(ctx context.Context, id int) error {
 	return a.syncIssues(ctx, "metadata", strconv.Itoa(id))
 }
@@ -230,6 +233,9 @@ func (a *Archive) syncNameIssuesWithSnapshot(ctx context.Context, id string, ent
 }
 func (a *Archive) syncTaxonIssuesWithSnapshot(ctx context.Context, id string, entry dirtyEntry) error {
 	return a.syncIssuesWithSnapshot(ctx, "taxon", id, entry)
+}
+func (a *Archive) syncReferenceIssuesWithSnapshot(ctx context.Context, id string, entry dirtyEntry) error {
+	return a.syncIssuesWithSnapshot(ctx, "reference", id, entry)
 }
 func (a *Archive) syncMetadataIssuesWithSnapshot(ctx context.Context, id int, entry dirtyEntry) error {
 	return a.syncIssuesWithSnapshot(ctx, "metadata", strconv.Itoa(id), entry)
@@ -380,11 +386,6 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 			},
 		},
 		{
-			// Reference is read-only from the validation cache's
-			// perspective for now — reindex walks its rows so `hive
-			// validate` picks up check-digit issues, but write-path
-			// syncing (Tx.CreateReference / UpdateReference) is a
-			// separate follow-up.
 			name:  "reference",
 			listQ: `SELECT col__id FROM reference ORDER BY col__id`,
 			syncFn: func(ctx context.Context, id string) error {
