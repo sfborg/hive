@@ -54,9 +54,22 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 		{name: "clb", bundle: clbRulesJSON, enabled: true},
 		{name: "tw", bundle: twRulesJSON, enabled: true},
 	}
+	// Apply per-ruleset toggles from hive__config_rulesets — a
+	// curator's explicit disable turns off a whole bundle before
+	// its rules are even loaded.
+	ctx := context.Background()
+	rulesetOverrides, err := readRulesetOverrides(ctx, db)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read ruleset overrides: %w", err)
+	}
+	for i, src := range sources {
+		if v, ok := rulesetOverrides[src.name]; ok {
+			sources[i].enabled = v
+		}
+	}
 
 	primaryLoader := repository.NewBytesBundleLoader(hiveRulesJSON)
-	pkg, err := primaryLoader.LoadPackage(context.Background())
+	pkg, err := primaryLoader.LoadPackage(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
 	}
@@ -68,11 +81,18 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 			continue
 		}
 		bl := repository.NewBytesBundleLoader(src.bundle)
-		bundle, err := bl.LoadPackage(context.Background())
+		bundle, err := bl.LoadPackage(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
 		}
 		mergedRules = append(mergedRules, bundle.Rules...)
+	}
+	// Apply per-rule overrides from hive__config_rules — disable
+	// specific rules and rewrite severities. Runs after the merge
+	// so a curator can override rules from any bundle.
+	mergedRules, err = applyRuleOverrides(ctx, db, mergedRules)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply rule overrides: %w", err)
 	}
 	mergedLoader := &mergedRuleLoader{rules: mergedRules}
 	mapper := sfgarules.NewSFGAMapper()
@@ -141,6 +161,76 @@ func (l *mergedRuleLoader) LoadRulesForTable(ctx context.Context, tableName stri
 		if r.TableName == tableName {
 			out = append(out, r)
 		}
+	}
+	return out, nil
+}
+
+// readRulesetOverrides fetches every hive__config_rulesets row into
+// a map. Missing entries → use the bundle's shipped default.
+func readRulesetOverrides(ctx context.Context, db *sql.DB) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT ruleset_name, enabled FROM hive__config_rulesets`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		var enabled int
+		if err := rows.Scan(&name, &enabled); err != nil {
+			return nil, err
+		}
+		out[name] = enabled == 1
+	}
+	return out, rows.Err()
+}
+
+// applyRuleOverrides consumes the merged rule list and rewrites it
+// per hive__config_rules — dropping rules a curator disabled and
+// swapping the severity of rules with a severity_override. Rules
+// without a config row pass through untouched.
+func applyRuleOverrides(ctx context.Context, db *sql.DB, rules []*domain.Rule) ([]*domain.Rule, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT rule_id, enabled, severity_override FROM hive__config_rules`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type override struct {
+		enabled          sql.NullBool
+		severityOverride sql.NullString
+	}
+	overrides := make(map[string]override)
+	for rows.Next() {
+		var id string
+		var ov override
+		if err := rows.Scan(&id, &ov.enabled, &ov.severityOverride); err != nil {
+			return nil, err
+		}
+		overrides[id] = ov
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(overrides) == 0 {
+		return rules, nil
+	}
+	out := make([]*domain.Rule, 0, len(rules))
+	for _, r := range rules {
+		ov, hasOv := overrides[r.ID]
+		if hasOv && ov.enabled.Valid && !ov.enabled.Bool {
+			continue // curator disabled — drop
+		}
+		if hasOv && ov.severityOverride.Valid && ov.severityOverride.String != "" {
+			// Shallow copy so the override doesn't leak back into
+			// the bundle's cached rule pointer.
+			cp := *r
+			cp.Severity = domain.Severity(ov.severityOverride.String)
+			out = append(out, &cp)
+			continue
+		}
+		out = append(out, r)
 	}
 	return out, nil
 }

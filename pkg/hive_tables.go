@@ -123,6 +123,35 @@ CREATE TABLE IF NOT EXISTS hive__metadata_touched (
 	id          INTEGER PRIMARY KEY,
 	touched_at  TEXT NOT NULL
 );
+
+-- hive__config_rules holds per-rule overrides of enabled state and
+-- severity. Missing row (or NULL columns) means "use the ruleset
+-- bundle's default." CHECK constraints reject bad values at write
+-- time so a typo in a CLI or hand-edit can't silently mis-load.
+--
+-- Purpose-built rather than a generic KV so the shape is
+-- self-documenting, sfga diff of two curators' archives shows
+-- clean per-rule row differences, and typos in setting names are
+-- impossible.
+CREATE TABLE IF NOT EXISTS hive__config_rules (
+	rule_id            TEXT PRIMARY KEY,
+	enabled            INTEGER CHECK (enabled IS NULL OR enabled IN (0, 1)),
+	severity_override  TEXT    CHECK (severity_override IS NULL OR severity_override IN ('error', 'warn', 'info', 'debug')),
+	updated_at         TEXT    NOT NULL,
+	updated_by         TEXT    NOT NULL DEFAULT ''
+);
+
+-- hive__config_rulesets toggles whole ruleset bundles (hive / clb /
+-- tw) on or off. A missing row means the ruleset uses its default
+-- (enabled). Coarser than hive__config_rules — sits above it in the
+-- precedence order: disabling a ruleset skips all its rules regardless
+-- of per-rule overrides.
+CREATE TABLE IF NOT EXISTS hive__config_rulesets (
+	ruleset_name  TEXT PRIMARY KEY,
+	enabled       INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+	updated_at    TEXT    NOT NULL,
+	updated_by    TEXT    NOT NULL DEFAULT ''
+);
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
