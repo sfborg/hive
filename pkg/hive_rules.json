@@ -91,7 +91,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -105,7 +105,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "orcid"},
       "error_message": "",
-      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -119,7 +119,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "orcid"},
       "error_message": "",
-      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -133,7 +133,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "orcid"},
       "error_message": "",
-      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -147,7 +147,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "orcid"},
       "error_message": "",
-      "warning_message": "ORCID check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -161,7 +161,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "rorid"},
       "error_message": "",
-      "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
+      "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -175,7 +175,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "rorid"},
       "error_message": "",
-      "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
+      "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -189,7 +189,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "rorid"},
       "error_message": "",
-      "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
+      "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -203,7 +203,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "rorid"},
       "error_message": "",
-      "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
+      "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -217,7 +217,7 @@
       "severity": "warn",
       "parameters": {"algorithm": "rorid"},
       "error_message": "",
-      "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
+      "warning_message": "This RORID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -236,7 +236,7 @@
         "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
       },
       "error_message": "",
-      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "warning_message": "Email address may be invalid — the format looks unusual. Confirm the value is correct.",
       "is_active": true,
       "priority": 40
     },
@@ -255,7 +255,7 @@
         "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
       },
       "error_message": "",
-      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "warning_message": "Email address may be invalid — the format looks unusual. Confirm the value is correct.",
       "is_active": true,
       "priority": 40
     },
@@ -274,7 +274,7 @@
         "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
       },
       "error_message": "",
-      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "warning_message": "Email address may be invalid — the format looks unusual. Confirm the value is correct.",
       "is_active": true,
       "priority": 40
     },
@@ -293,7 +293,7 @@
         "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
       },
       "error_message": "",
-      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "warning_message": "Email address may be invalid — the format looks unusual. Confirm the value is correct.",
       "is_active": true,
       "priority": 40
     },
@@ -312,7 +312,7 @@
         "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
       },
       "error_message": "",
-      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "warning_message": "Email address may be invalid — the format looks unusual. Confirm the value is correct.",
       "is_active": true,
       "priority": 40
     },
@@ -328,7 +328,7 @@
         "algorithm": "isbn10"
       },
       "error_message": "",
-      "warning_message": "ISBN check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ISBN may be invalid — its check digit doesn't match. Usually that means one digit is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -344,7 +344,7 @@
         "algorithm": "issn"
       },
       "error_message": "",
-      "warning_message": "ISSN check digit doesn't match the payload. Likely a typo — a single-digit substitution or adjacent-digit transposition.",
+      "warning_message": "This ISSN may be invalid — its check digit doesn't match. Usually that means one digit is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -380,7 +380,7 @@
         ],
         "expected": {"max": 0}
       },
-      "error_message": "This name appears on both sides of a name_relation row (self-referenced relation). Delete the row or repoint one side to a different name.",
+      "error_message": "This name appears on both sides of a name-relation link. Delete the link or repoint one side to a different name.",
       "warning_message": "",
       "is_active": true,
       "priority": 6
@@ -397,7 +397,7 @@
         "field": "col__reference_id",
         "relation": "name:reference"
       },
-      "error_message": "col__reference_id points at a reference row that does not exist. Fix the reference id or clear the field.",
+      "error_message": "Reference id doesn't match any known reference. Fix the id or clear the field.",
       "warning_message": "",
       "is_active": true,
       "priority": 8
@@ -455,7 +455,7 @@
         }
       },
       "error_message": "",
-      "warning_message": "Species taxon has no genus-group (GENUS / SUBGENUS / INFRAGENUS) ancestor in its parent chain. Reparent so the placement resolves under a genus.",
+      "warning_message": "Species has no genus (or subgenus) ancestor in its parent chain. Reparent under a genus.",
       "is_active": true,
       "priority": 12
     },
@@ -480,7 +480,7 @@
         }
       },
       "error_message": "",
-      "warning_message": "Infraspecific taxon has no species ancestor in its parent chain. Reparent so the placement resolves under a species.",
+      "warning_message": "Infraspecific taxon has no species in its parent chain. Reparent under a species.",
       "is_active": true,
       "priority": 12
     },
@@ -528,7 +528,7 @@
         "skip_if_empty": true
       },
       "error_message": "",
-      "warning_message": "Species attached to a parent that isn't a genus-group rank. Under ICZN this is a legitimate incertae sedis placement; consider marking the record explicitly so downstream consumers render it correctly.",
+      "warning_message": "Species attached to a parent that isn't a genus. Under ICZN this can be a legitimate incertae sedis placement — consider marking the record explicitly so other tools render it correctly.",
       "is_active": true,
       "priority": 10
     },
@@ -619,7 +619,7 @@
       ],
       "parameters": {"min": 1, "max": 1},
       "error_message": "",
-      "warning_message": "Parser recorded warnings on this name. Open the record and confirm the atomized fields (canonical, epithets, authorship) match what you intended.",
+      "warning_message": "Parser flagged this name. Open the record and confirm the parsed fields (canonical form, epithets, authorship) match what you intended.",
       "is_active": true,
       "priority": 20
     }
