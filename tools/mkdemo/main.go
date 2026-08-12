@@ -53,7 +53,38 @@ func main() {
 	if err != nil {
 		die("populate: %v", err)
 	}
-	fmt.Printf("wrote %s\n", path)
+	// Apply every registered rule fixture (bad + good cases) so the
+	// demo archive contains representative data for every validation
+	// rule hive ships. A developer can then browse via `hive view`
+	// or the Issues screen and see every rule fire on its own
+	// fixture. Cases are applied sequentially; a per-case failure
+	// is logged but doesn't abort the whole seed (some fixtures
+	// depend on empty state that a prior fixture may have taken —
+	// this is best-effort inspection data, not a test).
+	appliedBad, appliedGood, skipped := 0, 0, 0
+	for _, f := range hive.RuleFixtures {
+		for _, c := range f.Bad {
+			if err := c.Setup(ctx, a); err != nil {
+				fmt.Fprintf(os.Stderr, "  skip %s bad %q: %v\n", f.RuleID, c.Note, err)
+				skipped++
+				continue
+			}
+			appliedBad++
+		}
+		for _, c := range f.Good {
+			if err := c.Setup(ctx, a); err != nil {
+				fmt.Fprintf(os.Stderr, "  skip %s good %q: %v\n", f.RuleID, c.Note, err)
+				skipped++
+				continue
+			}
+			appliedGood++
+		}
+	}
+	if err := a.ReindexValidation(ctx, nil); err != nil {
+		die("reindex: %v", err)
+	}
+	fmt.Printf("wrote %s — %d fixture cases applied (%d bad, %d good; %d skipped)\n",
+		path, appliedBad+appliedGood, appliedBad, appliedGood, skipped)
 }
 
 // populate inserts a small Animalia subtree ending in Panthera / Felis, plus
