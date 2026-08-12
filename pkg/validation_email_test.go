@@ -24,15 +24,19 @@ func TestEmailRegex(t *testing.T) {
 		email string
 		want  bool // true = expect to be flagged as unusual
 	}{
-		{1, "alice@example.com", false},               // classic
-		{2, "alice+tag@example.com", false},           // plus tag
-		{3, "alice@example.museum", false},            // new gTLD
-		{4, "alice@example.technology", false},        // new gTLD
-		{5, "alice.smith@sub.example.co.uk", false},   // multi-label
-		{6, "", false},                                 // empty → condition gate → skip
-		{7, "not an email", true},                      // gross typo
-		{8, "alice@", true},                            // missing domain
-		{9, "@example.com", true},                      // missing local
+		{1, "alice@example.com", false},             // classic
+		{2, "alice+tag@example.com", false},         // plus tag — kept
+		{3, "alice@example.museum", false},          // new gTLD
+		{4, "alice@example.technology", false},      // new gTLD
+		{5, "alice.smith@sub.example.co.uk", false}, // multi-label
+		{6, "", false},                              // empty → condition gate → skip
+		{7, "not an email", true},                   // gross typo
+		{8, "alice@", true},                         // missing domain
+		{9, "@example.com", true},                   // missing local
+		{10, "o'brien@example.com", true},           // apostrophe now flagged
+		{11, "a&r@example.com", true},               // ampersand now flagged
+		{12, "user@localhost", true},                // single-label domain now flagged
+		{13, "user!company@example.com", true},      // exotic historical char
 	}
 	for _, r := range rows {
 		if _, err := a.db.ExecContext(ctx,
