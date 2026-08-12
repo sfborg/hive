@@ -25,6 +25,11 @@
       "reference.col__isbn": "text",
       "reference.col__issn": "text",
       "reference.col__doi": "text",
+      "name.col__uninomial": "text",
+      "name.col__genus": "text",
+      "name.col__infraspecific_epithet": "text",
+      "name.col__infrageneric_epithet": "text",
+      "name.col__authorship": "text",
       "creator.col__id": "integer",
       "creator.col__orcid": "text",
       "creator.col__rorid": "text",
@@ -567,6 +572,210 @@
       "warning_message": "Specific epithet is set on a name whose rank is above species. Check the rank or clear the epithet.",
       "is_active": true,
       "priority": 45
+    },
+    {
+      "rule_id": "hive_wrong_monomial_case_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "WRONG_MONOMIAL_CASE (uninomial)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
+      "error_message": "",
+      "warning_message": "Uninomial should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_wrong_monomial_case_genus",
+      "table_name": "name",
+      "field_name": "col__genus",
+      "rule_name": "WRONG_MONOMIAL_CASE (genus)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__genus", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\p{Lu}\\p{Ll}*$"},
+      "error_message": "",
+      "warning_message": "Genus should be title case (e.g. Panthera). Uppercase first letter, lowercase after.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_uppercase_epithet_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "UPPERCASE_EPITHET (specific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
+      "error_message": "",
+      "warning_message": "Specific epithet should be lowercase (e.g. leo, not Leo).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_uppercase_epithet_infraspecific",
+      "table_name": "name",
+      "field_name": "col__infraspecific_epithet",
+      "rule_name": "UPPERCASE_EPITHET (infraspecific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^[^\\p{Lu}]+$"},
+      "error_message": "",
+      "warning_message": "Infraspecific epithet should be lowercase.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_multi_word_monomial_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "MULTI_WORD_MONOMIAL (uninomial)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\S+$"},
+      "error_message": "",
+      "warning_message": "Uninomial should be a single word (no spaces).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_multi_word_epithet_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "MULTI_WORD_EPITHET (specific)",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^\\S+$"},
+      "error_message": "",
+      "warning_message": "Specific epithet should be a single word (no spaces).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_missing_genus",
+      "table_name": "name",
+      "field_name": "col__genus",
+      "rule_name": "MISSING_GENUS",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has a specific epithet but no genus. A binomial name needs both.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_infraspecific_needs_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "INCONSISTENT_NAME (infraspecific without specific)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has an infraspecific epithet but no specific epithet. An infraspecific name needs a species too.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_species_rank_needs_specific",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "INCONSISTENT_NAME (species rank without specific epithet)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES","SUBSPECIES","VARIETY","FORM","SUBVARIETY","SUBFORM"]}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Species-group rank set but no specific epithet. Fill in the epithet or fix the rank.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_suprageneric_needs_uninomial",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "INCONSISTENT_NAME (suprageneric without uninomial)",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY","SUPERFAMILY","SUBFAMILY","ORDER","SUPERORDER","SUBORDER","INFRAORDER","CLASS","SUPERCLASS","SUBCLASS","PHYLUM","SUPERPHYLUM","SUBPHYLUM","KINGDOM","SUBKINGDOM","SUPERKINGDOM","DOMAIN"]}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Rank above genus but no uninomial set. Fill in the uninomial name.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_unlikely_year",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "UNLIKELY_YEAR",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__published_in_year", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"min": 1753, "max": 2100},
+      "error_message": "",
+      "warning_message": "Publication year outside the expected range (1753 for zoological / botanical priority through the present).",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "hive_doi_invalid",
+      "table_name": "reference",
+      "field_name": "col__doi",
+      "rule_name": "DOI_INVALID",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__doi", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^(?:https?://(?:dx\\.)?doi\\.org/)?(?:urn:)?(?:doi:)?10\\.[0-9]+(?:\\.[0-9]+)*/.+$"},
+      "error_message": "",
+      "warning_message": "DOI doesn't look like a valid identifier. Expected form: 10.XXXX/YYYY, optionally prefixed with https://doi.org/ or doi:.",
+      "is_active": true,
+      "priority": 30
     },
     {
       "rule_id": "hive_duplicate_name",
