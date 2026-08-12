@@ -28,18 +28,23 @@
       "creator.col__id": "integer",
       "creator.col__orcid": "text",
       "creator.col__rorid": "text",
+      "creator.col__email": "text",
       "contact.col__id": "integer",
       "contact.col__orcid": "text",
       "contact.col__rorid": "text",
+      "contact.col__email": "text",
       "contributor.col__id": "integer",
       "contributor.col__orcid": "text",
       "contributor.col__rorid": "text",
+      "contributor.col__email": "text",
       "editor.col__id": "integer",
       "editor.col__orcid": "text",
       "editor.col__rorid": "text",
+      "editor.col__email": "text",
       "publisher.col__id": "integer",
       "publisher.col__orcid": "text",
       "publisher.col__rorid": "text",
+      "publisher.col__email": "text",
       "name_relation.col__name_id": "text",
       "name_relation.col__related_name_id": "text",
       "metadata.col__id": "integer"
@@ -215,6 +220,101 @@
       "warning_message": "RORID check digit doesn't match the payload. Likely a typo — a single-character substitution or adjacent-character transposition.",
       "is_active": true,
       "priority": 30
+    },
+    {
+      "rule_id": "hive_creator_email_format",
+      "table_name": "creator",
+      "field_name": "col__email",
+      "rule_name": "Creator email format looks unusual",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__email", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+      },
+      "error_message": "",
+      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_contact_email_format",
+      "table_name": "contact",
+      "field_name": "col__email",
+      "rule_name": "Contact email format looks unusual",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__email", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+      },
+      "error_message": "",
+      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_contributor_email_format",
+      "table_name": "contributor",
+      "field_name": "col__email",
+      "rule_name": "Contributor email format looks unusual",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__email", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+      },
+      "error_message": "",
+      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_editor_email_format",
+      "table_name": "editor",
+      "field_name": "col__email",
+      "rule_name": "Editor email format looks unusual",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__email", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+      },
+      "error_message": "",
+      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "hive_publisher_email_format",
+      "table_name": "publisher",
+      "field_name": "col__email",
+      "rule_name": "Publisher email format looks unusual",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__email", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+      },
+      "error_message": "",
+      "warning_message": "Email address doesn't match the HTML5 email pattern. Might be a typo — or an unusual-but-valid address; confirm the value is intentional.",
+      "is_active": true,
+      "priority": 40
     },
     {
       "rule_id": "hive_reference_isbn_check_digit",
