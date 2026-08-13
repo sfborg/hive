@@ -27,16 +27,79 @@
      A colorblind-safe alternate palette is available via
      html[data-severity-palette="cvd"] (see below). */
   --sev-error: #dc2626;
-  --sev-warn:  #ea580c;
+  /* Warn shifts toward amber (rather than red-orange) so it reads as
+     clearly distinct from --sev-error at a glance. Not pure yellow —
+     yellow-on-white loses contrast. */
+  --sev-warn:  #d97706;
   --sev-info:  #16a34a;
   --sev-debug: #2563eb;
-  --sev-error-bg: color-mix(in oklab, var(--sev-error) 12%, var(--bg));
-  --sev-warn-bg:  color-mix(in oklab, var(--sev-warn)  12%, var(--bg));
-  --sev-info-bg:  color-mix(in oklab, var(--sev-info)  12%, var(--bg));
-  --sev-debug-bg: color-mix(in oklab, var(--sev-debug) 12%, var(--bg));
+  /* Chip backgrounds sit at ~22% saturation so severity is legible
+     from across the screen — the earlier 12% read as almost-neutral
+     in the Issues sidebar's dense rule list. Chip text is the full
+     severity color so contrast against the tint stays high. */
+  --sev-error-bg: color-mix(in oklab, var(--sev-error) 22%, var(--bg));
+  --sev-warn-bg:  color-mix(in oklab, var(--sev-warn)  22%, var(--bg));
+  --sev-info-bg:  color-mix(in oklab, var(--sev-info)  22%, var(--bg));
+  --sev-debug-bg: color-mix(in oklab, var(--sev-debug) 22%, var(--bg));
 
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Spacing scale — six steps. All padding/margin/gap composes from
+     these. See DESIGN.md § Tokens → Spacing. */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+
+  /* Border radius — three values (chips/inputs/pills). --radius-md
+     matches the existing card radius so buttons and cards share the
+     same visual language. */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-pill: 999px;
+
+  /* Type scale — em-relative to the 14px body baseline. */
+  --fs-xs: 0.75em;
+  --fs-sm: 0.85em;
+  --fs-md: 1em;
+  --fs-lg: 1.1em;
+  --fs-xl: 1.4em;
+
+  /* Motion — reserved for hovers/reveals. Wrapped in the reduced-motion
+     query below so components can use these tokens unconditionally. */
+  --transition-fast: 120ms ease;
+  --transition-medium: 200ms ease;
+
+  /* Z-index — small stack, one token per role. */
+  --z-modal-backdrop: 10;
+  --z-modal-content: 11;
+  --z-popover: 20;
+  --z-toast: 30;
+  /* Tree-sticky-ancestor rows use a per-depth z-index derived from
+     this base (see SfgaTree's sticky rule). Kept below --z-popover
+     so combobox dropdowns / other popovers overlay sticky headers
+     rather than getting hidden behind them. Base 5 accommodates
+     trees up to a few dozen levels deep without going negative. */
+  --z-tree-sticky-base: 5;
+
+  /* Modal size tiers — see DESIGN.md § Modals → Size tiers. */
+  --modal-sm: 24rem;
+  --modal-md: 38rem;
+  --modal-lg: 48rem;
+  --modal-max-h: 90vh;
+}
+
+/* Respect the OS-level reduced-motion preference by zeroing every
+   transition token. Components that use these tokens get the fallback
+   automatically. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0s;
+    --transition-medium: 0s;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,7 +113,9 @@
     --error: #ff6b6b;
 
     --sev-error: #f87171;
-    --sev-warn:  #fb923c;
+    /* Amber-yellow on dark reads with high contrast and stays clearly
+       distinct from --sev-error. */
+    --sev-warn:  #fbbf24;
     --sev-info:  #4ade80;
     --sev-debug: #60a5fa;
   }
@@ -77,7 +142,7 @@ html[data-theme="dark"] {
   --error: #ff6b6b;
 
   --sev-error: #f87171;
-  --sev-warn:  #fb923c;
+  --sev-warn:  #fbbf24;
   --sev-info:  #4ade80;
   --sev-debug: #60a5fa;
 }

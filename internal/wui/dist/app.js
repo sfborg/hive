@@ -10,7 +10,7 @@
  * platform. No build step, no bundler; the browser resolves the imports.
  */
 
-import { LitElement, html, css, svg, unsafeHTML } from "/vendor/lit-3.x.x.min.js";
+import { LitElement, html, css, svg, unsafeHTML, nothing } from "/vendor/lit-3.x.x.min.js";
 import { api, Problem } from "/lib/api.js";
 
 // ---------- icons ----------
@@ -24,6 +24,13 @@ import { api, Problem } from "/lib/api.js";
 // When adding a view, pick a lucide icon at lucide.dev, grab the
 // inner shapes from "Show as SVG", and add here using `svg` tag.
 const iconPaths = {
+  // plus — generic "add" affordance (Lucide). Used in combobox
+  // pinned actions and any future generic add button that isn't
+  // one of the more specific taxonomic add icons.
+  plus: svg`
+    <path d="M5 12h14" />
+    <path d="M12 5v14" />
+  `,
   // network — nested nodes / hierarchy → Taxa tree
   network: svg`
     <rect x="16" y="16" width="6" height="6" rx="1" />
@@ -264,11 +271,16 @@ function renderLabel(label, fallback = "") {
 // Color comes from --sev-* CSS custom properties (traffic-light default,
 // swap via html[data-severity-palette="cvd"]). A leading glyph carries
 // the signal too so severity is legible under color loss.
+// Same glyph for every severity — a warning triangle. Severity is
+// conveyed by the chip color (via var(--sev-*)) and the label text;
+// keeping the icon consistent avoids the mixed-iconography look
+// of a per-severity glyph set (bug, X, i, triangle) and lets the
+// color palette carry the semantic weight it's designed for.
 const SEV_META = {
-  error: { glyph: "✕",  label: "error" },  // ✕
-  warn:  { glyph: "⚠",  label: "warn"  },  // ⚠
-  info:  { glyph: "ⓘ",  label: "info"  },  // ⓘ
-  debug: { glyph: "🐛", label: "debug" },  // 🐛
+  error: { glyph: "⚠", label: "Error" },
+  warn:  { glyph: "⚠", label: "Warn"  },
+  info:  { glyph: "⚠", label: "Info"  },
+  debug: { glyph: "⚠", label: "Debug" },
 };
 function severityChip(severity) {
   const key = (severity || "warn").toLowerCase();
@@ -276,6 +288,237 @@ function severityChip(severity) {
   return html`<span class="sev-chip sev-${key}"
     ><span class="sev-glyph">${meta.glyph}</span>${meta.label}</span
   >`;
+}
+
+// Shared CSS for severityChip's rendered markup. Included in every
+// component that hosts a severity chip via `static styles = [...]` —
+// Lit shadow-DOM scoping means each host has to import the block
+// itself; a global rule in styles.css wouldn't cross the boundary.
+// See severityChip() for the markup this dresses up.
+const severityChipStyles = css`
+  .sev-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.8em;
+    font-weight: 600;
+    line-height: 1;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .sev-chip.sev-error { color: var(--sev-error); background: var(--sev-error-bg); }
+  .sev-chip.sev-warn  { color: var(--sev-warn);  background: var(--sev-warn-bg);  }
+  .sev-chip.sev-info  { color: var(--sev-info);  background: var(--sev-info-bg);  }
+  .sev-chip.sev-debug { color: var(--sev-debug); background: var(--sev-debug-bg); }
+  .sev-chip .sev-glyph { font-weight: 700; }
+`;
+
+// Shared button vocabulary. Included in every component that renders
+// buttons via `static styles = [buttonStyles, ...]`. Variants per
+// DESIGN.md § Buttons: default (secondary/neutral), .primary (main
+// action), .danger (outlined destructive in a toolbar), .danger-primary
+// (filled destructive that IS the primary intent — e.g. confirm-modal
+// Delete), .icon-btn (square icon-only; requires aria-label + title),
+// .icon-btn.subtle (borderless icon button for header nav / peripheral
+// controls; hover reveals a background tint instead of a border),
+// .close-x (bare glyph for modal dismissal only). Additions require a
+// design-system extension per DESIGN.md § Extending this system.
+const buttonStyles = css`
+  button {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--sp-1) var(--sp-3);
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  button.danger {
+    color: var(--error);
+    border-color: var(--error);
+  }
+  button.danger:hover:not(:disabled) {
+    border-color: var(--error);
+    background: color-mix(in oklab, var(--error) 12%, transparent);
+  }
+  button.danger-primary {
+    background: var(--error);
+    color: var(--bg);
+    border-color: var(--error);
+  }
+  button.danger-primary:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--error) 82%, black);
+    border-color: color-mix(in oklab, var(--error) 82%, black);
+  }
+  button.icon-btn {
+    padding: var(--sp-1);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+  button.icon-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  button.icon-btn svg {
+    display: block;
+  }
+  /* Subtle variant for header navigation / peripheral controls where a
+     visible border would compete with the data. Hover reveals a soft
+     background tint instead. */
+  button.icon-btn.subtle {
+    border-color: transparent;
+  }
+  button.icon-btn.subtle:hover:not(:disabled) {
+    border-color: transparent;
+    background: color-mix(in oklab, var(--fg) 8%, transparent);
+    color: var(--fg);
+  }
+  /* Subtle + danger: destructive header actions (trash / delete) reuse
+     the borderless treatment but shift the hover tint to error so the
+     icon reads as destructive on interaction, not just at rest. */
+  button.icon-btn.subtle.danger {
+    color: var(--fg);
+    border-color: transparent;
+  }
+  button.icon-btn.subtle.danger:hover:not(:disabled) {
+    border-color: transparent;
+    color: var(--error);
+    background: color-mix(in oklab, var(--error) 8%, transparent);
+  }
+  button.close-x {
+    background: transparent;
+    color: var(--dim);
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    font-size: var(--fs-xl);
+    line-height: 1;
+  }
+  button.close-x:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: transparent;
+  }
+`;
+
+// Shared form-field vocabulary. Included in every component that renders
+// a form via `static styles = [formFieldStyles, ...]`. Covers inputs,
+// textareas, selects, labels (right-aligned dim mono at --fs-sm), the
+// .req marker (adds " *" in --error), and the focus behavior (accent
+// border). Component-local form layout (grid columns, label alignment
+// overrides, custom widgets) still lives in the component's own styles.
+const formFieldStyles = css`
+  input,
+  textarea,
+  select {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: var(--sp-1) var(--sp-2);
+    font-family: inherit;
+    font-size: var(--fs-md);
+    min-width: 0;
+  }
+  textarea {
+    min-height: 4rem;
+    resize: vertical;
+    font-family: var(--font-body);
+  }
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  label {
+    color: var(--dim);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+  }
+  label.req::after {
+    content: " *";
+    color: var(--error);
+  }
+  .req {
+    color: var(--error);
+  }
+`;
+
+// trapFocus keeps keyboard focus inside a modal container. Call it in
+// connectedCallback with the root element to trap in (usually the
+// component's shadow root or the .modal child), and invoke the returned
+// release() in disconnectedCallback. Also focuses the initial target
+// (opts.initialFocus, a selector or element) and restores focus to
+// whichever element had focus before trap install when released — so
+// dismissing a modal returns the curator to whatever they clicked to
+// open it. Works across shadow-DOM boundaries by reading activeElement
+// from the trapped element's own root node.
+function trapFocus(container, opts = {}) {
+  const root = container.getRootNode();
+  const previouslyFocused = root.activeElement;
+
+  const focusables = () =>
+    Array.from(
+      container.querySelectorAll(
+        'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+
+  const onKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    const items = focusables();
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    // getRootNode().activeElement gives the active element within the
+    // same shadow root as the container — document.activeElement would
+    // return the host element (sfga-app) instead of the focused button.
+    const active = root.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  container.addEventListener("keydown", onKeyDown);
+
+  // Defer initial focus so Lit finishes rendering the target element.
+  Promise.resolve().then(() => {
+    let target = null;
+    if (opts.initialFocus) {
+      target =
+        typeof opts.initialFocus === "string"
+          ? container.querySelector(opts.initialFocus)
+          : opts.initialFocus;
+    }
+    if (!target) target = focusables()[0];
+    if (target) target.focus();
+  });
+
+  return () => {
+    container.removeEventListener("keydown", onKeyDown);
+    if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+      previouslyFocused.focus();
+    }
+  };
 }
 
 // orcidLink turns a bare ORCID iD (0000-0002-1825-0097) into an anchor to
@@ -289,13 +532,15 @@ function orcidLink(value) {
 
 // renderStars produces a filled/empty star row plus a numeric readout.
 // Used for the metadata Confidence 1-5 rating. Values clamp into
-// [0, max]. CSS class .star-filled gets the accent color; .star-empty
-// stays dim. Unicode chars — no icon library.
+// [0, max]. Both filled and empty use ★ so the glyph metrics match —
+// the visual distinction comes from color (.star-filled uses the accent
+// color, .star-empty uses --border for a faint outline effect). Using ☆
+// for empty produced a size/baseline mismatch in most system fonts.
 function renderStars(value, max) {
   const v = Math.max(0, Math.min(max, Number(value) || 0));
   return html`<span class="stars"
     ><span class="star-filled">${"★".repeat(v)}</span
-    ><span class="star-empty">${"☆".repeat(max - v)}</span>
+    ><span class="star-empty">${"★".repeat(max - v)}</span>
     <span class="star-count">${v} / ${max}</span></span
   >`;
 }
@@ -478,13 +723,27 @@ function referenceHitLabel(h) {
 
 // taxonSource hits the server. Uses the server-rendered label.text so
 // dagger + authorship formatting stays consistent with the tree.
+//
+// include_synonyms=true so curators searching by a synonymous name
+// still land on the accepted taxon — parent pickers and the top-bar
+// combobox both benefit. Synonym rows carry `matched` (the synonym
+// text that matched the query) and `isSynonym: true`; the combobox
+// renders those rows as "matched → name" (see DESIGN.md § Search
+// combobox synonym rendering). On pick, `id` is the accepted taxon's
+// id in both cases, so the reveal / navigate path is unchanged.
 async function taxonSource(q) {
   if (!q || q.length < 2) return [];
   try {
-    const page = await api.taxon.search({ q, limit: 20 });
+    const page = await api.taxon.search({
+      q,
+      limit: 20,
+      include_synonyms: true,
+    });
     return (page.items || []).map((hit) => ({
       id: hit.id,
       name: hit.label?.text || hit.name,
+      isSynonym: !!hit.is_synonym,
+      matched: hit.matched_name || "",
     }));
   } catch (_) {
     return [];
@@ -521,6 +780,10 @@ class SfgaApp extends LitElement {
     // Warnings from the most recent create/update, if any. Cleared
     // when the selection moves to a different taxon. See _onMoved.
     _pendingWarnings: { state: true },
+    // Reference id to pre-select on the References screen — set by
+    // _onIssueNavigate when a reference-scoped issue is opened, so
+    // the References component focuses that row on first render.
+    _pendingReferenceId: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -539,7 +802,9 @@ class SfgaApp extends LitElement {
     { id: "issues", label: "Issues", icon: "triangle-alert", key: "i" },
   ];
 
-  static styles = css`
+  static styles = [
+    buttonStyles,
+    css`
     :host {
       display: grid;
       grid-template-rows: auto 1fr;
@@ -547,44 +812,64 @@ class SfgaApp extends LitElement {
       color: var(--fg);
       background: var(--bg);
     }
+    /* Skip-to-main link — visually hidden until focused, then anchors
+       to the top-left with the accent-fill so keyboard/screen-reader
+       users can bypass the sidebar and header. Activating it moves
+       focus into <main> (see _skipToMain). */
+    .skip-link {
+      position: absolute;
+      top: var(--sp-2);
+      left: var(--sp-2);
+      background: var(--accent);
+      color: var(--accent-fg);
+      padding: var(--sp-1) var(--sp-3);
+      border-radius: var(--radius-md);
+      text-decoration: none;
+      font: inherit;
+      z-index: var(--z-popover);
+      transform: translateX(-200%);
+    }
+    .skip-link:focus {
+      transform: translateX(0);
+      outline: 2px solid var(--fg);
+      outline-offset: 2px;
+    }
+    /* main must be focusable (tabindex="-1") so _skipToMain can move
+       focus there. Suppress its default focus outline — the
+       tab-stop is a jump-target, not a visible focus destination. */
+    main:focus {
+      outline: none;
+    }
+    /* Three-column header: left is reserved (future hamburger menu for
+       load-database / share / sign-in-out); center holds the archive
+       title with schema version inline; right holds peripheral controls
+       (help, theme). The 1fr/auto/1fr split keeps the title truly
+       centered independent of what lands in the left slot. */
     header {
       border-bottom: 1px solid var(--border);
-      padding: 0.5rem 0.75rem;
-      display: flex;
-      justify-content: space-between;
+      padding: var(--sp-2) var(--sp-3);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      gap: 1rem;
+      gap: var(--sp-4);
     }
     header .title {
       font-weight: 600;
+      text-align: center;
     }
-    header .meta {
+    header .title .schema {
       color: var(--dim);
-      font-size: 0.9em;
+      font-weight: normal;
       font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      margin-left: var(--sp-1);
     }
     header .header-buttons {
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: var(--sp-1);
+      justify-self: end;
     }
-    button.theme-toggle {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.25rem;
-      font-family: inherit;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-    button.theme-toggle:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-    button.theme-toggle svg { display: block; }
     main {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -657,8 +942,12 @@ class SfgaApp extends LitElement {
       display: grid;
       overflow: hidden;
     }
+    /* Taxa screen splits the viewport 50/50 between tree and detail
+       — the classification is a first-class artifact, not a nav
+       sidebar. The minmax lower bound preserves a legible tree on
+       narrow windows before the columns collapse to equal shares. */
     .screen.taxa {
-      grid-template-columns: minmax(20rem, 40%) 1fr;
+      grid-template-columns: minmax(20rem, 1fr) 1fr;
     }
     .screen.metadata {
       grid-template-columns: 1fr;
@@ -666,7 +955,7 @@ class SfgaApp extends LitElement {
       overflow: auto;
     }
     .screen.references {
-      grid-template-columns: minmax(20rem, 40%) 1fr;
+      grid-template-columns: minmax(20rem, 1fr) 1fr;
     }
     aside,
     section {
@@ -698,7 +987,8 @@ class SfgaApp extends LitElement {
       color: var(--error);
       font-family: var(--font-mono);
     }
-  `;
+  `,
+  ];
 
   constructor() {
     super();
@@ -711,6 +1001,7 @@ class SfgaApp extends LitElement {
     this.sidebarCollapsed = localStorage.getItem("hive-sidebar") === "collapsed";
     this.helpOpen = false;
     this._pendingWarnings = null;
+    this._pendingReferenceId = "";
     this._applyTheme();
     this._onGlobalKey = this._onGlobalKey.bind(this);
   }
@@ -721,12 +1012,48 @@ class SfgaApp extends LitElement {
     // regardless of which input has focus. Bound at document level;
     // torn down in disconnectedCallback.
     window.addEventListener("keydown", this._onGlobalKey);
+    // Screen-level action buttons live in the app header rather than
+    // in each pane, so panes keep full horizontal room for their data
+    // (long scientific names + authorships in taxa; long descriptions
+    // in metadata). Screens dispatch "screen-actions-changed" when the
+    // set of relevant actions changes (edit mode toggled, selection
+    // changed, data loaded). See DESIGN.md § Screen actions.
+    this._onScreenActionsChanged = () => this.requestUpdate();
+    this.addEventListener(
+      "screen-actions-changed",
+      this._onScreenActionsChanged,
+    );
+    // Tree rows dispatch taxon-action {id, action} when the curator
+    // hits one of the row-level buttons (edit / new-child /
+    // new-sister / delete). If the target row isn't already selected
+    // we select it first, then wait for SfgaDetail's load to
+    // complete before invoking the action so the action fires
+    // against fully-loaded state. See DESIGN.md § List-row actions.
+    this._onTaxonAction = (e) => this._handleTaxonAction(e.detail);
+    this.addEventListener("taxon-action", this._onTaxonAction);
+    // Empty-archive affordance: SfgaTree dispatches taxon-create-root
+    // when the curator clicks "Add first taxon" on a tree that has
+    // no root taxa yet. Route into SfgaDetail's create pane with an
+    // empty parent (see startCreateRoot).
+    this._onTaxonCreateRoot = () => this._handleTaxonCreateRoot();
+    this.addEventListener("taxon-create-root", this._onTaxonCreateRoot);
     // URL fragment routing. Back/forward buttons update the hash;
     // hashchange feeds it back into our state. Initial hash is read
     // before data loads so the tree reveal fires with the right id.
     this._onHashChange = this._onHashChange.bind(this);
     window.addEventListener("hashchange", this._onHashChange);
     this._syncFromHash();
+    // Guard against losing unsaved metadata edits to a tab close,
+    // reload, or navigation. Browsers show a generic confirm dialog
+    // when preventDefault + returnValue is set; the specific text
+    // is not shown to the user (spec: sanitized to a stock message).
+    this._onBeforeUnload = (e) => {
+      if (this._hasUnsavedMetadata()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", this._onBeforeUnload);
     try {
       // Load in parallel: archive info + dataset metadata for the
       // header, vocabulary bundle for edit-form dropdowns, NOMEN
@@ -758,7 +1085,121 @@ class SfgaApp extends LitElement {
   disconnectedCallback() {
     window.removeEventListener("keydown", this._onGlobalKey);
     window.removeEventListener("hashchange", this._onHashChange);
+    if (this._onBeforeUnload) {
+      window.removeEventListener("beforeunload", this._onBeforeUnload);
+    }
+    if (this._onScreenActionsChanged) {
+      this.removeEventListener(
+        "screen-actions-changed",
+        this._onScreenActionsChanged,
+      );
+    }
+    if (this._onTaxonAction) {
+      this.removeEventListener("taxon-action", this._onTaxonAction);
+    }
+    if (this._onTaxonCreateRoot) {
+      this.removeEventListener("taxon-create-root", this._onTaxonCreateRoot);
+    }
     super.disconnectedCallback();
+  }
+
+  // _skipToMain moves keyboard focus into the <main> region, bypassing
+  // the header and sidebar. Prefers the first focusable element inside
+  // <main> — on the taxa screen this lands on the tree <ul> (which is
+  // where SfgaTree auto-focuses on mount anyway), on other screens it
+  // lands on whichever interactive element renders first. Falls back
+  // to focusing <main> itself when no focusable descendant exists.
+  _skipToMain(e) {
+    e.preventDefault();
+    const main = this.renderRoot?.querySelector("main");
+    if (!main) return;
+    const focusable = main.querySelector(
+      'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable) focusable.focus();
+    else main.focus();
+  }
+
+  // _handleTaxonAction processes a taxon-action dispatched by a tree
+  // row. If the target isn't the currently-selected taxon, updates
+  // selection so SfgaDetail loads the target, then awaits the load
+  // via performAction() (which awaits its own _loadPromise) before
+  // running the action. Single-click UX for the tree-row buttons on
+  // desktop; the same code path handles the tap-then-button flow on
+  // touch (where the row was already selected by the tap).
+  async _handleTaxonAction({ id, action }) {
+    if (!id || !action) return;
+    if (this.selectedId !== id) {
+      this.selectedId = id;
+      await this.updateComplete;
+    }
+    const detail = this.renderRoot?.querySelector("sfga-detail");
+    if (!detail || typeof detail.performAction !== "function") return;
+    await detail.performAction(action);
+  }
+
+  // _handleTaxonCreateRoot opens the create pane for a new root-level
+  // taxon. Fired by SfgaTree's "Add first taxon" affordance when the
+  // archive is empty. Guarded on the archive being writable so the
+  // click no-ops silently on read-only archives (the button shouldn't
+  // render there either, but this belt-and-suspenders keeps the
+  // affordance from doing anything harmful if it does).
+  async _handleTaxonCreateRoot() {
+    if (this.screen !== "taxa") return;
+    if (!this.archive || this.archive.read_only) return;
+    await this.updateComplete;
+    const detail = this.renderRoot?.querySelector("sfga-detail");
+    if (!detail || typeof detail.startCreateRoot !== "function") return;
+    await detail.startCreateRoot();
+  }
+
+  // _renderScreenActions asks the currently-mounted screen component
+  // for the buttons it wants projected into the app header. Screens
+  // implement renderHeaderActions() returning an html template or "";
+  // they dispatch "screen-actions-changed" (see connectedCallback)
+  // when the output would change so this method's result stays fresh.
+  _renderScreenActions() {
+    const selector = {
+      metadata: "sfga-metadata",
+      taxa: "sfga-detail",
+    }[this.screen];
+    if (!selector) return "";
+    const el = this.renderRoot?.querySelector(selector);
+    return el?.renderHeaderActions?.() ?? "";
+  }
+
+  // _hasUnsavedMetadata reports whether the mounted <sfga-metadata>
+  // has an in-progress edit. Returns false when the metadata screen
+  // isn't rendered (component absent from the shadow tree).
+  _hasUnsavedMetadata() {
+    const md = this.renderRoot?.querySelector("sfga-metadata");
+    return !!md && typeof md.hasUnsavedChanges === "function" &&
+      md.hasUnsavedChanges();
+  }
+
+  // _requestScreenChange gates every screen switch through the
+  // unsaved-edits guard. Called from both the sidebar click handler
+  // and the alt+letter global shortcut so no navigation path can
+  // bypass the confirm. Returns true iff the switch proceeded.
+  async _requestScreenChange(target) {
+    if (target === this.screen) return true;
+    if (this.screen === "metadata" && this._hasUnsavedMetadata()) {
+      const md = this.renderRoot?.querySelector("sfga-metadata");
+      const choice = await confirmDirty({
+        heading: "Unsaved metadata edits",
+        message:
+          "You have unsaved changes to metadata. Save them, discard them, or keep editing?",
+        canSave: true,
+      });
+      if (choice === "cancel") return false;
+      if (choice === "save") {
+        if (!md || !(await md.save())) return false;
+      } else if (choice === "discard") {
+        if (md && typeof md.discardChanges === "function") md.discardChanges();
+      }
+    }
+    this.screen = target;
+    return true;
   }
 
   // updated pushes state changes back into the URL fragment so the
@@ -916,7 +1357,7 @@ class SfgaApp extends LitElement {
       case "view-issues": {
         const wanted = action.slice("view-".length); // "taxa" / "metadata" / "references" / "issues"
         e.preventDefault();
-        this.screen = wanted;
+        this._requestScreenChange(wanted);
         return;
       }
       case "search-focus": {
@@ -1074,15 +1515,33 @@ class SfgaApp extends LitElement {
     }
   }
 
-  // Row click from the Issues screen. Routing depends on the target
-  // table: taxon-linked issues open the Taxa screen and reveal in
-  // the tree; metadata-scoped issues open the Metadata screen.
-  // Other tables get a fallback that just switches to Taxa without
-  // reveal (nothing sensible to navigate to yet).
+  // Row click from the Issues screen. Route to the natural edit
+  // surface for the flagged record:
+  //   - taxon-linked issues open the Taxa screen and reveal the row
+  //   - reference-scoped issues open the References screen with the
+  //     flagged reference pre-selected
+  //   - metadata + role-table issues (creator/contact/contributor/
+  //     editor/publisher) open the Metadata screen, where those
+  //     agent lists are edited
+  // Unknown tables with no taxon hint are silently ignored — the
+  // Issues row was already rendered dim to signal that.
   async _onIssueNavigate(e) {
     const detail = e.detail || {};
-    if (detail.table === "metadata") {
+    const roleTables = new Set([
+      "metadata",
+      "creator",
+      "contact",
+      "contributor",
+      "editor",
+      "publisher",
+    ]);
+    if (roleTables.has(detail.table)) {
       this.screen = "metadata";
+      return;
+    }
+    if (detail.table === "reference") {
+      this._pendingReferenceId = detail.record_id || "";
+      this.screen = "references";
       return;
     }
     if (detail.taxon_id) {
@@ -1125,21 +1584,34 @@ class SfgaApp extends LitElement {
 
   render() {
     // Header title comes from the dataset metadata when present, else
-    // falls back to the literal "hive" (legacy archive without a seeded
-    // metadata row). Path / schema / mode stay in the secondary meta
-    // strip for operator-visible context.
+    // Falls back to the literal "hive" for legacy archives without a
+    // seeded metadata row. The schema version renders inline after the
+    // title in a dimmed mono style; read-only mode appends a marker so
+    // curators notice they're viewing a locked archive without needing
+    // a separate strip. The DB filename is available via the title
+    // tooltip.
     const title = this.metadata?.title || "hive";
-    const meta = this.archive
-      ? html`${this.archive.path} · schema ${this.archive.schema_version} ·
-          ${this.archive.read_only ? "read-only" : "read-write"}`
-      : "loading…";
+    const schemaText = this.archive
+      ? this.archive.read_only
+        ? `(${this.archive.schema_version}, read-only)`
+        : `(${this.archive.schema_version})`
+      : "";
+    const titleTooltip = this.archive ? this.archive.path : "";
     return html`
+      <a class="skip-link" href="#main" @click=${(e) => this._skipToMain(e)}
+        >Skip to main content</a
+      >
       <header>
-        <div class="title">${title}</div>
-        <div class="meta">${meta}</div>
+        <div class="header-left"></div>
+        <div class="title" title=${titleTooltip}>
+          ${title}${schemaText
+            ? html`<span class="schema">${schemaText}</span>`
+            : ""}
+        </div>
         <div class="header-buttons">
+          ${this._renderScreenActions()}
           <button
-            class="theme-toggle"
+            class="icon-btn subtle"
             @click=${() => (this.helpOpen = true)}
             title="keyboard shortcuts  (?)"
             aria-label="keyboard shortcuts"
@@ -1147,7 +1619,7 @@ class SfgaApp extends LitElement {
             ${renderIcon("help-circle", 18)}
           </button>
           <button
-            class="theme-toggle"
+            class="icon-btn subtle"
             @click=${() => this._cycleTheme()}
             title="theme: ${this.theme}  (click to cycle)"
             aria-label="theme: ${this.theme}"
@@ -1156,7 +1628,7 @@ class SfgaApp extends LitElement {
           </button>
         </div>
       </header>
-      <main>
+      <main id="main" tabindex="-1">
         ${this._renderSidebar()}
         ${this._renderScreen()}
       </main>
@@ -1177,7 +1649,7 @@ class SfgaApp extends LitElement {
             (v) => html`
               <li
                 class=${v.id === this.screen ? "active" : ""}
-                @click=${() => (this.screen = v.id)}
+                @click=${() => this._requestScreenChange(v.id)}
                 title=${v.label + "  (alt+" + v.key + ")"}
               >
                 <span class="icon">${renderIcon(v.icon)}</span>
@@ -1214,7 +1686,10 @@ class SfgaApp extends LitElement {
       case "references":
         return html`
           <div class="screen references">
-            <sfga-references></sfga-references>
+            <sfga-references
+              .selectId=${this._pendingReferenceId}
+              @reference-selected=${() => (this._pendingReferenceId = "")}
+            ></sfga-references>
           </div>
         `;
       case "issues":
@@ -1232,13 +1707,13 @@ class SfgaApp extends LitElement {
               <sfga-combobox
                 class="search"
                 min-search-chars="2"
-                placeholder="search taxa…"
+                placeholder="Search taxa…"
                 .source=${taxonSource}
                 .resolver=${taxonResolver}
                 @pick=${(e) => this._onSearchPick(e)}
               ></sfga-combobox>
               <div class="tree-scroll">
-                ${this.error ? html`<div class="error">${this.error}</div>` : ""}
+                ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : ""}
                 <sfga-tree @taxon-selected=${(e) => this._onSelected(e)}></sfga-tree>
               </div>
             </aside>
@@ -1253,6 +1728,7 @@ class SfgaApp extends LitElement {
                 }
                 @taxon-moved=${(e) => this._onMoved(e)}
                 @taxon-deleted=${(e) => this._onDeleted(e)}
+                @taxon-selected=${(e) => this._onSelected(e)}
               ></sfga-detail>
             </section>
           </div>
@@ -1271,62 +1747,185 @@ class SfgaTree extends LitElement {
     nodes: { state: true },
     selectedId: { state: true },
     error: { state: true },
+    // _loaded flips true after the first reloadRoots resolves. Gates
+    // the empty-state render so a slow initial fetch (COL-scale
+    // archives take a moment for the roots query) doesn't flash the
+    // "Add first taxon" affordance before the real roots arrive.
+    _loaded: { state: true },
   };
 
-  static styles = css`
-    :host {
-      display: block;
-      font-family: var(--font-mono);
-      font-size: 0.95em;
-    }
-    ul {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      /* Suppress the default focus outline on the <ul>; the pane-level
-         ring lives on the .tree-scroll wrapper in the app shell so it
-         fills the whole tree area (not just the content-sized <ul>).
-         See PARITY.md § Focus semantics. */
-      outline: none;
-    }
-    li {
-      padding: 0.15rem 0.35rem;
-      cursor: pointer;
-      white-space: nowrap;
-      color: var(--fg);
-    }
-    li:hover {
-      background: color-mix(in oklab, var(--fg) 8%, transparent);
-    }
-    li.selected {
-      background: var(--accent);
-      color: var(--accent-fg);
-    }
-    li.sentinel {
-      color: var(--dim);
-      font-style: italic;
-    }
-    li.sentinel:hover {
-      color: var(--fg);
-    }
-    .caret {
-      display: inline-block;
-      width: 1em;
-      color: var(--dim);
-    }
-    li.selected .caret {
-      color: var(--accent-fg);
-    }
-    .error {
-      color: var(--error);
-    }
-  `;
+  static styles = [
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+        /* Fixed row height so the sticky-ancestor waterfall's top
+           offsets stack cleanly (each depth's ancestor sticks at
+           row-height * depth). Value is in px (not rem) so every
+           calc(row-height * depth) is a whole-pixel offset — a rem
+           value at 14px body font produced 24.5px, which the browser
+           rounded inconsistently and left 1px slivers of scrolled
+           content bleeding through between stacked ancestor rows. */
+        --tree-row-height: 24px;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        /* Suppress the default focus outline on the <ul>; the pane-level
+           ring lives on the .tree-scroll wrapper in the app shell so it
+           fills the whole tree area (not just the content-sized <ul>).
+           See PARITY.md § Focus semantics. */
+        outline: none;
+      }
+      li {
+        min-height: var(--tree-row-height);
+        padding: 0 var(--sp-1);
+        cursor: pointer;
+        white-space: nowrap;
+        color: var(--fg);
+        display: flex;
+        align-items: center;
+        gap: var(--sp-1);
+      }
+      li:hover {
+        background: color-mix(in oklab, var(--fg) 8%, transparent);
+      }
+      li.selected {
+        background: var(--accent);
+        color: var(--accent-fg);
+      }
+      /* Sticky ancestor waterfall (see DESIGN.md § Sticky ancestor
+         rows in the tree pane). Only expanded parents stick — leaves
+         and collapsed parents scroll normally so the tree doesn't
+         "shimmer" as every row briefly pins itself on the way out.
+         Each stuck row sits at row-height × depth from the top of
+         the scroll region, so Animalia (depth 0) pins first at 0,
+         Chordata (depth 1) below it at 1×row-height, etc. Background
+         is opaque so scrolled content below doesn't bleed through.
+         z-index inverted with depth keeps shallower ancestors on top
+         when browsers stack overlapping stickies. Base pulled from
+         --z-tree-sticky-base in styles.css so sticky rows always
+         stack BELOW --z-popover (combobox dropdowns) — otherwise
+         the tree search suggestions would render behind the sticky
+         waterfall and be un-clickable. */
+      li[data-sticky] {
+        position: sticky;
+        top: calc(var(--tree-row-height) * var(--depth, 0));
+        background: var(--bg);
+        /* Clamp to a positive value — depths beyond
+           --z-tree-sticky-base would give a negative z-index, which
+           can push the element behind the scroll container's stacking
+           context in some browsers and make deep ancestor rows
+           visually vanish. All sticky rows land in a small positive
+           band (0 to base); DOM order breaks ties within it. */
+        z-index: max(1, calc(var(--z-tree-sticky-base) - var(--depth, 0)));
+      }
+      /* Sticky rows need opaque backgrounds on state changes too —
+         otherwise the transparent-mix hover / hover-over-scrolled-
+         content combination bleeds through and looks broken. */
+      li[data-sticky]:hover {
+        background: color-mix(in oklab, var(--fg) 8%, var(--bg));
+      }
+      li[data-sticky].selected {
+        background: var(--accent);
+      }
+      li.sentinel {
+        color: var(--dim);
+        font-style: italic;
+      }
+      li.sentinel:hover {
+        color: var(--fg);
+      }
+      .caret {
+        display: inline-block;
+        width: 1em;
+        color: var(--dim);
+        flex: 0 0 auto;
+      }
+      li.selected .caret {
+        color: var(--accent-fg);
+      }
+      /* Row label eats remaining width so the actions strip sits at
+         the right edge; truncates with ellipsis when tight (curator
+         hovers the row for the full name via title tooltip). */
+      .label {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* List-row actions per DESIGN.md § List-row actions. Hidden on
+         inactive rows by default; row hover / focus-within reveals
+         them (allocates space via visibility so no layout shift).
+         Active row (li.selected) always shows them so touch users
+         can act without a hover state. Icons override the parent
+         li's accent-fg text color when the row is selected so the
+         icons remain legible on the accent background. */
+      .row-actions {
+        display: inline-flex;
+        gap: 0;
+        visibility: hidden;
+        flex: 0 0 auto;
+      }
+      li:hover .row-actions,
+      li:focus-within .row-actions,
+      li.selected .row-actions {
+        visibility: visible;
+      }
+      li.selected .row-actions button.icon-btn.subtle {
+        color: var(--accent-fg);
+      }
+      li.selected .row-actions button.icon-btn.subtle:hover:not(:disabled) {
+        background: color-mix(in oklab, var(--accent-fg) 18%, transparent);
+        color: var(--accent-fg);
+      }
+      /* On the selected (accent-filled) row, the transparent-mix
+         danger tint that works on inactive rows reads as purplish —
+         the accent blue bleeds through. Switch to a solid --error
+         fill (matching .danger-primary elsewhere) so the trash icon
+         reads clearly as destructive on hover. */
+      li.selected .row-actions button.icon-btn.subtle.danger:hover:not(:disabled) {
+        background: var(--error);
+        color: var(--bg);
+      }
+      .error {
+        color: var(--error);
+      }
+      /* Empty-archive state: shown when the tree loads with zero
+         root taxa. Centered CTA button that dispatches
+         taxon-create-root; the shell opens SfgaDetail's create pane
+         with an empty parent. */
+      .empty-tree {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--sp-3);
+        padding: var(--sp-5) var(--sp-4);
+        color: var(--dim);
+        font-family: var(--font-body);
+        font-size: var(--fs-md);
+        text-align: center;
+      }
+      .empty-tree p {
+        margin: 0;
+      }
+      button.add-first {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: var(--accent);
+      }
+    `,
+  ];
 
   constructor() {
     super();
     this.nodes = [];
     this.selectedId = "";
     this.error = "";
+    this._loaded = false;
     // Page size matches the TUI's treePageSize constant — 200 rows per
     // fetch, sentinel below if more remain. Kept as a field so tests /
     // future config can override.
@@ -1365,6 +1964,8 @@ class SfgaTree extends LitElement {
       this.nodes = this._pageToNodes(page, 0, "");
     } catch (err) {
       this.error = String(err);
+    } finally {
+      this._loaded = true;
     }
   }
 
@@ -1443,11 +2044,17 @@ class SfgaTree extends LitElement {
   async _expand(node) {
     try {
       const page = await api.taxon.children(node.id, { limit: this._pageSize });
-      const idx = this.nodes.indexOf(node);
+      // Look up by id, not by reference. Between the click that
+      // captured `node` and this async continuation, this.nodes may
+      // have been rebuilt (e.g., by a reveal fired from a search
+      // pick that ran in the same tick). Reference identity would
+      // silently fail — id lookup finds the row wherever it is now.
+      const idx = this.nodes.findIndex((n) => !n.sentinel && n.id === node.id);
       if (idx < 0) return;
-      const children = this._pageToNodes(page, node.depth + 1, node.id);
+      const current = this.nodes[idx];
+      const children = this._pageToNodes(page, current.depth + 1, current.id);
       const newNodes = [...this.nodes];
-      newNodes[idx] = { ...node, expanded: true };
+      newNodes[idx] = { ...current, expanded: true };
       newNodes.splice(idx + 1, 0, ...children);
       this.nodes = newNodes;
     } catch (err) {
@@ -1479,39 +2086,72 @@ class SfgaTree extends LitElement {
   }
 
   _collapse(node) {
-    const idx = this.nodes.indexOf(node);
+    // Id lookup (same rationale as _expand) so a stale reference
+    // from a re-rendered array still resolves.
+    const idx = this.nodes.findIndex((n) => !n.sentinel && n.id === node.id);
     if (idx < 0) return;
+    const current = this.nodes[idx];
     let end = idx + 1;
-    while (end < this.nodes.length && this.nodes[end].depth > node.depth) {
+    while (end < this.nodes.length && this.nodes[end].depth > current.depth) {
       end++;
     }
     const newNodes = [...this.nodes];
     newNodes.splice(idx + 1, end - idx - 1);
-    newNodes[idx] = { ...node, expanded: false };
+    newNodes[idx] = { ...current, expanded: false };
     this.nodes = newNodes;
   }
 
-  // reveal loads the ancestor chain for id and expands the tree along it
-  // so the target appears in its correct location. Called after a move so
-  // the curator doesn't have to hunt for the reparented taxon. Also
-  // handles the case where an ancestor is above any currently-visible
-  // root by reloading roots first.
+  // reveal loads the classification chain for id and expands the tree
+  // along it so the target appears in its correct location. Called
+  // after a move (so the curator doesn't have to hunt for the reparented
+  // taxon) and after a search pick.
+  //
+  // Two round trips instead of O(depth):
+  //   1. GET /api/taxon/{id}/classification — the full ancestor chain
+  //      in one shot (root first, target last).
+  //   2. GET /api/taxon/roots + GET /api/taxon/{ancestor}/children in
+  //      parallel via Promise.all — every level's sibling page comes
+  //      back concurrently.
+  // The old path issued 1 (ancestors) + 1 (roots) + N (per-ancestor
+  // children) sequential requests; on a 12-deep taxon in COL scale that
+  // was 14 sequential round trips, observed as multi-second lag.
   async reveal(id) {
     if (!id) return;
     try {
-      const { ids: chain } = await api.taxon.ancestors(id);
-      // Reload roots so a taxon moved to root level (or whose new root
-      // ancestor was previously off-screen) shows up. Rebuild fresh via
-      // the paging helper so an oversized root list carries its sentinel.
-      const rootsPage = await api.taxon.roots({ limit: this._pageSize });
-      this.nodes = this._pageToNodes(rootsPage, 0, "");
-      // Expand each ancestor in order. _expand mutates this.nodes in place
-      // so the next ancestor lookup finds the freshly-inserted row.
-      for (const ancestorID of chain) {
-        const node = this.nodes.find((n) => n.id === ancestorID);
-        if (!node || node.expanded) continue;
-        await this._expand(node);
+      const { items: chain } = await api.taxon.classification(id);
+      const ancestorIDs = (chain || []).slice(0, -1).map((h) => h.id);
+      // Fan out roots + every ancestor's children page concurrently.
+      // Each call is independent — we only need the parent id to fetch
+      // its children — so parallelism is safe and drops wall time to
+      // roughly the slowest single request.
+      const opts = { limit: this._pageSize };
+      const [rootsPage, ...childrenPages] = await Promise.all([
+        api.taxon.roots(opts),
+        ...ancestorIDs.map((aid) => api.taxon.children(aid, opts)),
+      ]);
+      // Rebuild the tree top-down. Start from roots, then splice each
+      // ancestor's children page in below its parent row and mark the
+      // parent expanded. Sequential in memory (no I/O) so the flat-list
+      // invariant holds after each splice.
+      let nodes = this._pageToNodes(rootsPage, 0, "");
+      for (let i = 0; i < ancestorIDs.length; i++) {
+        const ancestorID = ancestorIDs[i];
+        const idx = nodes.findIndex((n) => !n.sentinel && n.id === ancestorID);
+        if (idx < 0) continue;
+        const parent = nodes[idx];
+        const children = this._pageToNodes(
+          childrenPages[i],
+          parent.depth + 1,
+          parent.id,
+        );
+        nodes = [
+          ...nodes.slice(0, idx),
+          { ...parent, expanded: true },
+          ...children,
+          ...nodes.slice(idx + 1),
+        ];
       }
+      this.nodes = nodes;
       // Select the target (highlights the row so the curator sees where
       // it landed). If the target is off-screen the browser scrolls it in.
       this.selectedId = id;
@@ -1526,22 +2166,69 @@ class SfgaTree extends LitElement {
   }
 
   render() {
-    if (this.error) return html`<div class="error">${this.error}</div>`;
+    if (this.error) return html`<div class="error" role="alert">${this.error}</div>`;
+    // Empty-archive affordance: when the tree loads with zero root
+    // taxa there's nothing to select, nothing to "add sister" from,
+    // and no header pencil (which requires a selected taxon). Give
+    // the curator a direct entry point. Dispatches taxon-create-root
+    // for the shell to route into SfgaDetail's create pane; hidden
+    // when the archive is read-only (button emits regardless — the
+    // shell suppresses the action for viewers).
+    //
+    // Gated on _loaded so a slow initial roots-query (COL-scale
+    // archives take a moment) doesn't flash the "Add first taxon"
+    // affordance before the real roots arrive. Show a loading
+    // placeholder in the interim instead.
+    if (this.nodes.length === 0) {
+      if (!this._loaded) {
+        return html`<div class="empty-tree" role="status"><p>Loading…</p></div>`;
+      }
+      return html`
+        <div class="empty-tree" role="status">
+          <p>This archive has no taxa yet.</p>
+          <button
+            class="add-first"
+            @click=${() => this._addFirstTaxon()}
+          >
+            Add first taxon
+          </button>
+        </div>
+      `;
+    }
     // tabindex="0" makes the tree Tab-reachable and a valid focus target.
     // mousedown promotes focus to the <ul> before the <li> click fires,
     // so a click into the tree lands focus here (browsers don't focus
     // non-input elements on click by default). The pane earns focus
     // explicitly (PARITY.md § Focus semantics) so keyboard shortcuts
     // don't fire while the curator is typing into an unrelated input.
+    // role="tree" + role="treeitem" on children announces the widget
+    // as a taxonomic tree to screen readers; aria-activedescendant
+    // points at the currently selected row so screen readers know
+    // which item has focus without moving DOM focus per keystroke.
+    const activeId = this.selectedId
+      ? `tree-item-${this.selectedId}`
+      : undefined;
     return html`
       <ul
+        role="tree"
+        aria-label="Taxa"
         tabindex="0"
+        aria-activedescendant=${activeId ?? nothing}
         @mousedown=${(e) => e.currentTarget.focus()}
         @keydown=${(e) => this._onKeyDown(e)}
       >
         ${this.nodes.map((n) => this._renderNode(n))}
       </ul>
     `;
+  }
+
+  _addFirstTaxon() {
+    this.dispatchEvent(
+      new CustomEvent("taxon-create-root", {
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   // _onKeyDown handles tree-scoped shortcuts. Runs only when the <ul>
@@ -1855,32 +2542,111 @@ class SfgaTree extends LitElement {
     if (n.sentinel) {
       const label = n.remaining
         ? `⋯ ${n.remaining} more  (click to load)`
-        : `⋯ load more`;
+        : `⋯ Load more`;
+      // Sentinels are load-more affordances rather than tree items;
+      // role="button" announces them accurately to screen readers.
       return html`
         <li
+          role="button"
           class="sentinel"
+          aria-label=${label}
           style="padding-left: ${0.35 + n.depth * 1.1}rem"
           @click=${() => this._loadMore(n)}
         >
           <span class="caret"> </span>
-          ${label}
+          <span class="label">${label}</span>
         </li>
       `;
     }
+    const selected = n.id === this.selectedId;
+    // aria-level is 1-indexed per the ARIA tree pattern; node.depth
+    // is 0-indexed internally. aria-expanded is only meaningful on
+    // parents — leaves omit it so screen readers don't announce an
+    // expandable state that doesn't exist.
+    //
+    // data-sticky opts this row into the sticky-ancestor waterfall
+    // (see :host CSS). Only expanded parents opt in — a stuck leaf
+    // would flash-pin at the top as it scrolls out, which is noise
+    // rather than signal. --depth drives the sticky top offset so
+    // the waterfall stacks in classification order.
+    const isAncestor = n.has_children && n.expanded;
     return html`
       <li
-        class=${n.id === this.selectedId ? "selected" : ""}
-        style="padding-left: ${0.35 + n.depth * 1.1}rem"
+        id="tree-item-${n.id}"
+        role="treeitem"
+        class=${selected ? "selected" : ""}
+        aria-selected=${selected ? "true" : "false"}
+        aria-level=${n.depth + 1}
+        aria-expanded=${n.has_children ? (n.expanded ? "true" : "false") : nothing}
+        ?data-sticky=${isAncestor}
+        style="padding-left: ${0.35 + n.depth * 1.1}rem; --depth: ${n.depth}"
         @click=${() => {
           this._select(n);
           this._toggle(n);
         }}
       >
-        <span class="caret">
+        <span class="caret" aria-hidden="true">
           ${n.has_children ? (n.expanded ? "▼" : "▶") : " "}
         </span>
-        ${renderLabel(n.label, n.name)}
+        <span class="label">${renderLabel(n.label, n.name)}</span>
+        ${this._renderRowActions(n)}
       </li>
+    `;
+  }
+
+  // _renderRowActions produces the per-row action strip (edit /
+  // new-child / new-sister / delete). CSS hides it on inactive rows;
+  // hover, focus-within, or selection reveals it. Buttons dispatch
+  // taxon-action {id, action}; SfgaApp handles the select-then-act
+  // flow. Click handlers stopPropagation so the row's own click
+  // (select + expand) doesn't fire when a button is used. See
+  // DESIGN.md § List-row actions.
+  _renderRowActions(n) {
+    const fire = (action, e) => {
+      e.stopPropagation();
+      this.dispatchEvent(
+        new CustomEvent("taxon-action", {
+          detail: { id: n.id, action },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    };
+    return html`
+      <span class="row-actions">
+        <button
+          class="icon-btn subtle"
+          title="edit"
+          aria-label="edit"
+          @click=${(e) => fire("edit", e)}
+        >
+          ${renderIcon("pencil", 14)}
+        </button>
+        <button
+          class="icon-btn subtle"
+          title="new child"
+          aria-label="new child"
+          @click=${(e) => fire("new-child", e)}
+        >
+          ${renderIcon("tree-child-plus", 14)}
+        </button>
+        <button
+          class="icon-btn subtle"
+          title="new sister"
+          aria-label="new sister"
+          @click=${(e) => fire("new-sister", e)}
+        >
+          ${renderIcon("tree-sister-plus", 14)}
+        </button>
+        <button
+          class="icon-btn subtle danger"
+          title="delete"
+          aria-label="delete"
+          @click=${(e) => fire("delete", e)}
+        >
+          ${renderIcon("trash-2", 14)}
+        </button>
+      </span>
     `;
   }
 }
@@ -1903,6 +2669,10 @@ class SfgaDetail extends LitElement {
     _etag: { state: true },
     _nameEtag: { state: true },
     _synonyms: { state: true },
+    // Classification chain from GET /api/taxon/{id}/classification —
+    // root-down list including the taxon itself as the last entry.
+    // Backs the breadcrumb strip above the taxon heading.
+    _classification: { state: true },
     _error: { state: true },
     _loading: { state: true },
     // Edit-mode state — taxon and name drafts are tracked separately so
@@ -1956,13 +2726,35 @@ class SfgaDetail extends LitElement {
     // Delete-confirmation modal state.
     _confirmDelete: { state: true },
     _deleteError: { state: true },
+    // Progressive-disclosure delete flow (see DESIGN.md § List-row
+    // actions / delete flow). _deletePreview is the async summary
+    // fetched when the modal opens (null while loading); it carries
+    // descendant + per-association counts. _deleteMode picks the
+    // path when the taxon has children — "" (unset), "reparent"
+    // (move children up one level, then leaf-delete), or "cascade"
+    // (recursive delete). _deleteConfirmText holds the typed value
+    // that must literally equal "DELETE" to enable the cascade
+    // Delete button.
+    _deletePreview: { state: true },
+    _deleteMode: { state: true },
+    _deleteConfirmText: { state: true },
     // Add-reference modal state. The modal is a self-contained component
     // (<sfga-add-reference-modal>) — this flag just toggles rendering,
     // and _pickedReferenceLabel carries the label into the combobox
     // after a successful pick so the display updates immediately without
     // waiting on the resolver's second fetch.
-    _addingReference: { state: true },
+    // _addingReferenceFor tracks which form context requested the
+    // add-reference modal — "edit" or "create" — so _onReferencePicked
+    // routes the picked id back into the right draft. Empty string
+    // means the modal is closed. Replaces the earlier boolean
+    // _addingReference now that the create form uses the same modal
+    // (see DESIGN.md § Reference-picker on every data-entry form).
+    _addingReferenceFor: { state: true },
     _pickedReferenceLabel: { state: true },
+    // Same idea for the create form's picker — carries the freshly-
+    // added reference label into the combobox display without waiting
+    // on the resolver's second GET.
+    _pickedCreateReferenceLabel: { state: true },
     // Edit-mode progressive-disclosure toggle for the atomized name +
     // atomized authorship blocks. Mirrors _createShowAtomized on the
     // create form; edit and create both surface the same widget set
@@ -1970,7 +2762,7 @@ class SfgaDetail extends LitElement {
     _editShowAtomized: { state: true },
   };
 
-  static styles = css`
+  static styles = [severityChipStyles, buttonStyles, formFieldStyles, css`
     :host {
       display: block;
       font-family: var(--font-body);
@@ -1981,6 +2773,31 @@ class SfgaDetail extends LitElement {
       font-size: 1.15em;
     }
     .authorship {
+      color: var(--dim);
+    }
+    /* Classification breadcrumbs above the taxon heading. Small, dim,
+       single line; wraps only when the pane is narrower than the full
+       path. Links stay real anchors (href="#/taxon/{id}") so
+       right-click / open-in-new-tab work — see DESIGN.md § Navigation
+       and links. */
+    .breadcrumbs {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--sp-1);
+      margin-bottom: var(--sp-2);
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+    }
+    .breadcrumbs .crumb {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .breadcrumbs .crumb:hover {
+      text-decoration: underline;
+    }
+    .breadcrumbs .crumb-sep {
       color: var(--dim);
     }
     hr {
@@ -2047,39 +2864,27 @@ class SfgaDetail extends LitElement {
       margin: 0.4rem 0 0 0;
       padding: 0;
     }
+    /* Fixed first-column width so the issue text lines up across
+       rows regardless of the severity chip's natural width (Info /
+       Warn / Error / Debug render at slightly different pill widths).
+       Each <li> is its own grid, so auto-sizing here would size col 1
+       per-row and stagger the text left-edge. 4.5rem accommodates the
+       widest chip. justify-self: start on the chip keeps it at its
+       natural content width instead of stretching to fill the track. */
     .warning-banner li {
       margin: 0.25rem 0;
       display: grid;
-      grid-template-columns: auto 1fr;
+      grid-template-columns: 4.5rem 1fr;
       gap: 0.5rem;
       align-items: baseline;
+    }
+    .warning-banner li > .sev-chip {
+      justify-self: start;
     }
     .warning-banner .warning-rule {
       font-weight: 600;
       color: var(--fg);
     }
-    /* Severity chip: colored glyph + label. Color always pairs with the
-       glyph so severity is readable under color loss. Backgrounds are
-       tinted at ~12% opacity so the chip stays legible in both themes.
-       See styles.css for --sev-* palette (traffic-light default, CVD
-       alternate via html[data-severity-palette="cvd"]). */
-    .sev-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      padding: 0.1rem 0.4rem;
-      border-radius: 999px;
-      font-size: 0.8em;
-      font-weight: 600;
-      line-height: 1;
-      border: 1px solid currentColor;
-      white-space: nowrap;
-    }
-    .sev-chip.sev-error { color: var(--sev-error); background: var(--sev-error-bg); }
-    .sev-chip.sev-warn  { color: var(--sev-warn);  background: var(--sev-warn-bg);  }
-    .sev-chip.sev-info  { color: var(--sev-info);  background: var(--sev-info-bg);  }
-    .sev-chip.sev-debug { color: var(--sev-debug); background: var(--sev-debug-bg); }
-    .sev-chip .sev-glyph { font-weight: 700; }
     /* Detail-pane header: taxon name on the left, action icons on
        the right. Matches TaxonWorks's convention of putting edit /
        new / delete inline with the record heading so scrolling the
@@ -2099,63 +2904,16 @@ class SfgaDetail extends LitElement {
       gap: 0.25rem;
       flex-shrink: 0;
     }
-    button.icon-btn {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.25rem;
-      font-family: inherit;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-    button.icon-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-    button.icon-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-    button.icon-btn:disabled:hover {
-      border-color: var(--border);
-      color: var(--fg);
-    }
-    button.icon-btn.icon-btn-danger:hover {
-      border-color: var(--error);
-      color: var(--error);
-    }
-    button.icon-btn svg { display: block; }
-    /* Edit-mode UI. Deliberately plain: platform inputs, single-column,
-       no fancy grid — the walking skeleton proves the wire flow, not
-       visual polish. */
+    /* Button and form-field styling comes from the shared buttonStyles
+       and formFieldStyles modules (see top of app.js). Local rules
+       below only cover layout (toolbar), state overrides that don't
+       belong in the shared vocabulary, or form-input width/box-sizing
+       constraints the shared module doesn't yet cover. */
     .toolbar {
       display: flex;
       gap: 0.5rem;
       align-items: center;
       margin-top: 0.5rem;
-    }
-    button {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.2rem 0.6rem;
-      font-family: inherit;
-      cursor: pointer;
-    }
-    button:hover {
-      border-color: var(--accent);
-    }
-    button.primary {
-      background: var(--accent);
-      color: var(--accent-fg);
-      border-color: var(--accent);
-    }
-    button[disabled] {
-      cursor: not-allowed;
-      opacity: 0.5;
     }
     .modal-backdrop {
       position: fixed;
@@ -2168,29 +2926,94 @@ class SfgaDetail extends LitElement {
     .modal {
       background: var(--bg);
       border: 1px solid var(--border);
-      padding: 1rem 1.25rem;
-      min-width: 24rem;
-      max-width: 32rem;
+      border-radius: var(--radius-md);
+      padding: var(--sp-4) var(--sp-5);
+      min-width: var(--modal-sm);
+      max-width: var(--modal-md);
       display: grid;
-      gap: 0.5rem;
+      gap: var(--sp-2);
     }
     .modal h3 {
-      margin: 0 0 0.25rem 0;
+      margin: 0 0 var(--sp-1) 0;
       font-family: var(--font-body);
-      font-size: 1.05em;
+      font-size: var(--fs-lg);
     }
     .modal p {
       margin: 0;
       color: var(--dim);
-      font-size: 0.95em;
+      font-size: var(--fs-sm);
     }
     .modal .error {
       color: var(--error);
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
     .modal .req {
       color: var(--error);
+    }
+    /* Delete-modal: slightly wider than the default confirm because
+       the parent case shows radio options + a cascade summary + typed-
+       DELETE input. sr-only hides the fieldset legend visually while
+       leaving it available to screen readers as "Choose how to handle
+       children". */
+    .delete-modal {
+      min-width: 28rem;
+      max-width: 38rem;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .delete-options {
+      display: grid;
+      gap: var(--sp-2);
+    }
+    .delete-options label {
+      display: flex;
+      gap: var(--sp-2);
+      align-items: baseline;
+      cursor: pointer;
+      color: var(--fg);
+      font-family: var(--font-body);
+      font-size: var(--fs-md);
+      text-align: left;
+    }
+    .cascade-summary {
+      margin-left: var(--sp-4);
+      padding: var(--sp-2) var(--sp-3);
+      background: color-mix(in oklab, var(--error) 8%, var(--bg));
+      border: 1px solid color-mix(in oklab, var(--error) 30%, var(--border));
+      border-radius: var(--radius-md);
+      color: var(--fg);
+      font-size: var(--fs-sm);
+    }
+    .cascade-summary .cascade-heading {
+      margin: 0 0 var(--sp-1) 0;
+      color: var(--error);
+      font-weight: 600;
+    }
+    .cascade-summary ul {
+      margin: 0 0 var(--sp-2) 0;
+      padding-left: var(--sp-4);
+    }
+    .cascade-confirm {
+      display: flex;
+      gap: var(--sp-2);
+      align-items: center;
+      margin-top: var(--sp-2);
+      font-family: var(--font-body);
+    }
+    .cascade-confirm input {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--font-mono);
     }
     form {
       display: grid;
@@ -2336,7 +3159,7 @@ class SfgaDetail extends LitElement {
     .picker-row > button {
       flex: 0 0 auto;
     }
-  `;
+  `];
 
   constructor() {
     super();
@@ -2377,6 +3200,9 @@ class SfgaDetail extends LitElement {
     this._editShowAtomized = readAtomizedPref();
     this._confirmDelete = false;
     this._deleteError = "";
+    this._deletePreview = null;
+    this._deleteMode = "";
+    this._deleteConfirmText = "";
     this.pendingWarnings = [];
   }
 
@@ -2395,7 +3221,27 @@ class SfgaDetail extends LitElement {
       this._createShowAtomized = readAtomizedPref();
       this._creatingBasionymFor = null;
       this._creatingBasionymForName = "";
-      this._load();
+      // Retain a handle to the in-flight load so callers of
+      // performAction() can await the selection catching up before
+      // firing the action against a partially-loaded state. See
+      // DESIGN.md § List-row actions.
+      this._loadPromise = this._load();
+    }
+    // Any state that changes which header actions this screen wants
+    // in the app header → notify the shell so it re-renders the
+    // header slot. See DESIGN.md § Screen actions.
+    if (
+      changed.has("_taxon") ||
+      changed.has("_editing") ||
+      changed.has("_creating") ||
+      changed.has("editable")
+    ) {
+      this.dispatchEvent(
+        new CustomEvent("screen-actions-changed", {
+          bubbles: true,
+          composed: true,
+        }),
+      );
     }
   }
 
@@ -2405,6 +3251,7 @@ class SfgaDetail extends LitElement {
       this._etag = "";
       this._nameEtag = "";
       this._synonyms = [];
+      this._classification = [];
       return;
     }
     // Snapshot the requested ID so stale replies are discarded.
@@ -2434,9 +3281,17 @@ class SfgaDetail extends LitElement {
       this._name = name;
       this._nameEtag = nameEtag;
 
-      const syn = await api.taxon.synonyms(requested);
+      // Fetch synonyms + classification in parallel — neither depends
+      // on the other and both are needed before the pane finishes
+      // rendering. Classification failure just drops the breadcrumbs;
+      // the taxon still renders.
+      const [syn, cls] = await Promise.all([
+        api.taxon.synonyms(requested),
+        api.taxon.classification(requested).catch(() => ({ items: [] })),
+      ]);
       if (this.taxonId !== requested) return;
       this._synonyms = syn.items || [];
+      this._classification = cls.items || [];
     } catch (err) {
       if (this.taxonId !== requested) return;
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
@@ -2461,6 +3316,16 @@ class SfgaDetail extends LitElement {
     this._parentDraftName = "";
     this._saveError = "";
     this._editing = false;
+  }
+
+  // startCreateRoot is the public entry the shell calls when the tree
+  // is empty and the curator clicks "Add first taxon". Opens the
+  // create pane with an empty parent so the new taxon is added at
+  // the root of the archive. Also usable later for the "add a new
+  // root to an already-populated archive" case, though that flow
+  // typically routes through "add sister" on an existing root.
+  async startCreateRoot() {
+    return this._openCreateWithParent("", "(new top-level taxon)");
   }
 
   // _openCreate opens the create pane with the current taxon as the
@@ -2701,23 +3566,60 @@ class SfgaDetail extends LitElement {
     }
   }
 
-  _askDelete() {
+  async _askDelete() {
+    // Reset delete state, open the modal in a "loading" state, then
+    // fetch the preview. The modal renders progressively — while the
+    // preview is null we show a loading placeholder; once it arrives
+    // we branch to either the leaf confirm or the parent's three-
+    // option UI. See DESIGN.md § List-row actions / delete flow.
     this._deleteError = "";
+    this._deleteMode = "";
+    this._deleteConfirmText = "";
+    this._deletePreview = null;
     this._confirmDelete = true;
+    if (!this._taxon) return;
+    try {
+      this._deletePreview = await api.taxon.deletePreview(this._taxon.id);
+    } catch (err) {
+      this._deleteError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
   }
 
   _cancelDelete() {
     this._confirmDelete = false;
     this._deleteError = "";
+    this._deletePreview = null;
+    this._deleteMode = "";
+    this._deleteConfirmText = "";
   }
 
   async _submitDelete() {
     if (!this._taxon) return;
+    const preview = this._deletePreview;
+    const isLeaf = preview && preview.direct_child_count === 0;
     try {
-      const res = await api.taxon.delete(this._taxon.id);
-      this._confirmDelete = false;
-      // Reveal the parent (or clear selection if the deleted taxon was
-      // a root) via the shell's move-handler pipeline.
+      let res;
+      if (isLeaf || !preview) {
+        // Leaf case (or preview never loaded — fall through to the
+        // simple delete, which will 409 if the server sees children).
+        res = await api.taxon.delete(this._taxon.id);
+      } else if (this._deleteMode === "reparent") {
+        res = await api.taxon.deleteReparent(this._taxon.id);
+      } else if (this._deleteMode === "cascade") {
+        // The Delete button only enables when this input equals
+        // "DELETE" exactly, but guard here in case the button state
+        // was bypassed (keyboard invocation of a disabled click).
+        if (this._deleteConfirmText !== "DELETE") return;
+        res = await api.taxon.deleteCascade(this._taxon.id);
+      } else {
+        return;
+      }
+      this._cancelDelete();
+      // Reveal the parent (or clear selection if the deleted taxon
+      // was a root) via the shell's move-handler pipeline.
       this.dispatchEvent(
         new CustomEvent("taxon-deleted", {
           detail: { deleted_id: res.deleted_id, parent_id: res.parent_id },
@@ -2727,7 +3629,9 @@ class SfgaDetail extends LitElement {
       );
     } catch (err) {
       this._deleteError =
-        err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
     }
   }
 
@@ -2751,7 +3655,7 @@ class SfgaDetail extends LitElement {
         </h2>
         <hr />
         ${this._createError
-          ? html`<div class="error">${this._createError}</div>`
+          ? html`<div class="error" role="alert">${this._createError}</div>`
           : ""}
         ${this._createStep === 0
           ? this._renderCreateStep0()
@@ -2785,9 +3689,9 @@ class SfgaDetail extends LitElement {
           @click=${() => this._advanceToPreview()}
           ?disabled=${this._createBusy}
         >
-          ${this._createBusy ? "parsing…" : "next → preview"}
+          ${this._createBusy ? "Parsing…" : "Next → preview"}
         </button>
-        <button @click=${() => this._cancelCreate()}>cancel</button>
+        <button @click=${() => this._cancelCreate()}>Cancel</button>
       </div>
     `;
   }
@@ -2813,7 +3717,7 @@ class SfgaDetail extends LitElement {
         <label>Rank</label>
         <sfga-combobox
           min-search-chars="0"
-          placeholder="rank…"
+          placeholder="Rank…"
           .source=${childRankSource(this._createChildRanks)}
           .resolver=${vocabResolver("rank")}
           .value=${d.rank || ""}
@@ -2834,7 +3738,7 @@ class SfgaDetail extends LitElement {
             writeAtomizedPref(e.target.checked);
           }}
         />
-        show atomized fields
+        Show atomized fields
         <span class="hint">
           (verify or override the parse; hive parses in the background
           regardless)
@@ -2848,10 +3752,20 @@ class SfgaDetail extends LitElement {
         <label>${referenceLabelFor(d)}</label>
         <sfga-combobox
           min-search-chars="2"
-          placeholder="search references…"
+          placeholder="Search references…"
           .source=${referenceSource}
           .resolver=${referenceResolver}
           .value=${d.reference_id || ""}
+          .valueName=${this._pickedCreateReferenceLabel !== undefined
+            ? this._pickedCreateReferenceLabel
+            : ""}
+          .actions=${[
+            {
+              label: "Add new reference…",
+              icon: "plus",
+              handler: () => (this._addingReferenceFor = "create"),
+            },
+          ]}
           @pick=${(e) => this._createFieldChange("reference_id", e.detail.id)}
         ></sfga-combobox>
         <label>Published in page</label>
@@ -2862,7 +3776,7 @@ class SfgaDetail extends LitElement {
         <legend>metadata</legend>
         <label>Nom status</label>
         <sfga-combobox
-          placeholder="nomenclatural status…"
+          placeholder="Nomenclatural status…"
           .source=${nomenSource(d.code)}
           .resolver=${nomenResolver}
           .value=${d.status || ""}
@@ -2884,7 +3798,7 @@ class SfgaDetail extends LitElement {
         <label>Code</label>
         <sfga-combobox
           min-search-chars="0"
-          placeholder="nomenclatural code…"
+          placeholder="Nomenclatural code…"
           .source=${vocabSource("nom_code")}
           .resolver=${vocabResolver("nom_code")}
           .value=${d.code || ""}
@@ -2916,8 +3830,9 @@ class SfgaDetail extends LitElement {
               </button>
             `
           : ""}
-        <button @click=${() => this._cancelCreate()}>cancel</button>
+        <button @click=${() => this._cancelCreate()}>Cancel</button>
       </div>
+      ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
     `;
   }
 
@@ -2998,40 +3913,169 @@ class SfgaDetail extends LitElement {
         .contextAuthors=${authors}
         .contextYear=${year}
         @reference-picked=${(e) => this._onReferencePicked(e)}
-        @close=${() => (this._addingReference = false)}
+        @close=${() => (this._addingReferenceFor = "")}
       ></sfga-add-reference-modal>
     `;
   }
 
   _onReferencePicked(e) {
-    // Modal supplies {id, label}. Update the draft and stash the label
-    // so the combobox displays it immediately (its resolver would
+    // Modal supplies {id, label}. Route to the draft whose form
+    // opened the modal — edit form's name draft or create form's
+    // create draft — and stash the label so the corresponding
+    // combobox displays it immediately (the resolver would
     // otherwise fire a second GET before the label appears).
     const { id, label } = e.detail;
-    this._nameFieldChange("reference_id", id);
-    this._pickedReferenceLabel = label || "";
-    this._addingReference = false;
+    const target = this._addingReferenceFor;
+    if (target === "create") {
+      this._createFieldChange("reference_id", id);
+      this._pickedCreateReferenceLabel = label || "";
+    } else {
+      // Default to edit-form routing so a legacy caller doesn't drop
+      // the pick on the floor.
+      this._nameFieldChange("reference_id", id);
+      this._pickedReferenceLabel = label || "";
+    }
+    this._addingReferenceFor = "";
   }
 
   _renderDeleteModal() {
     const label = this._taxon?.label?.text || this._taxon?.id || "(unknown)";
+    const preview = this._deletePreview;
+    const isLeaf = preview && preview.direct_child_count === 0;
+    const isParent = preview && preview.direct_child_count > 0;
+    const isRoot = preview && !preview.parent_id;
+    // The Delete button enables when: leaf, or reparent chosen, or
+    // cascade chosen with the literal string "DELETE" typed. Guards
+    // against accidental clicks on the destructive path.
+    const canDelete =
+      isLeaf ||
+      (isParent && this._deleteMode === "reparent") ||
+      (isParent &&
+        this._deleteMode === "cascade" &&
+        this._deleteConfirmText === "DELETE");
     return html`
       <div class="modal-backdrop" @click=${() => this._cancelDelete()}>
-        <div class="modal" @click=${(e) => e.stopPropagation()}>
-          <h3>Delete ${label}?</h3>
-          ${this._deleteError
-            ? html`<div class="error">${this._deleteError}</div>`
-            : html`<p>
+        <div
+          class="modal delete-modal"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="delete-confirm-title"
+          @click=${(e) => e.stopPropagation()}
+        >
+          <h3 id="delete-confirm-title">Delete ${label}?</h3>
+          ${!preview && !this._deleteError
+            ? html`<div class="empty" role="status">Loading…</div>`
+            : ""}
+          ${isLeaf
+            ? html`<p>
                 Deleting removes the taxon and its per-taxon associations
                 (synonyms, vernaculars, distributions). Names are shared and
-                remain intact. Taxa with children are refused — reparent or
-                delete descendants first.
-              </p>`}
+                remain intact.
+              </p>`
+            : ""}
+          ${isParent ? this._renderDeleteParentOptions(preview, isRoot) : ""}
+          ${this._deleteError
+            ? html`<div class="error" role="alert">${this._deleteError}</div>`
+            : ""}
           <div class="toolbar">
-            <button class="primary" @click=${() => this._submitDelete()}>delete</button>
-            <button @click=${() => this._cancelDelete()}>cancel</button>
+            <button @click=${() => this._cancelDelete()}>Cancel</button>
+            <button
+              class="danger"
+              ?disabled=${!canDelete}
+              @click=${() => this._submitDelete()}
+            >
+              Delete
+            </button>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  // _renderDeleteParentOptions renders the three-option UI for the
+  // "taxon has children" case: re-parent (safer, keeps children;
+  // hidden as unavailable only visually if root — the option still
+  // reads as "children become new top-level taxa") or cascade (with
+  // typed-DELETE confirmation and per-table summary).
+  _renderDeleteParentOptions(preview, isRoot) {
+    const descendants = preview.descendant_count - 1;
+    return html`
+      <p>
+        This taxon has ${preview.direct_child_count} direct
+        ${preview.direct_child_count === 1 ? "child" : "children"}${descendants > preview.direct_child_count
+          ? html` (${descendants} descendants total)`
+          : ""}.
+      </p>
+      <div
+        class="delete-options"
+        role="radiogroup"
+        aria-label="Choose how to handle children"
+      >
+        <label>
+          <input
+            type="radio"
+            name="delete-mode"
+            value="reparent"
+            .checked=${this._deleteMode === "reparent"}
+            @change=${() => (this._deleteMode = "reparent")}
+          />
+          <span>
+            ${isRoot
+              ? html`Move children up — they become new top-level taxa`
+              : html`Re-parent children — they move up one level`}
+          </span>
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="delete-mode"
+            value="cascade"
+            .checked=${this._deleteMode === "cascade"}
+            @change=${() => (this._deleteMode = "cascade")}
+          />
+          <span>Delete this taxon and all descendants</span>
+        </label>
+        ${this._deleteMode === "cascade"
+          ? this._renderDeleteCascadeConfirm(preview)
+          : ""}
+      </div>
+    `;
+  }
+
+  _renderDeleteCascadeConfirm(preview) {
+    // Only show non-zero rows so the summary reads as a real
+    // inventory rather than a table of mostly-zeros.
+    const rows = [
+      ["taxa (this + descendants)", preview.descendant_count],
+      ["distribution records", preview.distribution_count],
+      ["vernacular names", preview.vernacular_count],
+      ["synonyms", preview.synonym_count],
+      ["media", preview.media_count],
+      ["treatments", preview.treatment_count],
+      ["species estimates", preview.species_estimate_count],
+      ["taxon properties", preview.taxon_property_count],
+      ["species interactions", preview.species_interaction_count],
+      ["taxon-concept relations", preview.taxon_concept_relation_count],
+    ].filter(([, n]) => n > 0);
+    return html`
+      <div class="cascade-summary">
+        <p class="cascade-heading">⚠ Cascade will delete:</p>
+        <ul>
+          ${rows.map(
+            ([lab, count]) => html`<li>${count} ${lab}</li>`,
+          )}
+        </ul>
+        <label class="cascade-confirm">
+          <span>Type <strong>DELETE</strong> to confirm:</span>
+          <input
+            type="text"
+            .value=${this._deleteConfirmText}
+            @input=${(e) => (this._deleteConfirmText = e.target.value)}
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Type DELETE to confirm cascade delete"
+          />
+        </label>
       </div>
     `;
   }
@@ -3135,24 +4179,23 @@ class SfgaDetail extends LitElement {
   }
 
   render() {
+    // Create mode takes over the whole pane — hoisted above the
+    // no-selection guard because the empty-archive flow needs to open
+    // the create pane without any selected taxon (a curator with a
+    // brand-new archive clicks "Add first taxon" and lands here).
+    if (this._creating) {
+      return this._renderCreatePane();
+    }
     if (!this.taxonId) {
       return html`<div class="empty">Select a taxon to see its details.</div>`;
     }
     if (this._error) {
-      return html`<div class="error">${this._error}</div>`;
+      return html`<div class="error" role="alert">${this._error}</div>`;
     }
     if (this._loading && !this._taxon) {
-      return html`<div class="empty">loading…</div>`;
+      return html`<div class="empty" role="status">Loading…</div>`;
     }
     if (!this._taxon) return html``;
-
-    // Create mode takes over the whole pane — there's no existing taxon
-    // to render behind it, and the modal-in-overlay pattern's
-    // click-outside-loses-work risk was real. Curator uses the toolbar
-    // buttons (or Esc) to cancel back to view mode.
-    if (this._creating) {
-      return this._renderCreatePane();
-    }
 
     // Server-rendered label: text + html forms. html carries dagger and
     // italics per rank (BuildLabel). Fall back to canonical / (no name)
@@ -3161,18 +4204,71 @@ class SfgaDetail extends LitElement {
       ? html`${unsafeHTML(this._taxon.label.html)}`
       : this._name?.canonical_simple ||
         this._name?.scientific_name ||
-        "(no name)";
+        "(No name)";
 
+    // Taxon name gets the full pane width now that action buttons live
+    // in the app header (see DESIGN.md § Screen actions). Long
+    // scientific names + authorships wrap cleanly without an action
+    // strip stealing horizontal room from them.
     return html`
+      ${this._renderBreadcrumbs()}
       <div class="detail-header">
         <h2>${heading}</h2>
-        ${this.editable && !this._editing ? this._renderHeaderActions() : ""}
       </div>
       <hr />
       ${this._renderPendingWarnings()}
       ${this._editing ? this._renderEditForm() : this._renderViewFields()}
       ${this._renderSynonyms()}
     `;
+  }
+
+  // _renderBreadcrumbs draws the classification path above the taxon
+  // heading — root down, excluding the taxon itself (which is the
+  // heading). Each ancestor is a clickable link that dispatches
+  // taxon-selected to navigate the shell to that taxon. Solves the
+  // "I can't see my parents while scrolled deep in a large group"
+  // problem from the detail-page side; complements the tree pane's
+  // sticky-ancestor waterfall. See DESIGN.md § Breadcrumbs /
+  // classification path.
+  _renderBreadcrumbs() {
+    const chain = this._classification || [];
+    if (chain.length <= 1) return ""; // root taxon has no ancestors
+    const ancestors = chain.slice(0, -1);
+    return html`
+      <nav class="breadcrumbs" aria-label="Classification">
+        ${ancestors.map(
+          (a, i) => html`
+            <a
+              class="crumb"
+              href="#/taxon/${a.id}"
+              @click=${(e) => this._onBreadcrumbClick(e, a.id)}
+              title=${a.rank || ""}
+              >${a.name}</a
+            >${i < ancestors.length - 1
+              ? html`<span class="crumb-sep" aria-hidden="true">▸</span>`
+              : ""}
+          `,
+        )}
+      </nav>
+    `;
+  }
+
+  _onBreadcrumbClick(e, id) {
+    // Left-click without modifiers navigates in-app via the shell's
+    // taxon-selected event (same path as tree-row selection).
+    // Modifier-clicks (Ctrl/Cmd/middle) fall through to the browser
+    // so open-in-new-tab / open-in-new-window still work — the
+    // href="#/taxon/{id}" resolves to a real URL the app routes
+    // to on load.
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    this.dispatchEvent(
+      new CustomEvent("taxon-selected", {
+        detail: { id },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   // _renderPendingWarnings shows the gsvalidator soft warnings for the
@@ -3206,53 +4302,70 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  // _renderHeaderActions is the compact icon-button strip floated to
-  // the right of the taxon name in the detail-pane header. Kept out of
-  // the field list at the bottom so scrolling long records doesn't
-  // hide the primary actions.
-  //
-  // Matches the TaxonWorks convention of surfacing edit / new-child /
-  // new-sister / delete inline with the taxon name. Icons + tooltips
-  // rather than text — a curator picking up the pattern learns four
-  // symbols once and gets a much more scannable pane forever after.
-  _renderHeaderActions() {
+  // renderHeaderActions is the public contract SfgaApp calls to project
+  // this screen's actions into the app header (see DESIGN.md § Screen
+  // actions). Returns the four-button strip (edit / new-child /
+  // new-sister / delete) or "" when no taxon is loaded or the pane is
+  // in edit/create mode. Classes use the "subtle" variant so they
+  // inherit the borderless header treatment from SfgaApp's buttonStyles;
+  // the rendered markup lives in SfgaApp's shadow DOM, so component-
+  // local styles do not apply.
+  renderHeaderActions() {
+    if (!this.editable) return "";
+    if (this._editing || this._creating) return "";
+    if (!this._taxon) return "";
     return html`
-      <div class="header-actions">
-        <button
-          class="icon-btn"
-          @click=${() => this._startEdit()}
-          title="edit (e)"
-          aria-label="edit"
-        >
-          ${renderIcon("pencil", 18)}
-        </button>
-        <button
-          class="icon-btn"
-          @click=${() => this._openCreate()}
-          title="new child (n) — adds under this taxon"
-          aria-label="new child"
-        >
-          ${renderIcon("tree-child-plus", 18)}
-        </button>
-        <button
-          class="icon-btn"
-          @click=${() => this._openCreateSister()}
-          title="new sister — adds at the same level"
-          aria-label="new sister"
-          ?disabled=${!this._taxon}
-        >
-          ${renderIcon("tree-sister-plus", 18)}
-        </button>
-        <button
-          class="icon-btn icon-btn-danger"
-          @click=${() => this._askDelete()}
-          title="delete (d)"
-          aria-label="delete"
-        >
-          ${renderIcon("trash-2", 18)}
-        </button>
-      </div>
+      <button
+        class="icon-btn subtle"
+        @click=${() => this._startEdit()}
+        title="edit (e)"
+        aria-label="edit"
+      >
+        ${renderIcon("pencil", 18)}
+      </button>
+      <button
+        class="icon-btn subtle"
+        @click=${() => this._openCreate()}
+        title="new child (n) — adds under this taxon"
+        aria-label="new child"
+      >
+        ${renderIcon("tree-child-plus", 18)}
+      </button>
+      <button
+        class="icon-btn subtle"
+        @click=${() => this._openCreateSister()}
+        title="new sister — adds at the same level"
+        aria-label="new sister"
+      >
+        ${renderIcon("tree-sister-plus", 18)}
+      </button>
+      <button
+        class="icon-btn subtle danger"
+        @click=${() => this._askDelete()}
+        title="delete (d)"
+        aria-label="delete"
+      >
+        ${renderIcon("trash-2", 18)}
+      </button>
     `;
+  }
+
+  // performAction is the public entry called by SfgaApp when the user
+  // triggers an action from a tree-row button. Awaits any in-flight
+  // load (set by updated() when taxonId changed) so the action fires
+  // against fully-loaded taxon state rather than a partially-populated
+  // component. See DESIGN.md § List-row actions.
+  async performAction(action) {
+    if (this._loadPromise) {
+      try { await this._loadPromise; } catch (_) { /* fall through */ }
+    }
+    if (!this._taxon) return;
+    switch (action) {
+      case "edit": this._startEdit(); break;
+      case "new-child": this._openCreate(); break;
+      case "new-sister": this._openCreateSister(); break;
+      case "delete": this._askDelete(); break;
+    }
   }
 
   _renderViewFields() {
@@ -3363,7 +4476,7 @@ class SfgaDetail extends LitElement {
         <label>Parent</label>
         <sfga-combobox
           min-search-chars="2"
-          placeholder="type to search taxa…"
+          placeholder="Type to search, or leave empty for a top-level taxon"
           .source=${taxonSource}
           .resolver=${taxonResolver}
           .value=${parentID}
@@ -3446,7 +4559,7 @@ class SfgaDetail extends LitElement {
 
         <div class="toolbar" style="grid-column: 1 / -1">
           <button class="primary" @click=${() => this._save()} ?disabled=${this._saving}>
-            ${this._saving ? "saving…" : "save"}
+            ${this._saving ? "Saving…" : "Save"}
           </button>
           <button @click=${() => this._cancelEdit()} ?disabled=${this._saving}>
             cancel
@@ -3474,14 +4587,14 @@ class SfgaDetail extends LitElement {
       <input
         id="edit-scientific"
         type="text"
-        placeholder="verbatim string with authorship"
+        placeholder="Verbatim string with authorship"
         .value=${this._nameFieldValue("scientific_name_string")}
         @input=${(e) => this._nameFieldChange("scientific_name_string", e.target.value)}
       />
 
       <label>Rank</label>
       <sfga-combobox
-        placeholder="rank…"
+        placeholder="Rank…"
         .source=${vocabSource("rank")}
         .resolver=${vocabResolver("rank")}
         .value=${this._nameFieldValue("rank")}
@@ -3490,7 +4603,7 @@ class SfgaDetail extends LitElement {
 
       <label>Code</label>
       <sfga-combobox
-        placeholder="nomenclatural code…"
+        placeholder="Nomenclatural code…"
         .source=${vocabSource("nom_code")}
         .resolver=${vocabResolver("nom_code")}
         .value=${this._nameFieldValue("code")}
@@ -3514,7 +4627,7 @@ class SfgaDetail extends LitElement {
             writeAtomizedPref(e.target.checked);
           }}
         />
-        show atomized fields
+        Show atomized fields
         <span class="hint">
           (verify or override the parse — hive parses in the background
           regardless)
@@ -3525,7 +4638,7 @@ class SfgaDetail extends LitElement {
 
       <label>Nom status</label>
       <sfga-combobox
-        placeholder="nomenclatural status…"
+        placeholder="Nomenclatural status…"
         .source=${nomenSource(this._nameFieldValue("code"))}
         .resolver=${nomenResolver}
         .value=${this._nameFieldValue("status")}
@@ -3533,29 +4646,27 @@ class SfgaDetail extends LitElement {
       ></sfga-combobox>
 
       <label>${referenceLabelFor(merged)}</label>
-      <div class="picker-row">
-        <sfga-combobox
-          min-search-chars="2"
-          placeholder="search references…"
-          .source=${referenceSource}
-          .resolver=${referenceResolver}
-          .value=${this._nameFieldValue("reference_id")}
-          .valueName=${this._pickedReferenceLabel !== undefined
-            ? this._pickedReferenceLabel
-            : Object.hasOwn(this._nameDraft, "reference_id")
-              ? ""
-              : this._name?.reference_label || ""}
-          @pick=${(e) => this._nameFieldChange("reference_id", e.detail.id)}
-        ></sfga-combobox>
-        <button
-          type="button"
-          title="add a reference from BHLnames / DOI / BibTeX"
-          @click=${() => (this._addingReference = true)}
-        >
-          add…
-        </button>
-      </div>
-      ${this._addingReference ? this._renderAddReferenceModal() : ""}
+      <sfga-combobox
+        min-search-chars="2"
+        placeholder="Search references…"
+        .source=${referenceSource}
+        .resolver=${referenceResolver}
+        .value=${this._nameFieldValue("reference_id")}
+        .valueName=${this._pickedReferenceLabel !== undefined
+          ? this._pickedReferenceLabel
+          : Object.hasOwn(this._nameDraft, "reference_id")
+            ? ""
+            : this._name?.reference_label || ""}
+        .actions=${[
+          {
+            label: "Add new reference…",
+            icon: "plus",
+            handler: () => (this._addingReferenceFor = "edit"),
+          },
+        ]}
+        @pick=${(e) => this._nameFieldChange("reference_id", e.detail.id)}
+      ></sfga-combobox>
+      ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
 
       <label for="edit-etymology">Etymology</label>
       <input
@@ -3676,142 +4787,154 @@ class SfgaAddReferenceModal extends LitElement {
     _preview: { state: true },
   };
 
-  static styles = css`
-    :host {
-      display: block;
-    }
-    .backdrop {
-      position: fixed;
-      inset: 0;
-      background: color-mix(in oklab, var(--bg) 60%, transparent);
-      display: grid;
-      place-items: center;
-      z-index: 10;
-    }
-    .modal {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      padding: 1rem 1.25rem;
-      width: min(48rem, 95vw);
-      max-height: 90vh;
-      overflow: auto;
-      display: grid;
-      gap: 0.5rem;
-      font-family: var(--font-body);
-    }
-    h3 {
-      margin: 0;
-      font-size: 1.05em;
-    }
-    .tabs {
-      display: flex;
-      gap: 0.25rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .tabs button {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid transparent;
-      border-bottom: none;
-      padding: 0.3rem 0.7rem;
-      cursor: pointer;
-      font: inherit;
-    }
-    .tabs button[aria-selected="true"] {
-      border-color: var(--border);
-      background: var(--bg);
-      position: relative;
-      top: 1px;
-    }
-    .pane {
-      min-height: 12rem;
-      display: grid;
-      gap: 0.5rem;
-    }
-    input[type="text"],
-    textarea {
-      background: var(--bg);
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.3rem 0.4rem;
-      font: inherit;
-    }
-    textarea {
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-      min-height: 8rem;
-    }
-    .hit {
-      border: 1px solid var(--border);
-      padding: 0.5rem;
-      display: grid;
-      gap: 0.2rem;
-    }
-    .hit .title {
-      font-weight: 500;
-    }
-    .hit .meta {
-      color: var(--dim);
-      font-size: 0.85em;
-    }
-    .hit .actions {
-      display: flex;
-      gap: 0.3rem;
-      justify-content: flex-end;
-    }
-    .quality {
-      display: inline-block;
-      padding: 0 0.3rem;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      font-family: var(--font-mono);
-      font-size: 0.75em;
-      color: var(--dim);
-    }
-    .quality.q5 {
-      color: var(--accent);
-      border-color: var(--accent);
-    }
-    .quality.q4 {
-      color: var(--fg);
-      border-color: var(--fg);
-    }
-    .preview dl {
-      margin: 0;
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 0.15rem 0.75rem;
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-    }
-    .preview dt {
-      color: var(--dim);
-    }
-    .preview dd {
-      margin: 0;
-      overflow-wrap: anywhere;
-    }
-    .toolbar {
-      display: flex;
-      justify-content: flex-end;
-      gap: 0.3rem;
-      margin-top: 0.5rem;
-    }
-    button.primary {
-      background: var(--accent);
-      color: var(--accent-fg);
-      border-color: var(--accent);
-    }
-    .error {
-      color: var(--error);
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-    }
-    .empty {
-      color: var(--dim);
-      font-style: italic;
-    }
-  `;
+  static styles = [
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        display: grid;
+        place-items: center;
+        z-index: var(--z-modal-backdrop);
+      }
+      .modal {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4) var(--sp-5);
+        width: min(var(--modal-lg), 95vw);
+        max-height: var(--modal-max-h);
+        overflow: auto;
+        display: grid;
+        gap: var(--sp-2);
+        font-family: var(--font-body);
+      }
+      h3 {
+        margin: 0;
+        font-size: var(--fs-lg);
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: var(--sp-2);
+      }
+      .tabs {
+        display: flex;
+        gap: var(--sp-1);
+        border-bottom: 1px solid var(--border);
+      }
+      .tabs button {
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: var(--radius-md) var(--radius-md) 0 0;
+        padding: var(--sp-1) var(--sp-3);
+        cursor: pointer;
+        font: inherit;
+      }
+      .tabs button[aria-selected="true"] {
+        border-color: var(--border);
+        background: var(--bg);
+        position: relative;
+        top: 1px;
+      }
+      .pane {
+        min-height: 12rem;
+        display: grid;
+        gap: var(--sp-2);
+      }
+      /* Local input styles cover the picker text fields and BibTeX
+         textarea. Not composed from formFieldStyles because the
+         textarea here wants a monospaced payload font at fs-sm and
+         a taller min-height than the shared default. */
+      input[type="text"],
+      textarea {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-1) var(--sp-2);
+        font: inherit;
+      }
+      textarea {
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+        min-height: 8rem;
+      }
+      .hit {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-2);
+        display: grid;
+        gap: var(--sp-1);
+      }
+      .hit .title {
+        font-weight: 500;
+      }
+      .hit .meta {
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .hit .actions {
+        display: flex;
+        gap: var(--sp-1);
+        justify-content: flex-end;
+      }
+      .quality {
+        display: inline-block;
+        padding: 0 var(--sp-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        font-family: var(--font-mono);
+        font-size: var(--fs-xs);
+        color: var(--dim);
+      }
+      .quality.q5 {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .quality.q4 {
+        color: var(--fg);
+        border-color: var(--fg);
+      }
+      .preview dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: var(--sp-1) var(--sp-3);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+      }
+      .preview dt {
+        color: var(--dim);
+      }
+      .preview dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .toolbar {
+        display: flex;
+        justify-content: flex-end;
+        gap: var(--sp-1);
+        margin-top: var(--sp-2);
+      }
+      .error {
+        color: var(--error);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+      }
+      .empty {
+        color: var(--dim);
+        font-style: italic;
+      }
+    `,
+  ];
 
   constructor() {
     super();
@@ -3853,8 +4976,70 @@ class SfgaAddReferenceModal extends LitElement {
     this._preview = null;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    // Escape dismisses via the same guarded path as the × button and
+    // the footer close, so a stray key doesn't discard a fetched
+    // preview or a long BibTeX paste.
+    this._onDocKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this._requestClose();
+      }
+    };
+    document.addEventListener("keydown", this._onDocKey);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._onDocKey) {
+      document.removeEventListener("keydown", this._onDocKey);
+      this._onDocKey = null;
+    }
+    if (this._releaseFocus) {
+      this._releaseFocus();
+      this._releaseFocus = null;
+    }
+  }
+
+  firstUpdated() {
+    // Trap focus inside the modal and land initial focus in the first
+    // input of the active tab (project search is the default tab).
+    this._releaseFocus = trapFocus(this.renderRoot, {
+      initialFocus: "input, textarea",
+    });
+  }
+
   _close() {
     this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
+  }
+
+  // _isDirty flags the state worth confirming before dismissal: a
+  // typed DOI or BibTeX payload, or a fetched preview awaiting the
+  // add-and-pick step. Project-tab search text is treated as
+  // ephemeral filter state and doesn't gate the prompt.
+  _isDirty() {
+    return (
+      (this._doiInput || "").trim().length > 0 ||
+      (this._bibtexInput || "").trim().length > 0 ||
+      this._preview != null
+    );
+  }
+
+  async _requestClose() {
+    if (this._isDirty()) {
+      // Two-choice: there's no "save" path here — the affirmative
+      // action for a pending reference is the add-and-pick button
+      // on the tab itself.
+      const choice = await confirmDirty({
+        heading: "Discard pending reference",
+        message:
+          "This reference hasn't been added yet. Discard it?",
+        canSave: false,
+      });
+      if (choice !== "discard") return;
+    }
+    this._close();
   }
 
   _pick(id, label) {
@@ -3869,9 +5054,25 @@ class SfgaAddReferenceModal extends LitElement {
 
   render() {
     return html`
-      <div class="backdrop" @click=${() => this._close()}>
-        <div class="modal" @click=${(e) => e.stopPropagation()}>
-          <h3>Add reference</h3>
+      <div class="backdrop">
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-ref-title"
+        >
+          <div class="modal-header">
+            <h3 id="add-ref-title">Add reference</h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._requestClose()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
           <div class="tabs" role="tablist">
             <button role="tab" aria-selected=${this._tab === 0} @click=${() => this._selectTab(0)}>
               Project
@@ -3893,7 +5094,7 @@ class SfgaAddReferenceModal extends LitElement {
             ${this._tab === 3 ? this._renderBibTeXPane() : ""}
           </div>
           <div class="toolbar">
-            <button @click=${() => this._close()}>close</button>
+            <button @click=${() => this._requestClose()}>Close</button>
           </div>
         </div>
       </div>
@@ -3909,14 +5110,14 @@ class SfgaAddReferenceModal extends LitElement {
       </p>
       <input
         type="text"
-        placeholder="author / title / citation…"
+        placeholder="Author / title / citation…"
         .value=${this._projectQuery}
         @input=${(e) => this._onProjectInput(e.target.value)}
         autofocus
       />
-      ${this._busy ? html`<div class="empty">searching…</div>` : ""}
+      ${this._busy ? html`<div class="empty" role="status">Searching…</div>` : ""}
       ${this._projectHits.length === 0 && this._projectQuery.length >= 2 && !this._busy
-        ? html`<div class="empty">no matches</div>`
+        ? html`<div class="empty" role="status">No matches</div>`
         : ""}
       ${this._projectHits.map(
         (h) => html`
@@ -3977,10 +5178,10 @@ class SfgaAddReferenceModal extends LitElement {
         <em>${this.contextCanonical}</em>${this.contextAuthors ? ` ${this.contextAuthors}` : ""}${this.contextYear ? ` (${this.contextYear})` : ""}
         in the Biodiversity Heritage Library index.
       </p>
-      ${this._busy ? html`<div class="empty">searching BHLnames…</div>` : ""}
-      ${this._error ? html`<div class="error">${this._error}</div>` : ""}
+      ${this._busy ? html`<div class="empty" role="status">Searching BHLnames…</div>` : ""}
+      ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : ""}
       ${this._bhlLoaded && this._bhlHits.length === 0 && !this._busy
-        ? html`<div class="empty">no BHLnames matches</div>`
+        ? html`<div class="empty" role="status">No BHLnames matches</div>`
         : ""}
       ${this._bhlHits.map(
         (h) => html`
@@ -4000,7 +5201,7 @@ class SfgaAddReferenceModal extends LitElement {
                 </div>`
               : ""}
             <div class="actions">
-              <button @click=${() => (this._preview = h.reference)}>preview</button>
+              <button @click=${() => (this._preview = h.reference)}>Preview</button>
               <button class="primary" @click=${() => this._createAndPick(h.reference)}>
                 add & pick
               </button>
@@ -4049,10 +5250,10 @@ class SfgaAddReferenceModal extends LitElement {
       />
       <div class="toolbar" style="justify-content: flex-start">
         <button @click=${() => this._resolveDOI()} ?disabled=${!this._doiInput.trim() || this._busy}>
-          ${this._busy ? "resolving…" : "resolve"}
+          ${this._busy ? "Resolving…" : "Resolve"}
         </button>
       </div>
-      ${this._error ? html`<div class="error">${this._error}</div>` : ""}
+      ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : ""}
       ${this._preview ? this._renderPreview() : ""}
     `;
   }
@@ -4088,10 +5289,10 @@ class SfgaAddReferenceModal extends LitElement {
       ></textarea>
       <div class="toolbar" style="justify-content: flex-start">
         <button @click=${() => this._parseBibTeX()} ?disabled=${!this._bibtexInput.trim() || this._busy}>
-          ${this._busy ? "parsing…" : "parse"}
+          ${this._busy ? "Parsing…" : "Parse"}
         </button>
       </div>
-      ${this._error ? html`<div class="error">${this._error}</div>` : ""}
+      ${this._error ? html`<div class="error" role="alert">${this._error}</div>` : ""}
       ${this._preview ? this._renderPreview() : ""}
     `;
   }
@@ -4131,9 +5332,9 @@ class SfgaAddReferenceModal extends LitElement {
           ${rows.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}
         </dl>
         <div class="toolbar">
-          <button @click=${() => (this._preview = null)}>discard</button>
+          <button @click=${() => (this._preview = null)}>Discard</button>
           <button class="primary" @click=${() => this._createAndPick(r)}>
-            ${this._busy ? "saving…" : "add & pick"}
+            ${this._busy ? "Saving…" : "Add & pick"}
           </button>
         </div>
       </div>
@@ -4183,6 +5384,13 @@ class SfgaCombobox extends LitElement {
     minSearchChars: { type: Number, attribute: "min-search-chars" },
     source: { attribute: false }, // async (q) => [{id, name, ...extras}]
     resolver: { attribute: false }, // async (id) => name (optional)
+    // Pinned action items rendered at the top of the dropdown, always
+    // visible even during search. Each entry:
+    //   { label: string, icon?: string (renderIcon name), handler: () => void }
+    // Selecting an action runs its handler and closes the dropdown;
+    // it does NOT commit the input value as the picker's selection.
+    // See DESIGN.md § Combobox pinned actions.
+    actions: { attribute: false },
     _input: { state: true },
     _results: { state: true },
     _open: { state: true },
@@ -4204,11 +5412,14 @@ class SfgaCombobox extends LitElement {
       color: var(--fg);
       background: var(--bg);
       border: 1px solid var(--border);
-      /* room on the right for the × button, plus a bit extra so text
-         doesn't butt up against it. */
-      padding: 0.3rem 1.8rem 0.3rem 0.4rem;
+      border-radius: var(--radius-md);
+      /* Room on the right for the × button, plus a bit extra so text
+         doesn't butt up against it. Deliberately deviates from the
+         formFieldStyles default padding — the combobox has to reserve
+         space for its clear affordance. */
+      padding: var(--sp-1) 1.8rem var(--sp-1) var(--sp-2);
       font-family: inherit;
-      font-size: 1em;
+      font-size: var(--fs-md);
       width: 100%;
       box-sizing: border-box;
     }
@@ -4222,15 +5433,15 @@ class SfgaCombobox extends LitElement {
     }
     button.clear {
       position: absolute;
-      right: 0.35rem;
+      right: var(--sp-1);
       top: 50%;
       transform: translateY(-50%);
       background: transparent;
       color: var(--dim);
       border: 0;
-      padding: 0 0.35rem;
+      padding: 0 var(--sp-1);
       font-family: inherit;
-      font-size: 1.2em;
+      font-size: var(--fs-lg);
       line-height: 1;
       cursor: pointer;
     }
@@ -4242,21 +5453,23 @@ class SfgaCombobox extends LitElement {
       left: 0;
       right: 0;
       top: 100%;
-      z-index: 20;
+      z-index: var(--z-popover);
       max-height: 14rem;
       overflow: auto;
       background: var(--bg);
       border: 1px solid var(--border);
       border-top: none;
+      border-bottom-left-radius: var(--radius-md);
+      border-bottom-right-radius: var(--radius-md);
       margin: 0;
       padding: 0;
       list-style: none;
     }
     .results li {
-      padding: 0.25rem 0.5rem;
+      padding: var(--sp-1) var(--sp-2);
       cursor: pointer;
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -4274,6 +5487,56 @@ class SfgaCombobox extends LitElement {
       background: var(--bg);
       color: var(--dim);
     }
+    /* Synonym result rows: "<accepted taxon> (=<matched synonym>)".
+       Accepted name leads so the curator sees the taxon they'll
+       navigate to first; the parenthesised (=synonym) uses the CoLDP
+       "=" synonym marker to signal why the row appeared. The paren
+       group is dimmed against the accepted-name lead so the eye
+       reads accepted-then-context. On hover (selection highlight)
+       both sides invert to accent-fg together so contrast stays
+       readable. See DESIGN.md § Search combobox synonym rendering. */
+    .results li.synonym .syn-matched {
+      color: var(--dim);
+      margin-left: var(--sp-1);
+    }
+    .results li.synonym.hover .syn-matched {
+      color: var(--accent-fg);
+    }
+    /* Pinned action rows (see DESIGN.md § Combobox pinned actions).
+       Three visual differentiators so curators don't miss the action
+       or mistake it for a search result: (1) icon prefix; (2) subtle
+       accent background tint; (3) border-bottom divider separating
+       the action zone from the results zone below. Font matches the
+       body font (not the mono result font) to further signal
+       "action, not data". */
+    .results li.action {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      font-family: var(--font-body);
+      color: var(--fg);
+      background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+    }
+    .results li.action.divider {
+      border-bottom: 1px solid var(--border);
+    }
+    .results li.action .action-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      flex: 0 0 auto;
+    }
+    .results li.action .action-icon svg {
+      display: block;
+    }
+    .results li.action.hover {
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+    .results li.action.hover .action-icon {
+      color: var(--accent-fg);
+    }
   `;
 
   constructor() {
@@ -4284,6 +5547,7 @@ class SfgaCombobox extends LitElement {
     this.minSearchChars = 0;
     this.source = async () => [];
     this.resolver = null;
+    this.actions = [];
     this._input = "";
     this._results = [];
     this._open = false;
@@ -4327,11 +5591,29 @@ class SfgaCombobox extends LitElement {
 
   _onFocus() {
     this._focused = true;
-    // Empty input + minSearchChars=0 → show all options (select-like UX
-    // for small vocabs). Otherwise wait for the user to type.
+    // Open the dropdown on focus in three cases:
+    //   1. Empty input + minSearchChars=0 (vocab picker; show all).
+    //   2. Pinned actions exist (curator should see "Add new …"
+    //      immediately without having to type first).
+    //   3. Input already has content above the search threshold
+    //      (curator re-focusing a picker with a partial query — the
+    //      existing results should re-appear).
+    // Runs a search in cases (1) and (3) so results populate.
+    const hasActions = (this.actions?.length || 0) > 0;
     if (this._input.length === 0 && this.minSearchChars === 0) {
       this._runSearch();
       this._open = true;
+    } else if (hasActions) {
+      this._open = true;
+      // If input meets the search threshold, refresh results too so
+      // the dropdown shows current data alongside the pinned actions.
+      if (this._input.length >= this.minSearchChars) {
+        this._runSearch();
+      } else {
+        // No results yet, but we still want the hover cursor on the
+        // first action so Enter works immediately.
+        this._hover = 0;
+      }
     }
   }
 
@@ -4374,6 +5656,13 @@ class SfgaCombobox extends LitElement {
     }
   }
 
+  // _totalHoverItems returns the count of keyboard-navigable dropdown
+  // rows: pinned actions plus search results. Used by the arrow-key
+  // handler and by Enter to route between action.handler and _pick.
+  _totalHoverItems() {
+    return (this.actions?.length || 0) + this._results.length;
+  }
+
   async _runSearch() {
     const q = this._input;
     this._lastQuery = q;
@@ -4381,12 +5670,19 @@ class SfgaCombobox extends LitElement {
       const results = await Promise.resolve(this.source(q));
       if (q === this._lastQuery) {
         this._results = results || [];
-        this._hover = this._results.length ? 0 : -1;
+        // Default hover: first item overall (action if present, else
+        // first result). Keeps Enter useful the moment the dropdown
+        // opens.
+        const total = this._totalHoverItems();
+        this._hover = total > 0 ? 0 : -1;
         this._loading = false;
       }
     } catch (_) {
       if (q === this._lastQuery) {
         this._results = [];
+        // Even with no results, actions may still be present; keep
+        // hover on the first action so Enter works.
+        this._hover = (this.actions?.length || 0) > 0 ? 0 : -1;
         this._loading = false;
       }
     }
@@ -4399,20 +5695,28 @@ class SfgaCombobox extends LitElement {
         if (!this._open) {
           this._open = true;
           if (!this._results.length) this._runSearch();
-        } else if (this._results.length) {
-          this._hover = (this._hover + 1) % this._results.length;
+        } else {
+          const total = this._totalHoverItems();
+          if (total) this._hover = (this._hover + 1) % total;
         }
         break;
       case "ArrowUp":
         e.preventDefault();
-        if (this._results.length) {
-          this._hover = (this._hover - 1 + this._results.length) % this._results.length;
+        {
+          const total = this._totalHoverItems();
+          if (total) this._hover = (this._hover - 1 + total) % total;
         }
         break;
       case "Enter":
         e.preventDefault();
-        if (this._hover >= 0 && this._hover < this._results.length) {
-          this._pick(this._results[this._hover]);
+        {
+          const nActions = this.actions?.length || 0;
+          if (this._hover < 0) break;
+          if (this._hover < nActions) {
+            this._runAction(this.actions[this._hover]);
+          } else if (this._hover - nActions < this._results.length) {
+            this._pick(this._results[this._hover - nActions]);
+          }
         }
         break;
       case "Escape":
@@ -4421,6 +5725,15 @@ class SfgaCombobox extends LitElement {
         this._open = false;
         break;
     }
+  }
+
+  _runAction(action) {
+    if (!action || typeof action.handler !== "function") return;
+    this._open = false;
+    // Close the dropdown before running the handler so the action's
+    // side effects (e.g., opening a modal) don't race with the
+    // combobox's own render cycle.
+    action.handler();
   }
 
   _pick(item) {
@@ -4467,30 +5780,85 @@ class SfgaCombobox extends LitElement {
   }
 
   render() {
-    let dropdown;
+    const actions = this.actions || [];
+    const nActions = actions.length;
+    // Actions render first, always visible (see DESIGN.md § Combobox
+    // pinned actions). The last action carries `.divider` when any
+    // result row follows so the border-bottom partitions the two
+    // zones cleanly. mousedown (not click) so the dropdown's blur
+    // handler doesn't dismiss us before the handler fires.
+    const actionRows = actions.map((a, i) => {
+      const cls = ["action"];
+      if (i === this._hover) cls.push("hover");
+      // Divider on the last action row iff any result content follows.
+      if (i === nActions - 1) cls.push("divider");
+      return html`
+        <li
+          class=${cls.join(" ")}
+          @mousedown=${(e) => {
+            e.preventDefault();
+            this._runAction(a);
+          }}
+          @mouseenter=${() => (this._hover = i)}
+        >
+          ${a.icon
+            ? html`<span class="action-icon">${renderIcon(a.icon, 14)}</span>`
+            : ""}
+          <span>${a.label}</span>
+        </li>
+      `;
+    });
+
+    let resultRows;
     if (this._loading) {
-      dropdown = html`<li class="empty">searching…</li>`;
+      resultRows = html`<li class="empty">Searching…</li>`;
     } else if (
       !this._results.length &&
       this._input.length >= this.minSearchChars
     ) {
-      dropdown = html`<li class="empty">no matches</li>`;
+      resultRows = html`<li class="empty">No matches</li>`;
     } else {
-      dropdown = this._results.map(
-        (r, i) => html`
+      resultRows = this._results.map((r, i) => {
+        const cls = ["result"];
+        if (nActions + i === this._hover) cls.push("hover");
+        // Synonym rows render "<matched> → <accepted>" so the curator
+        // sees which name text matched their query and which taxon
+        // picking will land on. Guard against matched === name (name
+        // change between search & render, or backend chose to elide
+        // matched) so we don't render a redundant "X → X".
+        const isSynRow = r.isSynonym && r.matched && r.matched !== r.name;
+        if (isSynRow) cls.push("synonym");
+        // Screen-reader label collapses "<accepted> (=<matched>)" into
+        // a single announcement so listeners get the same information
+        // sighted curators do from the parenthesised marker. The
+        // paren-group markup is decorative for a11y (aria-hidden on
+        // the raw punctuation would still leave "= X" parsed as an
+        // equation by some readers), so the entire visual is aria-
+        // hidden'd inside the li and the aria-label carries meaning.
+        const ariaLabel = isSynRow
+          ? `${r.name}, matched via synonym ${r.matched}`
+          : undefined;
+        return html`
           <li
-            class=${i === this._hover ? "hover" : ""}
+            class=${cls.join(" ")}
+            aria-label=${ariaLabel ?? nothing}
             @mousedown=${(e) => {
               e.preventDefault();
               this._pick(r);
             }}
-            @mouseenter=${() => (this._hover = i)}
+            @mouseenter=${() => (this._hover = nActions + i)}
           >
-            ${r.name || "(unset)"}
+            ${isSynRow
+              ? html`<span class="syn-accepted">${r.name}</span
+                  ><span class="syn-matched" aria-hidden="true"
+                    >(=${r.matched})</span
+                  >`
+              : r.name || "(unset)"}
           </li>
-        `,
-      );
+        `;
+      });
     }
+    const dropdown = html`${actionRows}${resultRows}`;
 
     return html`
       <div class="wrap">
@@ -4538,123 +5906,110 @@ class SfgaMetadata extends LitElement {
     _saveError: { state: true },
   };
 
-  static styles = css`
-    :host {
-      display: block;
-      font-family: var(--font-body);
-      color: var(--fg);
-      padding: 1rem 1.25rem;
-    }
-    h2 {
-      margin: 0 0 0.25rem 0;
-      font-size: 1.25em;
-    }
-    hr {
-      border: 0;
-      border-top: 1px solid var(--border);
-      margin: 0.5rem 0 1rem 0;
-    }
-    dl {
-      margin: 0;
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 0.25rem 1rem;
-      font-family: var(--font-mono);
-      font-size: 0.95em;
-      max-width: 60rem;
-    }
-    dt {
-      color: var(--dim);
-    }
-    dd {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    form {
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 0.5rem 1rem;
-      max-width: 60rem;
-      margin-top: 0.5rem;
-    }
-    form label {
-      color: var(--dim);
-      align-self: center;
-      font-family: var(--font-mono);
-      font-size: 0.95em;
-    }
-    form input,
-    form textarea,
-    form select {
-      background: var(--bg);
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.25rem 0.4rem;
-      font-family: inherit;
-      font-size: 0.95em;
-    }
-    form textarea {
-      min-height: 4rem;
-      resize: vertical;
-      font-family: var(--font-body);
-    }
-    form input:focus,
-    form textarea:focus,
-    form select:focus {
-      outline: none;
-      border-color: var(--accent);
-    }
-    .req {
-      color: var(--error);
-    }
-    .toolbar {
-      grid-column: 1 / -1;
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 0.5rem;
-    }
-    button {
-      background: transparent;
-      color: var(--fg);
-      border: 1px solid var(--border);
-      padding: 0.2rem 0.6rem;
-      font-family: inherit;
-      cursor: pointer;
-    }
-    button:hover {
-      border-color: var(--accent);
-    }
-    button.primary {
-      background: var(--accent);
-      color: var(--accent-fg);
-      border-color: var(--accent);
-    }
-    .error {
-      color: var(--error);
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-    }
-    .empty {
-      color: var(--dim);
-    }
-    .stars {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 0.4rem;
-      font-family: var(--font-mono);
-    }
-    .star-filled {
-      color: gold;
-    }
-    .star-empty {
-      color: var(--dim);
-    }
-    .star-count {
-      color: var(--dim);
-      font-size: 0.85em;
-    }
-  `;
+  // Reference implementation for the WUI design system. Styles compose
+  // from formFieldStyles + buttonStyles (shared vocabulary) plus a small
+  // block of component-specific layout. All spacings, radii, and font
+  // sizes read from the tokens defined in styles.css — no raw px/rem
+  // outside the 60rem content max-width, which is intentionally kept
+  // hardcoded until it appears in enough other components to earn a
+  // token of its own. See DESIGN.md for the extension protocol.
+  static styles = [
+    formFieldStyles,
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+        font-family: var(--font-body);
+        color: var(--fg);
+        padding: var(--sp-4) var(--sp-5);
+      }
+      h2 {
+        margin: 0 0 var(--sp-1) 0;
+        font-size: var(--fs-lg);
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: var(--sp-2) 0 var(--sp-4) 0;
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: var(--sp-1) var(--sp-4);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+        max-width: 60rem;
+      }
+      dt {
+        color: var(--dim);
+        align-self: start;
+      }
+      dd {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      /* Cells containing an <sfga-agent-section> reset white-space so
+         the newlines/indentation between <dd> and the child element
+         don't render as visible blank lines. pre-wrap is kept on the
+         default dd for the Description field's multi-line text. */
+      dd.agents-cell {
+        white-space: normal;
+      }
+      form {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: var(--sp-2) var(--sp-4);
+        max-width: 60rem;
+        margin-top: var(--sp-2);
+      }
+      /* Center-align labels next to single-line inputs by default.
+         Agent-label rows contain a tall card block, so top-align that
+         specific label so it stays anchored to the top of the cell. */
+      form label {
+        align-self: center;
+      }
+      form label.agent-label {
+        align-self: start;
+      }
+      .toolbar {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: var(--sp-2);
+        margin-top: var(--sp-2);
+      }
+      .error {
+        color: var(--error);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+      }
+      .empty {
+        color: var(--dim);
+      }
+      /* Star rating for confidence. Filled stars use the accent color
+         so the palette stays within fg + accent + severity — no gold
+         off-palette exception. Filled and empty spans sit flush so the
+         row reads as a single rating; only the numeric count is
+         separated by a gap. */
+      .stars {
+        display: inline-flex;
+        align-items: baseline;
+        font-family: var(--font-mono);
+      }
+      .star-filled {
+        color: var(--accent);
+      }
+      .star-empty {
+        color: var(--border);
+      }
+      .star-count {
+        color: var(--dim);
+        font-size: var(--fs-sm);
+        margin-left: var(--sp-2);
+      }
+    `,
+  ];
 
   constructor() {
     super();
@@ -4682,6 +6037,9 @@ class SfgaMetadata extends LitElement {
       }
     } finally {
       this._loading = false;
+      // Data resolved (or errored) — signal the shell so the header
+      // pencil renders now that hasEditAffordance() has a real answer.
+      this._notifyActionsChanged();
     }
   }
 
@@ -4689,12 +6047,43 @@ class SfgaMetadata extends LitElement {
     this._draft = {};
     this._saveError = "";
     this._editing = true;
+    this._notifyActionsChanged();
   }
 
   _cancelEdit() {
     this._draft = {};
     this._saveError = "";
     this._editing = false;
+    this._notifyActionsChanged();
+  }
+
+  // renderHeaderActions is the public contract every screen component
+  // implements to project its actions into the app header (see DESIGN.md
+  // § Screen actions). Return an html`...` template of buttons or ""
+  // when no actions should render right now. Dispatch
+  // "screen-actions-changed" whenever the output would change so the
+  // shell knows to re-render.
+  renderHeaderActions() {
+    if (!this.editable || this._editing || !this._metadata) return "";
+    return html`
+      <button
+        class="icon-btn subtle"
+        @click=${() => this._startEdit()}
+        title="edit metadata"
+        aria-label="edit metadata"
+      >
+        ${renderIcon("pencil", 18)}
+      </button>
+    `;
+  }
+
+  _notifyActionsChanged() {
+    this.dispatchEvent(
+      new CustomEvent("screen-actions-changed", {
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   _change(field, value) {
@@ -4748,6 +6137,8 @@ class SfgaMetadata extends LitElement {
           composed: true,
         }),
       );
+      // Edit mode ended — header pencil becomes available again.
+      this._notifyActionsChanged();
     } catch (err) {
       this._saveError =
         err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
@@ -4756,12 +6147,36 @@ class SfgaMetadata extends LitElement {
     }
   }
 
+  // hasUnsavedChanges reports true when the edit form has draft
+  // values that haven't been saved. Consulted by the shell before
+  // switching screens so a stray alt+t or sidebar click can't
+  // discard an in-progress edit without asking.
+  hasUnsavedChanges() {
+    return this._editing && Object.keys(this._draft || {}).length > 0;
+  }
+
+  // save is the public entry the shell calls when the user picks
+  // "Save" from the unsaved-changes dialog. Returns true when the
+  // save succeeded (draft cleared, edit closed), false when the
+  // form still has unsaved state so the shell can abort its
+  // pending navigation.
+  async save() {
+    await this._save();
+    return !this.hasUnsavedChanges();
+  }
+
+  // discardChanges is the public entry the shell calls when the
+  // user picks "Discard" — drops the draft and returns to read view.
+  discardChanges() {
+    this._cancelEdit();
+  }
+
   render() {
     if (this._loading && !this._metadata) {
-      return html`<div class="empty">loading…</div>`;
+      return html`<div class="empty" role="status">Loading…</div>`;
     }
     if (this._error) {
-      return html`<div class="error">${this._error}</div>`;
+      return html`<div class="error" role="alert">${this._error}</div>`;
     }
     if (!this._metadata) {
       // Legacy archive without seeded metadata — offer to seed via
@@ -4773,7 +6188,7 @@ class SfgaMetadata extends LitElement {
           <p class="empty">
             This archive doesn't have metadata yet.
             ${this.editable
-              ? html`<button @click=${() => this._startEdit()}>seed metadata</button>`
+              ? html`<button @click=${() => this._startEdit()}>Seed metadata</button>`
               : ""}
           </p>
         `;
@@ -4791,10 +6206,26 @@ class SfgaMetadata extends LitElement {
         ? ""
         : html`<dt>${label}</dt>
             <dd>${value}</dd>`;
+    // Agent rows live inline in the dl so cards align with the
+    // rest of the metadata field grid. Order matches curator
+    // priority: contact (who to reach), then creators (primary
+    // authors), then editors / publishers / contributors. Read
+    // mode hides the "+ Add" tile — adding requires entering
+    // edit mode via the header pencil — but leaves existing
+    // cards clickable so curators can still open an agent's
+    // detail modal without leaving the read view.
+    const agentRow = (role, label) => html`
+      <dt>${label}</dt>
+      <dd class="agents-cell"><sfga-agent-section
+        .role=${role}
+        .editable=${this.editable}
+        .noheader=${true}
+        .noAdd=${true}
+      ></sfga-agent-section></dd>
+    `;
     return html`
-      <h2>${m.title || "(untitled)"}</h2>
-      <hr />
       <dl>
+        ${row("Title", m.title || "(untitled)")}
         ${row("Alias", m.alias)} ${row("Version", m.version)}
         ${row("Issued", m.issued)} ${row("DOI", m.doi)} ${row("URL", m.url)}
         ${row("Logo", m.logo)} ${row("Label", m.label)}
@@ -4814,12 +6245,12 @@ class SfgaMetadata extends LitElement {
         ${m.private !== undefined && m.private !== null
           ? row("Access", m.private ? "private" : "public")
           : ""}
+        ${agentRow("contact", "Contact")}
+        ${agentRow("creator", "Creators")}
+        ${agentRow("editor", "Editors")}
+        ${agentRow("publisher", "Publishers")}
+        ${agentRow("contributor", "Contributors")}
       </dl>
-      ${this.editable
-        ? html`<div class="toolbar" style="margin-top:1rem">
-            <button @click=${() => this._startEdit()}>edit</button>
-          </div>`
-        : ""}
     `;
   }
 
@@ -4963,6 +6394,7 @@ class SfgaMetadata extends LitElement {
           <option value="false">public</option>
           <option value="true">private</option>
         </select>
+        ${this._renderEditAgentRows()}
         <div class="toolbar">
           <button class="primary" @click=${() => this._save()} ?disabled=${this._saving}>
             save
@@ -4971,10 +6403,33 @@ class SfgaMetadata extends LitElement {
             cancel
           </button>
           ${this._saveError
-            ? html`<span class="error">${this._saveError}</span>`
+            ? html`<span class="error" role="alert">${this._saveError}</span>`
             : ""}
         </div>
       </form>
+    `;
+  }
+
+  // Agent rows for the edit form. Same visual grid as the read
+  // view (labels aligned with the metadata field labels), but the
+  // "+ Add" tile is enabled so curators can add new agents while
+  // in edit mode. Card clicks still open the modal in either
+  // mode — this only gates creation, not editing.
+  _renderEditAgentRows() {
+    const editRow = (role, label) => html`
+      <label class="agent-label">${label}</label>
+      <div class="agents-cell"><sfga-agent-section
+        .role=${role}
+        .editable=${true}
+        .noheader=${true}
+      ></sfga-agent-section></div>
+    `;
+    return html`
+      ${editRow("contact", "Contact")}
+      ${editRow("creator", "Creators")}
+      ${editRow("editor", "Editors")}
+      ${editRow("publisher", "Publishers")}
+      ${editRow("contributor", "Contributors")}
     `;
   }
 }
@@ -4986,6 +6441,12 @@ class SfgaMetadata extends LitElement {
 
 class SfgaReferences extends LitElement {
   static properties = {
+    // Public: when set (e.g. by the shell routing an Issues click),
+    // the component selects that reference on the next render. The
+    // shell clears its side of the state via the `reference-selected`
+    // event so subsequent property assignments (even to the same id)
+    // still trigger a reveal.
+    selectId: { attribute: false },
     _hits: { state: true },
     _selectedId: { state: true },
     _current: { state: true },
@@ -4996,19 +6457,22 @@ class SfgaReferences extends LitElement {
   static styles = css`
     :host {
       display: grid;
-      grid-template-columns: minmax(18rem, 40%) 1fr;
+      /* Matches the taxa screen's 50/50 split — reference list left,
+         detail right — so the two primary editing surfaces feel
+         consistent when a curator moves between screens. */
+      grid-template-columns: minmax(18rem, 1fr) 1fr;
       overflow: hidden;
       height: 100%;
     }
     aside,
     section {
       overflow: auto;
-      padding: 0.5rem;
+      padding: var(--sp-2);
     }
     aside {
       border-right: 1px solid var(--border);
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
     ul.list {
       list-style: none;
@@ -5016,7 +6480,7 @@ class SfgaReferences extends LitElement {
       padding: 0;
     }
     ul.list li {
-      padding: 0.35rem 0.5rem;
+      padding: var(--sp-1) var(--sp-2);
       cursor: pointer;
       color: var(--fg);
       border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
@@ -5029,41 +6493,42 @@ class SfgaReferences extends LitElement {
       color: var(--accent-fg);
     }
     .author { font-weight: 600; }
-    .year { color: var(--dim); margin-left: 0.4rem; }
-    .title { display: block; color: var(--dim); font-weight: normal; margin-top: 0.15rem; }
+    .year { color: var(--dim); margin-left: var(--sp-1); }
+    .title { display: block; color: var(--dim); font-weight: normal; margin-top: var(--sp-1); }
     ul.list li.selected .year,
     ul.list li.selected .title { color: var(--accent-fg); }
     section h2 {
-      margin: 0 0 0.25rem 0;
-      font-size: 1.1em;
+      margin: 0 0 var(--sp-1) 0;
+      font-size: var(--fs-lg);
     }
     section hr {
       border: 0;
       border-top: 1px solid var(--border);
-      margin: 0.5rem 0;
+      margin: var(--sp-2) 0;
     }
     section dl {
       margin: 0;
       display: grid;
       grid-template-columns: max-content 1fr;
-      gap: 0.25rem 1rem;
+      gap: var(--sp-1) var(--sp-4);
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
     section dt { color: var(--dim); }
     section dd { margin: 0; word-break: break-word; }
     .citation {
-      margin-top: 1rem;
+      margin-top: var(--sp-4);
       color: var(--dim);
       font-family: var(--font-body);
       line-height: 1.4;
     }
-    .empty { color: var(--dim); padding: 0.5rem; }
-    .error { color: var(--error); font-family: var(--font-mono); padding: 0.5rem; }
+    .empty { color: var(--dim); padding: var(--sp-2); }
+    .error { color: var(--error); font-family: var(--font-mono); padding: var(--sp-2); }
   `;
 
   constructor() {
     super();
+    this.selectId = "";
     this._hits = [];
     this._selectedId = "";
     this._current = null;
@@ -5077,7 +6542,14 @@ class SfgaReferences extends LitElement {
     try {
       const page = await api.reference.list({ limit: 200 });
       this._hits = page.items || [];
-      if (this._hits.length > 0) {
+      // Prefer the caller-requested id (deep-link from an Issues
+      // click); fall back to the first hit. `_select` fetches by id
+      // directly, so a requested id that isn't in the first-page
+      // list still resolves — it just won't be highlighted in the
+      // sidebar until the curator scrolls or filters to it.
+      if (this.selectId) {
+        this._select(this.selectId);
+      } else if (this._hits.length > 0) {
         this._select(this._hits[0].id);
       }
     } catch (err) {
@@ -5087,10 +6559,31 @@ class SfgaReferences extends LitElement {
     }
   }
 
+  // Post-mount: if the shell hands us a new `selectId` (e.g. curator
+  // clicked another reference-scoped issue while already on this
+  // screen), honor it. Ignored during initial load — that path runs
+  // through connectedCallback.
+  updated(changed) {
+    if (changed.has("selectId") && this.selectId && this.selectId !== this._selectedId) {
+      this._select(this.selectId);
+    }
+  }
+
   async _select(id) {
     if (!id || id === this._selectedId) return;
     this._selectedId = id;
     this._current = null;
+    // Announce so the shell can clear its pending-select state; this
+    // matters when the same id is routed twice (a second click on the
+    // same Issues row should still reveal it, even if the property
+    // value hasn't changed).
+    this.dispatchEvent(
+      new CustomEvent("reference-selected", {
+        detail: { id },
+        bubbles: true,
+        composed: true,
+      }),
+    );
     try {
       this._current = await api.reference.get(id);
     } catch (err) {
@@ -5100,20 +6593,22 @@ class SfgaReferences extends LitElement {
 
   render() {
     if (this._loading && this._hits.length === 0) {
-      return html`<div class="empty">loading…</div>`;
+      return html`<div class="empty" role="status">Loading…</div>`;
     }
     if (this._error) {
-      return html`<div class="error">${this._error}</div>`;
+      return html`<div class="error" role="alert">${this._error}</div>`;
     }
     if (this._hits.length === 0) {
-      return html`<div class="empty">(no references)</div>`;
+      return html`<div class="empty">(No references)</div>`;
     }
     return html`
       <aside>
-        <ul class="list">
+        <ul class="list" role="listbox" aria-label="References">
           ${this._hits.map(
             (h) => html`
               <li
+                role="option"
+                aria-selected=${h.id === this._selectedId ? "true" : "false"}
                 class=${h.id === this._selectedId ? "selected" : ""}
                 @click=${() => this._select(h.id)}
               >
@@ -5130,7 +6625,7 @@ class SfgaReferences extends LitElement {
   }
 
   _renderDetail() {
-    if (!this._current) return html`<div class="empty">loading…</div>`;
+    if (!this._current) return html`<div class="empty" role="status">Loading…</div>`;
     const r = this._current;
     const row = (label, value) =>
       value === undefined || value === null || value === ""
@@ -5185,85 +6680,82 @@ class SfgaHelpModal extends LitElement {
     { scope: "form", label: "Edit forms" },
   ];
 
-  static styles = css`
-    :host {
-      display: block;
-    }
-    .backdrop {
-      position: fixed;
-      inset: 0;
-      background: color-mix(in oklab, var(--bg) 60%, transparent);
-      display: grid;
-      place-items: center;
-      z-index: 10;
-    }
-    .modal {
-      background: var(--bg);
-      color: var(--fg);
-      border: 1px solid var(--accent);
-      padding: 1rem 1.5rem;
-      width: min(38rem, 95vw);
-      max-height: 90vh;
-      overflow: auto;
-      display: grid;
-      gap: 0.75rem;
-      font-family: var(--font-body);
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    header h3 {
-      margin: 0;
-      font-size: 1.1em;
-      color: var(--accent);
-    }
-    button.close {
-      background: transparent;
-      color: var(--dim);
-      border: 0;
-      padding: 0 0.35rem;
-      font: inherit;
-      font-size: 1.4em;
-      line-height: 1;
-      cursor: pointer;
-    }
-    button.close:hover {
-      color: var(--fg);
-    }
-    .hint {
-      color: var(--dim);
-      font-style: italic;
-      font-size: 0.9em;
-    }
-    section {
-      display: grid;
-      gap: 0.25rem;
-    }
-    section h4 {
-      margin: 0 0 0.15rem 0;
-      font-size: 0.95em;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.15rem;
-    }
-    dl {
-      margin: 0;
-      display: grid;
-      grid-template-columns: minmax(6rem, auto) 1fr;
-      column-gap: 1rem;
-      row-gap: 0.15rem;
-      align-items: baseline;
-    }
-    dt {
-      font-family: var(--font-mono);
-      color: var(--accent);
-      white-space: nowrap;
-    }
-    dd {
-      margin: 0;
-    }
-  `;
+  static styles = [
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        display: grid;
+        place-items: center;
+        z-index: var(--z-modal-backdrop);
+      }
+      .modal {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4) var(--sp-5);
+        width: min(var(--modal-md), 95vw);
+        max-height: var(--modal-max-h);
+        overflow: auto;
+        display: grid;
+        gap: var(--sp-3);
+        font-family: var(--font-body);
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      header h3 {
+        margin: 0;
+        font-size: var(--fs-lg);
+        color: var(--accent);
+      }
+      .hint {
+        color: var(--dim);
+        font-style: italic;
+        font-size: var(--fs-sm);
+      }
+      section {
+        display: grid;
+        gap: var(--sp-1);
+      }
+      section h4 {
+        margin: 0 0 var(--sp-1) 0;
+        font-size: var(--fs-md);
+        border-bottom: 1px solid var(--border);
+        padding-bottom: var(--sp-1);
+      }
+      /* Fixed first-column width so the description column starts at
+         the same left edge across every section. Auto-sizing per <dl>
+         staggers the second column because the widest shortcut per
+         section varies (Global's longest is Alt+I; Tree includes
+         → / l / Enter which is much wider). 11rem accommodates the
+         widest key combo currently in the keymap. */
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: 11rem 1fr;
+        column-gap: var(--sp-4);
+        row-gap: var(--sp-1);
+        align-items: baseline;
+      }
+      dt {
+        font-family: var(--font-mono);
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      dd {
+        margin: 0;
+      }
+    `,
+  ];
 
   render() {
     return html`
@@ -5277,7 +6769,13 @@ class SfgaHelpModal extends LitElement {
         <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
           <header>
             <h3>Keyboard shortcuts</h3>
-            <button class="close" @click=${() => this._close()} title="close">
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._close()}
+              title="close"
+              aria-label="close"
+            >
               ×
             </button>
           </header>
@@ -5304,6 +6802,24 @@ class SfgaHelpModal extends LitElement {
         </dl>
       </section>
     `;
+  }
+
+  firstUpdated() {
+    // Trap focus so Tab cycles through the shortcut entries and the
+    // close button instead of leaking out to the underlying app. The
+    // release() restores focus to the help toggle (or wherever
+    // triggered the modal) on dismissal.
+    this._releaseFocus = trapFocus(this.renderRoot, {
+      initialFocus: "button.close-x",
+    });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._releaseFocus) {
+      this._releaseFocus();
+      this._releaseFocus = null;
+    }
   }
 
   _close() {
@@ -5368,16 +6884,16 @@ class SfgaIssues extends LitElement {
     aside,
     section {
       overflow: auto;
-      padding: 0.75rem;
+      padding: var(--sp-3);
     }
     aside {
       border-right: 1px solid var(--border);
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
     h3 {
-      margin: 0 0 0.5rem 0;
-      font-size: 0.95em;
+      margin: 0 0 var(--sp-2) 0;
+      font-size: var(--fs-md);
       color: var(--dim);
       font-weight: 600;
       text-transform: uppercase;
@@ -5386,9 +6902,9 @@ class SfgaIssues extends LitElement {
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: var(--sp-2);
       align-items: center;
-      margin-bottom: 0.75rem;
+      margin-bottom: var(--sp-3);
     }
     .toolbar .grow {
       flex: 1;
@@ -5396,10 +6912,10 @@ class SfgaIssues extends LitElement {
     button.filter-chip {
       display: inline-flex;
       align-items: center;
-      gap: 0.25rem;
-      padding: 0.15rem 0.6rem;
-      border-radius: 999px;
-      font-size: 0.85em;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-3);
+      border-radius: var(--radius-pill);
+      font-size: var(--fs-sm);
       font-weight: 600;
       cursor: pointer;
       background: var(--bg);
@@ -5416,18 +6932,21 @@ class SfgaIssues extends LitElement {
     button.filter-chip.on.sev-warn  { color: var(--sev-warn);  border-color: var(--sev-warn);  background: var(--sev-warn-bg); }
     button.filter-chip.on.sev-info  { color: var(--sev-info);  border-color: var(--sev-info);  background: var(--sev-info-bg); }
     button.filter-chip.on.sev-debug { color: var(--sev-debug); border-color: var(--sev-debug); background: var(--sev-debug-bg); }
+    /* Compound button — icon + text label. Not the shared .icon-btn
+       (icon-only). Kept local until enough compound buttons appear
+       elsewhere to justify a shared variant. */
     button.icon-btn {
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
-      padding: 0.25rem 0.55rem;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-2);
       background: var(--bg);
       color: var(--fg);
       border: 1px solid var(--border);
-      border-radius: 3px;
+      border-radius: var(--radius-md);
       cursor: pointer;
       font-family: inherit;
-      font-size: 0.85em;
+      font-size: var(--fs-sm);
     }
     button.icon-btn:hover:not(:disabled) {
       background: color-mix(in oklab, var(--fg) 8%, transparent);
@@ -5445,8 +6964,8 @@ class SfgaIssues extends LitElement {
       display: grid;
       grid-template-columns: 1fr auto;
       align-items: baseline;
-      gap: 0.5rem;
-      padding: 0.4rem 0.5rem;
+      gap: var(--sp-2);
+      padding: var(--sp-1) var(--sp-2);
       cursor: pointer;
       border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
     }
@@ -5461,6 +6980,18 @@ class SfgaIssues extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Rule-row severity coloring. The row's leading glyph + label
+       take the severity color so the sidebar reads as a heat-map
+       instead of a wall of chip pills. Filter buttons above stay
+       button-shaped so their affordance is unambiguous. */
+    ul.rules li.sev-error .rule-label { color: var(--sev-error); }
+    ul.rules li.sev-warn  .rule-label { color: var(--sev-warn); }
+    ul.rules li.sev-info  .rule-label { color: var(--sev-info); }
+    ul.rules li.sev-debug .rule-label { color: var(--sev-debug); }
+    ul.rules .sev-glyph {
+      font-weight: 700;
+      margin-right: var(--sp-1);
+    }
     ul.rules .count {
       color: var(--dim);
       font-variant-numeric: tabular-nums;
@@ -5471,10 +7002,8 @@ class SfgaIssues extends LitElement {
       padding: 0;
     }
     ul.issues li {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 0.5rem;
-      padding: 0.6rem 0.5rem;
+      display: block;
+      padding: var(--sp-2);
       border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
       cursor: pointer;
     }
@@ -5484,6 +7013,18 @@ class SfgaIssues extends LitElement {
     ul.issues li.orphan {
       cursor: default;
       opacity: 0.75;
+    }
+    /* Issue-row severity coloring. Matches the sidebar's
+       glyph+colored-label approach — the record label carries the
+       severity color so the row reads at a glance without pulling in
+       a chip pill. */
+    ul.issues li.sev-error .issue-record { color: var(--sev-error); }
+    ul.issues li.sev-warn  .issue-record { color: var(--sev-warn); }
+    ul.issues li.sev-info  .issue-record { color: var(--sev-info); }
+    ul.issues li.sev-debug .issue-record { color: var(--sev-debug); }
+    ul.issues .sev-glyph {
+      font-weight: 700;
+      margin-right: var(--sp-1);
     }
     .issue-record {
       font-weight: 600;
@@ -5495,11 +7036,11 @@ class SfgaIssues extends LitElement {
     }
     .issue-rule {
       color: var(--dim);
-      font-size: 0.85em;
-      margin-top: 0.15rem;
+      font-size: var(--fs-sm);
+      margin-top: var(--sp-1);
     }
     .issue-msg {
-      margin-top: 0.25rem;
+      margin-top: var(--sp-1);
       color: var(--fg);
       line-height: 1.35;
     }
@@ -5507,18 +7048,18 @@ class SfgaIssues extends LitElement {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 0.75rem;
-      padding-top: 0.5rem;
+      margin-top: var(--sp-3);
+      padding-top: var(--sp-2);
       border-top: 1px solid var(--border);
       color: var(--dim);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
-    .empty { color: var(--dim); padding: 0.5rem; font-style: italic; }
-    .error { color: var(--error); font-family: var(--font-mono); padding: 0.5rem; }
+    .empty { color: var(--dim); padding: var(--sp-2); font-style: italic; }
+    .error { color: var(--error); font-family: var(--font-mono); padding: var(--sp-2); }
     .diag-note {
-      margin-top: 0.5rem;
+      margin-top: var(--sp-2);
       color: var(--dim);
-      font-size: 0.85em;
+      font-size: var(--fs-sm);
       line-height: 1.35;
     }
   `;
@@ -5641,18 +7182,20 @@ class SfgaIssues extends LitElement {
   }
 
   // _openIssue asks the shell to navigate to the flagged record's
-  // natural detail view. Payload varies by target: taxon-linked
-  // issues carry a taxon_id + reveal the tree; metadata-scoped
-  // issues carry only the table so the shell jumps to the Metadata
-  // screen. Orphan rows (no owning taxon and not a special table)
-  // are silently ignored — the row was already rendered dim to hint
-  // that clicking won't do anything.
+  // natural edit surface. Payload always carries the target table +
+  // record_id so the shell can pre-select on the destination screen
+  // (references, in particular, use record_id to focus the row).
+  // Taxon-linked issues additionally carry a taxon_id so the shell
+  // can reveal the row in the tree. Orphan rows (no owning taxon and
+  // no known routing) are silently ignored — the row was already
+  // rendered dim to hint that clicking won't do anything.
   _openIssue(issue) {
+    if (!SfgaIssues._isRoutableTable(issue.table) && !issue.link_taxon_id) {
+      return;
+    }
     const detail = { table: issue.table, record_id: issue.record_id };
     if (issue.link_taxon_id) {
       detail.taxon_id = issue.link_taxon_id;
-    } else if (issue.table !== "metadata") {
-      return;
     }
     this.dispatchEvent(
       new CustomEvent("issue-navigate", {
@@ -5663,12 +7206,28 @@ class SfgaIssues extends LitElement {
     );
   }
 
+  // Tables the shell knows how to route to without a taxon hint.
+  // Kept as a static set so the click-enable check in _openIssue
+  // and the orphan-dim check in _renderIssueRow stay aligned.
+  static ROUTABLE_TABLES = new Set([
+    "metadata",
+    "reference",
+    "creator",
+    "contact",
+    "contributor",
+    "editor",
+    "publisher",
+  ]);
+  static _isRoutableTable(table) {
+    return SfgaIssues.ROUTABLE_TABLES.has(table);
+  }
+
   render() {
     if (this._loading && this._summary.length === 0 && this._issues.length === 0) {
-      return html`<div class="empty">loading…</div>`;
+      return html`<div class="empty" role="status">Loading…</div>`;
     }
     if (this._error) {
-      return html`<div class="error">${this._error}</div>`;
+      return html`<div class="error" role="alert">${this._error}</div>`;
     }
     return html`
       ${this._renderSidebar()}
@@ -5697,7 +7256,7 @@ class SfgaIssues extends LitElement {
           Rules (${totalShown} issue${totalShown === 1 ? "" : "s"})
         </h3>
         ${rows.length === 0
-          ? html`<div class="empty">No issues match the current filter.</div>`
+          ? html`<div class="empty" role="status">No issues match the current filter.</div>`
           : html`<ul class="rules">
               ${rows.map((r) => this._renderRuleRow(r))}
             </ul>`}
@@ -5722,16 +7281,20 @@ class SfgaIssues extends LitElement {
   _renderRuleRow(r) {
     const selected =
       this._ruleFilter === r.rule_id && this._tableFilter === r.table;
+    const sev = (r.severity || "warn").toLowerCase();
+    const classes = ["sev-" + sev];
+    if (selected) classes.push("selected");
+    // No per-row glyph: every severity now uses the same triangle
+    // icon (see SEV_META), so a leading glyph adds nothing beyond
+    // what the row's severity color already conveys — and it steals
+    // characters from the rule name in a narrow sidebar.
     return html`
       <li
-        class=${selected ? "selected" : ""}
+        class=${classes.join(" ")}
         @click=${() => this._selectRule(r)}
         title="${r.rule_id} (${r.table})"
       >
-        <span class="rule-label">
-          ${severityChip(r.severity)}
-          ${r.rule_name || r.rule_id}
-        </span>
+        <span class="rule-label">${r.rule_name || r.rule_id}</span>
         <span class="count">${r.count}</span>
       </li>
     `;
@@ -5750,7 +7313,7 @@ class SfgaIssues extends LitElement {
               ? this._summary.find((r) => r.rule_id === this._ruleFilter)?.rule_name || this._ruleFilter
               : "All rules"}</strong>
             <span style="color:var(--dim); margin-left:0.5rem;">
-              ${this._total > 0 ? `${from}-${to} of ${this._total}` : "no issues"}
+              ${this._total > 0 ? `${from}-${to} of ${this._total}` : "No issues"}
             </span>
           </div>
           <button
@@ -5764,7 +7327,7 @@ class SfgaIssues extends LitElement {
           </button>
         </div>
         ${this._issues.length === 0
-          ? html`<div class="empty">No issues match the current filter.</div>`
+          ? html`<div class="empty" role="status">No issues match the current filter.</div>`
           : html`<ul class="issues">
               ${this._issues.map((i) => this._renderIssueRow(i))}
             </ul>`}
@@ -5792,25 +7355,1238 @@ class SfgaIssues extends LitElement {
   }
 
   _renderIssueRow(i) {
-    const orphan = !i.link_taxon_id;
+    const orphan = !i.link_taxon_id && !SfgaIssues._isRoutableTable(i.table);
     const label = i.record_label || `(record ${i.record_id.slice(0, 8)}…)`;
+    const sev = (i.severity || "warn").toLowerCase();
+    const classes = ["sev-" + sev];
+    if (orphan) classes.push("orphan");
+    // Same rationale as _renderRuleRow — glyph dropped because color
+    // already conveys severity and the uniform triangle adds nothing.
     return html`
       <li
-        class=${orphan ? "orphan" : ""}
+        class=${classes.join(" ")}
         @click=${() => this._openIssue(i)}
-        title=${orphan ? "no owning taxon — cannot navigate" : "open this record"}
+        title=${orphan ? "cannot navigate to this record type yet" : "open this record"}
       >
-        ${severityChip(i.severity)}
-        <div>
-          <div class="issue-record ${orphan ? "orphan-label" : ""}">${label}</div>
-          <div class="issue-rule">
-            ${i.rule_name || i.rule_id}${i.field_name ? ` · ${i.field_name}` : ""}
-          </div>
-          <div class="issue-msg">${i.message}</div>
+        <div class="issue-record ${orphan ? "orphan-label" : ""}">${label}</div>
+        <div class="issue-rule">
+          ${i.rule_name || i.rule_id}${i.field_name ? ` · ${i.field_name}` : ""}
         </div>
+        <div class="issue-msg">${i.message}</div>
       </li>
     `;
   }
+}
+
+// ---------- <sfga-agent-card> ----------
+
+// One card in an agent list. Rendered inside <sfga-agent-section>;
+// dispatches `agent-edit` when clicked so the section can open the
+// modal. Presentation-only — no fetches, no writes.
+//
+// Layout mirrors ChecklistBank's AgentPresentation: family+given
+// underlined, ORCID line (icon + id, linked), organisation,
+// ROR line (icon + id, linked), department, city/state/country,
+// email as mailto, url, italic note.
+class SfgaAgentCard extends LitElement {
+  static properties = {
+    agent: { attribute: false },
+    // Highest severity across issues attached to this agent row.
+    // Optional; when set, a small glyph anchors the card in the
+    // upper-right corner so curators can spot problem rows without
+    // opening each one.
+    issueSeverity: { attribute: false },
+  };
+
+  static styles = css`
+    /* Host is a grid cell (see SfgaAgentSection .cards). Grid stretch
+       is on by default so the host fills the row height; the .card
+       inside also stretches to fill the host so its border and hit
+       area extend to the bottom of the row even for cards with less
+       content. */
+    :host {
+      display: block;
+      height: 100%;
+    }
+    .card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 0.05rem;
+      padding: var(--sp-1) var(--sp-2);
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in oklab, var(--bg) 94%, var(--fg));
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      line-height: 1.15;
+      color: var(--fg);
+      text-align: left;
+      /* Clip long content — each field ellipsizes on its own so
+         the card stays uniform-width and lines up with siblings in
+         the grid. Hovering the card shows the tooltip attribute
+         for anything the curator can't fully read. */
+      overflow: hidden;
+      min-width: 0;
+    }
+    .card:hover {
+      border-color: var(--accent);
+    }
+    /* Ellipsize any per-line block so the card never grows beyond
+       its grid track. Applied broadly to keep the card CSS tight;
+       specific rows override where wrapping is desired (note). */
+    .card > * {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .name {
+      font-family: var(--font-body);
+      font-weight: 600;
+      text-decoration: underline;
+    }
+    .line {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    /* Badge icons sit next to the ORCID / ROR id text; sizing them
+       em-relative keeps them proportional to the card's text height
+       instead of dominating the row at a fixed 14/16px. */
+    .line img {
+      flex: 0 0 auto;
+      width: 1em;
+      height: 1em;
+    }
+    .line img.ror {
+      width: 1.15em;
+      height: 1.15em;
+    }
+    .dim { color: var(--dim); }
+    .note {
+      font-family: var(--font-body);
+      font-style: italic;
+      color: var(--dim);
+      margin-top: var(--sp-1);
+      /* Notes are the one field allowed to wrap so the curator sees
+         the full contribution note in situ; other fields ellipsize
+         to preserve the card grid. */
+      white-space: normal;
+    }
+    .sev-badge {
+      position: absolute;
+      top: var(--sp-1);
+      right: var(--sp-1);
+      font-size: var(--fs-sm);
+      font-weight: 700;
+    }
+    .sev-badge.sev-error { color: var(--sev-error); }
+    .sev-badge.sev-warn  { color: var(--sev-warn); }
+    .sev-badge.sev-info  { color: var(--sev-info); }
+    .sev-badge.sev-debug { color: var(--sev-debug); }
+  `;
+
+  _onClick() {
+    this.dispatchEvent(
+      new CustomEvent("agent-edit", {
+        detail: { agent: this.agent },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  render() {
+    const a = this.agent || {};
+    const parts = [a.family, a.given].filter(Boolean).join(", ");
+    const locale = [a.city, a.state, a.country].filter(Boolean).join(", ");
+    const sev = (this.issueSeverity || "").toLowerCase();
+    const glyph = SEV_META[sev]?.glyph || "";
+    return html`
+      <button class="card" type="button" @click=${() => this._onClick()}>
+        ${sev
+          ? html`<span
+              class="sev-badge sev-${sev}"
+              title="${sev}: this record has open issues"
+              aria-label="severity ${sev}"
+              >${glyph}</span
+            >`
+          : ""}
+        ${parts ? html`<span class="name">${parts}</span>` : ""}
+        ${a.orcid
+          ? html`<span class="line"
+              ><img src="/vendor/logos/orcid.png" alt="ORCID" />${a.orcid}</span
+            >`
+          : ""}
+        ${a.organisation ? html`<span>${a.organisation}</span>` : ""}
+        ${a.rorid
+          ? html`<span class="line"
+              ><img class="ror" src="/vendor/logos/ror.png" alt="ROR" />${a.rorid}</span
+            >`
+          : ""}
+        ${a.department ? html`<span>${a.department}</span>` : ""}
+        ${locale ? html`<span class="dim">${locale}</span>` : ""}
+        ${a.email ? html`<span class="dim">${a.email}</span>` : ""}
+        ${a.url ? html`<span class="dim">${a.url}</span>` : ""}
+        ${a.note ? html`<span class="note">${a.note}</span>` : ""}
+      </button>
+    `;
+  }
+}
+
+// ---------- <sfga-agent-modal> ----------
+
+// Modal form for creating or editing one agent. Two entry modes:
+//   - create: agent is null; sets defaults, POSTs on save.
+//   - edit:   agent is a full apiAgent; PATCHes on save.
+//
+// In edit mode also offers a quick-copy affordance: pick another
+// role from the dropdown and click "Copy to <role>" to duplicate
+// this agent into that table (blanking the role/contribution
+// note by default). The source row is left in place — copy is
+// not move.
+//
+// Events:
+//   agent-saved   { agent }   — saved (create or edit); parent reloads.
+//   agent-deleted { id, role} — delete confirmed; parent removes card.
+//   close                     — modal closes with no change.
+class SfgaAgentModal extends LitElement {
+  static properties = {
+    // The role of the source row (in edit mode) or the target role
+    // (in create mode). Never changes during a modal session.
+    role: { attribute: false },
+    // Existing agent for edit; null/undefined for create.
+    agent: { attribute: false },
+    _draft: { state: true },
+    _saving: { state: true },
+    _error: { state: true },
+    _copyTo: { state: true },
+    // Open validation issues for the row being edited. Rendered at
+    // the top of the modal so curators see what needs fixing without
+    // going back to the Issues screen. Empty on create-mode and on
+    // rows the validator has never flagged.
+    _issues: { state: true },
+  };
+
+  static styles = [
+    formFieldStyles,
+    buttonStyles,
+    css`
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        display: grid;
+        place-items: center;
+        z-index: var(--z-modal-backdrop);
+      }
+      .modal {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4) var(--sp-5);
+        width: min(var(--modal-lg), 95vw);
+        max-height: var(--modal-max-h);
+        overflow: auto;
+        display: grid;
+        gap: var(--sp-2);
+        font-family: var(--font-body);
+        color: var(--fg);
+      }
+      h3 {
+        margin: 0;
+        font-size: var(--fs-lg);
+      }
+      /* Modal header hosts the title and the close (×) button.
+         Backdrop clicks are intentionally not wired to close — a
+         misclick shouldn't wipe out an in-progress edit. Curators
+         dismiss via X, Cancel, or Esc, all of which prompt when the
+         form is dirty. */
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: var(--sp-2);
+      }
+      form {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: var(--sp-2) var(--sp-3);
+        align-items: center;
+      }
+      /* Role/contribution note is usually a phrase, not a paragraph —
+         override the shared 4rem textarea min-height for a tighter fit. */
+      form textarea {
+        min-height: 3rem;
+      }
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--sp-2);
+        margin-top: var(--sp-2);
+        border-top: 1px solid var(--border);
+        padding-top: var(--sp-2);
+      }
+      .copy-row {
+        display: flex;
+        gap: var(--sp-1);
+        align-items: center;
+        margin-top: var(--sp-1);
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .error {
+        color: var(--error);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+        margin-top: var(--sp-1);
+      }
+      .hint {
+        grid-column: 2 / -1;
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      /* Open-issues banner. Matches the taxon detail's warning-banner
+         so curators recognize the pattern across screens. Each row
+         carries its own severity color via the shared sev-* variables;
+         glyph makes severity legible under color loss. */
+      .warning-banner {
+        border: 1px solid var(--border);
+        background: color-mix(in oklab, var(--fg) 4%, var(--bg));
+        color: var(--fg);
+        padding: var(--sp-2) var(--sp-3);
+        border-radius: var(--radius-sm);
+        font-size: var(--fs-sm);
+      }
+      .warning-banner ul {
+        list-style: none;
+        margin: var(--sp-1) 0 0 0;
+        padding: 0;
+      }
+      .warning-banner li {
+        margin: var(--sp-1) 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: var(--sp-2);
+        align-items: baseline;
+      }
+      .warning-banner .warning-rule {
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .warning-banner .sev-glyph {
+        font-weight: 700;
+      }
+      .warning-banner .sev-error {
+        color: var(--sev-error);
+      }
+      .warning-banner .sev-warn {
+        color: var(--sev-warn);
+      }
+      .warning-banner .sev-info {
+        color: var(--sev-info);
+      }
+      .warning-banner .sev-debug {
+        color: var(--sev-debug);
+      }
+    `,
+  ];
+
+  constructor() {
+    super();
+    this.role = "creator";
+    this.agent = null;
+    this._draft = {};
+    this._saving = false;
+    this._error = "";
+    this._copyTo = "";
+    this._issues = [];
+  }
+
+  async connectedCallback() {
+    super.connectedCallback();
+    // Seed the draft with the existing row so uncontrolled inputs
+    // (labeled fields) display the current values. On create, the
+    // draft stays empty and everything renders blank.
+    this._draft = { ...(this.agent || {}) };
+    // Default copy-target: first role that isn't the source role.
+    this._copyTo = SfgaAgentModal._otherRoles(this.role)[0] || "";
+    // Escape closes the modal via the same guarded path as Cancel
+    // and the X button. Registered at document level so it fires
+    // regardless of which element in the shadow DOM has focus.
+    this._onDocKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this._requestClose();
+      }
+    };
+    document.addEventListener("keydown", this._onDocKey);
+    // Fetch open validation issues for this specific row so the
+    // curator sees them without leaving the modal. Best-effort —
+    // a fetch failure just skips the banner.
+    if (this.agent && this.agent.id) {
+      try {
+        const page = await api.issue.list({
+          table: this.role,
+          limit: 500,
+        });
+        const idStr = String(this.agent.id);
+        this._issues = (page.items || []).filter(
+          (i) => i.record_id === idStr,
+        );
+      } catch (_) {
+        this._issues = [];
+      }
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._onDocKey) {
+      document.removeEventListener("keydown", this._onDocKey);
+      this._onDocKey = null;
+    }
+    if (this._releaseFocus) {
+      this._releaseFocus();
+      this._releaseFocus = null;
+    }
+  }
+
+  firstUpdated() {
+    // Trap focus inside the edit form and land the caret in the first
+    // input so keyboard curators can start typing immediately. Release
+    // in disconnectedCallback restores focus to the card / add tile
+    // that opened the modal.
+    this._releaseFocus = trapFocus(this.renderRoot, {
+      initialFocus: "input, textarea, select",
+    });
+  }
+
+  static _otherRoles(role) {
+    return ["creator", "contact", "editor", "contributor", "publisher"]
+      .filter((r) => r !== role);
+  }
+
+  _isEdit() {
+    return this.agent && this.agent.id;
+  }
+
+  _change(field, value) {
+    this._draft = { ...this._draft, [field]: value };
+  }
+
+  _fieldValue(field) {
+    if (Object.hasOwn(this._draft, field)) return this._draft[field] ?? "";
+    return "";
+  }
+
+  _close() {
+    this.dispatchEvent(
+      new CustomEvent("close", { bubbles: true, composed: true }),
+    );
+  }
+
+  // _isDirty compares the draft against the loaded row. Used to
+  // gate the close-with-unsaved-changes prompt. Create mode is
+  // "dirty" whenever any field has been typed into.
+  _isDirty() {
+    if (!this.agent) {
+      return Object.values(this._draft).some((v) => (v || "") !== "");
+    }
+    for (const [k, v] of Object.entries(this._draft)) {
+      if (k === "id" || k === "role") continue;
+      if ((this.agent[k] || "") !== (v || "")) return true;
+    }
+    return false;
+  }
+
+  // _requestClose is the user-facing close path for Cancel / X /
+  // Esc — asks for confirmation when the form has unsaved edits so
+  // a stray click doesn't discard curator work. Backdrop clicks are
+  // intentionally NOT wired here; only explicit close affordances
+  // (Cancel, X, Esc) can dismiss the modal.
+  async _requestClose() {
+    if (this._isDirty()) {
+      const choice = await confirmDirty({
+        heading: "Unsaved agent edits",
+        message:
+          "You have unsaved changes. Save them, discard them, or keep editing?",
+        canSave: true,
+      });
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        // _save closes on success; on failure it surfaces _error and
+        // leaves the modal open so the curator can fix and retry.
+        await this._save();
+        return;
+      }
+      // discard → fall through to close
+    }
+    this._close();
+  }
+
+  async _save() {
+    this._saving = true;
+    this._error = "";
+    try {
+      let saved;
+      if (this._isEdit()) {
+        // Patch only fields whose value differs from the loaded row.
+        const patch = {};
+        for (const [k, v] of Object.entries(this._draft)) {
+          if (k === "id" || k === "role") continue;
+          if ((this.agent[k] || "") !== (v || "")) patch[k] = v || "";
+        }
+        if (Object.keys(patch).length === 0) {
+          this._close();
+          return;
+        }
+        saved = await api.agent.patch(this.role, this.agent.id, patch);
+      } else {
+        const body = { ...this._draft };
+        delete body.id;
+        delete body.role;
+        saved = await api.agent.create(this.role, body);
+      }
+      this.dispatchEvent(
+        new CustomEvent("agent-saved", {
+          detail: { agent: saved },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      this._close();
+    } catch (err) {
+      this._error =
+        err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  async _delete() {
+    if (!this._isEdit()) return;
+    const ok = await confirmAction({
+      heading: `Delete this ${this.role}?`,
+      message: "This cannot be undone.",
+      actionLabel: "Delete",
+    });
+    if (!ok) return;
+    this._saving = true;
+    this._error = "";
+    try {
+      await api.agent.delete(this.role, this.agent.id);
+      this.dispatchEvent(
+        new CustomEvent("agent-deleted", {
+          detail: { id: this.agent.id, role: this.role },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      this._close();
+    } catch (err) {
+      this._error =
+        err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+      this._saving = false;
+    }
+  }
+
+  async _copy() {
+    return this._copyOrMove(false);
+  }
+
+  async _move() {
+    if (!this._isEdit() || !this._copyTo) return;
+    // Move deletes the source row — cheap-to-undo it isn't, so
+    // confirm before the round-trip. Skip the extra prompt for
+    // copy since that leaves the source intact.
+    const ok = await confirmAction({
+      heading: `Move ${this.role} to ${this._copyTo}?`,
+      message: `The ${this.role} row will be deleted and re-created as a ${this._copyTo}.`,
+      actionLabel: `Move to ${this._copyTo}`,
+      actionVariant: "primary",
+    });
+    if (!ok) return;
+    return this._copyOrMove(true);
+  }
+
+  async _copyOrMove(move) {
+    if (!this._isEdit() || !this._copyTo) return;
+    this._saving = true;
+    this._error = "";
+    try {
+      // blank_note defaults to true; the role/contribution note is
+      // role-specific in practice ("primary curator" for a creator
+      // doesn't survive a copy to publisher) so the curator writes
+      // a fresh one on the target after the copy or move.
+      const fn = move ? api.agent.move : api.agent.copy;
+      const created = await fn(
+        this.role,
+        this.agent.id,
+        this._copyTo,
+        true,
+      );
+      // Move deletes the source — signal deletion too so the source
+      // section drops the row without a second round-trip.
+      if (move) {
+        this.dispatchEvent(
+          new CustomEvent("agent-deleted", {
+            detail: { id: this.agent.id, role: this.role },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+      this.dispatchEvent(
+        new CustomEvent("agent-saved", {
+          detail: { agent: created },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      this._close();
+    } catch (err) {
+      this._error =
+        err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+      this._saving = false;
+    }
+  }
+
+  // _renderIssuesBanner shows the open gsvalidator issues for the
+  // row being edited. Same visual pattern as SfgaDetail's warning
+  // banner so curators recognize it across screens. Hidden in
+  // create-mode (no row exists yet) and when the fetch returns
+  // nothing.
+  _renderIssuesBanner() {
+    if (!this._issues || this._issues.length === 0) return "";
+    const heading = `${this._issues.length} open issue${this._issues.length > 1 ? "s" : ""}:`;
+    return html`
+      <div class="warning-banner">
+        <strong>${heading}</strong>
+        <ul>
+          ${this._issues.map((w) => {
+            const sev = (w.severity || "warn").toLowerCase();
+            const glyph = (SEV_META[sev] || SEV_META.warn).glyph;
+            return html`<li>
+              <span class="sev-glyph sev-${sev}" aria-label="severity ${sev}"
+                >${glyph}</span
+              >
+              <span>
+                <span class="warning-rule">${w.rule_name || w.rule_id}</span>${w.field_name
+                  ? html` · <span class="warning-rule">${w.field_name}</span>`
+                  : ""}:
+                ${w.message}
+              </span>
+            </li>`;
+          })}
+        </ul>
+      </div>
+    `;
+  }
+
+  render() {
+    const editing = this._isEdit();
+    const isPublisher = this.role === "publisher";
+    const isContact = this.role === "contact";
+    return html`
+      <div class="backdrop">
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-modal-title"
+        >
+          <div class="modal-header">
+            <h3 id="agent-modal-title">
+              ${editing ? "Edit" : "Add"}
+              ${this.role.charAt(0).toUpperCase() + this.role.slice(1)}
+            </h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._requestClose()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
+          ${this._renderIssuesBanner()}
+          <form @submit=${(e) => e.preventDefault()}>
+            <label class=${isPublisher ? "" : "req"}>Given name</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("given")}
+              @input=${(e) => this._change("given", e.target.value)}
+            />
+            <label class=${isPublisher ? "" : "req"}>Family name</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("family")}
+              @input=${(e) => this._change("family", e.target.value)}
+            />
+            <label>ORCID iD</label>
+            <input
+              type="text"
+              placeholder="0000-0000-0000-0000"
+              .value=${this._fieldValue("orcid")}
+              @input=${(e) => this._change("orcid", e.target.value)}
+            />
+            <label>Organisation</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("organisation")}
+              @input=${(e) => this._change("organisation", e.target.value)}
+            />
+            <label>ROR ID</label>
+            <input
+              type="text"
+              placeholder="e.g. 05dxps055"
+              .value=${this._fieldValue("rorid")}
+              @input=${(e) => this._change("rorid", e.target.value)}
+            />
+            <label>Department</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("department")}
+              @input=${(e) => this._change("department", e.target.value)}
+            />
+            <label>City</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("city")}
+              @input=${(e) => this._change("city", e.target.value)}
+            />
+            <label>State/Region</label>
+            <input
+              type="text"
+              .value=${this._fieldValue("state")}
+              @input=${(e) => this._change("state", e.target.value)}
+            />
+            <label>Country</label>
+            <input
+              type="text"
+              placeholder="ISO alpha-2 (e.g. US)"
+              .value=${this._fieldValue("country")}
+              @input=${(e) => this._change("country", e.target.value)}
+            />
+            <label class=${isContact ? "req" : ""}>Email</label>
+            <input
+              type="email"
+              .value=${this._fieldValue("email")}
+              @input=${(e) => this._change("email", e.target.value)}
+            />
+            <label>URL</label>
+            <input
+              type="url"
+              .value=${this._fieldValue("url")}
+              @input=${(e) => this._change("url", e.target.value)}
+            />
+            <label>Role / contribution note</label>
+            <textarea
+              .value=${this._fieldValue("note")}
+              placeholder="What is this person's role or contribution?"
+              @input=${(e) => this._change("note", e.target.value)}
+            ></textarea>
+            ${editing
+              ? html`<div class="hint">
+                    Copy adds a duplicate under the target role;
+                    Move relocates this row and deletes the source.
+                  </div>
+                  <div class="copy-row" style="grid-column: 1 / -1;">
+                    <select
+                      .value=${this._copyTo}
+                      @change=${(e) => (this._copyTo = e.target.value)}
+                    >
+                      ${SfgaAgentModal._otherRoles(this.role).map(
+                        (r) => html`<option value=${r}>${r}</option>`,
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      @click=${() => this._copy()}
+                      ?disabled=${this._saving || !this._copyTo}
+                      title="creates a new agent in the chosen role; leaves this row in place"
+                    >
+                      Copy to ${this._copyTo}
+                    </button>
+                    <button
+                      type="button"
+                      @click=${() => this._move()}
+                      ?disabled=${this._saving || !this._copyTo}
+                      title="reassigns this agent to the chosen role; deletes the source row"
+                    >
+                      Move to ${this._copyTo}
+                    </button>
+                  </div>`
+              : ""}
+          </form>
+          ${this._error
+            ? html`<div class="error" role="alert">${this._error}</div>`
+            : ""}
+          <div class="toolbar">
+            <div>
+              ${editing
+                ? html`<button
+                    class="danger"
+                    type="button"
+                    @click=${() => this._delete()}
+                    ?disabled=${this._saving}
+                  >
+                    Delete
+                  </button>`
+                : ""}
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+              <button type="button" @click=${() => this._requestClose()}>
+                Cancel
+              </button>
+              <button
+                class="primary"
+                type="button"
+                @click=${() => this._save()}
+                ?disabled=${this._saving}
+              >
+                ${this._saving ? "Saving…" : editing ? "Save" : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// ---------- <sfga-agent-section> ----------
+
+// One section (Creators, Contacts, …) inside SfgaMetadata's view.
+// Owns fetch, modal orchestration, and card rendering for its
+// role. Renders read-only for anyone (public archives can browse
+// dataset metadata), edit affordances when .editable is true.
+class SfgaAgentSection extends LitElement {
+  static properties = {
+    role: { attribute: false },
+    editable: { type: Boolean, attribute: false },
+    // When true, skip the section's own <h3> title. Callers that
+    // embed the section inside another labelled grid (dl row,
+    // form) supply their own label and don't want a duplicate.
+    noheader: { type: Boolean, attribute: false },
+    // When true, suppress the "+ Add" tile. Used in the metadata
+    // read view where adding is gated on entering edit mode —
+    // cards remain clickable so existing agents can still be
+    // opened and edited from either mode.
+    noAdd: { type: Boolean, attribute: false },
+    _agents: { state: true },
+    _issuesByID: { state: true }, // agent id → highest severity
+    _loading: { state: true },
+    _error: { state: true },
+    _modalAgent: { state: true }, // agent for edit modal; null = create; false = closed
+  };
+
+  static styles = css`
+    :host {
+      display: block;
+    }
+    :host(.spaced) {
+      margin-top: 1.2rem;
+    }
+    h3 {
+      margin: 0 0 var(--sp-1) 0;
+      font-size: var(--fs-md);
+      font-family: var(--font-body);
+      color: var(--fg);
+    }
+    .empty {
+      color: var(--dim);
+      font-style: italic;
+      font-size: var(--fs-sm);
+    }
+    /* Card grid: fixed-width columns sized to fit an ORCID iD
+       (16-char logo + 19 chars of monospace ≈ 15rem). auto-fill
+       packs as many cards per row as the value column has room
+       for and wraps the rest. Grid items use the default stretch
+       alignment so every card in a row matches the tallest card's
+       height — content stays top-aligned inside each card (the
+       card is a flex column with default flex-start) but the
+       card's border and hit area extend to the row height for
+       visual consistency. The Add tile shares the same track
+       width so it drops into the flow as another card. */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+      gap: var(--sp-1);
+    }
+    .add-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 100%;
+      background: transparent;
+      color: var(--dim);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-2);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--fs-sm);
+    }
+    .add-btn:hover { border-color: var(--accent); color: var(--accent); }
+  `;
+
+  constructor() {
+    super();
+    this.role = "creator";
+    this.editable = false;
+    this.noheader = false;
+    this.noAdd = false;
+    this._agents = [];
+    this._issuesByID = new Map();
+    this._loading = false;
+    this._error = "";
+    this._modalAgent = false;
+  }
+
+  async connectedCallback() {
+    super.connectedCallback();
+    await this._reload();
+  }
+
+  async _reload() {
+    this._loading = true;
+    this._error = "";
+    try {
+      const page = await api.agent.list(this.role);
+      this._agents = page.items || [];
+      // Fetch issues for this role and index by record_id → highest
+      // severity. Best-effort — a validation-cache miss just leaves
+      // the badge off; the card remains clickable.
+      try {
+        const issues = await api.issue.list({
+          table: this.role,
+          limit: 500,
+        });
+        const byID = new Map();
+        for (const iss of issues.items || []) {
+          const cur = byID.get(iss.record_id);
+          if (!cur || SfgaAgentSection._sevRank(iss.severity) > SfgaAgentSection._sevRank(cur)) {
+            byID.set(iss.record_id, iss.severity);
+          }
+        }
+        this._issuesByID = byID;
+      } catch (_) {
+        this._issuesByID = new Map();
+      }
+    } catch (err) {
+      this._error =
+        err instanceof Problem ? err.detail || err.title : String(err);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  static _sevRank(sev) {
+    switch ((sev || "").toLowerCase()) {
+      case "error": return 4;
+      case "warn":  return 3;
+      case "info":  return 2;
+      case "debug": return 1;
+      default:      return 0;
+    }
+  }
+
+  _title() {
+    // Plural section headers (Creators, Contacts, …). Simple + s;
+    // sfga role table names all pluralize with "s".
+    return this.role.charAt(0).toUpperCase() + this.role.slice(1) + "s";
+  }
+
+  _onCardClick(e) {
+    if (!this.editable) return;
+    this._modalAgent = e.detail.agent;
+  }
+
+  _openCreate() {
+    this._modalAgent = null; // null → create-mode
+  }
+
+  _onModalClose() {
+    this._modalAgent = false;
+  }
+
+  async _onAgentSaved() {
+    // Reload the list — a create may add, an edit may change name/
+    // sort order, a copy may drop a new agent in this section (from
+    // another). Either way a full refresh is the safest cheap path.
+    await this._reload();
+  }
+
+  async _onAgentDeleted() {
+    await this._reload();
+  }
+
+  render() {
+    const header = this.noheader ? "" : html`<h3>${this._title()}</h3>`;
+    if (this._loading && this._agents.length === 0) {
+      return html`${header}<div class="empty">loading…</div>`;
+    }
+    if (this._error) {
+      return html`${header}<div class="empty">error: ${this._error}</div>`;
+    }
+    return html`
+      ${header}
+      <div class="cards">
+        ${this._agents.length === 0
+          ? html`<span class="empty">
+              ${this.noheader ? "(none)" : `No ${this.role}s.`}
+            </span>`
+          : this._agents.map(
+              (a) => html`<sfga-agent-card
+                .agent=${a}
+                .issueSeverity=${this._issuesByID.get(String(a.id)) || ""}
+                @agent-edit=${(e) => this._onCardClick(e)}
+              ></sfga-agent-card>`,
+            )}
+        ${this.editable && !this.noAdd
+          ? html`<button
+              class="add-btn"
+              type="button"
+              @click=${() => this._openCreate()}
+              title="add ${this.role}"
+            >
+              + Add
+            </button>`
+          : ""}
+      </div>
+      ${this._modalAgent !== false
+        ? html`<sfga-agent-modal
+            .role=${this.role}
+            .agent=${this._modalAgent}
+            @close=${() => this._onModalClose()}
+            @agent-saved=${(e) => this._onAgentSaved(e)}
+            @agent-deleted=${(e) => this._onAgentDeleted(e)}
+          ></sfga-agent-modal>`
+        : ""}
+    `;
+  }
+}
+
+// ---------- <sfga-confirm-modal> ----------
+//
+// Generic imperatively-mounted confirmation modal. Renders a heading, a
+// message, and an arbitrary buttons array; resolves the caller's Promise
+// with the chosen button's `result` value. Two thin wrappers below
+// (confirmDirty / confirmAction) cover the standard shapes:
+// dirty-check (Keep editing / Discard / optional Save) and
+// destructive-action (Cancel / Delete-or-similar).
+class SfgaConfirmModal extends LitElement {
+  static properties = {
+    heading: { type: String },
+    message: { type: String },
+    // Array of {label, variant, result, focus?}.
+    // First entry renders left-aligned (safe/cancel); the rest render
+    // right-aligned as the action group. Variants: "default",
+    // "primary", "danger", "danger-primary".
+    buttons: { attribute: false },
+  };
+
+  static styles = [
+    buttonStyles,
+    css`
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        display: grid;
+        place-items: center;
+        z-index: var(--z-popover);
+      }
+      .modal {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4) var(--sp-5);
+        min-width: 22rem;
+        max-width: var(--modal-sm);
+        display: grid;
+        gap: var(--sp-2);
+        font-family: var(--font-body);
+        color: var(--fg);
+      }
+      h3 {
+        margin: 0;
+        font-size: var(--fs-lg);
+      }
+      p {
+        margin: 0;
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-2);
+        margin-top: var(--sp-2);
+      }
+      .spacer {
+        flex: 1;
+      }
+    `,
+  ];
+
+  constructor() {
+    super();
+    this.heading = "";
+    this.message = "";
+    this.buttons = [];
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    // Esc resolves as "cancel" iff a button carries that result value.
+    // If no cancel path exists, Esc is a no-op so the caller must
+    // handle every enumerated outcome explicitly.
+    this._onDocKey = (e) => {
+      if (e.key !== "Escape") return;
+      const cancel = (this.buttons || []).find((b) => b.result === "cancel");
+      if (!cancel) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this._choose("cancel");
+    };
+    document.addEventListener("keydown", this._onDocKey, true);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._onDocKey) {
+      document.removeEventListener("keydown", this._onDocKey, true);
+      this._onDocKey = null;
+    }
+    if (this._releaseFocus) {
+      this._releaseFocus();
+      this._releaseFocus = null;
+    }
+  }
+
+  firstUpdated() {
+    // Trap focus inside the modal and land initial focus on the
+    // button flagged focus:true (usually cancel — safest default so
+    // an accidental Enter doesn't destroy work). Tab / Shift+Tab
+    // cycle within the modal; release() on disconnect restores focus
+    // to whoever opened the modal.
+    this._releaseFocus = trapFocus(this.renderRoot, {
+      initialFocus: "button[data-focus]",
+    });
+  }
+
+  _choose(result) {
+    this.dispatchEvent(
+      new CustomEvent("confirm-result", {
+        detail: result,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  render() {
+    const btns = this.buttons || [];
+    const left = btns.slice(0, 1);
+    const right = btns.slice(1);
+    const renderBtn = (b) => html`
+      <button
+        class=${b.variant || "default"}
+        type="button"
+        ?data-focus=${!!b.focus}
+        @click=${() => this._choose(b.result)}
+      >
+        ${b.label}
+      </button>
+    `;
+    return html`
+      <div class="backdrop">
+        <div
+          class="modal"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="hive-confirm-title"
+        >
+          <h3 id="hive-confirm-title">${this.heading}</h3>
+          <p>${this.message}</p>
+          <div class="toolbar">
+            ${left.map(renderBtn)}
+            <div class="spacer"></div>
+            ${right.map(renderBtn)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// _mountConfirm mounts an SfgaConfirmModal, awaits the user's choice,
+// removes the element, and resolves with the chosen button's result.
+async function _mountConfirm({ heading, message, buttons }) {
+  return new Promise((resolve) => {
+    const el = document.createElement("sfga-confirm-modal");
+    el.heading = heading;
+    el.message = message;
+    el.buttons = buttons;
+    const handler = (e) => {
+      el.removeEventListener("confirm-result", handler);
+      if (el.parentNode) el.parentNode.removeChild(el);
+      resolve(e.detail);
+    };
+    el.addEventListener("confirm-result", handler);
+    document.body.appendChild(el);
+  });
+}
+
+// confirmDirty prompts the user before dismissing a form or navigating
+// away from unsaved edits. Two-choice by default (Discard / Keep
+// editing); pass canSave: true to add the Save option. Returns
+// "save" | "discard" | "cancel". On "save", the caller runs its own
+// save path and treats a save failure as a signal to abort the
+// surrounding action.
+async function confirmDirty({
+  heading = "Unsaved changes",
+  message = "You have unsaved changes.",
+  canSave = false,
+} = {}) {
+  const buttons = [
+    { label: "Keep editing", variant: "default", result: "cancel", focus: true },
+    { label: "Discard", variant: "danger", result: "discard" },
+  ];
+  if (canSave) {
+    buttons.push({ label: "Save", variant: "primary", result: "save" });
+  }
+  return _mountConfirm({ heading, message, buttons });
+}
+
+// confirmAction prompts before a destructive or otherwise consequential
+// action (delete, move, reset). Two-choice (Cancel / <action>). Returns
+// true when the user confirms, false otherwise. Default action variant
+// is "danger-primary" (filled red) for destructive intents; pass
+// actionVariant: "primary" for constructive intents that still warrant
+// a checkpoint (e.g. reassignments).
+async function confirmAction({
+  heading,
+  message,
+  actionLabel,
+  actionVariant = "danger-primary",
+  cancelLabel = "Cancel",
+}) {
+  const buttons = [
+    { label: cancelLabel, variant: "default", result: "cancel", focus: true },
+    { label: actionLabel, variant: actionVariant, result: "confirm" },
+  ];
+  const result = await _mountConfirm({ heading, message, buttons });
+  return result === "confirm";
 }
 
 customElements.define("sfga-app", SfgaApp);
@@ -5822,3 +8598,7 @@ customElements.define("sfga-issues", SfgaIssues);
 customElements.define("sfga-combobox", SfgaCombobox);
 customElements.define("sfga-add-reference-modal", SfgaAddReferenceModal);
 customElements.define("sfga-help-modal", SfgaHelpModal);
+customElements.define("sfga-agent-card", SfgaAgentCard);
+customElements.define("sfga-agent-modal", SfgaAgentModal);
+customElements.define("sfga-agent-section", SfgaAgentSection);
+customElements.define("sfga-confirm-modal", SfgaConfirmModal);

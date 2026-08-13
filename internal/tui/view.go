@@ -158,6 +158,15 @@ type model struct {
 	confirmTargetName string
 	confirmError      string
 
+	// Leave-metadata-with-unsaved-edits prompt. When leaveMetadata is
+	// true the status bar shows "unsaved metadata edits — leave? y/N"
+	// and view mode intercepts the next key: y discards + switches,
+	// n / esc cancels the switch. leaveMetadataTarget carries the
+	// screen the curator was trying to reach so the accept path can
+	// complete the navigation.
+	leaveMetadata       bool
+	leaveMetadataTarget screen
+
 	// Cached metadata title for the status bar. Loaded once at model
 	// construction; not refreshed live since edits go through the
 	// (future) metadata screen which will invalidate this itself.
@@ -178,6 +187,24 @@ type model struct {
 // metadataTitle returns the cached dataset-metadata title, or "" if
 // unavailable (legacy archive without a seeded metadata row).
 func (m *model) metadataTitle() string { return m.metaTitle }
+
+// requestScreenSwitch is the guarded entry point for every alt+
+// letter view change. When switching FROM the metadata screen
+// with unsaved edits, defers the switch and raises the y/N
+// confirm prompt in the status bar. Otherwise performs the
+// switch immediately.
+func (m *model) requestScreenSwitch(target screen) (tea.Model, tea.Cmd) {
+	if target == m.screen {
+		return m, nil
+	}
+	if m.screen == viewMetadata && m.metadata.HasUnsavedChanges() {
+		m.leaveMetadata = true
+		m.leaveMetadataTarget = target
+		return m, nil
+	}
+	m.screen = target
+	return m, nil
+}
 
 func newModel(a *hive.Archive, archivePath string, editable bool, actor string) *model {
 	// Load the metadata title synchronously — one row lookup, sub-ms
@@ -278,24 +305,42 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.command.Open()
 			return m, nil
 		}
+		// Leave-metadata confirmation intercept. When the shell has
+		// asked the curator whether to discard unsaved metadata
+		// edits, y accepts (switch to the pending screen), n / esc
+		// cancels (stay put). Runs before the alt+letter dispatch
+		// so the second alt+letter press doesn't queue another
+		// prompt on top.
+		if m.leaveMetadata {
+			switch msg.String() {
+			case "y", "Y":
+				m.leaveMetadata = false
+				m.metadata.ExitEditMode()
+				m.screen = m.leaveMetadataTarget
+				return m, nil
+			default:
+				m.leaveMetadata = false
+				return m, nil
+			}
+		}
 		// Alt-letter view switches fire at the top level so they work
 		// from any focus / mode (except the delete-confirm prompt,
 		// which intercepts first). Editing an edit form and pressing
 		// alt+M jumps you to metadata; the edit-form state stays put
 		// underneath so alt+T returns to the same form.
+		//
+		// When leaving the metadata screen with unsaved edits, the
+		// switch is gated on the leave-metadata confirmation state
+		// above so a stray alt+t can't discard curator work.
 		switch {
 		case key.Matches(msg, m.keys.ViewTaxa):
-			m.screen = viewTaxa
-			return m, nil
+			return m.requestScreenSwitch(viewTaxa)
 		case key.Matches(msg, m.keys.ViewMeta):
-			m.screen = viewMetadata
-			return m, nil
+			return m.requestScreenSwitch(viewMetadata)
 		case key.Matches(msg, m.keys.ViewRefs):
-			m.screen = viewReferences
-			return m, nil
+			return m.requestScreenSwitch(viewReferences)
 		case key.Matches(msg, m.keys.ViewIssues):
-			m.screen = viewIssues
-			return m, nil
+			return m.requestScreenSwitch(viewIssues)
 		}
 		// Any key clears a lingering delete error banner and is consumed
 		// so a stray keypress can't accidentally trigger another action.
@@ -348,7 +393,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
-			return m, nil
+			// Non-edit keys (e.g. `a` opens the agents sub-mode,
+			// arrows navigate the agents list once it's open) route
+			// through the metadata model so it can own its own key
+			// map without the shell knowing about every sub-mode.
+			var cmd tea.Cmd
+			m.metadata, cmd = m.metadata.Update(msg)
+			return m, cmd
 		}
 		// References screen: read-only for now — arrow keys move the
 		// list cursor, everything else falls through to the top-level
@@ -572,7 +623,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail, cmd = m.detail.Update(msg)
 		return m, cmd
 
-	case metadataLoadedMsg, metadataSavedMsg:
+	case metadataLoadedMsg, metadataSavedMsg,
+		agentsLoadedMsg, agentsSavedMsg, metadataAgentsLoadedMsg:
 		var cmd tea.Cmd
 		m.metadata, cmd = m.metadata.Update(msg)
 		// Refresh the cached status-bar title on a successful save so
@@ -898,6 +950,10 @@ func (m *model) statusBar() string {
 	}
 	if m.confirmError != "" {
 		msg := fmt.Sprintf("  delete failed: %s  [any key to dismiss]  ", m.confirmError)
+		return statusStyle.Render(padRight(msg, m.width))
+	}
+	if m.leaveMetadata {
+		msg := "  unsaved metadata edits — discard and leave?  [y] discard  [any other key] stay  "
 		return statusStyle.Render(padRight(msg, m.width))
 	}
 

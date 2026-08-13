@@ -184,6 +184,16 @@ type apiTaxonHit struct {
 	Extinct     *bool    `json:"extinct,omitempty"`
 	HasChildren bool     `json:"has_children"`
 	Label       apiLabel `json:"label,omitzero"`
+	// IsSynonym is set only when the search returned this row via a
+	// synonym pointing at the accepted taxon (id). Elided when false
+	// so responses from list endpoints (ListChildren, roots) stay
+	// identical to the pre-synonyms wire shape.
+	IsSynonym bool `json:"is_synonym,omitempty"`
+	// MatchedName carries the text that actually satisfied the query.
+	// Equals name for accepted-name matches; equals the synonym's
+	// canonical for synonym matches. Elided when unset (list
+	// endpoints leave it empty; front-ends fall back to name).
+	MatchedName string `json:"matched_name,omitempty"`
 }
 
 // apiNameHit is a name-search projection.
@@ -818,6 +828,8 @@ func hitToAPI(h hive.TaxonHit) apiTaxonHit {
 		Extinct:     nullBoolToPtr(h.Extinct),
 		HasChildren: h.HasChildren,
 		Label:       apiLabel{Text: h.Label.Text, HTML: h.Label.HTML},
+		IsSynonym:   h.IsSynonym,
+		MatchedName: h.MatchedName,
 	}
 }
 

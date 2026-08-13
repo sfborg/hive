@@ -202,6 +202,13 @@ export const api = {
     children: (id, opts) => j("GET", `/api/taxon/${encodeURIComponent(id)}/children${qs(opts)}`),
     synonyms: (id) => j("GET", `/api/taxon/${encodeURIComponent(id)}/synonyms`),
     ancestors: (id) => j("GET", `/api/taxon/${encodeURIComponent(id)}/ancestors`),
+    // classification returns the full ancestor chain (id + name + rank
+    // + status) in one call — root first, target taxon last. Backs the
+    // breadcrumb strip on the taxon detail page and lets the tree
+    // reveal() path fan out per-ancestor children requests in parallel
+    // instead of walking the chain sequentially.
+    classification: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/classification`),
     codeDefault: (parentId) =>
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/code-default`),
     createNamePrefix: (parentId) =>
@@ -227,6 +234,20 @@ export const api = {
     addBasionym: (taxonID, body) =>
       j("POST", `/api/taxon/${encodeURIComponent(taxonID)}/basionym`, body),
     delete: (id) => j("DELETE", `/api/taxon/${encodeURIComponent(id)}`),
+    // Delete-preview returns descendant + per-association-table counts
+    // used by the parent-delete modal to render the cascade summary
+    // (see DESIGN.md § List-row actions / delete flow).
+    deletePreview: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/delete-preview`),
+    // ReparentAndDelete moves the taxon's direct children up one level
+    // (to its parent — empty when the taxon was a root) then deletes
+    // the taxon as a leaf.
+    deleteReparent: (id) =>
+      j("POST", `/api/taxon/${encodeURIComponent(id)}/delete-reparent`),
+    // CascadeDelete removes the taxon, every descendant, and every
+    // per-taxon association attached to any member of that set.
+    deleteCascade: (id) =>
+      j("POST", `/api/taxon/${encodeURIComponent(id)}/delete-cascade`),
   },
 
   name: {
@@ -255,6 +276,43 @@ export const api = {
     summary: () => j("GET", "/api/issue/summary"),
     list: (opts) => j("GET", `/api/issue${qs(opts)}`),
     reindex: () => j("POST", "/api/reindex/validation"),
+  },
+
+  // Agent role tables. sfga stores dataset metadata people (creators,
+  // contacts, editors, contributors, publishers) as five parallel
+  // tables with identical column shape; hive treats them uniformly
+  // and parameterizes on role. See pkg/role.go for the storage
+  // layer and internal/server/agent.go for the handler set.
+  agent: {
+    list: (role) => j("GET", `/api/agent/${encodeURIComponent(role)}`),
+    get: (role, id) =>
+      j("GET", `/api/agent/${encodeURIComponent(role)}/${encodeURIComponent(id)}`),
+    create: (role, body) =>
+      j("POST", `/api/agent/${encodeURIComponent(role)}`, body),
+    patch: (role, id, patch) =>
+      j("PATCH", `/api/agent/${encodeURIComponent(role)}/${encodeURIComponent(id)}`, patch),
+    delete: (role, id) =>
+      j("DELETE", `/api/agent/${encodeURIComponent(role)}/${encodeURIComponent(id)}`),
+    // copy creates a new agent in `toRole` from (fromRole, id).
+    // blankNote defaults to true on the server; caller may pass
+    // false to preserve the source note when it applies uniformly
+    // across the two roles.
+    copy: (fromRole, id, toRole, blankNote) =>
+      j(
+        "POST",
+        `/api/agent/${encodeURIComponent(fromRole)}/${encodeURIComponent(id)}/copy`,
+        { to_role: toRole, blank_note: blankNote },
+      ),
+    // move reassigns an agent to a different role atomically: creates
+    // the row in toRole and deletes the source in one transaction.
+    // Use when a person was filed under the wrong role from the start
+    // (copy leaves the source in place; move relocates it).
+    move: (fromRole, id, toRole, blankNote) =>
+      j(
+        "POST",
+        `/api/agent/${encodeURIComponent(fromRole)}/${encodeURIComponent(id)}/move`,
+        { to_role: toRole, blank_note: blankNote },
+      ),
   },
 
   reference: {

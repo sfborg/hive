@@ -85,42 +85,42 @@ func Keymap() []Shortcut {
 		// ---- global ----
 		{
 			Action:      "view-taxa",
-			Description: "switch to Taxa view",
+			Description: "Switch to Taxa view",
 			Display:     "Alt+T",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"alt+t"}, []string{"alt+t"}),
 		},
 		{
 			Action:      "view-metadata",
-			Description: "switch to Metadata view",
+			Description: "Switch to Metadata view",
 			Display:     "Alt+M",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"alt+m"}, []string{"alt+m"}),
 		},
 		{
 			Action:      "view-references",
-			Description: "switch to References view",
+			Description: "Switch to References view",
 			Display:     "Alt+R",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"alt+r"}, []string{"alt+r"}),
 		},
 		{
 			Action:      "view-issues",
-			Description: "switch to Issues view",
+			Description: "Switch to Issues view",
 			Display:     "Alt+I",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"alt+i"}, []string{"alt+i"}),
 		},
 		{
 			Action:      "search-focus",
-			Description: "focus the taxon search box",
+			Description: "Focus the taxon search box",
 			Display:     "/",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"/"}, []string{"/"}),
 		},
 		{
 			Action:      "help-open",
-			Description: "open keyboard shortcut help",
+			Description: "Open keyboard shortcut help",
 			Display:     "?",
 			Scope:       ScopeGlobal,
 			// TUI opens help via the command mode (:h / :help) rather
@@ -131,7 +131,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "command-open",
-			Description: "open command mode (try :help)",
+			Description: "Open command mode (try :help)",
 			Display:     ":",
 			Scope:       ScopeGlobal,
 			// WUI has no command mode; discovery happens via the ?
@@ -140,14 +140,14 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "cancel",
-			Description: "cancel / close overlay / blur pane",
+			Description: "Cancel / close overlay / blur pane",
 			Display:     "Esc",
 			Scope:       ScopeGlobal,
 			Keys:        both([]string{"esc"}, []string{"Escape"}),
 		},
 		{
 			Action:      "switch-pane",
-			Description: "switch focus between panes",
+			Description: "Switch focus between panes",
 			Display:     "Tab",
 			Scope:       ScopeGlobal,
 			// WUI relies on browser-native Tab focus traversal; a
@@ -156,7 +156,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "quit",
-			Description: "quit hive",
+			Description: "Quit hive",
 			Display:     "q",
 			Scope:       ScopeGlobal,
 			// WUI has no quit — closing the tab is the browser's job.
@@ -166,42 +166,42 @@ func Keymap() []Shortcut {
 		// ---- tree ----
 		{
 			Action:      "tree-up",
-			Description: "move cursor up one taxon",
+			Description: "Move cursor up one taxon",
 			Display:     "↑ / k",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"up", "k"}, []string{"ArrowUp", "k"}),
 		},
 		{
 			Action:      "tree-down",
-			Description: "move cursor down one taxon",
+			Description: "Move cursor down one taxon",
 			Display:     "↓ / j",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"down", "j"}, []string{"ArrowDown", "j"}),
 		},
 		{
 			Action:      "tree-expand",
-			Description: "expand and step into first child (Nl descends N)",
+			Description: "Expand and step into first child (Nl descends N)",
 			Display:     "→ / l / Enter",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"right", "l", "enter"}, []string{"ArrowRight", "l", "Enter"}),
 		},
 		{
 			Action:      "tree-collapse",
-			Description: "collapse and step out to parent (Nh ascends N)",
+			Description: "Collapse and step out to parent (Nh ascends N)",
 			Display:     "← / h",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"left", "h"}, []string{"ArrowLeft", "h"}),
 		},
 		{
 			Action:      "tree-first-sibling",
-			Description: "first sibling in group (prefix with count for Nth)",
+			Description: "First sibling in group (prefix with count for Nth)",
 			Display:     "g / Ng",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"g"}, []string{"g"}),
 		},
 		{
 			Action:      "tree-last-sibling",
-			Description: "last loaded sibling (loads more if truncated)",
+			Description: "Last loaded sibling (loads more if truncated)",
 			Display:     "G / NG",
 			Scope:       ScopeTree,
 			Keys:        both([]string{"G"}, []string{"G"}),
@@ -210,7 +210,7 @@ func Keymap() []Shortcut {
 		// ---- detail ----
 		{
 			Action:      "detail-edit",
-			Description: "edit the selected taxon",
+			Description: "Edit the selected taxon",
 			Display:     "e",
 			Scope:       ScopeDetail,
 			// Same key in both frontends; WUI gates on "not typing in
@@ -219,7 +219,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "detail-new-child",
-			Description: "new child taxon under the selection",
+			Description: "New child taxon under the selection",
 			Display:     "n / c",
 			Scope:       ScopeDetail,
 			// c is the mnemonic ([c]hild) that reads naturally alongside
@@ -229,14 +229,14 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "detail-new-sister",
-			Description: "new sister taxon at the same tree level",
+			Description: "New sister taxon at the same tree level",
 			Display:     "s",
 			Scope:       ScopeDetail,
 			Keys:        both([]string{"s"}, []string{"s"}),
 		},
 		{
 			Action:      "detail-delete",
-			Description: "delete the selected taxon",
+			Description: "Delete the selected taxon",
 			Display:     "d",
 			Scope:       ScopeDetail,
 			Keys:        both([]string{"d"}, []string{"d"}),
@@ -245,7 +245,7 @@ func Keymap() []Shortcut {
 		// ---- form ----
 		{
 			Action:      "form-save",
-			Description: "save edits",
+			Description: "Save edits",
 			Display:     "Ctrl+S",
 			Scope:       ScopeForm,
 			// WUI uses on-screen Save; Ctrl+S is browser Save Page As.
@@ -253,7 +253,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "form-add-ref",
-			Description: "add reference (in name edit form)",
+			Description: "Add reference (in name edit form)",
 			Display:     "Ctrl+A",
 			Scope:       ScopeForm,
 			// WUI uses on-screen Add Reference; Ctrl+A is browser Select All.
@@ -261,7 +261,7 @@ func Keymap() []Shortcut {
 		},
 		{
 			Action:      "form-add-basionym",
-			Description: "save + start adding original combination",
+			Description: "Save + start adding original combination",
 			Display:     "Ctrl+O",
 			Scope:       ScopeForm,
 			// WUI uses on-screen affordance; Ctrl+O is browser Open File.

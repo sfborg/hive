@@ -32,6 +32,17 @@ type TaxonHit struct {
 	Extinct     sql.NullBool
 	HasChildren bool
 	Label       Label
+
+	// IsSynonym is true when this hit was resolved via a synonym
+	// pointing at the accepted taxon (ID). Set only by SearchTaxa
+	// when its includeSynonyms parameter is true; false elsewhere.
+	IsSynonym bool
+	// MatchedName is the name string that actually satisfied the
+	// query — the synonym's canonical when IsSynonym, else the
+	// accepted taxon's own canonical (same as Name). Callers
+	// display it alongside Name so curators can see why a result
+	// appeared when it came in via a synonym.
+	MatchedName string
 }
 
 // GetTaxon returns the taxon with the given col__id.
@@ -312,37 +323,173 @@ func (a *Archive) CodeForParent(ctx context.Context, parentID string) (string, e
 	return code, nil
 }
 
+// stripLikeWildcards removes '%' and '_' from q so appending '%' for a
+// prefix search doesn't let a user-typed wildcard broaden the pattern.
+// Deliberately NOT using LIKE ... ESCAPE '\' for the escape route:
+// SQLite's LIKE-uses-index optimization only fires when there is no
+// ESCAPE clause (regardless of whether the escape char is present in
+// the actual pattern), so the ESCAPE approach forces a full table
+// scan and defeats the NOCASE indices. Scientific names never contain
+// '%' or '_'; stripping them is a no-op for real queries.
+func stripLikeWildcards(q string) string {
+	if !strings.ContainsAny(q, "%_") {
+		return q
+	}
+	r := strings.NewReplacer("%", "", "_", "")
+	return r.Replace(q)
+}
+
 // SearchTaxa returns up to `limit` taxa whose associated name canonical or
-// scientific-name string matches q as a case-insensitive substring. Returns
+// scientific-name string matches q as a case-insensitive prefix. Returns
 // thin TaxonHit projections — same shape as ListChildren so the WUI's
 // tree components can render either result set uniformly.
 //
-// Ordering is alphabetical by display name for a stable client experience.
-// Only taxa with an attached name row are returned; a taxon whose col__name_id
-// doesn't resolve is skipped (rare — legacy archives may have orphaned rows).
-func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int) ([]TaxonHit, error) {
+// When includeSynonyms is true, the result set also includes accepted
+// taxa reached via a matching synonym: for each synonym whose name
+// prefix-matches q, the accepted taxon it points at appears in the
+// results with IsSynonym=true and MatchedName set to the synonym's
+// text. Pro-parte synonyms — one synonym row family pointing at
+// multiple accepted taxa — produce one hit per resolved accepted
+// taxon so curators see every destination. If the same accepted
+// taxon matches both by its own name and via a synonym, the accepted
+// row wins; the synonym row is dropped.
+//
+// Ordering is alphabetical by matched_name so synonym and accepted
+// hits interleave in the order curators would look for them.
+//
+// Prefix (LIKE 'q%') rather than substring lets the query use the
+// NOCASE indices on name (and idx_synonym_name_id on synonym) added
+// in ensureHiveTables. On COL 26-07 (5.4M names, 2.7M synonyms) the
+// full include_synonyms path returns in under 100ms; see DEFERRED.md
+// § Substring name search (FTS follow-up) for the substring-semantics
+// follow-up.
+func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int, includeSynonyms bool) ([]TaxonHit, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	const query = `SELECT
-		t.col__id,
-		COALESCE(t.col__parent_id, ''),
-		t.col__name_id,
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
-		COALESCE(n.col__authorship, ''),
-		COALESCE(n.col__rank_id, ''),
-		COALESCE(t.col__status_id, ''),
-		t.col__extinct,
-		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = t.col__id) AS has_children
-	FROM taxon t
-	JOIN name n ON n.col__id = t.col__name_id
-	WHERE LOWER(n.gn__canonical_simple) LIKE LOWER(?)
-	   OR LOWER(n.col__scientific_name) LIKE LOWER(?)
-	ORDER BY display_name
+	pattern := stripLikeWildcards(q) + "%"
+
+	// Two arms per source (canonical + scientific text columns) each
+	// hit a dedicated NOCASE index — UNION ALL keeps each arm on its
+	// own index (an OR predicate on both columns would prevent the
+	// planner from using either). The outer ROW_NUMBER partitions by
+	// accepted-taxon id so a synonym pointing at a taxon that also
+	// matches by its own name collapses to the accepted row.
+	//
+	// Per-arm LIMIT keeps the intermediate result set bounded even
+	// when the query is a very common prefix (e.g., a single letter);
+	// each arm is guaranteed to contribute enough candidates to
+	// satisfy the outer LIMIT after dedup, since limit ≤ per-arm cap.
+	acceptedArms := `
+		SELECT * FROM (
+			SELECT
+				t.col__id AS id,
+				COALESCE(t.col__parent_id, '') AS parent_id,
+				t.col__name_id AS name_id,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(n.col__authorship, '') AS authorship,
+				COALESCE(n.col__rank_id, '') AS rank_id,
+				COALESCE(t.col__status_id, '') AS status_id,
+				t.col__extinct AS extinct,
+				0 AS is_synonym,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name
+			FROM name n
+			JOIN taxon t ON t.col__name_id = n.col__id
+			WHERE n.gn__canonical_simple LIKE ? COLLATE NOCASE
+			LIMIT ?
+		)
+		UNION ALL
+		SELECT * FROM (
+			SELECT
+				t.col__id,
+				COALESCE(t.col__parent_id, ''),
+				t.col__name_id,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, ''),
+				COALESCE(n.col__authorship, ''),
+				COALESCE(n.col__rank_id, ''),
+				COALESCE(t.col__status_id, ''),
+				t.col__extinct,
+				0,
+				n.col__scientific_name
+			FROM name n
+			JOIN taxon t ON t.col__name_id = n.col__id
+			WHERE n.col__scientific_name LIKE ? COLLATE NOCASE
+			LIMIT ?
+		)`
+
+	synonymArms := `
+		UNION ALL
+		SELECT * FROM (
+			SELECT
+				t.col__id,
+				COALESCE(t.col__parent_id, ''),
+				t.col__name_id,
+				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(acc.col__authorship, ''),
+				COALESCE(acc.col__rank_id, ''),
+				COALESCE(t.col__status_id, ''),
+				t.col__extinct,
+				1,
+				sname.gn__canonical_simple
+			FROM name sname
+			JOIN synonym s ON s.col__name_id = sname.col__id
+			JOIN taxon t ON t.col__id = s.col__taxon_id
+			JOIN name acc ON acc.col__id = t.col__name_id
+			WHERE sname.gn__canonical_simple LIKE ? COLLATE NOCASE
+			LIMIT ?
+		)
+		UNION ALL
+		SELECT * FROM (
+			SELECT
+				t.col__id,
+				COALESCE(t.col__parent_id, ''),
+				t.col__name_id,
+				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(acc.col__authorship, ''),
+				COALESCE(acc.col__rank_id, ''),
+				COALESCE(t.col__status_id, ''),
+				t.col__extinct,
+				1,
+				sname.col__scientific_name
+			FROM name sname
+			JOIN synonym s ON s.col__name_id = sname.col__id
+			JOIN taxon t ON t.col__id = s.col__taxon_id
+			JOIN name acc ON acc.col__id = t.col__name_id
+			WHERE sname.col__scientific_name LIKE ? COLLATE NOCASE
+			LIMIT ?
+		)`
+
+	// Dedup: PARTITION BY accepted-taxon id and pick the accepted row
+	// when both present (is_synonym=0 sorts before 1). Pro-parte
+	// preserved automatically since distinct accepted taxa land in
+	// distinct partitions. has_children is computed in the outer
+	// select over the dedup'd rows so we don't run the EXISTS probe
+	// for rows we're about to drop.
+	body := acceptedArms
+	if includeSynonyms {
+		body += synonymArms
+	}
+	query := `SELECT
+		id, parent_id, name_id, display_name, authorship, rank_id,
+		status_id, extinct, is_synonym, matched_name,
+		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = id) AS has_children
+	FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY id ORDER BY is_synonym, matched_name
+		) AS rn
+		FROM (` + body + `)
+	)
+	WHERE rn = 1
+	ORDER BY matched_name
 	LIMIT ?`
 
-	pattern := "%" + q + "%"
-	rows, err := a.db.QueryContext(ctx, query, pattern, pattern, limit)
+	args := []any{pattern, limit, pattern, limit}
+	if includeSynonyms {
+		args = append(args, pattern, limit, pattern, limit)
+	}
+	args = append(args, limit)
+
+	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("core: search taxa %q: %w", q, err)
 	}
@@ -350,14 +497,20 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int) ([]TaxonH
 
 	var hits []TaxonHit
 	for rows.Next() {
-		var h TaxonHit
+		var (
+			h         TaxonHit
+			isSynonym int
+		)
 		if err := rows.Scan(
 			&h.ID, &h.ParentID, &h.NameID,
 			&h.Name, &h.Authorship, &h.Rank,
-			&h.Status, &h.Extinct, &h.HasChildren,
+			&h.Status, &h.Extinct,
+			&isSynonym, &h.MatchedName,
+			&h.HasChildren,
 		); err != nil {
 			return nil, fmt.Errorf("core: scan taxa hit: %w", err)
 		}
+		h.IsSynonym = isSynonym == 1
 		h.Label = BuildLabel(h.Name, h.Authorship, h.Rank, h.Extinct.Valid && h.Extinct.Bool)
 		hits = append(hits, h)
 	}
@@ -374,11 +527,35 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int) ([]TaxonH
 //
 // See GetTaxon for the "" ↔ NULL parent_id COALESCE convention.
 func (a *Archive) ListChildrenPage(ctx context.Context, parentID string, limit, offset int) ([]TaxonHit, int, error) {
+	// Fork the WHERE clause on parentID rather than wrapping the column
+	// in COALESCE. SQLite can't push an equality predicate through
+	// COALESCE(col__parent_id, '') = ? to use idx_taxon_parent_id, so
+	// the wrapped form falls back to a full-table scan (2.7M rows on
+	// COL 26-07). Splitting into a root predicate vs equality lets each
+	// branch use the index directly (MULTI-INDEX OR for roots, single
+	// index seek for a named parent).
+	//
+	// Roots come in two shapes across the archives we see: NULL
+	// (hive-created) and '' (harvester-created, sfga imports through
+	// certain paths). The `IS NULL OR = ''` predicate covers both and
+	// still uses idx_taxon_parent_id via SQLite's MULTI-INDEX OR plan.
+	var (
+		countQ    string
+		whereQ    string
+		countArgs []any
+		whereArgs []any
+	)
+	if parentID == "" {
+		countQ = `SELECT COUNT(*) FROM taxon WHERE col__parent_id IS NULL OR col__parent_id = ''`
+		whereQ = `WHERE t.col__parent_id IS NULL OR t.col__parent_id = ''`
+	} else {
+		countQ = `SELECT COUNT(*) FROM taxon WHERE col__parent_id = ?`
+		countArgs = []any{parentID}
+		whereQ = `WHERE t.col__parent_id = ?`
+		whereArgs = []any{parentID}
+	}
 	var total int
-	if err := a.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM taxon WHERE COALESCE(col__parent_id, '') = ?`,
-		parentID,
-	).Scan(&total); err != nil {
+	if err := a.db.QueryRowContext(ctx, countQ, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("core: count children of %q: %w", parentID, err)
 	}
 
@@ -394,10 +571,10 @@ func (a *Archive) ListChildrenPage(ctx context.Context, parentID string, limit, 
 		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = t.col__id) AS has_children
 	FROM taxon t
 	LEFT JOIN name n ON n.col__id = t.col__name_id
-	WHERE COALESCE(t.col__parent_id, '') = ?
+	` + whereQ + `
 	ORDER BY t.col__ordinal IS NULL, t.col__ordinal, display_name`
 
-	args := []any{parentID}
+	args := whereArgs
 	if limit > 0 {
 		q += " LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
@@ -675,6 +852,17 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 		}
 	}
 
+	// Snapshot and mark every descendant BEFORE the move so their
+	// ancestor-dependent validation rules re-run under the new
+	// hierarchy. A genus moved to a different family shifts the
+	// ancestor chain for every species / infraspecies under it —
+	// PARENT_GENUS_MISSING and probable-incertae-sedis rules walk
+	// up looking for a genus and may light up (or clear) once the
+	// grandparent context changes.
+	if err := t.snapshotAndMarkDescendantsDirty(id); err != nil {
+		return err
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := t.tx.ExecContext(t.ctx, `
 		UPDATE taxon
@@ -698,6 +886,66 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 	return nil
 }
 
+// Classification returns the full ancestor chain of a taxon in root-down
+// order, INCLUDING the taxon itself as the final element. Each hit
+// carries the display name, rank, authorship, and status — enough for
+// callers to render breadcrumbs, expand a tree path, or feed a picker
+// without a second round trip per ancestor.
+//
+// Empty return means id is unknown. A one-element return means id has
+// no parent (root-level taxon).
+//
+// One recursive-CTE query with an outer JOIN against name replaces what
+// the old reveal path took N sequential Ancestors + ListChildren calls
+// to compute. See DEFERRED.md § Bulk classification endpoint (now
+// resolved by this method).
+func (a *Archive) Classification(ctx context.Context, id string) ([]TaxonHit, error) {
+	if id == "" {
+		return nil, nil
+	}
+	const q = `
+		WITH RECURSIVE chain(id, parent_id, depth) AS (
+			SELECT col__id, col__parent_id, 0 FROM taxon WHERE col__id = ?
+			UNION ALL
+			SELECT t.col__id, t.col__parent_id, c.depth + 1
+			  FROM taxon t
+			  JOIN chain c ON t.col__id = c.parent_id
+		)
+		SELECT
+			t.col__id,
+			COALESCE(t.col__parent_id, ''),
+			t.col__name_id,
+			COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+			COALESCE(n.col__authorship, ''),
+			COALESCE(n.col__rank_id, ''),
+			COALESCE(t.col__status_id, ''),
+			t.col__extinct,
+			EXISTS(SELECT 1 FROM taxon x WHERE x.col__parent_id = t.col__id) AS has_children
+		FROM chain c
+		JOIN taxon t ON t.col__id = c.id
+		LEFT JOIN name n ON n.col__id = t.col__name_id
+		ORDER BY c.depth DESC`
+	rows, err := a.db.QueryContext(ctx, q, id)
+	if err != nil {
+		return nil, fmt.Errorf("core: classification %s: %w", id, err)
+	}
+	defer rows.Close()
+	var hits []TaxonHit
+	for rows.Next() {
+		var h TaxonHit
+		if err := rows.Scan(
+			&h.ID, &h.ParentID, &h.NameID,
+			&h.Name, &h.Authorship, &h.Rank,
+			&h.Status, &h.Extinct, &h.HasChildren,
+		); err != nil {
+			return nil, fmt.Errorf("core: scan classification hit: %w", err)
+		}
+		h.Label = BuildLabel(h.Name, h.Authorship, h.Rank, h.Extinct.Valid && h.Extinct.Bool)
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
+
 // Ancestors returns the parent chain of a taxon in root-down order,
 // excluding the taxon itself. Empty return means id is at root level (or
 // unknown — callers checking existence should GetTaxon first).
@@ -705,6 +953,10 @@ func (t *Tx) MoveTaxon(id, newParentID string) error {
 // Used by the tree panes to expand the path from the root down to a
 // freshly-moved taxon so it appears in the correct place without a full
 // tree reload. Runs in O(depth) via a recursive CTE.
+//
+// Prefer Classification for callers that also need display data —
+// Ancestors is the id-only shim kept for the legacy /ancestors
+// endpoint and any caller that truly just needs the id chain.
 func (a *Archive) Ancestors(ctx context.Context, id string) ([]string, error) {
 	if id == "" {
 		return nil, nil
@@ -732,6 +984,59 @@ func (a *Archive) Ancestors(ctx context.Context, id string) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// snapshotAndMarkDescendantsDirty walks every taxon descended from
+// rootID (excluding rootID itself), captures a pre-mutation snapshot
+// of each, and marks each dirty via markTaxonDirtyWithPre. WithTx's
+// post-commit validation sync then re-runs every affected record so
+// ancestor-dependent rules (parent-genus-missing, probable incertae
+// sedis, etc.) fire correctly under the new hierarchy.
+//
+// Callers invoke this BEFORE any mutation that changes ancestor
+// context — MoveTaxon (parent changes → descendants' ancestor chain
+// changes) and ReparentAndDeleteTaxon (deleted node shortens the
+// chain for every descendant). Snapshot-first so old-side neighbor
+// propagation sees the pre-mutation column values.
+//
+// Perf note: O(N) queries where N is the descendant count. For a
+// deep subtree with many thousands of descendants, this can add
+// noticeable latency to a move commit; acceptable for v0 since
+// large-scale moves are rare and correctness is more important
+// than speed. A future optimization would batch the snapshots into
+// a single SELECT.
+func (t *Tx) snapshotAndMarkDescendantsDirty(rootID string) error {
+	const q = `
+		WITH RECURSIVE descendants(id) AS (
+			SELECT col__id FROM taxon WHERE col__parent_id = ?
+			UNION ALL
+			SELECT c.col__id
+			  FROM taxon c
+			  JOIN descendants d ON c.col__parent_id = d.id
+		)
+		SELECT id FROM descendants`
+	rows, err := t.tx.QueryContext(t.ctx, q, rootID)
+	if err != nil {
+		return fmt.Errorf("core: enumerate descendants of %s: %w", rootID, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			rows.Close()
+			return fmt.Errorf("core: scan descendant of %s: %w", rootID, err)
+		}
+		ids = append(ids, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("core: iterate descendants of %s: %w", rootID, err)
+	}
+	for _, d := range ids {
+		pre, _ := t.snapshotTaxon(d)
+		t.markTaxonDirtyWithPre(d, pre)
+	}
+	return nil
 }
 
 // isDescendantOf returns true when candidateID lies in the subtree rooted at
@@ -840,6 +1145,318 @@ func (t *Tx) DeleteTaxon(id string) error {
 	}
 	if rows == 0 {
 		return fmt.Errorf("core: delete taxon %s: %w", id, ErrNotFound)
+	}
+	t.markTaxonDeleted(id, preSnapshot)
+	return nil
+}
+
+// TaxonDeletePreview summarizes what a cascade delete of the given
+// taxon would remove: the descendant set (including the taxon itself)
+// and the per-taxon association rows attached to any member of that
+// set. Returned to the WUI's delete-confirm modal so curators see
+// concrete numbers before they type DELETE.
+//
+// DirectChildCount is broken out separately so the modal can pick the
+// right flow (leaf → simple confirm; parent → three-option UI).
+// DescendantCount includes the taxon itself.
+type TaxonDeletePreview struct {
+	DirectChildCount     int
+	DescendantCount      int // includes self
+	SynonymCount         int
+	VernacularCount      int
+	DistributionCount    int
+	MediaCount           int
+	TreatmentCount       int
+	SpeciesEstimateCount int
+	TaxonPropertyCount   int
+	SpeciesInteractionCount   int
+	TaxonConceptRelationCount int
+	// ParentID of the taxon being previewed. Empty when the taxon is a
+	// root — reparent-flow callers use this to decide the destination
+	// (children become new roots when their parent was already a root).
+	ParentID string
+}
+
+// TaxonDeletePreview computes the counts a cascade delete would touch.
+// Read-only; runs in its own connection since it's a read path.
+func (a *Archive) TaxonDeletePreview(ctx context.Context, id string) (TaxonDeletePreview, error) {
+	var p TaxonDeletePreview
+	if id == "" {
+		return p, fmt.Errorf("core: delete preview: %w: id required", ErrValidation)
+	}
+
+	// Fetch parent and confirm the taxon exists in one shot.
+	var parentID sql.NullString
+	if err := a.db.QueryRowContext(ctx,
+		"SELECT col__parent_id FROM taxon WHERE col__id = ?", id,
+	).Scan(&parentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return p, fmt.Errorf("core: delete preview %s: %w", id, ErrNotFound)
+		}
+		return p, fmt.Errorf("core: fetch parent for preview %s: %w", id, err)
+	}
+	p.ParentID = parentID.String
+
+	// Direct children — informs the modal's flow selection.
+	if err := a.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM taxon WHERE col__parent_id = ?", id,
+	).Scan(&p.DirectChildCount); err != nil {
+		return p, fmt.Errorf("core: count direct children of %s: %w", id, err)
+	}
+
+	// Descendant set (including self) — driven by a recursive CTE.
+	// Reused as a temp view for the per-table COUNTs below via a WITH
+	// clause on each query, which SQLite compiles to a single pass.
+	countWithDescendants := func(sqlCore string, args ...any) (int, error) {
+		q := `WITH RECURSIVE descendants(id) AS (
+			SELECT col__id FROM taxon WHERE col__id = ?
+			UNION ALL
+			SELECT t.col__id
+			  FROM taxon t
+			  JOIN descendants d ON t.col__parent_id = d.id
+		) ` + sqlCore
+		full := append([]any{id}, args...)
+		var n int
+		if err := a.db.QueryRowContext(ctx, q, full...).Scan(&n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	}
+
+	var err error
+	if p.DescendantCount, err = countWithDescendants(
+		"SELECT COUNT(*) FROM descendants",
+	); err != nil {
+		return p, fmt.Errorf("core: count descendants of %s: %w", id, err)
+	}
+
+	// Per-table single-FK counts.
+	for tbl, dest := range map[string]*int{
+		"synonym":         &p.SynonymCount,
+		"vernacular":      &p.VernacularCount,
+		"distribution":    &p.DistributionCount,
+		"media":           &p.MediaCount,
+		"treatment":       &p.TreatmentCount,
+		"species_estimate": &p.SpeciesEstimateCount,
+		"taxon_property":  &p.TaxonPropertyCount,
+	} {
+		n, err := countWithDescendants(
+			"SELECT COUNT(*) FROM " + tbl +
+				" WHERE col__taxon_id IN (SELECT id FROM descendants)",
+		)
+		if err != nil {
+			return p, fmt.Errorf("core: count %s for %s: %w", tbl, id, err)
+		}
+		*dest = n
+	}
+
+	// Bi-directional FK tables — count rows where either side is in
+	// the descendant set. DISTINCT prevents double-counting a row that
+	// has both sides in the set.
+	for tbl, dest := range map[string]*int{
+		"species_interaction":     &p.SpeciesInteractionCount,
+		"taxon_concept_relation":  &p.TaxonConceptRelationCount,
+	} {
+		n, err := countWithDescendants(
+			"SELECT COUNT(*) FROM " + tbl +
+				" WHERE col__taxon_id IN (SELECT id FROM descendants)" +
+				"    OR col__related_taxon_id IN (SELECT id FROM descendants)",
+		)
+		if err != nil {
+			return p, fmt.Errorf("core: count %s for %s: %w", tbl, id, err)
+		}
+		*dest = n
+	}
+
+	return p, nil
+}
+
+// ReparentAndDeleteTaxon moves the taxon's direct children up one
+// level (to its parent — empty/NULL when the taxon is a root, so
+// children become new roots) and then deletes the taxon as a leaf.
+// Flat one-level reparent — grandchildren stay under their parents,
+// which stay under the newly-promoted children.
+//
+// Curators who want the deeper "delete this subtree entirely" flow
+// use CascadeDeleteTaxon.
+func (t *Tx) ReparentAndDeleteTaxon(id string) error {
+	if id == "" {
+		return fmt.Errorf("core: reparent-delete taxon: %w: id required", ErrValidation)
+	}
+
+	// Fetch the taxon's own parent id so we know where to move the
+	// children. Sql.NullString handles the root case (NULL parent).
+	var parentID sql.NullString
+	if err := t.tx.QueryRowContext(t.ctx,
+		"SELECT col__parent_id FROM taxon WHERE col__id = ?", id,
+	).Scan(&parentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core: reparent-delete taxon %s: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("core: fetch parent of %s: %w", id, err)
+	}
+
+	// Snapshot and mark every descendant BEFORE the move. Direct
+	// children get a new parent_id (the deleted taxon's parent), and
+	// grandchildren+ keep their direct parent unchanged but see a
+	// shortened ancestor chain — both cases can flip ancestor-
+	// dependent validation rules (parent-genus-missing, incertae
+	// sedis) so the whole subtree needs re-validation after commit.
+	if err := t.snapshotAndMarkDescendantsDirty(id); err != nil {
+		return err
+	}
+
+	// Move children up one level. Stamp modified so the change is
+	// visible in the audit trail. Same "NULL vs empty" treatment as
+	// MoveTaxon — nullIfEmpty coerces "" to a proper SQL NULL.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := t.tx.ExecContext(t.ctx, `
+		UPDATE taxon
+		   SET col__parent_id  = ?,
+		       col__modified   = ?,
+		       col__modified_by = ?
+		 WHERE col__parent_id = ?`,
+		nullIfEmpty(parentID.String), now, t.actor, id,
+	); err != nil {
+		return fmt.Errorf("core: reparent children of %s: %w", id, err)
+	}
+
+	// Now that children are moved, this taxon is a leaf; the standard
+	// DeleteTaxon (with its per-taxon association cleanup) applies.
+	return t.DeleteTaxon(id)
+}
+
+// CascadeDeleteTaxon removes the taxon, every descendant, and every
+// per-taxon association attached to any member of that set. Runs in
+// a single transaction with deferred FK checks so we can delete rows
+// in any order — the self-referential col__parent_id constraint waits
+// until COMMIT, by which point every descendant is gone.
+//
+// The taxa's associated `name` rows are NOT deleted — names are shared
+// across taxa and often referenced elsewhere. Curators who also want
+// to remove names go through DeleteName after the cascade.
+func (t *Tx) CascadeDeleteTaxon(id string) error {
+	if id == "" {
+		return fmt.Errorf("core: cascade delete taxon: %w: id required", ErrValidation)
+	}
+
+	// Snapshot the root of the cascade for the audit log entry. The
+	// dispersed per-descendant rows aren't individually snapshotted
+	// (cost O(N)) — the audit records the trigger, not every leaf.
+	preSnapshot, _ := t.snapshotTaxon(id)
+
+	// Deferred FK checks let us DELETE parents before children in the
+	// taxon table without violating the self-referential constraint.
+	// Scoped to this transaction; commit-time enforcement still runs.
+	if _, err := t.tx.ExecContext(t.ctx, "PRAGMA defer_foreign_keys = ON"); err != nil {
+		return fmt.Errorf("core: enable deferred FK: %w", err)
+	}
+
+	// Collect the descendant set (including self). Materializing the
+	// IDs into a Go slice lets each subsequent DELETE re-use the same
+	// list without re-running the recursive CTE.
+	const descQ = `
+		WITH RECURSIVE descendants(id) AS (
+			SELECT col__id FROM taxon WHERE col__id = ?
+			UNION ALL
+			SELECT t.col__id
+			  FROM taxon t
+			  JOIN descendants d ON t.col__parent_id = d.id
+		)
+		SELECT id FROM descendants`
+	rows, err := t.tx.QueryContext(t.ctx, descQ, id)
+	if err != nil {
+		return fmt.Errorf("core: collect descendants of %s: %w", id, err)
+	}
+	var descIDs []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			rows.Close()
+			return fmt.Errorf("core: scan descendant: %w", err)
+		}
+		descIDs = append(descIDs, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("core: iterate descendants: %w", err)
+	}
+	if len(descIDs) == 0 {
+		return fmt.Errorf("core: cascade delete taxon %s: %w", id, ErrNotFound)
+	}
+
+	// Build a single IN-clause placeholder + args slice; both are
+	// reused for every table cleanup below.
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(descIDs)), ",")
+	args := make([]any, len(descIDs))
+	for i, d := range descIDs {
+		args[i] = d
+	}
+
+	// One-sided dependents keyed by col__taxon_id.
+	singleFKTables := []string{
+		"synonym",
+		"vernacular",
+		"distribution",
+		"media",
+		"treatment",
+		"species_estimate",
+		"taxon_property",
+	}
+	for _, tbl := range singleFKTables {
+		q := "DELETE FROM " + tbl + " WHERE col__taxon_id IN (" + placeholders + ")"
+		if _, err := t.tx.ExecContext(t.ctx, q, args...); err != nil {
+			return fmt.Errorf("core: cascade delete %s: %w", tbl, err)
+		}
+	}
+
+	// Bi-directional dependents where either side may be in the set.
+	biFKTables := []string{
+		"species_interaction",
+		"taxon_concept_relation",
+	}
+	for _, tbl := range biFKTables {
+		q := "DELETE FROM " + tbl +
+			" WHERE col__taxon_id IN (" + placeholders + ")" +
+			"    OR col__related_taxon_id IN (" + placeholders + ")"
+		biArgs := append(append([]any{}, args...), args...)
+		if _, err := t.tx.ExecContext(t.ctx, q, biArgs...); err != nil {
+			return fmt.Errorf("core: cascade delete %s: %w", tbl, err)
+		}
+	}
+
+	// Capture pre-delete snapshots for every descendant BEFORE the
+	// DELETE so the post-commit sync can propagate to old-side
+	// neighbors (external records that referenced these taxa via
+	// species-interaction or taxon-concept-relation, and now don't).
+	// Excludes the root — its snapshot was captured at the top of
+	// this method and passed into markTaxonDeleted below.
+	descPreSnaps := make(map[string]map[string]any, len(descIDs))
+	for _, d := range descIDs {
+		if d == id {
+			continue
+		}
+		descPreSnaps[d], _ = t.snapshotTaxon(d)
+	}
+
+	// Delete the taxa themselves. Deferred FK checks make the order
+	// irrelevant here.
+	if _, err := t.tx.ExecContext(t.ctx,
+		"DELETE FROM taxon WHERE col__id IN ("+placeholders+")", args...,
+	); err != nil {
+		return fmt.Errorf("core: cascade delete taxon set: %w", err)
+	}
+
+	// Mark every deleted taxon so post-commit sync prunes their
+	// __gsvalidator_results rows and re-syncs any external neighbor
+	// records (species-interaction / taxon-concept-relation on the
+	// other side of the FK) that lost a reference. Root goes last
+	// because it takes the explicit pre-snapshot we already captured.
+	for _, d := range descIDs {
+		if d == id {
+			continue
+		}
+		t.markTaxonDeleted(d, descPreSnaps[d])
 	}
 	t.markTaxonDeleted(id, preSnapshot)
 	return nil

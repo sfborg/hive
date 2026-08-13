@@ -46,10 +46,14 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/taxon/{id}/children", s.handleChildren)
 	mux.HandleFunc("GET /api/taxon/{id}/synonyms", s.handleSynonyms)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
+	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
 	mux.HandleFunc("POST /api/taxon/{id}/basionym", s.handleAddBasionym)
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
+	mux.HandleFunc("GET /api/taxon/{id}/delete-preview", s.handleDeletePreview)
+	mux.HandleFunc("POST /api/taxon/{id}/delete-reparent", s.handleDeleteReparent)
+	mux.HandleFunc("POST /api/taxon/{id}/delete-cascade", s.handleDeleteCascade)
 	mux.HandleFunc("GET /api/taxon/{id}/code-default", s.handleCodeDefault)
 	mux.HandleFunc("GET /api/taxon/{id}/create-name-prefix", s.handleCreateNamePrefix)
 	mux.HandleFunc("GET /api/taxon/{id}/child-ranks", s.handleChildRanks)
@@ -76,6 +80,17 @@ func (s *server) routes() *http.ServeMux {
 
 	mux.HandleFunc("GET /api/issue/summary", s.handleIssueSummary)
 	mux.HandleFunc("GET /api/issue", s.handleIssueList)
+
+	// Role-table CRUD. The {role} parameter selects which sfga table
+	// (creator/contact/editor/contributor/publisher); rows share an
+	// identical column shape so one handler set covers all five.
+	mux.HandleFunc("GET /api/agent/{role}", s.handleListAgents)
+	mux.HandleFunc("POST /api/agent/{role}", s.handleCreateAgent)
+	mux.HandleFunc("GET /api/agent/{role}/{id}", s.handleGetAgent)
+	mux.HandleFunc("PATCH /api/agent/{role}/{id}", s.handlePatchAgent)
+	mux.HandleFunc("DELETE /api/agent/{role}/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("POST /api/agent/{role}/{id}/copy", s.handleCopyAgent)
+	mux.HandleFunc("POST /api/agent/{role}/{id}/move", s.handleMoveAgent)
 
 	return mux
 }
@@ -315,10 +330,37 @@ func (s *server) handleChildRanks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": ranks})
 }
 
+// handleClassification returns the taxon's full ancestor chain in
+// root-down order, INCLUDING the taxon itself as the last element.
+// Each item is an apiTaxonHit — id + display name + rank + status —
+// which is enough for the WUI to render breadcrumbs and to drive a
+// single-round-trip tree reveal (fetch classification, then fire all
+// per-ancestor children requests in parallel instead of sequentially).
+//
+// Empty items array means the taxon id is unknown.
+func (s *server) handleClassification(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hits, err := s.a.Classification(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiTaxonHit, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, hitToAPI(h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiTaxonHit]{Items: items})
+}
+
 // handleAncestors returns the taxon's parent chain in root-down order
 // (excluding the taxon itself). Front-ends use this to expand the tree
 // down to a moved taxon so it appears in its new location without a full
 // reload.
+//
+// Kept alongside handleClassification for two reasons: any caller that
+// only needs the id chain doesn't have to pay for the name+rank join,
+// and the existing WUI shell code paths that just want the chain don't
+// have to be rewritten in the same change that adds classification.
 func (s *server) handleAncestors(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ids, err := s.a.Ancestors(r.Context(), id)
@@ -420,9 +462,15 @@ func (s *server) referenceLabel(ctx context.Context, id string) string {
 	return hive.ReferenceLabel(ref)
 }
 
-// handleTaxonSearch returns taxa whose name matches q as a case-insensitive
-// substring. Backs the WUI parent picker; also useful as a generic tree
-// navigation aid.
+// handleTaxonSearch returns taxa whose name matches q as a
+// case-insensitive prefix. Backs the WUI top-bar combobox and any
+// parent-picker use case; also useful as a generic tree-navigation
+// aid.
+//
+// include_synonyms=true (default false) extends results with accepted
+// taxa reached via matching synonyms — see hive.SearchTaxa. When set,
+// each apiTaxonHit carries is_synonym (true when the match came via
+// a synonym) and matched_name (the string that actually matched).
 func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -438,16 +486,39 @@ func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	hits, err := s.a.SearchTaxa(r.Context(), q, limit)
+	includeSynonyms := parseBoolParam(r.URL.Query().Get("include_synonyms"))
+	hits, err := s.a.SearchTaxa(r.Context(), q, limit, includeSynonyms)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
 	}
 	items := make([]apiTaxonHit, 0, len(hits))
 	for _, h := range hits {
-		items = append(items, hitToAPI(h))
+		item := hitToAPI(h)
+		if !includeSynonyms {
+			// Suppress the synonym-only fields when the caller didn't
+			// opt in so the default response shape stays identical to
+			// pre-feature. Core still populates MatchedName (== Name)
+			// for accepted matches, which would otherwise leak onto
+			// the wire.
+			item.MatchedName = ""
+			item.IsSynonym = false
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, apiPage[apiTaxonHit]{Items: items})
+}
+
+// parseBoolParam interprets a query-string flag. Accepts the common
+// truthy forms browsers and CLIs emit; anything else (including empty
+// / absent) is false so include_synonyms preserves its default-off
+// contract when the param is missing.
+func parseBoolParam(v string) bool {
+	switch strings.ToLower(v) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	}
+	return false
 }
 
 // handleMoveTaxon reparents a taxon. Body is {"new_parent_id": "..."} —
@@ -734,6 +805,88 @@ func (s *server) handleDeleteTaxon(w http.ResponseWriter, r *http.Request) {
 
 	err = s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
 		return tx.DeleteTaxon(id)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"deleted_id": id,
+		"parent_id":  parentID,
+	})
+}
+
+// handleDeletePreview returns the summary a curator sees before
+// confirming a cascade delete: direct-child count (drives the "leaf
+// vs parent" UI branch), descendant count, and per-association-table
+// counts across the descendant set.
+func (s *server) handleDeletePreview(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := s.a.TaxonDeletePreview(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"direct_child_count":            p.DirectChildCount,
+		"descendant_count":              p.DescendantCount,
+		"synonym_count":                 p.SynonymCount,
+		"vernacular_count":              p.VernacularCount,
+		"distribution_count":            p.DistributionCount,
+		"media_count":                   p.MediaCount,
+		"treatment_count":               p.TreatmentCount,
+		"species_estimate_count":        p.SpeciesEstimateCount,
+		"taxon_property_count":          p.TaxonPropertyCount,
+		"species_interaction_count":     p.SpeciesInteractionCount,
+		"taxon_concept_relation_count":  p.TaxonConceptRelationCount,
+		"parent_id":                     p.ParentID,
+	})
+}
+
+// handleDeleteReparent moves the taxon's direct children up one level
+// then leaf-deletes the taxon. Response body carries the destination
+// parent_id (empty when children became new roots) so the client can
+// reveal the tree at the parent's position.
+func (s *server) handleDeleteReparent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	t, err := s.a.GetTaxon(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	parentID := t.ParentID
+
+	err = s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.ReparentAndDeleteTaxon(id)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"deleted_id": id,
+		"parent_id":  parentID,
+	})
+}
+
+// handleDeleteCascade removes the taxon, every descendant, and every
+// per-taxon association attached to any member of that set. Response
+// body carries the deleted-root's parent_id so the client can reveal
+// the tree at the surviving parent (empty = tree returned to roots-
+// only view).
+func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	t, err := s.a.GetTaxon(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	parentID := t.ParentID
+
+	err = s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.CascadeDeleteTaxon(id)
 	})
 	if err != nil {
 		writeProblem(w, r, err)

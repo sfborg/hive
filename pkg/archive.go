@@ -310,6 +310,9 @@ func (a *Archive) WithTx(ctx context.Context, fn func(*Tx) error) error {
 	for id, entry := range tx.dirtyMetadata {
 		_ = a.syncMetadataIssuesWithSnapshot(ctx, id, entry)
 	}
+	for k, entry := range tx.dirtyAgents {
+		_ = a.syncAgentIssuesWithSnapshot(ctx, k.Role, k.ID, entry)
+	}
 	return nil
 }
 
@@ -335,6 +338,11 @@ type Tx struct {
 	dirtyTaxa     map[string]dirtyEntry
 	dirtyRefs     map[string]dirtyEntry
 	dirtyMetadata map[int]dirtyEntry
+	// dirtyAgents holds mutations across all 5 sfga role tables
+	// (creator / contact / editor / contributor / publisher) under a
+	// single (role, id) key so post-commit sync loops once instead
+	// of once per role table.
+	dirtyAgents map[agentKey]dirtyEntry
 }
 
 // dirtyEntry carries the pre-mutation snapshot of a record touched

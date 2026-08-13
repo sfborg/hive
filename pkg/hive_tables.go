@@ -152,6 +152,45 @@ CREATE TABLE IF NOT EXISTS hive__config_rulesets (
 	updated_at    TEXT    NOT NULL,
 	updated_by    TEXT    NOT NULL DEFAULT ''
 );
+
+-- Indices on sfga tables. Named with the standard idx_ prefix (not
+-- hive__) so that if sfga adopts them upstream the CREATE IF NOT EXISTS
+-- guard turns into a no-op on newly-imported archives. sflib/sf/gndb
+-- ignore extra indices.
+--
+-- idx_taxon_parent_id turns tree-navigation queries — ListChildrenPage,
+-- Ancestors' recursive CTE, MoveTaxon cycle checks, the has_children
+-- EXISTS probe — from full table scans of the taxon table into index
+-- range scans. On a 2.7M-row taxon table (COL 26-07) this drops
+-- children-of-X from ~150 ms per query to under 1 ms, which is the
+-- difference between a snappy tree reveal and a multi-second wait.
+CREATE INDEX IF NOT EXISTS idx_taxon_parent_id ON taxon (col__parent_id);
+
+-- idx_taxon_name_id lets JOIN-through-taxon queries (SearchTaxa,
+-- classification, synonym resolution) use an index on the taxon side
+-- instead of scanning taxon and looking up name by PK per row.
+CREATE INDEX IF NOT EXISTS idx_taxon_name_id ON taxon (col__name_id);
+
+-- Case-insensitive prefix indices on the two name-text columns the
+-- typeahead searches. sfga ships BINARY-collation indices on both
+-- columns (idx_name_scientific_name, idx_name_canonical_simple);
+-- those don't satisfy LIKE 'q%' because SQLite requires a NOCASE
+-- index (or PRAGMA case_sensitive_like=ON, which we don't want to
+-- flip session-wide). SearchTaxa uses the query pattern q||'%' so
+-- both indices are index-range-scanned instead of full-scanned.
+CREATE INDEX IF NOT EXISTS idx_name_scientific_name_nocase
+	ON name (col__scientific_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_name_canonical_simple_nocase
+	ON name (gn__canonical_simple COLLATE NOCASE);
+
+-- idx_synonym_name_id makes the synonym arm of SearchTaxa
+-- (include_synonyms=true) fast: after matching a synonym's name row
+-- via the NOCASE prefix indices above, hive follows synonym.col__name_id
+-- back to the synonym row and then to the accepted taxon. sfga indexes
+-- synonym.col__id and synonym.col__taxon_id but not col__name_id, so
+-- the name→synonym lookup would otherwise scan the 2.7M-row synonym
+-- table.
+CREATE INDEX IF NOT EXISTS idx_synonym_name_id ON synonym (col__name_id);
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata

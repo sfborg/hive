@@ -29,10 +29,17 @@ import (
 // Both fire via tea.Cmd → comboboxResultsMsg. Cmds keep Update() non-blocking
 // so a slow query never freezes the whole TUI.
 
-// term is one picker option: display label + underlying id.
+// term is one picker option: display label + underlying id. Display
+// is an optional dropdown-only rendering — when non-empty the dropdown
+// shows Display but the committed value on pick remains Label. Used by
+// the taxon-search source to annotate synonym rows as
+// "<Accepted> (=<Matched>)" without polluting the committed value with
+// the paren suffix (see WUI counterpart in DESIGN.md § Search combobox
+// synonym rendering).
 type term struct {
-	ID    string
-	Label string
+	ID      string
+	Label   string
+	Display string
 }
 
 // comboboxSource returns a tea.Cmd that produces a comboboxResultsMsg for
@@ -220,7 +227,11 @@ func (c combobox) View() string {
 			prefix = "▶ "
 			style = focusedStyle
 		}
-		b.WriteString(style.Render(prefix + r.Label))
+		label := r.Label
+		if r.Display != "" {
+			label = r.Display
+		}
+		b.WriteString(style.Render(prefix + label))
 	}
 	if overflow > 0 {
 		b.WriteByte('\n')
@@ -477,13 +488,21 @@ func taxonComboSource(a *hive.Archive) comboboxSource {
 			if len(trimmed) < 2 {
 				return comboboxResultsMsg{query: q, results: nil}
 			}
-			hits, err := a.SearchTaxa(context.Background(), trimmed, 20)
+			hits, err := a.SearchTaxa(context.Background(), trimmed, 20, true)
 			if err != nil {
 				return comboboxResultsMsg{query: q, results: nil}
 			}
 			results := make([]term, 0, len(hits))
 			for _, h := range hits {
-				results = append(results, term{ID: h.ID, Label: h.Label.Text})
+				t := term{ID: h.ID, Label: h.Label.Text}
+				// Synonym rows render "<Accepted> (=<Matched>)" so the
+				// curator sees why the row appeared and knows picking
+				// lands them on the accepted taxon. Guard against
+				// matched == label to avoid a redundant "X (=X)".
+				if h.IsSynonym && h.MatchedName != "" && h.MatchedName != h.Label.Text {
+					t.Display = fmt.Sprintf("%s (=%s)", h.Label.Text, h.MatchedName)
+				}
+				results = append(results, t)
 			}
 			return comboboxResultsMsg{query: q, results: results}
 		}
