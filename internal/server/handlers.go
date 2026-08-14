@@ -45,6 +45,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/taxon/{id}", s.handleGetTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/children", s.handleChildren)
 	mux.HandleFunc("GET /api/taxon/{id}/synonyms", s.handleSynonyms)
+	mux.HandleFunc("GET /api/taxon/{id}/nomenclatural-history", s.handleNomenclaturalHistory)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
@@ -374,6 +375,47 @@ func (s *server) handleAncestors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
 }
 
+// handleNomenclaturalHistory returns the taxon's multi-cluster
+// basionym-anchored nomenclatural history. Backs the "Nomenclatural
+// history" section on the WUI/TUI detail page — see DESIGN.md.
+//
+// Every hydrated name has its ReferenceID → ReferenceLabel resolved
+// here so the frontend footnote accumulator can render citations
+// inline without a per-row round trip. Same treatment the synonym
+// endpoint just picked up.
+func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hist, err := s.a.NomenclaturalHistory(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := apiNomenHistory{Clusters: make([]apiNomenCluster, 0, len(hist.Clusters))}
+	for _, c := range hist.Clusters {
+		outC := apiNomenCluster{
+			Role:  c.Role,
+			Names: make([]apiNomenName, 0, len(c.Names)),
+		}
+		for _, n := range c.Names {
+			row := apiNomenName{
+				NameID:      n.NameID,
+				Label:       apiLabel{Text: n.Label.Text, HTML: n.Label.HTML},
+				Authorship:  n.Authorship,
+				Rank:        n.Rank,
+				Year:        n.Year,
+				IsBasionym:  n.IsBasionym,
+				Involvement: n.Involvement,
+				SynonymID:   n.SynonymID,
+				ReferenceID: n.ReferenceID,
+			}
+			row.ReferenceLabel = s.referenceLabel(r.Context(), firstCSVID(row.ReferenceID))
+			outC.Names = append(outC.Names, row)
+		}
+		out.Clusters = append(out.Clusters, outC)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *server) handleSynonyms(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	// ListSynonymHits joins each synonym to its name so we can ship a
@@ -386,9 +428,28 @@ func (s *server) handleSynonyms(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]apiSynonym, 0, len(hits))
 	for _, h := range hits {
-		items = append(items, synonymHitToAPI(h))
+		item := synonymHitToAPI(h)
+		// Resolve the reference label so the frontend footnote
+		// accumulator can render inline citations without a per-row
+		// round trip. sfga stores synonym.col__reference_id as a
+		// comma-separated list; the first id is the primary
+		// citation for label rendering. Frontend re-splits when it
+		// needs to number every id separately.
+		item.ReferenceLabel = s.referenceLabel(r.Context(), firstCSVID(item.ReferenceID))
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, apiPage[apiSynonym]{Items: items})
+}
+
+// firstCSVID returns the first non-empty comma-separated fragment of
+// s, trimmed. Applies to sfga columns that hold multiple ids as CSV
+// (synonym.col__reference_id and its cousins).
+func firstCSVID(s string) string {
+	if s == "" {
+		return ""
+	}
+	head, _, _ := strings.Cut(s, ",")
+	return strings.TrimSpace(head)
 }
 
 func (s *server) handleGetName(w http.ResponseWriter, r *http.Request) {

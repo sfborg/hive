@@ -360,6 +360,57 @@ type apiName struct {
 	ModifiedBy string `json:"modified_by,omitempty"`
 }
 
+// apiNomenHistory is the wire projection of a taxon's basionym-
+// anchored nomenclatural history — one cluster per original
+// combination, each an ordered list of the basionym plus its
+// recombinations. See hive.NomenclaturalHistory for the assembly
+// semantics.
+type apiNomenHistory struct {
+	Clusters []apiNomenCluster `json:"clusters"`
+}
+
+type apiNomenCluster struct {
+	// Role is "accepted" when the cluster contains the taxon's
+	// currently accepted name, "synonym" otherwise. Exactly one
+	// "accepted" cluster per response (empty when the taxon has
+	// no accepted name row — pathological but tolerated).
+	Role  string         `json:"role"`
+	Names []apiNomenName `json:"names"`
+}
+
+type apiNomenName struct {
+	// NameID is the id of the name row this entry stands for.
+	// Front-ends navigate to /api/name/{id} for the full detail.
+	NameID string `json:"name_id"`
+	// Label is the server-rendered display (text + italicized HTML).
+	Label apiLabel `json:"label,omitzero"`
+	// Authorship / Rank / Year are surfaced independently so the
+	// front-end can compose alternate renderings (chronological
+	// gutter, rank badge, etc.) without re-parsing Label.
+	Authorship string `json:"authorship,omitempty"`
+	Rank       string `json:"rank,omitempty"`
+	Year       string `json:"year,omitempty"`
+	// IsBasionym is true for the anchor name of the cluster —
+	// exactly one per cluster (the original combination).
+	IsBasionym bool `json:"is_basionym,omitempty"`
+	// Involvement records how this name relates to the taxon being
+	// viewed: "accepted", "synonym", or "unlinked" (a sibling
+	// recombination discovered via name_relation but not currently
+	// attached to this taxon).
+	Involvement string `json:"involvement"`
+	// SynonymID is populated when Involvement == "synonym" — the
+	// synonym-link row's own id (may be empty on legacy archives
+	// where synonym.col__id wasn't set).
+	SynonymID string `json:"synonym_id,omitempty"`
+	// ReferenceID / ReferenceLabel — the name's own publication
+	// citation (from name.col__reference_id), resolved to a display
+	// string by the handler for the footnote-accumulator flow.
+	// Independent from any synonym-link reference (that lives on
+	// apiSynonym).
+	ReferenceID    string `json:"reference_id,omitempty"`
+	ReferenceLabel string `json:"reference_label,omitempty"`
+}
+
 // apiSynonym is the wire form of a synonym link. `label` is a server-
 // rendered display (text + html) for the associated name so front-ends
 // don't have to re-fetch each name row — matches the shape used for
@@ -375,6 +426,16 @@ type apiSynonym struct {
 	Remarks    string   `json:"remarks,omitempty"`
 	Modified   string   `json:"modified,omitempty"`
 	ModifiedBy string   `json:"modified_by,omitempty"`
+	// ReferenceID is the synonym-relation's own reference (verbatim
+	// from synonym.col__reference_id — a comma-separated list per the
+	// sfga schema). Nil-empty for legacy rows without a cited source.
+	ReferenceID string `json:"reference_id,omitempty"`
+	// ReferenceLabel is the server-rendered "Author (Year) Title" of
+	// the first id in ReferenceID, resolved by the handler so the
+	// nomenclatural-history footnote accumulator can display citations
+	// inline without a per-row round trip. Elided when the reference
+	// is unset or the resolution failed.
+	ReferenceLabel string `json:"reference_label,omitempty"`
 }
 
 // apiReferenceHit is the list/search projection for references. Lean
@@ -973,16 +1034,17 @@ func synonymToAPI(s coldp.Synonym) apiSynonym {
 // synonymToAPI when the handler has already gone through ListSynonymHits.
 func synonymHitToAPI(h hive.SynonymHit) apiSynonym {
 	return apiSynonym{
-		ID:         h.ID,
-		TaxonID:    h.TaxonID,
-		NameID:     h.NameID,
-		Label:      apiLabel{Text: h.Label.Text, HTML: h.Label.HTML},
-		NamePhrase: h.NamePhrase,
-		Status:     h.Status,
-		Link:       h.Link,
-		Remarks:    h.Remarks,
-		Modified:   h.Modified,
-		ModifiedBy: h.ModifiedBy,
+		ID:          h.ID,
+		TaxonID:     h.TaxonID,
+		NameID:      h.NameID,
+		Label:       apiLabel{Text: h.Label.Text, HTML: h.Label.HTML},
+		NamePhrase:  h.NamePhrase,
+		Status:      h.Status,
+		Link:        h.Link,
+		Remarks:     h.Remarks,
+		Modified:    h.Modified,
+		ModifiedBy:  h.ModifiedBy,
+		ReferenceID: h.ReferenceID,
 	}
 }
 

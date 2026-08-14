@@ -25,16 +25,25 @@ import (
 // Populated by ListSynonymHits in one query (no N+1 lookup per row). The
 // Label carries text + HTML forms; see core.BuildLabel for the rules.
 type SynonymHit struct {
-	ID         string
-	TaxonID    string
-	NameID     string
-	Label      Label
-	NamePhrase string
-	Status     string // taxonomic_status ID (raw enum ID; front-end can pretty-print)
-	Link       string
-	Remarks    string
-	Modified   string
-	ModifiedBy string
+	ID          string
+	TaxonID     string
+	NameID      string
+	Label       Label
+	NamePhrase  string
+	Status      string // taxonomic_status ID (raw enum ID; front-end can pretty-print)
+	Link        string
+	Remarks     string
+	Modified    string
+	ModifiedBy  string
+	// ReferenceID is the synonym-relation's own reference (col__reference_id
+	// on the synonym row) — the citation that establishes the synonymy,
+	// often distinct from the reference that originally published the
+	// synonym's name. The nomenclatural-history / footnote accumulator on
+	// the taxon detail page uses this to number every citation appearing
+	// on the page. May contain a comma-separated list per the sfga schema
+	// note ("ids about this synonym") — hive treats it as opaque for now
+	// and lets the frontend split when it renders.
+	ReferenceID string
 }
 
 // ListSynonymHits returns synonyms for a taxon with each row's name
@@ -54,7 +63,8 @@ func (a *Archive) ListSynonymHits(ctx context.Context, taxonID string) ([]Synony
 		s.col__link,
 		s.col__remarks,
 		s.col__modified,
-		s.col__modified_by
+		s.col__modified_by,
+		COALESCE(s.col__reference_id, '')
 	FROM synonym s
 	LEFT JOIN name n ON n.col__id = s.col__name_id
 	WHERE s.col__taxon_id = ?
@@ -78,6 +88,7 @@ func (a *Archive) ListSynonymHits(ctx context.Context, taxonID string) ([]Synony
 			&h.NamePhrase,
 			&h.Status, &h.Link, &h.Remarks,
 			&h.Modified, &h.ModifiedBy,
+			&h.ReferenceID,
 		); err != nil {
 			return nil, fmt.Errorf("core: scan synonym hit of %q: %w", taxonID, err)
 		}
