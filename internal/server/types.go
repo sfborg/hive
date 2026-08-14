@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"strconv"
 
 	"github.com/gnames/gnlib/ent/nomcode"
 	hive "github.com/sfborg/hive/pkg"
@@ -409,6 +410,51 @@ type apiNomenName struct {
 	// apiSynonym).
 	ReferenceID    string `json:"reference_id,omitempty"`
 	ReferenceLabel string `json:"reference_label,omitempty"`
+}
+
+// apiVernacular is the wire form of a vernacular-name row on a
+// taxon. sfga's vernacular table has no col__id; hive uses SQLite's
+// implicit rowid as the opaque handle and ships it as `id` (a
+// string per the "all ids are strings in JSON" rule). Curators
+// PATCH/DELETE against /api/vernacular/{id}.
+//
+// Preferred is a *bool because sfga distinguishes NULL (unknown /
+// unset) from false (explicitly-not-preferred). Frontends that
+// only expose a checkbox render NULL as unchecked; explicit false
+// still round-trips.
+type apiVernacular struct {
+	ID              string `json:"id"`
+	TaxonID         string `json:"taxon_id"`
+	Name            string `json:"name"`
+	Transliteration string `json:"transliteration,omitempty"`
+	Language        string `json:"language,omitempty"`
+	Preferred       *bool  `json:"preferred,omitempty"`
+	Country         string `json:"country,omitempty"`
+	Area            string `json:"area,omitempty"`
+	Sex             string `json:"sex,omitempty"`
+	SourceID        string `json:"source_id,omitempty"`
+	ReferenceID     string `json:"reference_id,omitempty"`
+	Remarks         string `json:"remarks,omitempty"`
+	Modified        string `json:"modified,omitempty"`
+	ModifiedBy      string `json:"modified_by,omitempty"`
+}
+
+// apiVernacularPatch mirrors apiVernacular but keeps every editable
+// field as a pointer so a curator can send only what changed. Nil
+// pointer means "leave alone"; a set pointer to zero-value means
+// "clear this field" (empty string / false). TaxonID isn't included
+// — reparenting a vernacular is delete+add on a different taxon.
+type apiVernacularPatch struct {
+	Name            *string `json:"name,omitempty"`
+	Transliteration *string `json:"transliteration,omitempty"`
+	Language        *string `json:"language,omitempty"`
+	Preferred       *bool   `json:"preferred,omitempty"`
+	Country         *string `json:"country,omitempty"`
+	Area            *string `json:"area,omitempty"`
+	Sex             *string `json:"sex,omitempty"`
+	SourceID        *string `json:"source_id,omitempty"`
+	ReferenceID     *string `json:"reference_id,omitempty"`
+	Remarks         *string `json:"remarks,omitempty"`
 }
 
 // apiSynonym is the wire form of a synonym link. `label` is a server-
@@ -1045,6 +1091,28 @@ func synonymHitToAPI(h hive.SynonymHit) apiSynonym {
 		Modified:    h.Modified,
 		ModifiedBy:  h.ModifiedBy,
 		ReferenceID: h.ReferenceID,
+	}
+}
+
+// vernacularHitToAPI mirrors synonymHitToAPI: converts the pkg-side
+// projection into the wire type, stringifying the rowid handle and
+// projecting sql.NullBool → *bool for the preferred flag.
+func vernacularHitToAPI(h hive.VernacularHit) apiVernacular {
+	return apiVernacular{
+		ID:              strconv.FormatInt(h.RowID, 10),
+		TaxonID:         h.TaxonID,
+		Name:            h.Name,
+		Transliteration: h.Transliteration,
+		Language:        h.Language,
+		Preferred:       nullBoolToPtr(h.Preferred),
+		Country:         h.Country,
+		Area:            h.Area,
+		Sex:             h.Sex.ID(),
+		SourceID:        h.SourceID,
+		ReferenceID:     h.ReferenceID,
+		Remarks:         h.Remarks,
+		Modified:        h.Modified,
+		ModifiedBy:      h.ModifiedBy,
 	}
 }
 

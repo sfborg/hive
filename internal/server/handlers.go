@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,10 +47,15 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/taxon/{id}/children", s.handleChildren)
 	mux.HandleFunc("GET /api/taxon/{id}/synonyms", s.handleSynonyms)
 	mux.HandleFunc("GET /api/taxon/{id}/nomenclatural-history", s.handleNomenclaturalHistory)
+	mux.HandleFunc("GET /api/taxon/{id}/vernaculars", s.handleListVernaculars)
+	mux.HandleFunc("POST /api/taxon/{id}/vernaculars", s.handleCreateVernacular)
+	mux.HandleFunc("PATCH /api/vernacular/{id}", s.handlePatchVernacular)
+	mux.HandleFunc("DELETE /api/vernacular/{id}", s.handleDeleteVernacular)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
 	mux.HandleFunc("POST /api/taxon/{id}/basionym", s.handleAddBasionym)
+	mux.HandleFunc("POST /api/taxon/{id}/synonym", s.handleAddSynonym)
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/delete-preview", s.handleDeletePreview)
@@ -452,6 +458,195 @@ func firstCSVID(s string) string {
 	return strings.TrimSpace(head)
 }
 
+// handleListVernaculars returns every vernacular row attached to
+// the given taxon, ordered preferred-first per language. The rowid
+// handle is stringified into `id` on the wire so front-ends address
+// individual rows against PATCH/DELETE /api/vernacular/{id}.
+func (s *server) handleListVernaculars(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	hits, err := s.a.ListVernaculars(r.Context(), taxonID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiVernacular, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, vernacularHitToAPI(h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiVernacular]{Items: items})
+}
+
+// handleCreateVernacular writes a new vernacular row attached to
+// the {id} taxon and returns the freshly-hydrated apiVernacular so
+// the caller can splice it into local state without a follow-up
+// list refresh. TaxonID is taken from the path, not the body —
+// consistent with POST /api/taxon/{id}/basionym.
+func (s *server) handleCreateVernacular(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	var body apiVernacular
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.TaxonID = taxonID // path wins over body
+	if strings.TrimSpace(body.Name) == "" {
+		writeBadRequest(w, r, "name is required")
+		return
+	}
+	var newID int64
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		id, err := tx.AddVernacular(coldp.Vernacular{
+			TaxonID:         body.TaxonID,
+			SourceID:        body.SourceID,
+			Name:            body.Name,
+			Transliteration: body.Transliteration,
+			Language:        body.Language,
+			Preferred:       ptrBoolToNull(body.Preferred),
+			Country:         body.Country,
+			Area:            body.Area,
+			Sex:             coldp.NewSex(body.Sex),
+			ReferenceID:     body.ReferenceID,
+			Remarks:         body.Remarks,
+		})
+		newID = id
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetVernacular(r.Context(), newID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, vernacularHitToAPI(*fresh))
+}
+
+// handlePatchVernacular applies a partial update. Nil fields on the
+// patch mean "leave alone"; a set pointer to zero-value clears the
+// field. TaxonID is not editable — reparent a vernacular by
+// delete+add on the new taxon.
+func (s *server) handlePatchVernacular(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseVernacularRowID(w, r)
+	if !ok {
+		return
+	}
+	var patch apiVernacularPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		current, err := s.a.GetVernacular(r.Context(), rowid)
+		if err != nil {
+			return err
+		}
+		merged := coldp.Vernacular{
+			TaxonID:         current.TaxonID,
+			SourceID:        current.SourceID,
+			Name:            current.Name,
+			Transliteration: current.Transliteration,
+			Language:        current.Language,
+			Preferred:       current.Preferred,
+			Country:         current.Country,
+			Area:            current.Area,
+			Sex:             current.Sex,
+			ReferenceID:     current.ReferenceID,
+			Remarks:         current.Remarks,
+		}
+		applyVernacularPatch(&merged, patch)
+		return tx.UpdateVernacular(rowid, merged)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetVernacular(r.Context(), rowid)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, vernacularHitToAPI(*fresh))
+}
+
+// handleDeleteVernacular removes the row at the given rowid.
+// Unknown row → 404 via ErrNotFound.
+func (s *server) handleDeleteVernacular(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseVernacularRowID(w, r)
+	if !ok {
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteVernacular(rowid)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseVernacularRowID pulls the {id} path parameter and parses it
+// as an int64. On failure it writes a 400 and returns false so the
+// caller can early-return.
+func parseVernacularRowID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeBadRequest(w, r, "invalid vernacular id: "+raw)
+		return 0, false
+	}
+	return n, true
+}
+
+// applyVernacularPatch layers the pointer-optional patch onto the
+// merged coldp.Vernacular. Nil pointer → leave alone; set pointer
+// (even to zero value) → overwrite. Preferred is *bool → sql.NullBool
+// via ptrBoolToNull so an explicit false round-trips.
+func applyVernacularPatch(v *coldp.Vernacular, p apiVernacularPatch) {
+	if p.Name != nil {
+		v.Name = *p.Name
+	}
+	if p.Transliteration != nil {
+		v.Transliteration = *p.Transliteration
+	}
+	if p.Language != nil {
+		v.Language = *p.Language
+	}
+	if p.Preferred != nil {
+		v.Preferred = ptrBoolToNull(p.Preferred)
+	}
+	if p.Country != nil {
+		v.Country = *p.Country
+	}
+	if p.Area != nil {
+		v.Area = *p.Area
+	}
+	if p.Sex != nil {
+		v.Sex = coldp.NewSex(*p.Sex)
+	}
+	if p.SourceID != nil {
+		v.SourceID = *p.SourceID
+	}
+	if p.ReferenceID != nil {
+		v.ReferenceID = *p.ReferenceID
+	}
+	if p.Remarks != nil {
+		v.Remarks = *p.Remarks
+	}
+}
+
+// ptrBoolToNull converts a wire *bool into sql.NullBool: nil → invalid,
+// set → valid with the given value. Mirror of nullBoolToPtr used on
+// the read side.
+func ptrBoolToNull(p *bool) sql.NullBool {
+	if p == nil {
+		return sql.NullBool{}
+	}
+	return sql.NullBool{Bool: *p, Valid: true}
+}
+
 func (s *server) handleGetName(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	n, err := s.a.GetName(r.Context(), id)
@@ -744,6 +939,69 @@ func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/name/"+newBasionymID)
+	writeJSON(w, http.StatusCreated, nameToAPI(fresh))
+}
+
+// handleAddSynonym creates a new name and links it as a synonym of the
+// taxon identified in the path. Two writes in one WithTx:
+//
+//  1. CreateName from the same createTaxonBody shape the new-taxon
+//     endpoint takes.
+//  2. AddSynonym linking the fresh name id to the taxon in the path.
+//
+// Simpler than handleAddBasionym — no BASIONYM name-relation because a
+// synonym is not, in general, homotypic with the accepted name (curators
+// use the basionym endpoint when the incoming name IS the accepted
+// name's original combination).
+//
+// Returns the newly created name (apiName) so the frontend can display
+// it. The parent taxon's row is untouched; the client refreshes the
+// taxon detail to pick the new synonym up in the Nomenclatural history
+// section.
+func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	if taxonID == "" {
+		writeBadRequest(w, r, "taxon id is required in path")
+		return
+	}
+	var body createTaxonBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.ScientificName) == "" {
+		writeBadRequest(w, r, "scientific_name is required")
+		return
+	}
+	if strings.TrimSpace(body.Code) == "" {
+		writeBadRequest(w, r, "code is required")
+		return
+	}
+	var newNameID string
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		nameID, err := tx.CreateName(body.toColdpName())
+		if err != nil {
+			return err
+		}
+		newNameID = nameID
+		_, err = tx.AddSynonym(coldp.Synonym{
+			TaxonID: taxonID,
+			NameID:  nameID,
+			// Status defaults to SYNONYM inside AddSynonym; modified /
+			// modified_by come from the tx actor.
+		})
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetName(r.Context(), newNameID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/name/"+newNameID)
 	writeJSON(w, http.StatusCreated, nameToAPI(fresh))
 }
 
