@@ -491,6 +491,152 @@ func TestFTSMatchFromTokens(t *testing.T) {
 	}
 }
 
+// TestSearchTaxaPartialExactEpithetOutranksPrefix — Step 4's
+// exact-epithet bonus: for q="rusci" the taxon whose last token
+// EQUALS "rusci" should rank above one whose last token merely
+// starts with it ("ruscifolia").
+func TestSearchTaxaPartialExactEpithetOutranksPrefix(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "tester")
+
+	var exactID, prefixID string
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		exact := insertTestName(t, tx, "Ceroplastes rusci")
+		if _, err := tx.tx.ExecContext(tx.ctx,
+			`UPDATE name SET gn__canonical_simple = ? WHERE col__id = ?`,
+			"Ceroplastes rusci", exact,
+		); err != nil {
+			return err
+		}
+		id, err := tx.CreateTaxon(taxonForTest(exact))
+		if err != nil {
+			return err
+		}
+		exactID = id
+		prefix := insertTestName(t, tx, "Alyxia ruscifolia")
+		if _, err := tx.tx.ExecContext(tx.ctx,
+			`UPDATE name SET gn__canonical_simple = ? WHERE col__id = ?`,
+			"Alyxia ruscifolia", prefix,
+		); err != nil {
+			return err
+		}
+		id, err = tx.CreateTaxon(taxonForTest(prefix))
+		if err != nil {
+			return err
+		}
+		prefixID = id
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	hits, err := a.SearchTaxa(ctx, "rusci", SearchOpts{
+		Mode:  SearchModePartial,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchTaxa partial: %v", err)
+	}
+	var exactPos, prefixPos = -1, -1
+	for i, h := range hits {
+		if h.ID == exactID {
+			exactPos = i
+		}
+		if h.ID == prefixID {
+			prefixPos = i
+		}
+	}
+	if exactPos < 0 || prefixPos < 0 {
+		t.Fatalf("expected both hits present; got exact=%d prefix=%d; hits=%+v",
+			exactPos, prefixPos, hits)
+	}
+	if exactPos >= prefixPos {
+		t.Errorf("exact-epithet match ranked %d, prefix-of-epithet ranked %d; expected exact < prefix",
+			exactPos, prefixPos)
+	}
+}
+
+// TestSearchTaxaPartialFindsByAuthorship — Step 4 extension.
+// The FTS mirrors now index col__authorship alongside the name
+// columns, so a query like "sigillatus Walker" (epithet + author
+// surname) resolves via a single MATCH.
+func TestSearchTaxaPartialFindsByAuthorship(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "tester")
+
+	var targetID string
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		nm := insertTestName(t, tx, "Gryllodes sigillatus")
+		if _, err := tx.tx.ExecContext(tx.ctx,
+			`UPDATE name SET gn__canonical_simple = ?, col__authorship = ? WHERE col__id = ?`,
+			"Gryllodes sigillatus", "(Walker, 1869)", nm,
+		); err != nil {
+			return err
+		}
+		id, err := tx.CreateTaxon(taxonForTest(nm))
+		if err != nil {
+			return err
+		}
+		targetID = id
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	hits, err := a.SearchTaxa(ctx, "sigillatus Walker", SearchOpts{
+		Mode:  SearchModePartial,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchTaxa partial: %v", err)
+	}
+	var found bool
+	for _, h := range hits {
+		if h.ID == targetID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("did not find Gryllodes sigillatus via 'sigillatus Walker'; hits=%+v", hits)
+	}
+}
+
+// TestFTSHasColumn — migration helper honesty check. Ensures a
+// freshly-created FTS mirror reports the expected columns, and
+// that the migration correctly detects the old 2-column shape.
+func TestFTSHasColumn(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := context.Background()
+
+	has, err := ftsHasColumn(ctx, a.db, "hive__name_fts", "col__authorship")
+	if err != nil {
+		t.Fatalf("ftsHasColumn: %v", err)
+	}
+	if !has {
+		t.Error("current hive__name_fts should have col__authorship")
+	}
+
+	// Create a legacy-shaped table to confirm detection returns false.
+	if _, err := a.db.ExecContext(ctx, `
+		DROP TABLE IF EXISTS fts_legacy_test;
+		CREATE VIRTUAL TABLE fts_legacy_test USING fts5(
+			gn__canonical_simple, col__scientific_name,
+			content='name', tokenize='unicode61'
+		)`); err != nil {
+		t.Fatalf("create legacy FTS: %v", err)
+	}
+	has, err = ftsHasColumn(ctx, a.db, "fts_legacy_test", "col__authorship")
+	if err != nil {
+		t.Fatalf("ftsHasColumn on legacy: %v", err)
+	}
+	if has {
+		t.Error("legacy FTS should not have col__authorship")
+	}
+}
+
 // TestListChildrenPageLeavesParentEmpty — parent context is a
 // search-only concern. List endpoints must not populate it or the
 // wire responses for /children and /roots would change shape.

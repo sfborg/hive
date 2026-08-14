@@ -213,9 +213,16 @@ CREATE INDEX IF NOT EXISTS idx_synonym_name_id ON synonym (col__name_id);
 -- remove_diacritics 2 strips accents so 'Flüela' and 'Fluela' match
 -- interchangeably — useful for taxonomic names that carry Latin /
 -- German umlauts.
+-- col__authorship is indexed alongside the name columns so a
+-- query like "sigillatus Walker" — epithet + author surname —
+-- resolves via a single FTS MATCH that requires both tokens.
+-- sfga stores authorship in a dedicated column (not appended to
+-- col__scientific_name), so without indexing it here the FTS arms
+-- would silently miss the author-search case entirely.
 CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts USING fts5(
   gn__canonical_simple,
   col__scientific_name,
+  col__authorship,
   content='name',
   tokenize='unicode61 remove_diacritics 2'
 );
@@ -227,18 +234,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts USING fts5(
 -- a delete + insert pair so a canonical-name change (e.g., gnparser
 -- refresh) doesn't leave stale tokens.
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_ai AFTER INSERT ON name BEGIN
-  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name)
-  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name, new.col__authorship);
 END;
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_ad AFTER DELETE ON name BEGIN
-  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name)
-  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name, old.col__authorship);
 END;
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_au AFTER UPDATE ON name BEGIN
-  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name)
-  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
-  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name)
-  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name, old.col__authorship);
+  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name, new.col__authorship);
 END;
 
 -- hive__name_fts_tri is a second FTS5 mirror using the trigram
@@ -263,6 +270,7 @@ END;
 CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts_tri USING fts5(
   gn__canonical_simple,
   col__scientific_name,
+  col__authorship,
   content='name',
   tokenize='trigram remove_diacritics 1'
 );
@@ -271,18 +279,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts_tri USING fts5(
 -- INSERT / UPDATE / DELETE on name propagates to the trigram
 -- index so both mirrors stay coherent under normal editing.
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_ai AFTER INSERT ON name BEGIN
-  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name)
-  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name, new.col__authorship);
 END;
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_ad AFTER DELETE ON name BEGIN
-  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name)
-  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name, old.col__authorship);
 END;
 CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_au AFTER UPDATE ON name BEGIN
-  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name)
-  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
-  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name)
-  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name, old.col__authorship);
+  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name, col__authorship)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name, new.col__authorship);
 END;
 `
 
@@ -416,7 +424,73 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 	if err := migrateRuleStateTable(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateNameFTSSchema(ctx, db); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateNameFTSSchema drops any hive__name_fts / hive__name_fts_tri
+// virtual table that predates the col__authorship column so the
+// canonical DDL in hiveSchemaDDL can recreate it with the current
+// column set. Detection uses PRAGMA table_info; if the FTS's column
+// list doesn't include col__authorship, we DROP and the subsequent
+// ensureFTSPopulated call rebuilds fresh.
+//
+// The alternative (ADD COLUMN via `INSERT INTO fts(fts, rank)
+// VALUES('rebuild', ...)`) doesn't exist for FTS5 — column set is
+// baked in at CREATE. Drop + recreate + rebuild is the canonical
+// path per the FTS5 docs.
+func migrateNameFTSSchema(ctx context.Context, db *sql.DB) error {
+	for _, tbl := range []string{"hive__name_fts", "hive__name_fts_tri"} {
+		exists, err := tableExists(ctx, db, tbl)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		has, err := ftsHasColumn(ctx, db, tbl, "col__authorship")
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS `+tbl); err != nil {
+			return fmt.Errorf("core: drop stale %s (missing col__authorship): %w", tbl, err)
+		}
+	}
+	return nil
+}
+
+// ftsHasColumn reports whether the FTS5 virtual table lists column
+// among its indexed columns. Reads PRAGMA table_info — which for
+// FTS5 returns the user-facing column list including RANK and
+// hidden columns, so we filter by exact name match.
+func ftsHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, fmt.Errorf("core: table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    any
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("core: scan table_info %s: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func migrateValidationIssueTable(ctx context.Context, db *sql.DB) error {

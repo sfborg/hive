@@ -445,13 +445,40 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, opts SearchOpts) ([]
 	if body == "" {
 		return nil, nil
 	}
-	args = append(args, opts.Limit)
+	// Over-fetch for FTS modes so the reranker sees enough candidates
+	// to promote a bm25-underranked target. Ceroplastes ranks ~13th
+	// by bm25 for query "Cerpolastes" (Herpolasia trigram-overlaps
+	// more); a top-10 fetch would never reach the reranker. Prefix
+	// mode doesn't rerank, so no over-fetch needed there.
+	outerLimit := opts.Limit
+	if opts.Mode == SearchModePartial || opts.Mode == SearchModeFuzzy {
+		outerLimit = max(opts.Limit*10, 100)
+	}
+	args = append(args, outerLimit)
 	rows, err := a.db.QueryContext(ctx, wrapSearchBody(body), args...)
 	if err != nil {
 		return nil, fmt.Errorf("core: search taxa %q: %w", q, err)
 	}
 	defer rows.Close()
-	return scanSearchHits(rows)
+	hits, err := scanSearchHits(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Composite re-ranking for the FTS-backed modes. Prefix mode's
+	// SQL ordering (alphabetical by matched_name) is already the
+	// right UX — every candidate is an equally-good position-0 match
+	// and curators want stable A-Z browsing. Partial and fuzzy modes
+	// come out of the arm ranked by bm25; layering the taxonomic
+	// signals (prefix anchor, epithet position, capitalization hint,
+	// authorship boost, edit distance) on top of that pool moves the
+	// intended target closer to the top than bare bm25 manages.
+	if opts.Mode == SearchModePartial || opts.Mode == SearchModeFuzzy {
+		hits = a.rerankHits(q, opts.Mode, hits)
+		if len(hits) > opts.Limit {
+			hits = hits[:opts.Limit]
+		}
+	}
+	return hits, nil
 }
 
 // wrapSearchBody wraps a mode-specific UNION ALL body in the shared
