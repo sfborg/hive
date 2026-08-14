@@ -33,6 +33,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("GET /api/vocab", s.handleVocab)
 	mux.HandleFunc("GET /api/vocab/nomen", s.handleNomenVocab)
+	mux.HandleFunc("GET /api/vocab/countries", s.handleCountriesVocab)
+	mux.HandleFunc("GET /api/vocab/languages", s.handleLanguagesVocab)
+	mux.HandleFunc("GET /api/vocab/sex", s.handleSexVocab)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 
 	mux.HandleFunc("GET /api/metadata", s.handleGetMetadata)
@@ -56,6 +59,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
 	mux.HandleFunc("POST /api/taxon/{id}/basionym", s.handleAddBasionym)
 	mux.HandleFunc("POST /api/taxon/{id}/synonym", s.handleAddSynonym)
+	mux.HandleFunc("DELETE /api/synonym/{id}", s.handleDeleteSynonym)
+	mux.HandleFunc("POST /api/synonym/{id}/move", s.handleMoveSynonym)
+	mux.HandleFunc("GET /api/name/{id}/dependencies", s.handleNameDependencies)
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)
 	mux.HandleFunc("GET /api/taxon/{id}/delete-preview", s.handleDeletePreview)
@@ -141,6 +147,52 @@ func (s *server) handleNomenVocab(w http.ResponseWriter, r *http.Request) {
 	// Immutable for the process lifetime — safe to cache aggressively.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	writeJSON(w, http.StatusOK, map[string]any{"items": terms})
+}
+
+// handleCountriesVocab returns the ISO 3166-1 alpha-2 catalog for
+// the vernacular col__country picker (and any other 2-letter
+// country lookup). Sourced from ChecklistBank so hive picks
+// countries from the same list as CoLDP tooling — see
+// hive.Countries().
+func (s *server) handleCountriesVocab(w http.ResponseWriter, r *http.Request) {
+	items, err := hive.Countries()
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	// Immutable at build time — long cache is safe.
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleLanguagesVocab returns the ISO 639-3 catalog for the
+// vernacular col__language picker (and any other 3-letter language
+// lookup). Ships ~7900 entries; frontends should fetch on-demand
+// (when the picker first opens) rather than at boot.
+func (s *server) handleLanguagesVocab(w http.ResponseWriter, r *http.Request) {
+	items, err := hive.Languages()
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleSexVocab returns the enriched sex vocabulary (name +
+// glyph symbol + definition) for the vernacular col__sex_id
+// picker. The plain sfga vocab bundle at /api/vocab still ships
+// the flat form (id-only from the archive's own `sex` table); the
+// enriched form here is drawn from ChecklistBank for pickers that
+// want to show the ♀ / ♂ / ⚥ symbol and hover-tooltip.
+func (s *server) handleSexVocab(w http.ResponseWriter, r *http.Request) {
+	items, err := hive.SexTerms()
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // handleKeymap returns the canonical shortcut list from pkg/ui.
@@ -1003,6 +1055,68 @@ func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/api/name/"+newNameID)
 	writeJSON(w, http.StatusCreated, nameToAPI(fresh))
+}
+
+// handleNameDependencies returns a count-projection of what still
+// references the given name — taxa (accepted-name link), synonyms,
+// and name_relation rows on either side. Frontend uses this to decide
+// whether to offer a "cascade name" option on synonym delete:
+// only if all three counts are zero AFTER the synonym being deleted
+// has been removed (i.e., synonym_count = 1 today and it's the target
+// synonym, and every other count = 0).
+func (s *server) handleNameDependencies(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	deps, err := s.a.NameDependencies(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"taxon_count":         deps.TaxonCount,
+		"synonym_count":       deps.SynonymCount,
+		"name_relation_count": deps.NameRelationCount,
+	})
+}
+
+// handleDeleteSynonym removes a single synonym row and, optionally,
+// the underlying name row if the query param cascade_name=true is set.
+// Cascade only succeeds when no OTHER row references the name — the
+// underlying DeleteName op refuses with ErrConflict when a taxon,
+// another synonym, or a name_relation still points at the name. Both
+// deletes execute in one WithTx so the archive never lands in a
+// synonym-gone-but-name-still-there half-state on cascade failure.
+//
+// Returns 204 on success.
+func (s *server) handleDeleteSynonym(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeBadRequest(w, r, "synonym id is required in path")
+		return
+	}
+	cascade := parseBoolParam(r.URL.Query().Get("cascade_name"))
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		_, nameID, err := tx.RemoveSynonymByID(id)
+		if err != nil {
+			return err
+		}
+		if cascade {
+			// DeleteName does its own dependency check inside the tx —
+			// no need to double-guard here. If a curator's request races
+			// with another that just added a new synonym pointing at the
+			// same name, DeleteName returns ErrConflict and rolls back
+			// the whole tx (synonym removal included). Correct
+			// consistency; the client can retry or drop the cascade.
+			if err := tx.DeleteName(nameID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleCreateTaxon composes a new (name, taxon) pair in one WithTx and

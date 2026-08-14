@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "id": "FEMALE",
+      "name": "female",
+      "symbol": "♀",
+      "description": "Female (♀) is the sex of an organism, or a part of an organism, which produces mobile ova (egg cells)."
+    },
+    {
+      "id": "HERMAPHRODITE",
+      "name": "hermaphrodite",
+      "symbol": "⚥",
+      "description": "One organism having both male and female sexual characteristics and organs; at birth an unambiguous assignment of male or female cannot be made."
+    },
+    {
+      "id": "MALE",
+      "name": "male",
+      "symbol": "♂",
+      "description": "Male (♂) refers to the sex of an organism, or part of an organism, which produces small mobile gametes, called spermatozoa."
+    }
+  ]
+}
