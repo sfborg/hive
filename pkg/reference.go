@@ -115,10 +115,13 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int) ([]
 	WHERE LOWER(col__author)   LIKE LOWER(?)
 	   OR LOWER(col__title)    LIKE LOWER(?)
 	   OR LOWER(col__citation) LIKE LOWER(?)
+	   OR LOWER(col__doi)      LIKE LOWER(?)
 	ORDER BY col__author, col__issued, col__title
 	LIMIT ?`
 	pattern := "%" + q + "%"
-	hits, _, err := a.scanReferenceHits(ctx, query, []any{pattern, pattern, pattern, limit}, 0)
+	hits, _, err := a.scanReferenceHits(
+		ctx, query, []any{pattern, pattern, pattern, pattern, limit}, 0,
+	)
 	return hits, err
 }
 

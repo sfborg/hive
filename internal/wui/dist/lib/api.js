@@ -85,6 +85,11 @@ let vocabCache = null;
 // fetched once, byURI is a URI→term lookup for label display.
 let nomenCache = null;
 let nomenByURI = null;
+// ISO vocab caches populated on first picker open. Countries + sex are
+// small; languages is ~7900 entries but fetched once and reused.
+let countriesCache = null;
+let languagesCache = null;
+let sexCache = null;
 // keymapCache holds the shared shortcut list loaded from /api/keymap.
 // Populated once at boot; consumers read via api.keymap.all() or
 // api.keymap.forScope(scope).
@@ -126,6 +131,43 @@ export const api = {
     // isLoaded lets components skip rendering pickers until the bundle
     // arrives. Rarely needed since load() runs before mount.
     isLoaded: () => vocabCache !== null,
+  },
+
+  // ISO vocab bundles served on-demand — countries + languages are
+  // large enough that fetching at boot would balloon the initial
+  // payload for curators who never touch a vernacular. Each vocab
+  // caches on first load, so opening the picker a second time is
+  // instant. Cache-Control headers on the endpoints let the browser
+  // serve subsequent visits from disk cache.
+  countries: {
+    load: async () => {
+      if (countriesCache) return countriesCache;
+      const resp = await j("GET", "/api/vocab/countries");
+      countriesCache = resp.items || [];
+      return countriesCache;
+    },
+    get: () => countriesCache || [],
+    isLoaded: () => countriesCache !== null,
+  },
+  languages: {
+    load: async () => {
+      if (languagesCache) return languagesCache;
+      const resp = await j("GET", "/api/vocab/languages");
+      languagesCache = resp.items || [];
+      return languagesCache;
+    },
+    get: () => languagesCache || [],
+    isLoaded: () => languagesCache !== null,
+  },
+  sex: {
+    load: async () => {
+      if (sexCache) return sexCache;
+      const resp = await j("GET", "/api/vocab/sex");
+      sexCache = resp.items || [];
+      return sexCache;
+    },
+    get: () => sexCache || [],
+    isLoaded: () => sexCache !== null,
   },
 
   nomen: {
@@ -209,6 +251,15 @@ export const api = {
     // instead of walking the chain sequentially.
     classification: (id) =>
       j("GET", `/api/taxon/${encodeURIComponent(id)}/classification`),
+    // nomenHistory returns the taxon's multi-cluster basionym-anchored
+    // nomenclatural history — one cluster per basionym family. Backs the
+    // Nomenclatural history section on the detail page; drives the
+    // ≡ / = glyphs, cluster indentation, and per-name reference cites.
+    // Shape: { clusters: [{ role, names: [{name_id, label, year,
+    // is_basionym, involvement, reference_id, reference_label, ...}] }] }.
+    // See core.NomenclaturalHistory for assembly semantics.
+    nomenHistory: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/nomenclatural-history`),
     codeDefault: (parentId) =>
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/code-default`),
     createNamePrefix: (parentId) =>
@@ -233,6 +284,13 @@ export const api = {
     // a new accepted taxon.
     addBasionym: (taxonID, body) =>
       j("POST", `/api/taxon/${encodeURIComponent(taxonID)}/basionym`, body),
+    // addSynonym creates a name and links it as a synonym of the taxon.
+    // Body shape mirrors addBasionym (createTaxonBody on the server) —
+    // scientific_name + code required, atomized fields optional and
+    // filled from gnparse on write. Returns the newly created name
+    // (apiName) so callers can display it or chain further work.
+    addSynonym: (taxonID, body) =>
+      j("POST", `/api/taxon/${encodeURIComponent(taxonID)}/synonym`, body),
     delete: (id) => j("DELETE", `/api/taxon/${encodeURIComponent(id)}`),
     // Delete-preview returns descendant + per-association-table counts
     // used by the parent-delete modal to render the cascade summary
@@ -248,6 +306,45 @@ export const api = {
     // per-taxon association attached to any member of that set.
     deleteCascade: (id) =>
       j("POST", `/api/taxon/${encodeURIComponent(id)}/delete-cascade`),
+    // vernaculars returns the taxon's vernacular names —
+    // preferred-first, then by language, then name. Each item is an
+    // apiVernacular {id, taxon_id, name, language, preferred, country,
+    // area, sex, transliteration, source_id, reference_id, remarks,
+    // modified, modified_by}.
+    vernaculars: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/vernaculars`),
+    createVernacular: (id, body) =>
+      j("POST", `/api/taxon/${encodeURIComponent(id)}/vernaculars`, body),
+    // distributions returns every distribution row attached to the
+    // taxon — ordered by gazetteer then area for stable geographic
+    // grouping. Each item is an apiDistribution {id, taxon_id, area,
+    // area_id, gazetteer, status, source_id, reference_id, remarks,
+    // modified, modified_by, issue_count}.
+    distributions: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/distributions`),
+    createDistribution: (id, body) =>
+      j("POST", `/api/taxon/${encodeURIComponent(id)}/distributions`, body),
+  },
+
+  // Vernacular row lives under its own path once created — PATCH and
+  // DELETE address it by rowid (opaque string per CLAUDE.md's ID rule).
+  // PATCH follows the standard hive pattern: nil pointer = leave
+  // alone, set-to-zero-value = clear this field. Reparenting is not
+  // supported (delete + re-add on the new taxon).
+  vernacular: {
+    patch: (id, patch) =>
+      j("PATCH", `/api/vernacular/${encodeURIComponent(id)}`, patch),
+    delete: (id) => j("DELETE", `/api/vernacular/${encodeURIComponent(id)}`),
+  },
+
+  // Same pattern as vernacular — distribution rows live at their own
+  // path once created (rowid handle since sfga distribution has no
+  // col__id). Reparenting is not supported (delete + re-add on the
+  // new taxon).
+  distribution: {
+    patch: (id, patch) =>
+      j("PATCH", `/api/distribution/${encodeURIComponent(id)}`, patch),
+    delete: (id) => j("DELETE", `/api/distribution/${encodeURIComponent(id)}`),
   },
 
   name: {
@@ -260,6 +357,34 @@ export const api = {
     // guess. Drives the two-step name-add form.
     parse: (scientific_name, code) =>
       j("POST", `/api/name/parse`, { scientific_name, code }),
+    // dependencies returns counts of taxa / synonyms / name_relations
+    // still pointing at the name. Zero across the board = the name is
+    // a "bare name" and safe to cascade-delete. Used by the WUI
+    // synonym-delete flow before offering the "delete name too" option.
+    dependencies: (id) =>
+      j("GET", `/api/name/${encodeURIComponent(id)}/dependencies`),
+  },
+
+  // Synonym row lives under its own path once created. Delete-only
+  // for now — synonym CREATE goes via /api/taxon/{id}/synonym (which
+  // creates both the name and the synonym link atomically). The
+  // cascade_name query param, when true, also DeleteNames the
+  // underlying name row in the same tx — refuses (ErrConflict) if
+  // any other row still references it.
+  synonym: {
+    delete: (id, opts = {}) => {
+      const params = opts.cascadeName ? "?cascade_name=true" : "";
+      return j("DELETE", `/api/synonym/${encodeURIComponent(id)}${params}`);
+    },
+    // move reassigns the synonym row to a different accepted taxon.
+    // In-place update — synonym.col__id stays stable so an audit log
+    // reference to this row survives. Curator's own taxon-detail view
+    // may need to re-navigate if this was the only reason they were
+    // viewing the source taxon; the caller decides.
+    move: (id, newTaxonID) =>
+      j("POST", `/api/synonym/${encodeURIComponent(id)}/move`, {
+        new_taxon_id: newTaxonID,
+      }),
   },
 
   // Issues (__gsvalidator_results). summary returns per-rule/severity

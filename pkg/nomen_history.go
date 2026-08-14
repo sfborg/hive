@@ -57,6 +57,13 @@ type NomenName struct {
 	Involvement string
 	SynonymID   string
 	ReferenceID string
+	// IssueCount is the number of __gsvalidator_results rows currently
+	// open against this name row (table_name='name', any severity).
+	// Populated per-name by a single batched query in
+	// Archive.NomenclaturalHistory so the frontend can render a warn
+	// icon on synonym / basionym rows that need attention without a
+	// per-row round trip.
+	IssueCount int
 }
 
 // NomenclaturalHistory returns the basionym-anchored cluster
@@ -182,6 +189,16 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 		return nil, err
 	}
 
+	// Step 5b: batch issue counts for every name in play. Single
+	// query over __gsvalidator_results returning nameID → count so
+	// the frontend can drape a warn icon on rows that need attention
+	// (see the WUI row-actions block). Cheap — indexed lookup on
+	// table_name + record_id.
+	issueCounts, err := a.batchNomenIssueCounts(ctx, keysOfBool(allNames))
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 6: assemble clusters.
 	out := &NomenclaturalHistory{Clusters: make([]NomenCluster, 0, len(membership))}
 	for anchor, set := range membership {
@@ -200,6 +217,7 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 				Year:        row.year,
 				IsBasionym:  id == anchor,
 				ReferenceID: row.referenceID,
+				IssueCount:  issueCounts[id],
 				Label:       BuildLabel(row.canonical, row.authorship, row.rank, false),
 			}
 			if inv, ok := involved[id]; ok {
@@ -332,6 +350,41 @@ func (a *Archive) batchNomenNameRows(ctx context.Context, ids []string) (map[str
 			return nil, fmt.Errorf("core: nomen history scan name row: %w", err)
 		}
 		out[id] = r
+	}
+	return out, rows.Err()
+}
+
+// batchNomenIssueCounts returns nameID → open issue count for every
+// input id. Table filter is table_name='name'; acknowledged issues
+// are excluded (they don't need the warn icon anymore). Ids with no
+// issues are absent from the map (callers treat absence as 0).
+func (a *Archive) batchNomenIssueCounts(ctx context.Context, ids []string) (map[string]int, error) {
+	out := make(map[string]int, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	q := `SELECT record_id, COUNT(*)
+		FROM __gsvalidator_results
+		WHERE table_name = 'name'
+		  AND (acknowledged_at IS NULL OR acknowledged_at = '')
+		  AND record_id IN (` + placeholders(len(ids)) + `)
+		GROUP BY record_id`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := a.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("core: nomen history issue counts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("core: nomen history scan issue count: %w", err)
+		}
+		out[id] = n
 	}
 	return out, rows.Err()
 }

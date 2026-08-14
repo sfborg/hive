@@ -58,7 +58,12 @@ type IssueSummaryRow struct {
 // RuleID are exact matches. HideAcknowledged drops rows with a
 // non-empty acknowledged_at, for the default "still-open" view.
 type IssueFilter struct {
-	TableName        string
+	TableName string
+	// RecordID scopes the query to a single row (paired with TableName
+	// most usefully — a bare RecordID lookup is fine but would match
+	// any table sharing that id, which sfga's UUID space makes
+	// vanishingly unlikely). Empty = no filter on record.
+	RecordID         string
 	RuleID           string
 	Severities       []string
 	HideAcknowledged bool
@@ -112,6 +117,10 @@ func (a *Archive) ListIssues(ctx context.Context, f IssueFilter, limit, offset i
 	if f.TableName != "" {
 		where = append(where, "table_name = ?")
 		args = append(args, f.TableName)
+	}
+	if f.RecordID != "" {
+		where = append(where, "record_id = ?")
+		args = append(args, f.RecordID)
 	}
 	if f.RuleID != "" {
 		where = append(where, "rule_id = ?")

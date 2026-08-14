@@ -428,12 +428,105 @@ func (t *Tx) UpdateSynonym(s coldp.Synonym) error {
 	return nil
 }
 
+// MoveSynonym reassigns a synonym row to a different accepted taxon
+// in place — synonym.col__id stays stable so any external reference
+// (audit log, undo history) survives the move. Stamps col__modified /
+// col__modified_by from the tx actor.
+//
+// Refuses (ErrValidation) when newTaxonID is empty; refuses
+// (ErrNotFound) when the synonym row doesn't exist. Doesn't validate
+// that newTaxonID exists in the taxon table — leaves that as an FK
+// concern (sfga does declare the FK, so a bad id surfaces as a DB
+// error). Pro-parte synonyms: MoveSynonym addresses a single row by
+// col__id; sibling rows sharing the col__id aren't touched.
+func (t *Tx) MoveSynonym(id, newTaxonID string) error {
+	if id == "" {
+		return fmt.Errorf(
+			"core: move synonym: %w: id required", ErrValidation,
+		)
+	}
+	if newTaxonID == "" {
+		return fmt.Errorf(
+			"core: move synonym %s: %w: new_taxon_id required",
+			id, ErrValidation,
+		)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := t.tx.ExecContext(t.ctx,
+		`UPDATE synonym
+		 SET col__taxon_id = ?, col__modified = ?, col__modified_by = ?
+		 WHERE col__id = ?`,
+		newTaxonID, now, t.actor, id,
+	)
+	if err != nil {
+		return fmt.Errorf("core: move synonym %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("core: move synonym %s: rows: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("core: move synonym %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// RemoveSynonymByID deletes a single synonym row addressed by its
+// col__id (opaque string per CLAUDE.md's ID rule). Returns the deleted
+// row's taxon_id + name_id so callers doing conditional cascade work
+// (e.g. "if the name is now bare, also DeleteName") don't need a
+// second query to reconstruct the pair.
+//
+// Pro-parte synonyms are represented as multiple rows sharing the
+// same col__id; RemoveSynonymByID removes only the specific row (by
+// PK on rowid isn't available at this layer — see the query below).
+// The WUI's per-row trash affordance addresses one synonym row at a
+// time; bulk pro-parte teardown uses SynonymPartners + RemoveSynonym.
+func (t *Tx) RemoveSynonymByID(id string) (taxonID, nameID string, err error) {
+	if id == "" {
+		return "", "", fmt.Errorf(
+			"core: remove synonym by id: %w: id required", ErrValidation,
+		)
+	}
+	// Snapshot the pair before delete — used by callers that need to
+	// probe the name's post-delete dependency count.
+	err = t.tx.QueryRowContext(t.ctx,
+		"SELECT col__taxon_id, col__name_id FROM synonym WHERE col__id = ?",
+		id,
+	).Scan(&taxonID, &nameID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", fmt.Errorf(
+				"core: remove synonym by id %s: %w", id, ErrNotFound,
+			)
+		}
+		return "", "", fmt.Errorf("core: remove synonym by id %s: %w", id, err)
+	}
+	res, err := t.tx.ExecContext(t.ctx,
+		"DELETE FROM synonym WHERE col__id = ?", id,
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("core: remove synonym by id %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return "", "", fmt.Errorf("core: remove synonym rows: %w", err)
+	}
+	if rows == 0 {
+		// Race with concurrent delete — treat as not-found.
+		return "", "", fmt.Errorf(
+			"core: remove synonym by id %s: %w", id, ErrNotFound,
+		)
+	}
+	return taxonID, nameID, nil
+}
+
 // RemoveSynonym deletes the synonym link between taxonID and nameID.
 //
 // For a pro-parte synonym, this removes only the specified accepted-taxon
 // link; other links with the same synonym ID are preserved. To delete the
 // entire pro-parte structure, iterate SynonymPartners and call RemoveSynonym
-// for each pair, or use RemoveSynonymByID (added when needed).
+// for each pair, or use RemoveSynonymByID for single-row deletes.
 func (t *Tx) RemoveSynonym(taxonID, nameID string) error {
 	if taxonID == "" || nameID == "" {
 		return fmt.Errorf(

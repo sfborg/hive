@@ -469,6 +469,7 @@ func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Reque
 				Involvement: n.Involvement,
 				SynonymID:   n.SynonymID,
 				ReferenceID: n.ReferenceID,
+				IssueCount:  n.IssueCount,
 			}
 			row.ReferenceLabel = s.referenceLabel(r.Context(), firstCSVID(row.ReferenceID))
 			outC.Names = append(outC.Names, row)
@@ -1241,6 +1242,38 @@ func (s *server) handleNameDependencies(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleMoveSynonym reassigns a synonym row to a new accepted taxon.
+// Body: {"new_taxon_id": "..."}. Returns 204 on success. The synonym's
+// col__id stays stable — this is an in-place taxon-id update, not a
+// delete-and-recreate, so any external reference to the synonym id
+// (audit log, undo) survives.
+func (s *server) handleMoveSynonym(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeBadRequest(w, r, "synonym id is required in path")
+		return
+	}
+	var body struct {
+		NewTaxonID string `json:"new_taxon_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.NewTaxonID) == "" {
+		writeBadRequest(w, r, "new_taxon_id is required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.MoveSynonym(id, body.NewTaxonID)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDeleteSynonym removes a single synonym row and, optionally,
 // the underlying name row if the query param cascade_name=true is set.
 // Cascade only succeeds when no OTHER row references the name — the
@@ -2002,6 +2035,7 @@ func (s *server) handleIssueList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := hive.IssueFilter{
 		TableName:        q.Get("table"),
+		RecordID:         q.Get("record_id"),
 		RuleID:           q.Get("rule_id"),
 		Severities:       q["severity"],
 		HideAcknowledged: q.Get("hide_acknowledged") == "true",

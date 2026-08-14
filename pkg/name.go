@@ -641,6 +641,64 @@ func (t *Tx) UpdateName(n coldp.Name) error {
 	return nil
 }
 
+// NameDependencies is the count-projection returned by
+// Archive.NameDependencies. Each field records how many rows in the
+// respective table reference the given name via its col__name_id (or,
+// for name_relation, either side of the relation). A name with all
+// zero counts is a "bare name" — it exists in the archive but no
+// taxon claims it and no synonym relation points at it. See CLAUDE.md
+// § pkg/ package conventions for the "delete refuses on dependencies"
+// contract that DeleteName enforces.
+type NameDependencies struct {
+	// TaxonCount is the number of taxon rows whose col__name_id is
+	// this name — >0 means this name is (or was) an accepted name.
+	TaxonCount int
+	// SynonymCount is the number of synonym rows whose col__name_id is
+	// this name — pro-parte synonyms count once per taxon link.
+	SynonymCount int
+	// NameRelationCount is the number of name_relation rows referencing
+	// this name via either col__name_id or col__related_name_id (basionym,
+	// homonym, etc.).
+	NameRelationCount int
+}
+
+// Total returns the sum of all counts — > 0 when the name is
+// referenced by anything at all. Callers use this to short-circuit
+// the "is this name bare?" check without touching individual fields.
+func (d NameDependencies) Total() int {
+	return d.TaxonCount + d.SynonymCount + d.NameRelationCount
+}
+
+// NameDependencies returns the count-projection for what references
+// the given name. Cheap — three indexed COUNT queries, ~microseconds
+// on a warm cache. Used by the WUI synonym-delete flow to decide
+// whether to offer a "cascade to name" option; would refuse the
+// cascade DELETE if a subsequent write shows fresh dependencies (the
+// pkg-level DeleteName does its own check inside the tx).
+func (a *Archive) NameDependencies(ctx context.Context, nameID string) (NameDependencies, error) {
+	if nameID == "" {
+		return NameDependencies{}, fmt.Errorf("core: name dependencies: %w: id required", ErrValidation)
+	}
+	var d NameDependencies
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM taxon WHERE col__name_id = ?`, nameID,
+	).Scan(&d.TaxonCount); err != nil {
+		return d, fmt.Errorf("core: name deps taxon %s: %w", nameID, err)
+	}
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM synonym WHERE col__name_id = ?`, nameID,
+	).Scan(&d.SynonymCount); err != nil {
+		return d, fmt.Errorf("core: name deps synonym %s: %w", nameID, err)
+	}
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM name_relation
+		 WHERE col__name_id = ? OR col__related_name_id = ?`, nameID, nameID,
+	).Scan(&d.NameRelationCount); err != nil {
+		return d, fmt.Errorf("core: name deps relation %s: %w", nameID, err)
+	}
+	return d, nil
+}
+
 // DeleteName removes a name and its auxiliary rows.
 //
 //   - Refuses with ErrConflict if any taxon or synonym still references the

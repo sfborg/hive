@@ -410,6 +410,12 @@ type apiNomenName struct {
 	// apiSynonym).
 	ReferenceID    string `json:"reference_id,omitempty"`
 	ReferenceLabel string `json:"reference_label,omitempty"`
+	// IssueCount is the number of open validation issues currently
+	// filed against this name row (table_name='name', not-yet-
+	// acknowledged). Zero → elided from JSON so the wire shape stays
+	// flat for the common case; front-ends render a warn icon on
+	// Nomenclatural-history rows when > 0.
+	IssueCount int `json:"issue_count,omitempty"`
 }
 
 // apiVernacular is the wire form of a vernacular-name row on a
@@ -437,6 +443,11 @@ type apiVernacular struct {
 	Remarks         string `json:"remarks,omitempty"`
 	Modified        string `json:"modified,omitempty"`
 	ModifiedBy      string `json:"modified_by,omitempty"`
+	// IssueCount is the number of open validation issues currently
+	// filed against this vernacular row (table_name='vernacular',
+	// not-yet-acknowledged). Zero → elided from JSON. Front-ends
+	// render a warn icon on the row when > 0.
+	IssueCount int `json:"issue_count,omitempty"`
 }
 
 // apiVernacularPatch mirrors apiVernacular but keeps every editable

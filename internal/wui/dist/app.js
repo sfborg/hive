@@ -584,6 +584,65 @@ function vocabResolver(name) {
   };
 }
 
+// isoSource / isoResolver back the ISO-vocab pickers (countries,
+// languages, sex). Each entry renders as "<name> - <primary code>[ -
+// <secondary code>]" so the curator can search either by human name
+// or by ISO code. `id` on the committed value is the primary code
+// (US, eng, MALE); the display string carries the full
+// context. Fetches the vocab from /api/vocab/{name} on first call
+// and caches for the process lifetime — the ISO catalogs are
+// immutable at build time.
+//
+// `pri` and `sec` are the field names on the vocab item for the
+// primary code (== id) and an optional secondary code (e.g., alpha-3
+// for countries). `symbol` (used by the sex vocab) appends a glyph
+// after the name.
+function isoSource(cache, pri, sec, symbolField) {
+  return async (q) => {
+    if (!cache.isLoaded()) await cache.load();
+    const items = cache.get() || [];
+    const needle = (q || "").toLowerCase().trim();
+    const matches = needle
+      ? items.filter((t) => {
+          const hay = `${t.name || ""} ${t.id || ""} ${t[sec] || ""}`
+            .toLowerCase();
+          return hay.includes(needle);
+        })
+      : items;
+    return matches.map((t) => ({
+      id: t.id,
+      name: isoDisplayLabel(t, pri, sec, symbolField),
+    }));
+  };
+}
+
+function isoResolver(cache, pri, sec, symbolField) {
+  return async (id) => {
+    if (!id) return "";
+    if (!cache.isLoaded()) await cache.load();
+    const items = cache.get() || [];
+    const t = items.find((t) => t.id === id);
+    return t ? isoDisplayLabel(t, pri, sec, symbolField) : id;
+  };
+}
+
+function isoDisplayLabel(t, pri, sec, symbolField) {
+  const parts = [t.name || t.id || ""];
+  if (t[pri]) parts.push(t[pri]);
+  if (sec && t[sec] && t[sec] !== t[pri]) parts.push(t[sec]);
+  const base = parts.join(" - ");
+  const sym = symbolField ? t[symbolField] : "";
+  return sym ? `${base} ${sym}` : base;
+}
+
+// Prebuilt source/resolver pairs for the three ISO vocabs.
+const countrySource = isoSource(api.countries, "id", "alpha3");
+const countryResolver = isoResolver(api.countries, "id", "alpha3");
+const languageSource = isoSource(api.languages, "id", null);
+const languageResolver = isoResolver(api.languages, "id", null);
+const sexSource = isoSource(api.sex, "id", null, "symbol");
+const sexResolver = isoResolver(api.sex, "id", null, "symbol");
+
 // childRankSource restricts the rank combobox to the ranks
 // pkg/ui.ValidChildRanks says are valid children of the current
 // create's parent. Behavior mirrors the TUI's childRankComboSource:
@@ -640,13 +699,22 @@ async function nomenResolver(uri) {
 }
 
 // referenceSource — combobox source that hits /api/reference/search
-// (server-side substring across author/title/citation). Each match
-// renders as "Author (Year) Title" so the picker line reads like a
-// citation. Empty query returns [] to skip flashing the whole list.
+// (server-side substring across author/title/citation/doi). Each
+// match renders as "Author (Year) Title" so the picker line reads
+// like a citation. Empty query returns [] to skip flashing the whole
+// list.
+//
+// DOI normalisation: hive stores DOIs in bare 10.NNNN/… form, but
+// curators paste them in a variety of shapes (doi.org URL, dx.doi.org
+// URL, doi: CURIE). Detect the DOI shape and search by the bare form
+// so the LIKE predicate matches. Non-DOI queries pass through
+// unchanged.
 async function referenceSource(q) {
   if (!q || q.length < 2) return [];
+  const doi = extractDOI(q);
+  const searchQ = doi || q;
   try {
-    const page = await api.reference.search({ q, limit: 20 });
+    const page = await api.reference.search({ q: searchQ, limit: 20 });
     return (page.items || []).map((h) => ({
       id: h.id,
       name: referenceHitLabel(h),
@@ -2775,7 +2843,37 @@ class SfgaDetail extends LitElement {
     _name: { state: true },
     _etag: { state: true },
     _nameEtag: { state: true },
-    _synonyms: { state: true },
+    // Nomenclatural history from GET /api/taxon/{id}/nomenclatural-history.
+    // Multi-cluster basionym-anchored projection — one cluster per
+    // basionym family; the accepted cluster contains the accepted name,
+    // its basionym, and every recombination sharing it. Backs the
+    // Nomenclatural history section on the detail page.
+    _nomenHistory: { state: true },
+    // Vernacular names from GET /api/taxon/{id}/vernaculars.
+    // Preferred-first, then by language, then name. Backs the
+    // Vernacular names section on the detail page.
+    _vernaculars: { state: true },
+    // Modal state for the vernacular add / edit form. Null when the
+    // modal is closed; an object shape {mode: "create" | "edit",
+    // draft: {…}, id?: string, error?: string} when open. The draft
+    // holds the in-progress field values so edits survive re-renders
+    // and can be committed via PATCH / POST on save.
+    _vernacularForm: { state: true },
+    // Distribution list + modal state — same pattern as the
+    // vernacular pair. Backend orders by gazetteer then area.
+    _distributions: { state: true },
+    _distributionForm: { state: true },
+    // Modal state for the synonym-delete flow. Null when closed;
+    // {phase, synonymId, nameId, label, deps, cascade, confirmText,
+    // busy, error} while open. See _renderSynonymDeleteModal.
+    _synonymDelete: { state: true },
+    // Modal state for the name-editor (invoked from the pencil on any
+    // synonym or basionym row in Nomenclatural history). Null when
+    // closed; {phase: "loading"|"edit", id, original, draft, etag,
+    // busy, error} while open. Loads the full name row from
+    // /api/name/{id} on open so the form can seed all fields; PATCH
+    // sends only fields that differ.
+    _nameEditor: { state: true },
     // Classification chain from GET /api/taxon/{id}/classification —
     // root-down list including the taxon itself as the last entry.
     // Backs the breadcrumb strip above the taxon heading.
@@ -2817,6 +2915,16 @@ class SfgaDetail extends LitElement {
     // Display name for the header row while creating a basionym so the
     // curator sees which combination they're entering the original for.
     _creatingBasionymForName: { state: true },
+    // When set, the create pane's Save writes to the "add synonym"
+    // endpoint (POST /api/taxon/{X}/synonym) instead of POST /api/taxon.
+    // The value is the accepted taxon id the new name will be
+    // linked to as a synonym. Null = normal accepted-name create /
+    // basionym flow.
+    _creatingSynonymFor: { state: true },
+    // Display name of the accepted taxon for the header row while
+    // creating a synonym so the curator sees which taxon they're
+    // adding a synonym of.
+    _creatingSynonymForName: { state: true },
     // Parent id + label the pending create attaches to. Distinguishes
     // "new child" (id = current taxon) from "new sister" (id = current
     // taxon's parent). Stored at open time so _submitCreate has a
@@ -2882,17 +2990,19 @@ class SfgaDetail extends LitElement {
     .authorship {
       color: var(--dim);
     }
-    /* Classification breadcrumbs above the taxon heading. Small, dim,
-       single line; wraps only when the pane is narrower than the full
-       path. Links stay real anchors (href="#/taxon/{id}") so
-       right-click / open-in-new-tab work — see DESIGN.md § Navigation
-       and links. */
+    /* Classification breadcrumbs on the line below the heading's
+       horizontal rule. Small, dim, single line; wraps only when the
+       pane is narrower than the full path. Reads as "this taxon lives
+       here" without competing with the scientific name for the eye's
+       first landing spot. Links stay real anchors (href="#/taxon/{id}")
+       so right-click / open-in-new-tab work — see DESIGN.md
+       § Navigation and links. */
     .breadcrumbs {
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
       gap: var(--sp-1);
-      margin-bottom: var(--sp-2);
+      margin-bottom: var(--sp-3);
       font-family: var(--font-mono);
       font-size: var(--fs-sm);
       color: var(--dim);
@@ -2927,23 +3037,419 @@ class SfgaDetail extends LitElement {
       margin: 0;
       overflow-wrap: anywhere;
     }
-    section.synonyms {
-      margin-top: 1rem;
+    /* Shared header pattern for every taxon-detail section
+       (Nomenclatural history, References, All fields). Each section
+       renders with an <hr /> above and a headline row that holds the
+       section label on the left and an optional + button on the right.
+       Sections that don't offer a direct add flow omit the button;
+       the label + hr still render so the visual rhythm stays uniform.
+       See DESIGN.md § Add affordance. */
+    /* Hide a section's leading <hr /> when it lands directly after
+       the page's top hr (i.e., breadcrumbs and warnings both empty
+       for this taxon). Prevents a double horizontal line at the
+       first-section boundary. */
+    hr + section > hr:first-child {
+      display: none;
     }
-    section.synonyms h3 {
-      margin: 0 0 0.25rem 0;
-      font-size: 0.95em;
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      margin: 0 0 var(--sp-2) 0;
+    }
+    .section-header h3 {
+      margin: 0;
+      font-size: var(--fs-sm);
       color: var(--dim);
+      font-weight: normal;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
-    section.synonyms ul {
+    .section-header .add {
+      /* Nudge the button up so its centre line aligns with the
+         heading's baseline. Icon buttons don't share the text
+         baseline naturally in a flex row. */
+      align-self: center;
+    }
+    /* Nomenclatural history — the signature section. Accepted name
+       flush left; basionyms and other synonyms rendered as compact
+       monospace rows underneath, glyph-then-label. Layout matches
+       how synonymy is laid out in a printed monograph so curators
+       who scan taxonomic literature recognise it on sight. See
+       DESIGN.md § Nomenclatural history section. */
+    section.nomen-history {
+      margin-bottom: var(--sp-4);
+    }
+    section.nomen-history ul {
       list-style: none;
       margin: 0;
       padding: 0;
       font-family: var(--font-mono);
-      font-size: 0.9em;
+      font-size: var(--fs-sm);
     }
-    section.synonyms li {
-      padding: 0.15rem 0;
+    section.nomen-history li {
+      padding: 1px 0;
+    }
+    /* Every row (accepted, basionym, recombs) uses the same indented
+       three-column grid so glyphs align in a single column, labels
+       start at the same character position, and hover-reveal actions
+       dock to the right edge. Reads as a nested block in monospace,
+       matching how synonymy is laid out in a printed monograph. */
+    section.nomen-history li.history {
+      display: grid;
+      grid-template-columns: 2ch 1fr auto;
+      align-items: baseline;
+      padding-left: 1ch;
+    }
+    /* Nested row — a recombination within a cluster, hanging off the
+       basionym above it. Extra 2ch shifts the glyph column another
+       character in so the visual hierarchy reads as
+       "cluster anchor → its recombs." */
+    section.nomen-history li.history.nested {
+      padding-left: 3ch;
+    }
+    section.nomen-history li.history .glyph {
+      color: var(--dim);
+    }
+    /* Accepted row's ✓ takes accent color to distinguish "the current
+       name" from the ≡ / = history glyphs above and below without
+       adding weight (bold on scientific names competes with the
+       italic species / genus rendering). */
+    section.nomen-history li.accepted .glyph {
+      color: var(--accent);
+    }
+    /* Vernacular names — compact monospace table. Per DESIGN.md
+       § Per-data-type sections. Row hover reveals edit/delete via
+       the same .row-actions pattern used elsewhere. */
+    section.vernaculars {
+      margin-top: var(--sp-4);
+    }
+    section.vernaculars table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+    }
+    section.vernaculars th {
+      text-align: left;
+      color: var(--dim);
+      font-weight: normal;
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+    }
+    section.vernaculars td {
+      padding: var(--sp-1) var(--sp-2);
+      vertical-align: baseline;
+    }
+    /* Preferred marker column stays narrow — either ✓ or empty. */
+    section.vernaculars th.pref,
+    section.vernaculars td.pref {
+      width: 1.5em;
+      text-align: center;
+      color: var(--accent);
+    }
+    /* Language / country / area columns are short — cap them so the
+       name column claims the remaining space. */
+    section.vernaculars th.lang,
+    section.vernaculars td.lang,
+    section.vernaculars th.country,
+    section.vernaculars td.country {
+      width: 4em;
+    }
+    section.vernaculars td.region {
+      color: var(--dim);
+    }
+    section.vernaculars th.actions,
+    section.vernaculars td.actions {
+      width: 4.5em;
+      text-align: right;
+    }
+    /* Match the nomen-history row-actions convention: hidden until
+       row hover / focus-within to keep the table quiet. */
+    section.vernaculars td.actions .row-actions {
+      display: inline-flex;
+      gap: 0;
+      visibility: hidden;
+    }
+    section.vernaculars tr:hover td.actions .row-actions,
+    section.vernaculars tr:focus-within td.actions .row-actions {
+      visibility: visible;
+    }
+    /* Warn icon on a row with open validation issues stays visible
+       even when the row isn't hovered — it's a "hey this needs
+       attention" signal, not a subtle affordance. Same treatment as
+       the nomen-history warn icon. */
+    section.vernaculars td.actions .row-actions .warn {
+      visibility: visible;
+      color: var(--sev-warn);
+    }
+    section.vernaculars td.actions .row-actions .warn:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    /* Distribution table — same shape as vernaculars, minus the
+       preferred column and with a wider area column since gazetteer
+       + status enum ids are short. */
+    section.distributions {
+      margin-top: var(--sp-4);
+    }
+    section.distributions table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+    }
+    section.distributions th {
+      text-align: left;
+      color: var(--dim);
+      font-weight: normal;
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+    }
+    section.distributions td {
+      padding: var(--sp-1) var(--sp-2);
+      vertical-align: baseline;
+    }
+    section.distributions th.gaz,
+    section.distributions td.gaz,
+    section.distributions th.status,
+    section.distributions td.status {
+      width: 8em;
+    }
+    section.distributions th.actions,
+    section.distributions td.actions {
+      width: 4.5em;
+      text-align: right;
+    }
+    /* Area-code appendage — the machine-readable code shown after
+       the human label when both are populated. Dim + slightly smaller
+       so the primary label reads first. */
+    section.distributions td.area .area-code {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-left: var(--sp-1);
+    }
+    section.distributions td.actions .row-actions {
+      display: inline-flex;
+      gap: 0;
+      visibility: hidden;
+    }
+    section.distributions tr:hover td.actions .row-actions,
+    section.distributions tr:focus-within td.actions .row-actions {
+      visibility: visible;
+    }
+    section.distributions td.actions .row-actions .warn {
+      visibility: visible;
+      color: var(--sev-warn);
+    }
+    section.distributions td.actions .row-actions .warn:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    /* Distribution modal form matches the vernacular form conventions
+       (label/input grid inherited from the shared form rule; toolbar
+       spans both columns). */
+    .modal-backdrop .modal:has(> .distribution-form) {
+      min-width: var(--modal-md);
+      max-width: var(--modal-lg);
+    }
+    .distribution-form .toolbar {
+      grid-column: 1 / -1;
+      justify-content: flex-end;
+    }
+    /* Non-Latin name (transliteration present) gets a small dim
+       transliteration underneath the primary name. Body-font so
+       curators reading the scientific literature can tell it apart
+       from the row's identity text. */
+    section.vernaculars td.name .translit {
+      display: block;
+      color: var(--dim);
+      font-family: var(--font-body);
+      font-size: var(--fs-xs);
+      margin-top: 1px;
+    }
+    /* Vernacular add/edit form inside its modal. Inherits the
+       label/input two-column grid from the shared form rule so
+       labels right-align in col 1 and inputs fill col 2 — matches
+       every other hive form. Widens the modal past the confirm
+       default so the reference-picker combobox has room to breathe.
+       Rows that need to span both columns (checkbox + toolbar) claim
+       grid-column 1 / -1 so they don't consume a single cell and
+       shift every row after them. */
+    .modal-backdrop .modal:has(> .vernacular-form) {
+      min-width: var(--modal-md);
+      max-width: var(--modal-lg);
+    }
+    .vernacular-form label.checkbox-row {
+      grid-column: 1 / -1;
+      text-align: left;
+      color: var(--fg);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    .vernacular-form .toolbar {
+      grid-column: 1 / -1;
+      justify-content: flex-end;
+    }
+    /* Synonym-delete modal — two-option cascade choice with a type-
+       to-confirm gate on the destructive path. Widens past the
+       confirm default so the two labeled radio options don't crush
+       their hint text. */
+    .modal-backdrop .modal.synonym-delete {
+      min-width: var(--modal-md);
+      max-width: var(--modal-md);
+    }
+    .modal.synonym-delete .cascade-choice {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-2);
+      margin: 0;
+      display: grid;
+      /* Override the shared fieldset rule (max-content 1fr) — we want
+         the two radio options stacked, not laid out side-by-side. */
+      grid-template-columns: 1fr;
+      gap: var(--sp-2);
+    }
+    .modal.synonym-delete .cascade-choice legend {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      padding: 0 var(--sp-1);
+    }
+    .modal.synonym-delete .cascade-choice label {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: var(--sp-2);
+      align-items: start;
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .modal.synonym-delete .cascade-choice label:has(input:disabled) {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+    .modal.synonym-delete .cascade-choice input[type="radio"] {
+      margin-top: 0.25em;
+    }
+    .modal.synonym-delete .cascade-choice strong {
+      display: block;
+      font-weight: 600;
+    }
+    .modal.synonym-delete .cascade-choice .hint {
+      display: block;
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      font-family: var(--font-body);
+      margin-top: 2px;
+    }
+    .modal.synonym-delete .cascade-choice .hint.warn {
+      color: var(--sev-warn);
+    }
+    .modal.synonym-delete .type-to-confirm {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: var(--sp-2);
+      color: var(--fg);
+    }
+    .modal.synonym-delete .type-to-confirm code {
+      font-family: var(--font-mono);
+      background: color-mix(in oklab, var(--error) 12%, var(--bg));
+      padding: 0 var(--sp-1);
+      border-radius: var(--radius-sm);
+      color: var(--error);
+    }
+    .modal.synonym-delete .toolbar {
+      justify-content: flex-end;
+    }
+    /* Name-editor modal — inherits the label/input two-column grid
+       from the shared form rule. Widens past confirm-default so the
+       combobox pickers have room. */
+    .modal-backdrop .modal.name-editor {
+      min-width: var(--modal-md);
+      max-width: var(--modal-lg);
+    }
+    .name-editor-form .toolbar {
+      grid-column: 1 / -1;
+      justify-content: flex-end;
+    }
+    /* Per-row hover actions — pencil (edit name), warning (open name
+       editor at issues), delete (remove synonym link). Hidden until
+       hover / focus-within, using visibility:hidden (not display:none)
+       so the grid reserves the space and the label column width
+       doesn't shift when the mouse enters the row. Matches the tree
+       pane's row-actions pattern. See DESIGN.md § List-row actions.
+       Accepted rows don't get these — the accepted taxon has
+       edit/delete in the app header already. */
+    section.nomen-history li.history .row-actions {
+      display: inline-flex;
+      gap: 0;
+      visibility: hidden;
+      flex: 0 0 auto;
+      align-self: center;
+    }
+    section.nomen-history li.history:hover .row-actions,
+    section.nomen-history li.history:focus-within .row-actions {
+      visibility: visible;
+    }
+    section.nomen-history li.history .row-actions .warn {
+      /* Warn icon breaks the row-actions hide-until-hover rule — a
+         row with open validation issues is a "please look at this"
+         signal, not a peripheral affordance. Kept visible at rest
+         with the severity color so scanning the list surfaces every
+         row that needs attention. */
+      visibility: visible;
+      color: var(--sev-warn);
+    }
+    section.nomen-history li.history .row-actions .warn:hover:not(:disabled) {
+      /* Hover tints the button background with a soft warn wash for
+         feedback without escalating the icon color itself. */
+      background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    /* Inline citation superscripts — small numbered link that points
+       at the References section at page bottom. Number is dim-accented
+       so it reads as annotation rather than content; the link keeps
+       standard underline-on-hover so it's obviously interactive. See
+       DESIGN.md § Numbered references section. */
+    a.cite {
+      color: var(--accent);
+      text-decoration: none;
+      margin-left: 0.2em;
+      font-size: 0.75em;
+      vertical-align: super;
+      line-height: 0;
+    }
+    a.cite:hover {
+      text-decoration: underline;
+    }
+    /* Numbered References section — final block on the taxon detail
+       page. Renders only when at least one row on the page cited a
+       reference. Compact rows with the number aligned on the left. */
+    section.references {
+      margin-top: var(--sp-4);
+    }
+    section.references ol {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      font-family: var(--font-body);
+      font-size: var(--fs-sm);
+    }
+    section.references li {
+      display: grid;
+      grid-template-columns: 2.5em 1fr;
+      align-items: baseline;
+      padding: 2px 0;
+    }
+    section.references li .refnum {
+      color: var(--dim);
+      text-align: right;
+      padding-right: var(--sp-2);
+    }
+    section.references li:target {
+      /* Highlight the entry after a click-jump from a superscript so
+         curators know which row they landed on. Fades naturally as
+         they read on. */
+      background: color-mix(in oklab, var(--accent) 12%, var(--bg));
     }
     .error {
       color: var(--error);
@@ -3276,7 +3782,13 @@ class SfgaDetail extends LitElement {
     this._name = null;
     this._etag = "";
     this._nameEtag = "";
-    this._synonyms = [];
+    this._nomenHistory = null;
+    this._vernaculars = [];
+    this._vernacularForm = null;
+    this._distributions = [];
+    this._distributionForm = null;
+    this._synonymDelete = null;
+    this._nameEditor = null;
     this._error = "";
     this._loading = false;
     this._editing = false;
@@ -3301,6 +3813,8 @@ class SfgaDetail extends LitElement {
     this._createShowAtomized = readAtomizedPref();
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
+    this._creatingSynonymFor = null;
+    this._creatingSynonymForName = "";
     this._createParentID = "";
     this._createParentLabel = "";
     this._createChildRanks = null;
@@ -3357,7 +3871,9 @@ class SfgaDetail extends LitElement {
       this._taxon = this._name = null;
       this._etag = "";
       this._nameEtag = "";
-      this._synonyms = [];
+      this._nomenHistory = null;
+      this._vernaculars = [];
+      this._distributions = [];
       this._classification = [];
       return;
     }
@@ -3388,16 +3904,21 @@ class SfgaDetail extends LitElement {
       this._name = name;
       this._nameEtag = nameEtag;
 
-      // Fetch synonyms + classification in parallel — neither depends
-      // on the other and both are needed before the pane finishes
-      // rendering. Classification failure just drops the breadcrumbs;
-      // the taxon still renders.
-      const [syn, cls] = await Promise.all([
-        api.taxon.synonyms(requested),
+      // Fetch nomen-history + vernaculars + distributions +
+      // classification in parallel — none depend on the others and
+      // all are needed before the pane finishes rendering. Per-
+      // section failure drops that one section; the rest of the
+      // taxon still renders.
+      const [nomen, vern, dist, cls] = await Promise.all([
+        api.taxon.nomenHistory(requested).catch(() => ({ clusters: [] })),
+        api.taxon.vernaculars(requested).catch(() => ({ items: [] })),
+        api.taxon.distributions(requested).catch(() => ({ items: [] })),
         api.taxon.classification(requested).catch(() => ({ items: [] })),
       ]);
       if (this.taxonId !== requested) return;
-      this._synonyms = syn.items || [];
+      this._nomenHistory = nomen;
+      this._vernaculars = vern.items || [];
+      this._distributions = dist.items || [];
       this._classification = cls.items || [];
     } catch (err) {
       if (this.taxonId !== requested) return;
@@ -3476,6 +3997,8 @@ class SfgaDetail extends LitElement {
     this._creating = true;
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
+    this._creatingSynonymFor = null;
+    this._creatingSynonymForName = "";
     if (parentID) {
       try {
         const [codeResp, prefixResp, childRanksResp] = await Promise.all([
@@ -3522,6 +4045,8 @@ class SfgaDetail extends LitElement {
     this._createError = "";
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
+    this._creatingSynonymFor = null;
+    this._creatingSynonymForName = "";
   }
 
   // _advanceToPreview fires the server-side parse (POST /api/name/parse)
@@ -3599,6 +4124,21 @@ class SfgaDetail extends LitElement {
         // is a synonym, not an accepted taxon in the tree).
         const revealID = this._creatingBasionymFor;
         await api.taxon.addBasionym(this._creatingBasionymFor, this._createDraft);
+        this._cancelCreate();
+        this.dispatchEvent(
+          new CustomEvent("taxon-moved", {
+            detail: { id: revealID },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      } else if (this._creatingSynonymFor) {
+        // Synonym write path — POST /api/taxon/{X}/synonym creates
+        // Name + Synonym link atomically. Stay on the same accepted
+        // taxon so the newly-added synonym appears in the refreshed
+        // Nomenclatural history section.
+        const revealID = this._creatingSynonymFor;
+        await api.taxon.addSynonym(this._creatingSynonymFor, this._createDraft);
         this._cancelCreate();
         this.dispatchEvent(
           new CustomEvent("taxon-moved", {
@@ -3750,7 +4290,10 @@ class SfgaDetail extends LitElement {
     const heading = this._creatingBasionymFor
       ? html`Add original combination for
           <em>${this._creatingBasionymForName}</em>`
-      : html`New taxon under ${parentLabel}`;
+      : this._creatingSynonymFor
+        ? html`Add synonym of
+            <em>${this._creatingSynonymForName}</em>`
+        : html`New taxon under ${parentLabel}`;
     return html`
       <div class="create-pane">
         <h2>
@@ -3924,7 +4467,9 @@ class SfgaDetail extends LitElement {
             ? "creating…"
             : this._creatingBasionymFor
               ? "add basionym"
-              : "create"}
+              : this._creatingSynonymFor
+                ? "add synonym"
+                : "create"}
         </button>
         ${this._shouldOfferBasionymAfterCreate(d)
           ? html`
@@ -4014,11 +4559,28 @@ class SfgaDetail extends LitElement {
       "";
     const authors = this._name?.authors || "";
     const year = parseInt(this._name?.published_in_year || "", 10) || 0;
+    // Name-editor / taxon-create callers most often want to reach for
+    // the protologue paper — Project search is the right first tab.
+    // Non-name callers (vernacular row, section-level References +)
+    // are usually adding a citing paper the curator has a DOI for;
+    // land them on the DOI tab, or on the Project tab in DOI-aware
+    // mode where a DOI-shaped query auto-falls-through to OpenAlex.
+    // Non-name contexts (vernacular, distribution, section-level
+    // References) default to the DOI tab because the curator most
+    // likely has a paper reference to cite. Name-editing paths (the
+    // taxon edit form's name section, taxon-create pane, and the
+    // pencil-edit name-editor) default to Project search — for names
+    // the protologue paper is often already in the archive.
+    const nonName =
+      this._addingReferenceFor === "section" ||
+      this._addingReferenceFor === "vernacular" ||
+      this._addingReferenceFor === "distribution";
     return html`
       <sfga-add-reference-modal
         .contextCanonical=${canonical}
         .contextAuthors=${authors}
         .contextYear=${year}
+        .defaultTab=${nonName ? "doi" : "project"}
         @reference-picked=${(e) => this._onReferencePicked(e)}
         @close=${() => (this._addingReferenceFor = "")}
       ></sfga-add-reference-modal>
@@ -4026,19 +4588,32 @@ class SfgaDetail extends LitElement {
   }
 
   _onReferencePicked(e) {
-    // Modal supplies {id, label}. Route to the draft whose form
-    // opened the modal — edit form's name draft or create form's
-    // create draft — and stash the label so the corresponding
-    // combobox displays it immediately (the resolver would
-    // otherwise fire a second GET before the label appears).
+    // Modal supplies {id, label}. Three call sites:
+    //   * "create" — new-taxon create pane picked / added a reference
+    //   * "edit"   — taxon edit form picked / added a reference
+    //   * "section" — References section's + button; no form to route
+    //     the pick into, just close (the reference is already in the
+    //     archive; it'll appear in the References section once some
+    //     row on this page cites it).
+    // Legacy callers with an unrecognised target fall through to the
+    // edit-form routing so a stale caller doesn't drop the pick on
+    // the floor.
     const { id, label } = e.detail;
     const target = this._addingReferenceFor;
     if (target === "create") {
       this._createFieldChange("reference_id", id);
       this._pickedCreateReferenceLabel = label || "";
-    } else {
-      // Default to edit-form routing so a legacy caller doesn't drop
-      // the pick on the floor.
+    } else if (target === "vernacular") {
+      // Pick flows into the vernacular add/edit modal's draft. The
+      // combobox will resolve the display label from the id on its
+      // own; no need to shortcut a label cache for this flow.
+      this._vernacularFieldChange("reference_id", id);
+    } else if (target === "distribution") {
+      this._distributionFieldChange("reference_id", id);
+    } else if (target === "nameEditor") {
+      // Pick flows into the pencil-edit name editor's draft.
+      this._nameEditorFieldChange("reference_id", id);
+    } else if (target !== "section") {
       this._nameFieldChange("reference_id", id);
       this._pickedReferenceLabel = label || "";
     }
@@ -4316,16 +4891,125 @@ class SfgaDetail extends LitElement {
     // Taxon name gets the full pane width now that action buttons live
     // in the app header (see DESIGN.md § Screen actions). Long
     // scientific names + authorships wrap cleanly without an action
-    // strip stealing horizontal room from them.
+    // strip stealing horizontal room from them. Classification
+    // breadcrumbs render on their own line below the horizontal rule
+    // — separated from the name so neither has to compete with the
+    // other for horizontal space, and the eye still lands on the
+    // name first. See DESIGN.md § Breadcrumbs / classification path.
+    //
+    // Reference accumulator reset at the top of every render so
+    // superscript numbers stay consistent with the References section
+    // rendered at the bottom. Populated as _renderNomenclaturalHistory
+    // (later: distribution / vernacular / interaction sections) walks
+    // rows in visual order; _renderReferences reads the finished map.
+    this._refCites = new Map();
     return html`
-      ${this._renderBreadcrumbs()}
       <div class="detail-header">
         <h2>${heading}</h2>
       </div>
       <hr />
+      ${this._renderBreadcrumbs()}
       ${this._renderPendingWarnings()}
-      ${this._editing ? this._renderEditForm() : this._renderViewFields()}
-      ${this._renderSynonyms()}
+      ${this._editing
+        ? this._renderEditForm()
+        : html`
+            ${this._renderNomenclaturalHistory()}
+            ${this._renderVernaculars()}
+            ${this._renderDistributions()}
+            ${this._renderReferences()}
+            ${this._renderViewFields()}
+          `}
+      ${this._vernacularForm ? this._renderVernacularModal() : ""}
+      ${this._distributionForm ? this._renderDistributionModal() : ""}
+      ${this._synonymDelete ? this._renderSynonymDeleteModal() : ""}
+      ${this._nameEditor ? this._renderNameEditorModal() : ""}
+      ${this._addingReferenceFor === "section" ||
+      this._addingReferenceFor === "vernacular" ||
+      this._addingReferenceFor === "distribution" ||
+      this._addingReferenceFor === "nameEditor"
+        ? this._renderAddReferenceModal()
+        : ""}
+    `;
+  }
+
+  // _sectionHeader renders the shared "<hr /> + heading + optional +
+  // button" pattern used above every taxon-detail section. `add` is
+  // an optional {handler, title} — omit it to render just the heading
+  // with no button. See DESIGN.md § Add affordance and the CSS in
+  // this element's static styles.
+  _sectionHeader(label, add) {
+    return html`
+      <hr />
+      <div class="section-header">
+        <h3>${label}</h3>
+        ${add
+          ? html`
+              <button
+                class="icon-btn subtle add"
+                @click=${add.handler}
+                title=${add.title}
+                aria-label=${add.title}
+              >
+                ${renderIcon("plus", 16)}
+              </button>
+            `
+          : ""}
+      </div>
+    `;
+  }
+
+  // _citeRef assigns a superscript number to a reference id — the next
+  // integer in order of first appearance on the page. Idempotent: calling
+  // it twice with the same id returns the same number. Returns a Lit
+  // template of the `[N]` superscript ready to inline next to whatever
+  // row cited the reference. Returns "" for empty ids so callers can
+  // unconditionally sprinkle it into their row templates.
+  //
+  // reference_id may be a comma-separated list of ids per the sfga
+  // convention; hive v1 cites just the first id (matches how the wire
+  // format's reference_label resolves — see synonymHitToAPI /
+  // taxonToAPI). Multi-reference citations track as a later slice.
+  _citeRef(id, label) {
+    if (!id) return "";
+    const primary = id.split(",")[0].trim();
+    if (!primary) return "";
+    let entry = this._refCites.get(primary);
+    if (!entry) {
+      entry = { n: this._refCites.size + 1, label: label || primary };
+      this._refCites.set(primary, entry);
+    }
+    return html`<a class="cite" href="#ref-${entry.n}" title=${entry.label}
+      >[${entry.n}]</a
+    >`;
+  }
+
+  // _renderReferences draws the numbered References section at page
+  // bottom — one row per distinct reference cited above. Hidden entirely
+  // when nothing was cited so pages with no reference-bearing rows
+  // don't accumulate an empty heading.
+  _renderReferences() {
+    if (!this._refCites || this._refCites.size === 0) return "";
+    const entries = Array.from(this._refCites.values()).sort(
+      (a, b) => a.n - b.n,
+    );
+    return html`
+      <section class="references">
+        ${this._sectionHeader("References", {
+          handler: () => (this._addingReferenceFor = "section"),
+          title:
+            "add reference to archive (appears here once cited)",
+        })}
+        <ol>
+          ${entries.map(
+            (e) => html`
+              <li id="ref-${e.n}">
+                <span class="refnum" aria-hidden="true">${e.n}.</span>
+                <span>${e.label}</span>
+              </li>
+            `,
+          )}
+        </ol>
+      </section>
     `;
   }
 
@@ -4498,6 +5182,8 @@ class SfgaDetail extends LitElement {
       : t.parent_id || "";
 
     return html`
+      <section class="all-fields">
+        ${this._sectionHeader("All fields")}
       <dl>
         ${row("ID", t.id)} ${row("Parent", parentDisplay)}
         ${row("Rank", n?.rank ? n.rank.toLowerCase() : "")}
@@ -4552,6 +5238,7 @@ class SfgaDetail extends LitElement {
                 ${row("Name mod. by", orcidLink(n.modified_by))}`
           : ""}
       </dl>
+      </section>
       ${this._confirmDelete ? this._renderDeleteModal() : ""}
     `;
   }
@@ -4834,21 +5521,1516 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  _renderSynonyms() {
-    if (!this._synonyms.length) return "";
+  // _renderNomenclaturalHistory draws the taxon's naming history from
+  // the multi-cluster projection at GET /api/taxon/{id}/nomenclatural-
+  // history. See DESIGN.md § Nomenclatural history section.
+  //
+  // Cluster / glyph / indent rules:
+  //   * Accepted cluster (exactly one per response):
+  //       - Accepted name (involvement="accepted"): flush left, no glyph.
+  //       - Basionym (is_basionym, not the accepted): indent 1, ≡ glyph.
+  //       - Other members (recombs of the basionym): indent 2, = glyph.
+  //         When accepted IS its own basionym (self-anchor, no separate
+  //         basionym row), these bump to indent 1 so they still sit
+  //         directly under the accepted rather than hanging off nothing.
+  //   * Synonym cluster (one per distinct basionym family):
+  //       - Basionym: indent 1, = glyph.
+  //       - Other members (recombs of that basionym): indent 2, = glyph.
+  //
+  // Cluster ordering (accepted first, then synonym clusters by
+  // basionym year, then alphabetical) and within-cluster ordering
+  // (basionym-first, then chronological, then alphabetical) come from
+  // the backend — no client-side re-sort.
+  //
+  // Every row's reference_id (the name's own publication citation)
+  // feeds _citeRef so a [N] superscript renders inline and the row
+  // shows up in the References section at page bottom.
+  _renderNomenclaturalHistory() {
+    const clusters = this._nomenHistory?.clusters || [];
+    if (clusters.length === 0) return "";
     return html`
-      <section class="synonyms">
-        <h3>Synonyms (${this._synonyms.length})</h3>
+      <section class="nomen-history">
+        ${this._sectionHeader("Nomenclatural history", {
+          handler: () => this._addNomenEntry(),
+          title: "add synonym",
+        })}
         <ul>
-          ${this._synonyms.map(
-            (s) => html`<li>
-              ${renderLabel(s.label, s.name_id)}${s.remarks
-                ? html` — <span class="empty">${s.remarks}</span>`
-                : ""}
-            </li>`,
-          )}
+          ${clusters.map((c) => this._renderNomenCluster(c))}
         </ul>
       </section>
+    `;
+  }
+
+  // _addNomenEntry handles the Nomenclatural History + button — opens
+  // the create pane in synonym-add mode targeting the currently viewed
+  // taxon as the accepted-name link.
+  _addNomenEntry() {
+    this._openCreateSynonym();
+  }
+
+  // _openCreateSynonym opens the create pane in synonym-add mode. Reuses
+  // the same two-step (verbatim → atomized preview) form as new-taxon
+  // create; on submit the pane calls api.taxon.addSynonym with the
+  // accepted taxon id captured at open time. See DESIGN.md § Add
+  // affordance.
+  async _openCreateSynonym() {
+    const taxonID = this._taxon?.id || "";
+    if (!taxonID) return;
+    const taxonLabel =
+      this._taxon?.label?.text || this._taxon?.name || this._taxon?.id || "";
+    // Seed the code from the accepted name so ICZN stays ICZN etc.
+    // Curator can override on step 1 for the odd case (e.g. an ICN
+    // name synonymised into a mixed-code project).
+    const code = this._name?.code || "";
+    this._createDraft = { scientific_name: "", code };
+    this._createStep = 0;
+    this._createError = "";
+    this._createBusy = false;
+    // Parent doesn't apply to synonym mode; clear so the render's
+    // parent-picker code path is bypassed cleanly.
+    this._createParentID = "";
+    this._createParentLabel = "";
+    this._createChildRanks = [];
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
+    this._creatingSynonymFor = taxonID;
+    this._creatingSynonymForName = taxonLabel;
+    this._creating = true;
+  }
+
+  _renderNomenCluster(cluster) {
+    const isAccepted = cluster.role === "accepted";
+    const names = cluster.names || [];
+    // Detect whether the cluster has a separate basionym row from the
+    // accepted (only meaningful for the accepted cluster; when accepted
+    // is its own basionym, is_basionym and involvement="accepted"
+    // coincide and there's no separate anchor).
+    const hasSeparateBasionym = names.some(
+      (n) => n.is_basionym && n.involvement !== "accepted",
+    );
+    return names.map((n) => {
+      const isAcceptedName = isAccepted && n.involvement === "accepted";
+      const isBasionymRow = n.is_basionym && !isAcceptedName;
+      let cls, glyph;
+      if (isAcceptedName) {
+        // ✓ marks the currently accepted name — matches TaxonWorks and
+        // signals "you land here" at a glance without breaking the
+        // aligned column of glyphs above and below.
+        cls = "history accepted";
+        glyph = "✓";
+      } else if (isBasionymRow) {
+        // Basionym anchor of the cluster. `≡` only when this basionym
+        // is the accepted's own (accepted-cluster basionym); other
+        // synonym clusters' basionyms use `=` because they're just
+        // heterotypic synonyms of the accepted from the curator's POV.
+        cls = "history";
+        glyph = isAccepted ? "≡" : "=";
+      } else {
+        // Recomb within the cluster. Indent 2 if there's a separate
+        // basionym above (it hangs off that anchor); indent 1 when the
+        // accepted is its own basionym (no anchor row to hang off).
+        cls = hasSeparateBasionym ? "history nested" : "history";
+        glyph = "=";
+      }
+      const cite = this._citeRef(n.reference_id, n.reference_label);
+      return html`<li class=${cls}>
+        <span class="glyph" aria-hidden="true">${glyph}</span>
+        <span>${renderLabel(n.label, n.name_id)}${cite}</span>
+        ${isAcceptedName ? "" : this._renderNomenRowActions(n)}
+      </li>`;
+    });
+  }
+
+  // _renderNomenRowActions draws the hover-reveal action strip on a
+  // synonym / basionym row: warning icon (when the name has open
+  // validation issues), pencil (open name editor), delete (remove the
+  // synonym link). Accepted-name rows skip this — the accepted taxon
+  // has its own edit/delete in the app header. See DESIGN.md § List-row
+  // actions.
+  //
+  // Placeholder wiring for now: each button dispatches a bubbling event
+  // (edit-name / delete-synonym / open-name-issues) with the relevant
+  // ids in detail. No parent listens today — the actual behaviours
+  // require:
+  //   * name-editor UI (standalone edit form for a name row)
+  //   * DELETE /api/synonym/{id} endpoint
+  //   * per-name issue-count field on apiNomenName so the warning
+  //     icon knows when to render
+  // See DEFERRED.md when those follow-up slices land.
+  _renderNomenRowActions(n) {
+    const hasIssues = (n.issue_count || 0) > 0;
+    return html`
+      <span class="row-actions">
+        ${hasIssues
+          ? html`<button
+              class="icon-btn subtle warn"
+              @click=${(e) => this._onNomenRowIssues(e, n)}
+              title="open name editor at validation issues"
+              aria-label="validation issues on this name"
+            >
+              ${renderIcon("triangle-alert", 14)}
+            </button>`
+          : ""}
+        <button
+          class="icon-btn subtle"
+          @click=${(e) => this._onNomenRowEdit(e, n)}
+          title="edit name"
+          aria-label="edit name"
+        >
+          ${renderIcon("pencil", 14)}
+        </button>
+        <button
+          class="icon-btn subtle danger"
+          @click=${(e) => this._onNomenRowDelete(e, n)}
+          title="delete synonym"
+          aria-label="delete synonym"
+          ?disabled=${!n.synonym_id}
+        >
+          ${renderIcon("trash-2", 14)}
+        </button>
+      </span>
+    `;
+  }
+
+  _onNomenRowEdit(e, n) {
+    e.stopPropagation();
+    if (!n.name_id) return;
+    // Pass the synonym context (id + current accepted-taxon id) so the
+    // modal can render an accepted-taxon combobox for the "fix the
+    // mis-linked synonym" flow. If the row has no synonym_id (rare
+    // for a Nomen History row but possible on the accepted-name row
+    // if we ever surface actions there), the modal falls back to a
+    // name-only editor.
+    this._openNameEditor(n.name_id, {
+      synonymID: n.synonym_id || "",
+      currentTaxonID: this.taxonId || "",
+    });
+  }
+
+  // _openNameEditor loads the name row and opens the editor modal.
+  // Two-phase: "loading" while api.name.get is in-flight, then
+  // "edit" once the row is hydrated. Draft starts empty — the
+  // form's field values fall through to `original` until the curator
+  // touches something; only fields the curator actually changed go
+  // into the PATCH body.
+  //
+  // `ctx` (optional) carries synonym context so the modal can render
+  // the accepted-taxon combobox for the move-synonym flow:
+  //   { synonymID, currentTaxonID }
+  async _openNameEditor(id, ctx = {}) {
+    this._nameEditor = {
+      phase: "loading",
+      id,
+      synonymID: ctx.synonymID || "",
+      currentTaxonID: ctx.currentTaxonID || "",
+      newTaxonID: ctx.currentTaxonID || "",
+      original: null,
+      draft: {},
+      etag: "",
+      issues: [],
+      busy: false,
+      error: "",
+    };
+    try {
+      // Fetch the name row + any open validation issues on it in
+      // parallel. Issues render as a banner at the top of the modal
+      // so the curator sees the problem before editing — same shape
+      // as _renderPendingWarnings. Issue-fetch failure is silent (the
+      // banner just won't render) so a transient issue-endpoint hiccup
+      // doesn't block editing.
+      const [name, issueResp] = await Promise.all([
+        api.name.get(id),
+        api.issue
+          .list({ table: "name", record_id: id, limit: 100 })
+          .catch(() => ({ items: [] })),
+      ]);
+      if (!this._nameEditor || this._nameEditor.id !== id) return;
+      this._nameEditor = {
+        ...this._nameEditor,
+        phase: "edit",
+        original: name,
+        etag: name.__etag || "",
+        issues: issueResp.items || [],
+      };
+    } catch (err) {
+      if (!this._nameEditor || this._nameEditor.id !== id) return;
+      this._nameEditor = {
+        ...this._nameEditor,
+        phase: "edit",
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  _cancelNameEditor() {
+    this._nameEditor = null;
+  }
+
+  _nameEditorFieldChange(field, value) {
+    if (!this._nameEditor) return;
+    this._nameEditor = {
+      ...this._nameEditor,
+      draft: { ...this._nameEditor.draft, [field]: value },
+    };
+  }
+
+  _nameEditorValue(field) {
+    const ed = this._nameEditor;
+    if (!ed) return "";
+    if (Object.hasOwn(ed.draft, field)) return ed.draft[field];
+    return ed.original?.[field] ?? "";
+  }
+
+  async _submitNameEditor() {
+    const ed = this._nameEditor;
+    if (!ed || !ed.original) return;
+    const patch = { ...ed.draft };
+    const nameChanged = Object.keys(patch).length > 0;
+    const taxonChanged =
+      ed.synonymID &&
+      ed.newTaxonID &&
+      ed.newTaxonID !== ed.currentTaxonID;
+    if (!nameChanged && !taxonChanged) {
+      this._nameEditor = null;
+      return;
+    }
+    this._nameEditor = { ...ed, busy: true, error: "" };
+    try {
+      // Move first, then name-patch. Order chosen so the curator's
+      // subsequent nav decision (below) is based on the completed
+      // move state; a name-patch failure after a successful move
+      // still leaves the synonym at the intended taxon.
+      if (taxonChanged) {
+        await api.synonym.move(ed.synonymID, ed.newTaxonID);
+      }
+      if (nameChanged) {
+        await api.name.patch(ed.id, patch, ed.etag);
+      }
+      const moved = taxonChanged;
+      const newTaxon = ed.newTaxonID;
+      this._nameEditor = null;
+      if (moved) {
+        // The synonym is no longer attached to the taxon the curator
+        // was viewing — jump to the new accepted taxon so the moved
+        // synonym is still in view.
+        this.dispatchEvent(
+          new CustomEvent("taxon-moved", {
+            detail: { id: newTaxon },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      } else {
+        // Name changed only — refetch the section so the label updates
+        // in place.
+        await this._refreshNomenHistory();
+      }
+    } catch (err) {
+      this._nameEditor = {
+        ...this._nameEditor,
+        busy: false,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  _renderNameEditorModal() {
+    const ed = this._nameEditor;
+    if (!ed) return "";
+    if (ed.phase === "loading") {
+      return html`
+        <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+          <div
+            class="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="name-editor-loading"
+          >
+            <h3 id="name-editor-loading">Edit name</h3>
+            <p role="status">Loading name…</p>
+          </div>
+        </div>
+      `;
+    }
+    const set = (field) => (e) =>
+      this._nameEditorFieldChange(field, e.target.value);
+    const referenceID = this._nameEditorValue("reference_id");
+    return html`
+      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+        <div
+          class="modal name-editor"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="name-editor-heading"
+          @keydown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this._cancelNameEditor();
+            }
+          }}
+        >
+          <h3 id="name-editor-heading">
+            ${ed.synonymID ? "Edit synonym" : "Edit name"}
+          </h3>
+          ${ed.issues && ed.issues.length > 0
+            ? html`
+                <div class="warning-banner">
+                  <strong>
+                    ${ed.issues.length} open
+                    issue${ed.issues.length > 1 ? "s" : ""} on this name:
+                  </strong>
+                  <ul>
+                    ${ed.issues.map(
+                      (i) => html`<li>
+                        ${severityChip(i.severity)}
+                        <span>
+                          <span class="warning-rule"
+                            >${i.rule_name || i.rule_id}</span
+                          >:
+                          ${i.message}
+                          ${i.field_name
+                            ? html` <span class="warning-rule"
+                                >(${i.field_name})</span
+                              >`
+                            : ""}
+                        </span>
+                      </li>`,
+                    )}
+                  </ul>
+                </div>
+              `
+            : ""}
+          ${ed.error
+            ? html`<div class="error" role="alert">${ed.error}</div>`
+            : ""}
+          <form
+            class="name-editor-form"
+            @submit=${(e) => {
+              e.preventDefault();
+              this._submitNameEditor();
+            }}
+          >
+            ${ed.synonymID
+              ? html`
+                  <label>Accepted taxon</label>
+                  <sfga-combobox
+                    min-search-chars="2"
+                    placeholder="Search taxa…"
+                    .source=${taxonSource}
+                    .resolver=${taxonResolver}
+                    .value=${ed.newTaxonID}
+                    @pick=${(e) =>
+                      (this._nameEditor = {
+                        ...this._nameEditor,
+                        newTaxonID: e.detail.id || "",
+                      })}
+                  ></sfga-combobox>
+                `
+              : ""}
+
+            <label for="ne-sci">Scientific name</label>
+            <input
+              id="ne-sci"
+              type="text"
+              .value=${this._nameEditorValue("scientific_name")}
+              @input=${set("scientific_name")}
+              autofocus
+            />
+
+            <label for="ne-auth">Authorship</label>
+            <input
+              id="ne-auth"
+              type="text"
+              .value=${this._nameEditorValue("authorship")}
+              @input=${set("authorship")}
+            />
+
+            <label>Rank</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Rank…"
+              .source=${vocabSource("rank")}
+              .resolver=${vocabResolver("rank")}
+              .value=${this._nameEditorValue("rank")}
+              @pick=${(e) =>
+                this._nameEditorFieldChange("rank", e.detail.id)}
+            ></sfga-combobox>
+
+            <label>Code</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Nomenclatural code…"
+              .source=${vocabSource("nom_code")}
+              .resolver=${vocabResolver("nom_code")}
+              .value=${this._nameEditorValue("code")}
+              @pick=${(e) =>
+                this._nameEditorFieldChange("code", e.detail.id)}
+            ></sfga-combobox>
+
+            <label>Reference</label>
+            <sfga-combobox
+              min-search-chars="2"
+              placeholder="Search author / title / citation / DOI…"
+              .source=${referenceSource}
+              .resolver=${referenceResolver}
+              .value=${referenceID}
+              .actions=${[
+                {
+                  label: "Add new reference",
+                  icon: "plus",
+                  handler: () => (this._addingReferenceFor = "nameEditor"),
+                },
+              ]}
+              @pick=${(e) =>
+                this._nameEditorFieldChange("reference_id", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="ne-year">Published year</label>
+            <input
+              id="ne-year"
+              type="text"
+              placeholder="YYYY"
+              .value=${this._nameEditorValue("published_in_year")}
+              @input=${set("published_in_year")}
+            />
+
+            <label for="ne-remarks">Remarks</label>
+            <textarea
+              id="ne-remarks"
+              rows="2"
+              .value=${this._nameEditorValue("remarks")}
+              @input=${set("remarks")}
+            ></textarea>
+
+            <div class="toolbar">
+              <button
+                type="button"
+                @click=${() => this._cancelNameEditor()}
+                ?disabled=${ed.busy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                class="primary"
+                ?disabled=${ed.busy || !ed.original}
+              >
+                ${ed.busy ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  _onNomenRowIssues(e, n) {
+    // Same target as the pencil — the editor modal fetches and
+    // renders open issues at the top, so opening it "on the issues"
+    // is just opening it.
+    this._onNomenRowEdit(e, n);
+  }
+
+  _onNomenRowDelete(e, n) {
+    e.stopPropagation();
+    if (!n.synonym_id) return; // button disabled in render; belt-and-braces
+    this._openSynonymDelete(n);
+  }
+
+  // _openSynonymDelete opens the two-option delete modal for a synonym.
+  // Kicks off in "loading" phase while name dependencies are fetched;
+  // on response transitions to "prompt" where the curator picks
+  // "Delete synonym only" (safe — leaves a bare name if this was the
+  // last reference) or "Delete synonym + name" (destructive — only
+  // offered when the name would be bare after removal). Cascade path
+  // gates behind typing DELETE. See DESIGN.md § List-row actions.
+  async _openSynonymDelete(n) {
+    this._synonymDelete = {
+      phase: "loading",
+      synonymId: n.synonym_id,
+      nameId: n.name_id,
+      label: n.label?.text || n.name_id,
+      deps: null,
+      cascade: false,
+      confirmText: "",
+      busy: false,
+      error: "",
+    };
+    try {
+      const deps = await api.name.dependencies(n.name_id);
+      // Race guard: curator dismissed while we waited.
+      if (!this._synonymDelete || this._synonymDelete.synonymId !== n.synonym_id) return;
+      this._synonymDelete = { ...this._synonymDelete, phase: "prompt", deps };
+    } catch (err) {
+      if (!this._synonymDelete || this._synonymDelete.synonymId !== n.synonym_id) return;
+      this._synonymDelete = {
+        ...this._synonymDelete,
+        phase: "prompt",
+        deps: null,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  _cancelSynonymDelete() {
+    this._synonymDelete = null;
+  }
+
+  _synonymDeleteSetCascade(cascade) {
+    if (!this._synonymDelete) return;
+    this._synonymDelete = {
+      ...this._synonymDelete,
+      cascade,
+      // Reset the DELETE-typing guard when the choice flips so the
+      // curator can't accidentally hit a stale-typed value.
+      confirmText: "",
+    };
+  }
+
+  _synonymDeleteSetConfirmText(v) {
+    if (!this._synonymDelete) return;
+    this._synonymDelete = { ...this._synonymDelete, confirmText: v };
+  }
+
+  async _submitSynonymDelete() {
+    const d = this._synonymDelete;
+    if (!d) return;
+    // Cascade requires typing DELETE. Non-cascade doesn't (no name
+    // is being removed; the synonym link is a safer op).
+    if (d.cascade && d.confirmText.trim() !== "DELETE") {
+      this._synonymDelete = {
+        ...d,
+        error: "Type DELETE to confirm cascade.",
+      };
+      return;
+    }
+    this._synonymDelete = { ...d, busy: true, error: "" };
+    try {
+      await api.synonym.delete(d.synonymId, { cascadeName: d.cascade });
+      this._synonymDelete = null;
+      // Refresh the whole nomen-history section — a cascade may also
+      // affect related basionym relations, so a targeted refetch is
+      // safest.
+      await this._refreshNomenHistory();
+    } catch (err) {
+      this._synonymDelete = {
+        ...this._synonymDelete,
+        busy: false,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  async _refreshNomenHistory() {
+    if (!this.taxonId) return;
+    try {
+      const resp = await api.taxon.nomenHistory(this.taxonId);
+      this._nomenHistory = resp;
+    } catch (_) {
+      // Silent — the section was populated a moment ago; a transient
+      // fetch failure leaves the stale rendering rather than clearing
+      // it, which would surprise the curator.
+    }
+  }
+
+  _renderSynonymDeleteModal() {
+    const d = this._synonymDelete;
+    if (!d) return "";
+    if (d.phase === "loading") {
+      return html`
+        <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+          <div
+            class="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="synonym-delete-loading"
+          >
+            <h3 id="synonym-delete-loading">Delete synonym</h3>
+            <p role="status">Checking what references this name…</p>
+          </div>
+        </div>
+      `;
+    }
+    // Cascade is offered only when the name would be bare after
+    // removal — i.e., no other synonyms point at it, no taxon claims
+    // it, no name_relation touches it. The taxon_count could be > 0
+    // if this synonym's name happens to also be an accepted name's
+    // basionym or similar edge (rare); block cascade in that case.
+    const deps = d.deps;
+    // Post-removal counts: subtract 1 from synonym_count since this
+    // row is being deleted. The other counts stay as-is.
+    const otherSynonyms = deps ? Math.max(0, (deps.synonym_count || 0) - 1) : 0;
+    const otherRefs = deps ? deps.taxon_count + otherSynonyms + deps.name_relation_count : 0;
+    const canCascade = deps !== null && otherRefs === 0;
+    const cascadeOK =
+      d.cascade && (d.confirmText || "").trim() === "DELETE" && !d.busy;
+    const deleteEnabled = d.cascade ? cascadeOK : !d.busy;
+    return html`
+      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+        <div
+          class="modal synonym-delete"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="synonym-delete-heading"
+          @keydown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this._cancelSynonymDelete();
+            }
+          }}
+        >
+          <h3 id="synonym-delete-heading">Delete synonym</h3>
+          <p>
+            <em>${d.label}</em> will be removed from this taxon.
+          </p>
+          ${d.error
+            ? html`<div class="error" role="alert">${d.error}</div>`
+            : ""}
+          <fieldset class="cascade-choice">
+            <legend>Also delete the name row?</legend>
+            <label>
+              <input
+                type="radio"
+                name="cascade"
+                .checked=${!d.cascade}
+                @change=${() => this._synonymDeleteSetCascade(false)}
+              />
+              <span>
+                <strong>Keep the name</strong>
+                <span class="hint">
+                  Safe. The synonym link is removed; the name row stays in
+                  the archive. If nothing else references it, it becomes a
+                  <em>bare name</em> — still searchable and re-usable.
+                </span>
+              </span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="cascade"
+                .checked=${d.cascade}
+                ?disabled=${!canCascade}
+                @change=${() => this._synonymDeleteSetCascade(true)}
+              />
+              <span>
+                <strong>Delete synonym + name</strong>
+                ${canCascade
+                  ? html`<span class="hint">
+                      Removes both rows. The name won't appear in any
+                      list or search after this.
+                    </span>`
+                  : html`<span class="hint warn">
+                      Not available — the name is still referenced elsewhere:
+                      ${deps
+                        ? this._renderNameDepBreakdown(deps, otherSynonyms)
+                        : "unknown (dependency check failed)"}.
+                    </span>`}
+              </span>
+            </label>
+          </fieldset>
+          ${d.cascade
+            ? html`
+                <label class="type-to-confirm">
+                  Type <code>DELETE</code> to confirm cascade:
+                  <input
+                    type="text"
+                    .value=${d.confirmText}
+                    @input=${(e) =>
+                      this._synonymDeleteSetConfirmText(e.target.value)}
+                    autocomplete="off"
+                    autofocus
+                  />
+                </label>
+              `
+            : ""}
+          <div class="toolbar">
+            <button
+              type="button"
+              @click=${() => this._cancelSynonymDelete()}
+              ?disabled=${d.busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="danger-primary"
+              ?disabled=${!deleteEnabled}
+              @click=${() => this._submitSynonymDelete()}
+            >
+              ${d.busy
+                ? "Deleting…"
+                : d.cascade
+                  ? "Delete synonym + name"
+                  : "Delete synonym"}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderNameDepBreakdown(deps, otherSynonyms) {
+    const parts = [];
+    if (deps.taxon_count > 0) {
+      parts.push(
+        `${deps.taxon_count} taxon${deps.taxon_count > 1 ? "s" : ""}`,
+      );
+    }
+    if (otherSynonyms > 0) {
+      parts.push(
+        `${otherSynonyms} other synonym${otherSynonyms > 1 ? "s" : ""}`,
+      );
+    }
+    if (deps.name_relation_count > 0) {
+      parts.push(
+        `${deps.name_relation_count} name relation${deps.name_relation_count > 1 ? "s" : ""}`,
+      );
+    }
+    return parts.join(", ");
+  }
+
+  // _renderVernaculars draws the vernacular-names table. Backed by
+  // GET /api/taxon/{id}/vernaculars which returns rows preferred-first,
+  // then by language, then name — no client-side re-sort needed.
+  // Section elided entirely when there are no vernaculars (per
+  // DESIGN.md § Per-data-type sections). Row hover reveals pencil +
+  // delete via the same .row-actions pattern used in nomen history.
+  _renderVernaculars() {
+    const items = this._vernaculars || [];
+    if (items.length === 0) return "";
+    return html`
+      <section class="vernaculars">
+        ${this._sectionHeader("Vernacular names", {
+          handler: () => this._openVernacularCreate(),
+          title: "add vernacular name",
+        })}
+        <table>
+          <thead>
+            <tr>
+              <th class="pref" aria-label="preferred"></th>
+              <th class="name">Name</th>
+              <th class="lang">Lang</th>
+              <th class="country">Country</th>
+              <th class="region">Area</th>
+              <th class="actions" aria-label="actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((v) => this._renderVernacularRow(v))}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  _renderVernacularRow(v) {
+    const cite = this._citeRef(v.reference_id, v.reference_label);
+    return html`
+      <tr>
+        <td class="pref" aria-hidden=${v.preferred ? "false" : "true"}>
+          ${v.preferred ? "✓" : ""}
+        </td>
+        <td class="name">
+          ${v.name}${cite}${v.transliteration
+            ? html`<span class="translit">${v.transliteration}</span>`
+            : ""}
+        </td>
+        <td class="lang">${v.language || ""}</td>
+        <td class="country">${v.country || ""}</td>
+        <td class="region">${v.area || ""}</td>
+        <td class="actions">
+          <span class="row-actions">
+            ${(v.issue_count || 0) > 0
+              ? html`<button
+                  class="icon-btn subtle warn"
+                  @click=${() => this._openVernacularEdit(v)}
+                  title="open editor at validation issues"
+                  aria-label="validation issues on this vernacular"
+                >
+                  ${renderIcon("triangle-alert", 14)}
+                </button>`
+              : ""}
+            <button
+              class="icon-btn subtle"
+              @click=${() => this._openVernacularEdit(v)}
+              title="edit vernacular"
+              aria-label="edit vernacular"
+            >
+              ${renderIcon("pencil", 14)}
+            </button>
+            <button
+              class="icon-btn subtle danger"
+              @click=${() => this._deleteVernacular(v)}
+              title="delete vernacular"
+              aria-label="delete vernacular"
+            >
+              ${renderIcon("trash-2", 14)}
+            </button>
+          </span>
+        </td>
+      </tr>
+    `;
+  }
+
+  // _openVernacularCreate opens the modal in create mode with a blank
+  // draft. Reference_id is left empty so the picker opens fresh; code
+  // isn't a concept on vernaculars.
+  _openVernacularCreate() {
+    this._vernacularForm = {
+      mode: "create",
+      draft: { name: "", preferred: false },
+      error: "",
+    };
+  }
+
+  async _openVernacularEdit(v) {
+    this._vernacularForm = {
+      mode: "edit",
+      id: v.id,
+      draft: { ...v },
+      issues: [],
+      error: "",
+    };
+    // Fetch open validation issues for this row so the banner at the
+    // top of the modal renders. Race-guarded via the id comparison
+    // (the curator might close and reopen a different row).
+    try {
+      const resp = await api.issue.list({
+        table: "vernacular",
+        record_id: v.id,
+        limit: 100,
+      });
+      if (this._vernacularForm && this._vernacularForm.id === v.id) {
+        this._vernacularForm = {
+          ...this._vernacularForm,
+          issues: resp.items || [],
+        };
+      }
+    } catch (_) {
+      // Silent — banner just won't render on fetch failure.
+    }
+  }
+
+  _cancelVernacularForm() {
+    this._vernacularForm = null;
+  }
+
+  _vernacularFieldChange(field, value) {
+    if (!this._vernacularForm) return;
+    this._vernacularForm = {
+      ...this._vernacularForm,
+      draft: { ...this._vernacularForm.draft, [field]: value },
+    };
+  }
+
+  async _submitVernacularForm() {
+    const f = this._vernacularForm;
+    if (!f) return;
+    const name = (f.draft.name || "").trim();
+    if (!name) {
+      this._vernacularForm = { ...f, error: "name is required" };
+      return;
+    }
+    try {
+      if (f.mode === "create") {
+        await api.taxon.createVernacular(this.taxonId, f.draft);
+      } else {
+        // PATCH body: send only fields that differ from the original
+        // row (the modal's draft was seeded from the original, so any
+        // field the curator hasn't touched matches; but we send them
+        // all — the backend patch treats non-nil pointers as
+        // "assign", which matches the round-trip we want). Simpler
+        // than diffing; correctness is unchanged.
+        await api.vernacular.patch(f.id, f.draft);
+      }
+      this._vernacularForm = null;
+      await this._refreshVernaculars();
+    } catch (err) {
+      this._vernacularForm = {
+        ...f,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  async _deleteVernacular(v) {
+    const ok = await confirmAction({
+      heading: "Delete vernacular name?",
+      message: `"${v.name}" will be permanently deleted from this taxon.`,
+      actionLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      await api.vernacular.delete(v.id);
+      await this._refreshVernaculars();
+    } catch (err) {
+      // Surface via the taxon-pane error banner — same channel as
+      // other detail-pane failures. Non-fatal for the rest of the pane.
+      this._error =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
+  }
+
+  async _refreshVernaculars() {
+    // Refetch just the vernaculars, not the whole pane — avoids a
+    // full _load() and the visible flash of "loading" state.
+    if (!this.taxonId) return;
+    try {
+      const resp = await api.taxon.vernaculars(this.taxonId);
+      this._vernaculars = resp.items || [];
+    } catch (_) {
+      // Silent — the section was populated a moment ago; a transient
+      // fetch failure leaves the stale list rather than flashing an
+      // error into the section.
+    }
+  }
+
+  // _renderVernacularModal is the add/edit form. Uses the modal
+  // pattern from SfgaConfirmModal (backdrop + centered content +
+  // trap focus) but with a bespoke form body.
+  _renderVernacularModal() {
+    const f = this._vernacularForm;
+    if (!f) return "";
+    const d = f.draft;
+    const set = (field) => (e) =>
+      this._vernacularFieldChange(field, e.target.value);
+    const setCheck = (field) => (e) =>
+      this._vernacularFieldChange(field, e.target.checked);
+    const heading =
+      f.mode === "edit" ? "Edit vernacular name" : "Add vernacular name";
+    // Reference-picker pinned action opens the shared add-reference
+    // modal. Route the pick back via the same _addingReferenceFor
+    // machinery, targeting a new "vernacular" scope so the pick
+    // updates this draft's reference_id.
+    const refActions = [
+      {
+        label: "Add new reference",
+        icon: "plus",
+        handler: () => (this._addingReferenceFor = "vernacular"),
+      },
+    ];
+    return html`
+      <div
+        class="modal-backdrop"
+        @click=${(e) => {
+          // Form modal — never dismiss on backdrop click (see DESIGN.md
+          // § Modals). Curator uses Cancel or Escape.
+          e.stopPropagation();
+        }}
+      >
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="vernacular-modal-heading"
+          @keydown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this._cancelVernacularForm();
+            }
+          }}
+        >
+          <h3 id="vernacular-modal-heading">${heading}</h3>
+          ${f.issues && f.issues.length > 0
+            ? html`
+                <div class="warning-banner">
+                  <strong>
+                    ${f.issues.length} open
+                    issue${f.issues.length > 1 ? "s" : ""} on this
+                    vernacular:
+                  </strong>
+                  <ul>
+                    ${f.issues.map(
+                      (i) => html`<li>
+                        ${severityChip(i.severity)}
+                        <span>
+                          <span class="warning-rule"
+                            >${i.rule_name || i.rule_id}</span
+                          >:
+                          ${i.message}
+                          ${i.field_name
+                            ? html` <span class="warning-rule"
+                                >(${i.field_name})</span
+                              >`
+                            : ""}
+                        </span>
+                      </li>`,
+                    )}
+                  </ul>
+                </div>
+              `
+            : ""}
+          ${f.error
+            ? html`<div class="error" role="alert">${f.error}</div>`
+            : ""}
+          <form
+            class="vernacular-form"
+            @submit=${(e) => {
+              e.preventDefault();
+              this._submitVernacularForm();
+            }}
+          >
+            <label for="vern-name">Name <span class="req">*</span></label>
+            <input
+              id="vern-name"
+              type="text"
+              .value=${d.name || ""}
+              @input=${set("name")}
+              autofocus
+            />
+
+            <label class="checkbox-row">
+              <input
+                type="checkbox"
+                .checked=${!!d.preferred}
+                @change=${setCheck("preferred")}
+              />
+              Preferred common name for this taxon
+            </label>
+
+            <label>Language</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Type name or ISO 639-3 code…"
+              allow-free-text
+              .source=${languageSource}
+              .resolver=${languageResolver}
+              .value=${d.language || ""}
+              @pick=${(e) =>
+                this._vernacularFieldChange("language", e.detail.id)}
+            ></sfga-combobox>
+
+            <label>Country</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Type name or ISO 3166 code…"
+              allow-free-text
+              .source=${countrySource}
+              .resolver=${countryResolver}
+              .value=${d.country || ""}
+              @pick=${(e) =>
+                this._vernacularFieldChange("country", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="vern-area">Area / region</label>
+            <input
+              id="vern-area"
+              type="text"
+              placeholder="e.g. North America, Pacific Northwest"
+              .value=${d.area || ""}
+              @input=${set("area")}
+            />
+
+            <label>Sex</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Type name or code…"
+              allow-free-text
+              .source=${sexSource}
+              .resolver=${sexResolver}
+              .value=${d.sex || ""}
+              @pick=${(e) => this._vernacularFieldChange("sex", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="vern-translit">Transliteration</label>
+            <input
+              id="vern-translit"
+              type="text"
+              placeholder="Latin-script rendering of a non-Latin name"
+              .value=${d.transliteration || ""}
+              @input=${set("transliteration")}
+            />
+
+            <label>Reference</label>
+            <sfga-combobox
+              min-search-chars="2"
+              placeholder="Search references…"
+              .source=${referenceSource}
+              .resolver=${referenceResolver}
+              .value=${d.reference_id || ""}
+              .actions=${refActions}
+              @pick=${(e) =>
+                this._vernacularFieldChange("reference_id", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="vern-remarks">Remarks</label>
+            <textarea
+              id="vern-remarks"
+              rows="2"
+              .value=${d.remarks || ""}
+              @input=${set("remarks")}
+            ></textarea>
+
+            <div class="toolbar">
+              <button
+                type="button"
+                @click=${() => this._cancelVernacularForm()}
+              >
+                Cancel
+              </button>
+              <button type="submit" class="primary">
+                ${f.mode === "edit" ? "Save changes" : "Add"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Distribution section ----------
+  // Same shape as the vernacular section — table + row-actions +
+  // add/edit modal. Backend ships apiDistribution with issue_count
+  // baked in, so the warn-icon plumbing works out of the box. Area
+  // gets the inline citation; other columns stay dense.
+
+  _renderDistributions() {
+    const items = this._distributions || [];
+    if (items.length === 0) return "";
+    return html`
+      <section class="distributions">
+        ${this._sectionHeader("Distributions", {
+          handler: () => this._openDistributionCreate(),
+          title: "add distribution",
+        })}
+        <table>
+          <thead>
+            <tr>
+              <th class="area">Area</th>
+              <th class="gaz">Gazetteer</th>
+              <th class="status">Status</th>
+              <th class="actions" aria-label="actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((d) => this._renderDistributionRow(d))}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  _renderDistributionRow(d) {
+    const cite = this._citeRef(d.reference_id, d.reference_label);
+    // Area prefers the human-readable label; falls back to area_id
+    // for gazetteers where only the code was populated.
+    const areaText = d.area || d.area_id || "(unset)";
+    // Show area_id in dim when we have both the label AND the code —
+    // gives curators the identifier reference without eating the row.
+    const showCode = d.area && d.area_id;
+    return html`
+      <tr>
+        <td class="area">
+          ${areaText}${cite}${showCode
+            ? html` <span class="area-code">${d.area_id}</span>`
+            : ""}
+        </td>
+        <td class="gaz">${d.gazetteer || ""}</td>
+        <td class="status">${d.status || ""}</td>
+        <td class="actions">
+          <span class="row-actions">
+            ${(d.issue_count || 0) > 0
+              ? html`<button
+                  class="icon-btn subtle warn"
+                  @click=${() => this._openDistributionEdit(d)}
+                  title="open editor at validation issues"
+                  aria-label="validation issues on this distribution"
+                >
+                  ${renderIcon("triangle-alert", 14)}
+                </button>`
+              : ""}
+            <button
+              class="icon-btn subtle"
+              @click=${() => this._openDistributionEdit(d)}
+              title="edit distribution"
+              aria-label="edit distribution"
+            >
+              ${renderIcon("pencil", 14)}
+            </button>
+            <button
+              class="icon-btn subtle danger"
+              @click=${() => this._deleteDistribution(d)}
+              title="delete distribution"
+              aria-label="delete distribution"
+            >
+              ${renderIcon("trash-2", 14)}
+            </button>
+          </span>
+        </td>
+      </tr>
+    `;
+  }
+
+  _openDistributionCreate() {
+    this._distributionForm = {
+      mode: "create",
+      draft: {},
+      issues: [],
+      error: "",
+    };
+  }
+
+  async _openDistributionEdit(d) {
+    this._distributionForm = {
+      mode: "edit",
+      id: d.id,
+      draft: { ...d },
+      issues: [],
+      error: "",
+    };
+    try {
+      const resp = await api.issue.list({
+        table: "distribution",
+        record_id: d.id,
+        limit: 100,
+      });
+      if (this._distributionForm && this._distributionForm.id === d.id) {
+        this._distributionForm = {
+          ...this._distributionForm,
+          issues: resp.items || [],
+        };
+      }
+    } catch (_) {
+      // Silent — banner just won't render on fetch failure.
+    }
+  }
+
+  _cancelDistributionForm() {
+    this._distributionForm = null;
+  }
+
+  _distributionFieldChange(field, value) {
+    if (!this._distributionForm) return;
+    this._distributionForm = {
+      ...this._distributionForm,
+      draft: { ...this._distributionForm.draft, [field]: value },
+    };
+  }
+
+  async _submitDistributionForm() {
+    const f = this._distributionForm;
+    if (!f) return;
+    // Distribution requires at least an area OR area_id — otherwise
+    // there's no geography to record. Backend also validates but
+    // catching here saves a round-trip and shows the error next to
+    // the fields.
+    const hasArea =
+      (f.draft.area || "").trim() || (f.draft.area_id || "").trim();
+    if (!hasArea) {
+      this._distributionForm = {
+        ...f,
+        error: "area or area_id is required",
+      };
+      return;
+    }
+    try {
+      if (f.mode === "create") {
+        await api.taxon.createDistribution(this.taxonId, f.draft);
+      } else {
+        await api.distribution.patch(f.id, f.draft);
+      }
+      this._distributionForm = null;
+      await this._refreshDistributions();
+    } catch (err) {
+      this._distributionForm = {
+        ...f,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  async _deleteDistribution(d) {
+    const ok = await confirmAction({
+      heading: "Delete distribution?",
+      message: `"${d.area || d.area_id || d.id}" will be permanently deleted from this taxon.`,
+      actionLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      await api.distribution.delete(d.id);
+      await this._refreshDistributions();
+    } catch (err) {
+      this._error =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
+  }
+
+  async _refreshDistributions() {
+    if (!this.taxonId) return;
+    try {
+      const resp = await api.taxon.distributions(this.taxonId);
+      this._distributions = resp.items || [];
+    } catch (_) {
+      // Silent — stale list beats a flashing error.
+    }
+  }
+
+  _renderDistributionModal() {
+    const f = this._distributionForm;
+    if (!f) return "";
+    const d = f.draft;
+    const set = (field) => (e) =>
+      this._distributionFieldChange(field, e.target.value);
+    const heading =
+      f.mode === "edit" ? "Edit distribution" : "Add distribution";
+    const refActions = [
+      {
+        label: "Add new reference",
+        icon: "plus",
+        handler: () => (this._addingReferenceFor = "distribution"),
+      },
+    ];
+    return html`
+      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="distribution-modal-heading"
+          @keydown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this._cancelDistributionForm();
+            }
+          }}
+        >
+          <h3 id="distribution-modal-heading">${heading}</h3>
+          ${f.issues && f.issues.length > 0
+            ? html`
+                <div class="warning-banner">
+                  <strong>
+                    ${f.issues.length} open
+                    issue${f.issues.length > 1 ? "s" : ""} on this
+                    distribution:
+                  </strong>
+                  <ul>
+                    ${f.issues.map(
+                      (i) => html`<li>
+                        ${severityChip(i.severity)}
+                        <span>
+                          <span class="warning-rule"
+                            >${i.rule_name || i.rule_id}</span
+                          >:
+                          ${i.message}
+                          ${i.field_name
+                            ? html` <span class="warning-rule"
+                                >(${i.field_name})</span
+                              >`
+                            : ""}
+                        </span>
+                      </li>`,
+                    )}
+                  </ul>
+                </div>
+              `
+            : ""}
+          ${f.error
+            ? html`<div class="error" role="alert">${f.error}</div>`
+            : ""}
+          <form
+            class="distribution-form"
+            @submit=${(e) => {
+              e.preventDefault();
+              this._submitDistributionForm();
+            }}
+          >
+            <label for="dist-area">Area</label>
+            <input
+              id="dist-area"
+              type="text"
+              placeholder="e.g. Australia: Western Australia"
+              .value=${d.area || ""}
+              @input=${set("area")}
+              autofocus
+            />
+
+            <label for="dist-area-id">Area ID</label>
+            <input
+              id="dist-area-id"
+              type="text"
+              placeholder="Code within the gazetteer (e.g. AU-WA)"
+              .value=${d.area_id || ""}
+              @input=${set("area_id")}
+            />
+
+            <label>Gazetteer</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Gazetteer…"
+              .source=${vocabSource("gazetteer")}
+              .resolver=${vocabResolver("gazetteer")}
+              .value=${d.gazetteer || ""}
+              @pick=${(e) =>
+                this._distributionFieldChange("gazetteer", e.detail.id)}
+            ></sfga-combobox>
+
+            <label>Status</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Distribution status…"
+              .source=${vocabSource("distribution_status")}
+              .resolver=${vocabResolver("distribution_status")}
+              .value=${d.status || ""}
+              @pick=${(e) =>
+                this._distributionFieldChange("status", e.detail.id)}
+            ></sfga-combobox>
+
+            <label>Reference</label>
+            <sfga-combobox
+              min-search-chars="2"
+              placeholder="Search author / title / citation / DOI…"
+              .source=${referenceSource}
+              .resolver=${referenceResolver}
+              .value=${d.reference_id || ""}
+              .actions=${refActions}
+              @pick=${(e) =>
+                this._distributionFieldChange("reference_id", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="dist-remarks">Remarks</label>
+            <textarea
+              id="dist-remarks"
+              rows="2"
+              .value=${d.remarks || ""}
+              @input=${set("remarks")}
+            ></textarea>
+
+            <div class="toolbar">
+              <button
+                type="button"
+                @click=${() => this._cancelDistributionForm()}
+              >
+                Cancel
+              </button>
+              <button type="submit" class="primary">
+                ${f.mode === "edit" ? "Save changes" : "Add"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     `;
   }
 }
@@ -4869,6 +7051,25 @@ class SfgaDetail extends LitElement {
 //   3 BibTeX — textarea; on submit, parses via core.ParseBibTeX and
 //     shows a preview form; save-and-pick POSTs to /api/reference.
 //
+// extractDOI normalises any DOI-shaped input into its bare form
+// (10.NNNN/xxx). Accepts:
+//   * bare DOI: "10.1234/abc.def"
+//   * URL: "https://doi.org/10.1234/abc.def" or dx.doi.org
+//   * CURIE: "doi:10.1234/abc.def"
+// Returns "" if the input doesn't look like a DOI, so callers can
+// treat a "found DOI" as the signal to fall through to OpenAlex.
+function extractDOI(input) {
+  const s = (input || "").trim();
+  if (!s) return "";
+  // Strip common prefixes; leave the DOI proper for the regex to
+  // validate. `10.NNNN/…` is the DOI shape per doi.org standard.
+  const cleaned = s.replace(
+    /^(https?:\/\/(?:dx\.)?doi\.org\/|doi:)/i,
+    "",
+  );
+  return /^10\.\d{4,9}\/\S+$/i.test(cleaned) ? cleaned : "";
+}
+
 // Events:
 //   reference-picked  { id, label }  — modal closes; caller updates form.
 //   close                             — modal closes; no change.
@@ -4877,7 +7078,21 @@ class SfgaAddReferenceModal extends LitElement {
     contextCanonical: { attribute: false },
     contextAuthors: { attribute: false },
     contextYear: { attribute: false },
+    // defaultTab lets the caller land the modal on a specific tab.
+    // Values: "project" | "bhlnames" | "doi" | "bibtex". Callers with
+    // a name context (curator most likely adding the protologue paper)
+    // typically want "project"; non-name contexts (vernacular,
+    // distribution, section-level References) prefer "doi" since the
+    // curator usually has a paper reference in hand. See DESIGN.md
+    // § Reference-picker on every data-entry form.
+    defaultTab: { attribute: false },
     _tab: { state: true }, // 0..3
+    // Tab 0 (project) — inline DOI preview when the local search
+    // finds nothing and the query looks like a DOI. Shows a save-
+    // and-pick affordance so the curator doesn't need to switch tabs.
+    _projectDoiPreview: { state: true },
+    _projectDoiBusy: { state: true },
+    _projectDoiError: { state: true },
     _busy: { state: true },
     _error: { state: true },
     // Tab 0 (project)
@@ -5048,16 +7263,40 @@ class SfgaAddReferenceModal extends LitElement {
     this.contextCanonical = "";
     this.contextAuthors = "";
     this.contextYear = 0;
+    this.defaultTab = "project";
     this._tab = 0;
     this._busy = false;
     this._error = "";
     this._projectQuery = "";
     this._projectHits = [];
+    this._projectDoiPreview = null;
+    this._projectDoiBusy = false;
+    this._projectDoiError = "";
     this._bhlHits = [];
     this._bhlLoaded = false;
     this._doiInput = "";
     this._bibtexInput = "";
     this._preview = null;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    // Land on the caller-requested tab (name-editor callers keep the
+    // project search default; non-name contexts prefer DOI).
+    this._tab = SfgaAddReferenceModal._tabIndex(this.defaultTab);
+  }
+
+  static _tabIndex(name) {
+    switch (name) {
+      case "bhlnames":
+        return 1;
+      case "doi":
+        return 2;
+      case "bibtex":
+        return 3;
+      default:
+        return 0;
+    }
   }
 
   updated(changed) {
@@ -5210,20 +7449,27 @@ class SfgaAddReferenceModal extends LitElement {
 
   // ---------- Tab 0: Project ----------
   _renderProjectPane() {
+    const isDOI = !!extractDOI(this._projectQuery);
+    const emptyLocal =
+      this._projectHits.length === 0 &&
+      this._projectQuery.length >= 2 &&
+      !this._busy;
     return html`
       <p class="empty">
-        Search references already in this archive. Picking one just
-        links the name to it — nothing new is written.
+        Search references already in this archive by author, title,
+        citation, or DOI. Picking one links the name to it — nothing
+        new is written. Type a DOI the archive doesn't have and hive
+        will fetch it from OpenAlex for you.
       </p>
       <input
         type="text"
-        placeholder="Author / title / citation…"
+        placeholder="Author / title / citation / DOI…"
         .value=${this._projectQuery}
         @input=${(e) => this._onProjectInput(e.target.value)}
         autofocus
       />
       ${this._busy ? html`<div class="empty" role="status">Searching…</div>` : ""}
-      ${this._projectHits.length === 0 && this._projectQuery.length >= 2 && !this._busy
+      ${emptyLocal && !isDOI
         ? html`<div class="empty" role="status">No matches</div>`
         : ""}
       ${this._projectHits.map(
@@ -5245,11 +7491,48 @@ class SfgaAddReferenceModal extends LitElement {
           </div>
         `,
       )}
+      ${emptyLocal && isDOI && this._projectDoiBusy
+        ? html`<div class="empty" role="status">
+            Not in archive — looking up on OpenAlex…
+          </div>`
+        : ""}
+      ${this._projectDoiError
+        ? html`<div class="error" role="alert">
+            OpenAlex lookup failed: ${this._projectDoiError}
+          </div>`
+        : ""}
+      ${this._projectDoiPreview
+        ? html`<div class="hit doi-preview">
+            <div class="title">
+              ${this._projectDoiPreview.title ||
+              this._projectDoiPreview.citation ||
+              this._projectDoiPreview.doi}
+            </div>
+            <div class="meta">
+              ${this._projectDoiPreview.author || ""}${this._projectDoiPreview
+                .issued
+                ? ` (${(this._projectDoiPreview.issued + "").slice(0, 4)})`
+                : ""}
+              · resolved from OpenAlex
+            </div>
+            <div class="actions">
+              <button
+                class="primary"
+                ?disabled=${this._projectDoiBusy}
+                @click=${() => this._saveProjectDoiPreview()}
+              >
+                ${this._projectDoiBusy ? "Saving…" : "Add to archive + pick"}
+              </button>
+            </div>
+          </div>`
+        : ""}
     `;
   }
 
   async _onProjectInput(q) {
     this._projectQuery = q;
+    this._projectDoiPreview = null;
+    this._projectDoiError = "";
     if (q.length < 2) {
       this._projectHits = [];
       return;
@@ -5267,7 +7550,44 @@ class SfgaAddReferenceModal extends LitElement {
       } finally {
         this._busy = false;
       }
+      // DOI fallback — if the query looks like a DOI (bare, URL, or
+      // curie form) AND the local search found nothing, auto-resolve
+      // via OpenAlex so the curator sees a save-and-pick preview
+      // inline. Detection guarded to well-formed DOIs only so a stray
+      // author-name search doesn't hit OpenAlex.
+      const doi = extractDOI(q);
+      if (doi && this._projectHits.length === 0) {
+        this._projectDoiBusy = true;
+        try {
+          const ref = await api.reference.resolveDOI(doi);
+          if (this._projectQuery === q) this._projectDoiPreview = ref;
+        } catch (err) {
+          if (this._projectQuery === q) {
+            this._projectDoiError =
+              err.detail || err.message || String(err);
+          }
+        } finally {
+          this._projectDoiBusy = false;
+        }
+      }
     }, 200);
+  }
+
+  // _saveProjectDoiPreview persists the OpenAlex-resolved preview to
+  // the archive and picks it in one step, so the curator lands back
+  // in the source form with the newly-added reference selected.
+  async _saveProjectDoiPreview() {
+    const preview = this._projectDoiPreview;
+    if (!preview) return;
+    this._projectDoiBusy = true;
+    try {
+      const saved = await api.reference.create(preview);
+      this._pick(saved.id, referenceHitLabel(saved));
+    } catch (err) {
+      this._projectDoiError = err.detail || err.message || String(err);
+    } finally {
+      this._projectDoiBusy = false;
+    }
   }
 
   // ---------- Tab 1: BHLnames ----------
@@ -5506,6 +7826,14 @@ class SfgaCombobox extends LitElement {
     // Caller owns the state (persist / reset / defaults). See DESIGN.md
     // § Search combobox filter chips.
     filters: { attribute: false },
+    // When true, the input accepts typed values that don't match any
+    // source result. On blur (or Enter with no highlighted result),
+    // the current input text commits verbatim as {id: text, name: text}
+    // rather than reverting to the last committed value. Used by
+    // vocab pickers where the ISO catalog is incomplete (historical
+    // countries, curator-authored sex descriptors, etc.) — see
+    // DESIGN.md § Combobox free-text mode.
+    allowFreeText: { type: Boolean, attribute: "allow-free-text" },
     _input: { state: true },
     _results: { state: true },
     _open: { state: true },
@@ -5734,6 +8062,7 @@ class SfgaCombobox extends LitElement {
     this.resolver = null;
     this.actions = [];
     this.filters = [];
+    this.allowFreeText = false;
     this._input = "";
     this._results = [];
     this._open = false;
@@ -5827,10 +8156,19 @@ class SfgaCombobox extends LitElement {
       }
       this._focused = false;
       this._open = false;
-      // If the user typed something and didn't pick, revert to the last
-      // committed value's name so the input never shows a "phantom" state.
+      // If the user typed something and didn't pick:
+      //   * allow-free-text: commit the raw typed value as-is
+      //     (id === name === typed text). The caller stores whatever
+      //     was typed; validation later can flag off-vocab values.
+      //   * otherwise: revert to the last committed value's name so
+      //     the input never shows a "phantom" state.
       if (this._input !== (this.valueName || "")) {
-        this._input = this.valueName || "";
+        if (this.allowFreeText) {
+          const typed = this._input;
+          this._pick({ id: typed, name: typed });
+        } else {
+          this._input = this.valueName || "";
+        }
       }
     }, 150);
   }
@@ -5914,11 +8252,22 @@ class SfgaCombobox extends LitElement {
         e.preventDefault();
         {
           const nActions = this.actions?.length || 0;
-          if (this._hover < 0) break;
-          if (this._hover < nActions) {
-            this._runAction(this.actions[this._hover]);
-          } else if (this._hover - nActions < this._results.length) {
-            this._pick(this._results[this._hover - nActions]);
+          if (this._hover >= 0) {
+            if (this._hover < nActions) {
+              this._runAction(this.actions[this._hover]);
+              break;
+            } else if (this._hover - nActions < this._results.length) {
+              this._pick(this._results[this._hover - nActions]);
+              break;
+            }
+          }
+          // No highlighted result to pick. In allow-free-text mode,
+          // Enter commits whatever the curator typed (empty allowed —
+          // maps to clearing the field). Otherwise Enter is a no-op
+          // so the input stays as-is until the curator picks.
+          if (this.allowFreeText) {
+            const typed = this._input;
+            this._pick({ id: typed, name: typed });
           }
         }
         break;
