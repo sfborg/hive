@@ -43,6 +43,19 @@ type TaxonHit struct {
 	// display it alongside Name so curators can see why a result
 	// appeared when it came in via a synonym.
 	MatchedName string
+
+	// ParentName / ParentAuthorship / ParentRank / ParentLabel carry
+	// the immediate parent taxon's display context so search
+	// front-ends can disambiguate homonyms (two accepted taxa sharing
+	// a canonical name) and give synonym rows a "this is where you
+	// land" cue. Populated only by SearchTaxa; list endpoints
+	// (ListChildrenPage, roots, Classification) leave them zero and
+	// the wire converter elides the parent object when ParentName is
+	// empty. Root-level taxa (no parent) also leave them zero.
+	ParentName       string
+	ParentAuthorship string
+	ParentRank       string
+	ParentLabel      Label
 }
 
 // GetTaxon returns the taxon with the given col__id.
@@ -339,47 +352,182 @@ func stripLikeWildcards(q string) string {
 	return r.Replace(q)
 }
 
-// SearchTaxa returns up to `limit` taxa whose associated name canonical or
-// scientific-name string matches q as a case-insensitive prefix. Returns
-// thin TaxonHit projections — same shape as ListChildren so the WUI's
-// tree components can render either result set uniformly.
+// SearchMode selects the matching algorithm SearchTaxa uses to find
+// candidate names. Prefix — the default — is fast and unambiguous but
+// only matches names that start with the query. Partial uses an FTS5
+// mirror to match on any word-prefix in the canonical or scientific
+// name string, so typing an epithet like "rusci" finds
+// "Ceroplastes rusci". Fuzzy (added in a follow-up step) will use a
+// trigram FTS5 mirror to tolerate typos.
+type SearchMode string
+
+const (
+	SearchModePrefix  SearchMode = "prefix"
+	SearchModePartial SearchMode = "partial"
+	SearchModeFuzzy   SearchMode = "fuzzy" // TODO(step-3)
+)
+
+// SearchOpts bundles the knobs SearchTaxa accepts. Zero value
+// (empty Mode, IncludeSynonyms=false, Limit=0) is a valid call that
+// behaves as prefix-only, accepted-only, limit=50 — the default
+// combobox contract.
+type SearchOpts struct {
+	// Mode selects the matching algorithm. Empty is treated as
+	// SearchModePrefix so calls that don't care about mode stay
+	// compatible.
+	Mode SearchMode
+	// IncludeSynonyms extends results with accepted taxa reached
+	// via a matching synonym (see SearchTaxa for the resolution
+	// semantics).
+	IncludeSynonyms bool
+	// Limit caps the number of returned hits. Zero → 50.
+	Limit int
+}
+
+// SearchTaxa returns up to opts.Limit taxa whose associated name
+// canonical or scientific-name string matches q under opts.Mode.
+// Returns thin TaxonHit projections — same shape as ListChildren so
+// the WUI's tree components can render either result set uniformly.
 //
-// When includeSynonyms is true, the result set also includes accepted
-// taxa reached via a matching synonym: for each synonym whose name
-// prefix-matches q, the accepted taxon it points at appears in the
-// results with IsSynonym=true and MatchedName set to the synonym's
-// text. Pro-parte synonyms — one synonym row family pointing at
-// multiple accepted taxa — produce one hit per resolved accepted
-// taxon so curators see every destination. If the same accepted
-// taxon matches both by its own name and via a synonym, the accepted
-// row wins; the synonym row is dropped.
+// When opts.IncludeSynonyms is true, the result set also includes
+// accepted taxa reached via a matching synonym: for each synonym
+// whose name matches q, the accepted taxon it points at appears in
+// the results with IsSynonym=true and MatchedName set to the
+// synonym's text. Pro-parte synonyms — one synonym row family
+// pointing at multiple accepted taxa — produce one hit per resolved
+// accepted taxon so curators see every destination. If the same
+// accepted taxon matches both by its own name and via a synonym,
+// the accepted row wins; the synonym row is dropped.
 //
 // Ordering is alphabetical by matched_name so synonym and accepted
 // hits interleave in the order curators would look for them.
 //
-// Prefix (LIKE 'q%') rather than substring lets the query use the
-// NOCASE indices on name (and idx_synonym_name_id on synonym) added
-// in ensureHiveTables. On COL 26-07 (5.4M names, 2.7M synonyms) the
-// full include_synonyms path returns in under 100ms; see DEFERRED.md
-// § Substring name search (FTS follow-up) for the substring-semantics
-// follow-up.
-func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int, includeSynonyms bool) ([]TaxonHit, error) {
-	if limit <= 0 {
-		limit = 50
+// Every hit carries parent context (ParentName / ParentLabel /
+// ParentRank) so front-ends can disambiguate homonyms and give
+// synonym rows a "you land under X" cue. Root-level accepted taxa
+// leave the parent fields empty.
+//
+// See DEFERRED.md § Substring name search (FTS follow-up) for the
+// substring-semantics extension that composes with partial mode.
+func (a *Archive) SearchTaxa(ctx context.Context, q string, opts SearchOpts) ([]TaxonHit, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 50
 	}
-	pattern := stripLikeWildcards(q) + "%"
+	var (
+		body string
+		args []any
+		err  error
+	)
+	switch opts.Mode {
+	case "", SearchModePrefix:
+		body, args = a.searchArmsPrefix(q, opts.IncludeSynonyms, opts.Limit)
+	case SearchModePartial:
+		body, args, err = a.searchArmsPartial(q, opts.IncludeSynonyms, opts.Limit)
+		if err != nil {
+			return nil, err
+		}
+	case SearchModeFuzzy:
+		// Step 3 will back this mode with a trigram FTS5 mirror.
+		// Until then, fall through to prefix — the WUI's fuzzy chip
+		// already exists and this keeps it from erroring out mid-
+		// rollout. Errors would fail the search silently in the
+		// combobox and hide the mode toggle's effect entirely.
+		body, args = a.searchArmsPrefix(q, opts.IncludeSynonyms, opts.Limit)
+	default:
+		return nil, fmt.Errorf("core: search taxa: unknown mode %q: %w", opts.Mode, ErrValidation)
+	}
+	if body == "" {
+		return nil, nil
+	}
+	args = append(args, opts.Limit)
+	rows, err := a.db.QueryContext(ctx, wrapSearchBody(body), args...)
+	if err != nil {
+		return nil, fmt.Errorf("core: search taxa %q: %w", q, err)
+	}
+	defer rows.Close()
+	return scanSearchHits(rows)
+}
 
-	// Two arms per source (canonical + scientific text columns) each
-	// hit a dedicated NOCASE index — UNION ALL keeps each arm on its
-	// own index (an OR predicate on both columns would prevent the
-	// planner from using either). The outer ROW_NUMBER partitions by
-	// accepted-taxon id so a synonym pointing at a taxon that also
-	// matches by its own name collapses to the accepted row.
-	//
-	// Per-arm LIMIT keeps the intermediate result set bounded even
-	// when the query is a very common prefix (e.g., a single letter);
-	// each arm is guaranteed to contribute enough candidates to
-	// satisfy the outer LIMIT after dedup, since limit ≤ per-arm cap.
+// wrapSearchBody wraps a mode-specific UNION ALL body in the shared
+// outer pipeline: ROW_NUMBER dedup preferring the accepted row per
+// taxon id, LEFT JOINs for parent context, final ORDER BY + LIMIT.
+// Callers append the outer LIMIT to their args slice.
+//
+// Parent context (pn.gn__canonical_simple / col__authorship /
+// col__rank_id) is joined on the OUTER select — after dedup and
+// LIMIT — so the JOIN runs on at most `limit` rows (typically ≤ 50).
+// Both joins are PK lookups; LEFT JOIN keeps root-level taxa (empty
+// parent_id) and orphaned parent links from dropping the row.
+func wrapSearchBody(body string) string {
+	return `SELECT
+		picked.id,
+		picked.parent_id,
+		picked.name_id,
+		picked.display_name,
+		picked.authorship,
+		picked.rank_id,
+		picked.status_id,
+		picked.extinct,
+		picked.is_synonym,
+		picked.matched_name,
+		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = picked.id) AS has_children,
+		COALESCE(NULLIF(pn.gn__canonical_simple, ''), pn.col__scientific_name, '') AS parent_name,
+		COALESCE(pn.col__authorship, '') AS parent_authorship,
+		COALESCE(pn.col__rank_id, '') AS parent_rank
+	FROM (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY id ORDER BY is_synonym, matched_name
+		) AS rn
+		FROM (` + body + `)
+	) picked
+	LEFT JOIN taxon pt ON pt.col__id = picked.parent_id AND picked.parent_id <> ''
+	LEFT JOIN name  pn ON pn.col__id = pt.col__name_id
+	WHERE picked.rn = 1
+	ORDER BY picked.matched_name
+	LIMIT ?`
+}
+
+// scanSearchHits reads the shared search projection into a []TaxonHit
+// slice, computing Label and ParentLabel from the raw column values.
+func scanSearchHits(rows *sql.Rows) ([]TaxonHit, error) {
+	var hits []TaxonHit
+	for rows.Next() {
+		var (
+			h         TaxonHit
+			isSynonym int
+		)
+		if err := rows.Scan(
+			&h.ID, &h.ParentID, &h.NameID,
+			&h.Name, &h.Authorship, &h.Rank,
+			&h.Status, &h.Extinct,
+			&isSynonym, &h.MatchedName,
+			&h.HasChildren,
+			&h.ParentName, &h.ParentAuthorship, &h.ParentRank,
+		); err != nil {
+			return nil, fmt.Errorf("core: scan taxa hit: %w", err)
+		}
+		h.IsSynonym = isSynonym == 1
+		h.Label = BuildLabel(h.Name, h.Authorship, h.Rank, h.Extinct.Valid && h.Extinct.Bool)
+		if h.ParentName != "" {
+			// Parent labels don't carry the extinct dagger — the parent
+			// is context, not the row itself. Extinct annotation belongs
+			// on the row we're actually navigating to.
+			h.ParentLabel = BuildLabel(h.ParentName, h.ParentAuthorship, h.ParentRank, false)
+		}
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
+
+// searchArmsPrefix builds the UNION ALL body for prefix-mode search:
+// two arms per source (canonical + scientific text columns), each
+// hitting a dedicated NOCASE index (an OR predicate on both columns
+// would prevent the planner from using either). Per-arm LIMIT keeps
+// the intermediate result set bounded even when the query is a very
+// common prefix (a single letter); the outer dedup + LIMIT then
+// picks the top `limit` after cross-arm collapsing.
+func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (string, []any) {
+	pattern := stripLikeWildcards(q) + "%"
 	acceptedArms := `
 		SELECT * FROM (
 			SELECT
@@ -416,7 +564,6 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int, includeSy
 			WHERE n.col__scientific_name LIKE ? COLLATE NOCASE
 			LIMIT ?
 		)`
-
 	synonymArms := `
 		UNION ALL
 		SELECT * FROM (
@@ -458,63 +605,147 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, limit int, includeSy
 			WHERE sname.col__scientific_name LIKE ? COLLATE NOCASE
 			LIMIT ?
 		)`
-
-	// Dedup: PARTITION BY accepted-taxon id and pick the accepted row
-	// when both present (is_synonym=0 sorts before 1). Pro-parte
-	// preserved automatically since distinct accepted taxa land in
-	// distinct partitions. has_children is computed in the outer
-	// select over the dedup'd rows so we don't run the EXISTS probe
-	// for rows we're about to drop.
 	body := acceptedArms
-	if includeSynonyms {
-		body += synonymArms
-	}
-	query := `SELECT
-		id, parent_id, name_id, display_name, authorship, rank_id,
-		status_id, extinct, is_synonym, matched_name,
-		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = id) AS has_children
-	FROM (
-		SELECT *, ROW_NUMBER() OVER (
-			PARTITION BY id ORDER BY is_synonym, matched_name
-		) AS rn
-		FROM (` + body + `)
-	)
-	WHERE rn = 1
-	ORDER BY matched_name
-	LIMIT ?`
-
 	args := []any{pattern, limit, pattern, limit}
 	if includeSynonyms {
+		body += synonymArms
 		args = append(args, pattern, limit, pattern, limit)
 	}
-	args = append(args, limit)
+	return body, args
+}
 
-	rows, err := a.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("core: search taxa %q: %w", q, err)
+// searchArmsPartial builds the UNION ALL body for partial-mode
+// search: token-prefix MATCH against the hive__name_fts mirror.
+// One accepted arm and (when opts.IncludeSynonyms is set) one
+// synonym arm — the FTS MATCH searches both indexed columns at
+// once, so we don't need the per-column split the prefix mode
+// requires.
+//
+// buildFTSMatch runs gnparser on the query first: parseable
+// binomials return their canonical (authorship stripped) as the
+// tokenized input, so pasting "Panthera leo (Linnaeus, 1758)" is
+// equivalent to typing "Panthera leo". Unparseable input is
+// tokenized as-is by whitespace-splitting.
+//
+// Returns "" body if the query yields no tokens — the caller
+// treats that as an empty result set.
+func (a *Archive) searchArmsPartial(q string, includeSynonyms bool, limit int) (string, []any, error) {
+	match := a.buildFTSMatch(q)
+	if match == "" {
+		return "", nil, nil
 	}
-	defer rows.Close()
+	// Per-arm LIMIT is inflated (perArmLimit) so the FTS pool
+	// contains enough relevant candidates to survive dedup and
+	// outer alphabetization. bm25 ordering picks the most relevant
+	// candidates per FTS5's built-in relevance score — shorter /
+	// rarer-token matches float up. Step 4's composite ranking will
+	// override this with a taxonomy-aware score (epithet-position,
+	// capitalization hint, authorship boost); for now bm25 is a
+	// sensible interim so the top-N always contains the "obvious"
+	// matches for a query.
+	perArmLimit := max(limit*4, 50)
+	acceptedArm := `
+		SELECT * FROM (
+			SELECT
+				t.col__id AS id,
+				COALESCE(t.col__parent_id, '') AS parent_id,
+				t.col__name_id AS name_id,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(n.col__authorship, '') AS authorship,
+				COALESCE(n.col__rank_id, '') AS rank_id,
+				COALESCE(t.col__status_id, '') AS status_id,
+				t.col__extinct AS extinct,
+				0 AS is_synonym,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name
+			FROM hive__name_fts fts
+			JOIN name n ON n.rowid = fts.rowid
+			JOIN taxon t ON t.col__name_id = n.col__id
+			WHERE hive__name_fts MATCH ?
+			ORDER BY bm25(hive__name_fts)
+			LIMIT ?
+		)`
+	synonymArm := `
+		UNION ALL
+		SELECT * FROM (
+			SELECT
+				t.col__id,
+				COALESCE(t.col__parent_id, ''),
+				t.col__name_id,
+				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(acc.col__authorship, ''),
+				COALESCE(acc.col__rank_id, ''),
+				COALESCE(t.col__status_id, ''),
+				t.col__extinct,
+				1,
+				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, '')
+			FROM hive__name_fts fts
+			JOIN name sname ON sname.rowid = fts.rowid
+			JOIN synonym s ON s.col__name_id = sname.col__id
+			JOIN taxon t ON t.col__id = s.col__taxon_id
+			JOIN name acc ON acc.col__id = t.col__name_id
+			WHERE hive__name_fts MATCH ?
+			ORDER BY bm25(hive__name_fts)
+			LIMIT ?
+		)`
+	body := acceptedArm
+	args := []any{match, perArmLimit}
+	if includeSynonyms {
+		body += synonymArm
+		args = append(args, match, perArmLimit)
+	}
+	return body, args, nil
+}
 
-	var hits []TaxonHit
-	for rows.Next() {
-		var (
-			h         TaxonHit
-			isSynonym int
-		)
-		if err := rows.Scan(
-			&h.ID, &h.ParentID, &h.NameID,
-			&h.Name, &h.Authorship, &h.Rank,
-			&h.Status, &h.Extinct,
-			&isSynonym, &h.MatchedName,
-			&h.HasChildren,
-		); err != nil {
-			return nil, fmt.Errorf("core: scan taxa hit: %w", err)
+// buildFTSMatch turns a user query into an FTS5 MATCH expression.
+// Uses gnparser to detect binomials and strip authorship, then
+// converts the remaining canonical (or the raw input for
+// unparseable queries) into a space-joined list of quoted
+// token-prefix terms — the FTS5 form that supports word-boundary
+// matches in any order.
+//
+// Returns "" for a query that yields no usable tokens (empty
+// input, all-punctuation input, etc.) so the caller can short-
+// circuit to an empty result set.
+func (a *Archive) buildFTSMatch(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return ""
+	}
+	// Try gnparser first — a well-formed binomial + authorship
+	// ("Panthera leo (Linnaeus, 1758)") parses cleanly and the
+	// canonical drops the authorship for us. Cardinality >= 2
+	// signals the parser recognized a multi-token name; single-
+	// word fragments (Cardinality == 1) and unparseable strings
+	// (Cardinality == 0) fall through to the raw-text path.
+	a.parserMu.Lock()
+	parsed := a.parser.ParseName(q).Flatten()
+	a.parserMu.Unlock()
+	text := q
+	if parsed.Cardinality >= 2 && parsed.CanonicalSimple != "" {
+		text = parsed.CanonicalSimple
+	}
+	return ftsMatchFromTokens(strings.Fields(text))
+}
+
+// ftsMatchFromTokens joins tokens into an FTS5 MATCH expression of
+// the form `"tok1"* "tok2"* …`. Each token is double-quoted so
+// hyphens / punctuation don't collide with FTS5's query operators,
+// and suffixed with `*` for token-prefix matching. Embedded double
+// quotes are escaped by doubling per FTS5 syntax.
+func ftsMatchFromTokens(tokens []string) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
 		}
-		h.IsSynonym = isSynonym == 1
-		h.Label = BuildLabel(h.Name, h.Authorship, h.Rank, h.Extinct.Valid && h.Extinct.Bool)
-		hits = append(hits, h)
+		t = strings.ReplaceAll(t, `"`, `""`)
+		parts = append(parts, `"`+t+`"*`)
 	}
-	return hits, rows.Err()
+	return strings.Join(parts, " ")
 }
 
 // ListChildrenPage returns direct children with SQL-level LIMIT/OFFSET

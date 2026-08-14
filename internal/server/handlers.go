@@ -487,7 +487,16 @@ func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 		limit = clampPageSize(n)
 	}
 	includeSynonyms := parseBoolParam(r.URL.Query().Get("include_synonyms"))
-	hits, err := s.a.SearchTaxa(r.Context(), q, limit, includeSynonyms)
+	mode, err := parseSearchMode(r.URL.Query().Get("mode"))
+	if err != nil {
+		writeBadRequest(w, r, err.Error())
+		return
+	}
+	hits, err := s.a.SearchTaxa(r.Context(), q, hive.SearchOpts{
+		Mode:            mode,
+		IncludeSynonyms: includeSynonyms,
+		Limit:           limit,
+	})
 	if err != nil {
 		writeProblem(w, r, err)
 		return
@@ -507,6 +516,22 @@ func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, apiPage[apiTaxonHit]{Items: items})
+}
+
+// parseSearchMode maps the `mode` query-string value to a
+// hive.SearchMode. Empty or missing → prefix (the default,
+// backward-compatible with pre-partial callers). Unknown values
+// return an error the handler surfaces as 400.
+func parseSearchMode(v string) (hive.SearchMode, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "prefix":
+		return hive.SearchModePrefix, nil
+	case "partial":
+		return hive.SearchModePartial, nil
+	case "fuzzy":
+		return hive.SearchModeFuzzy, nil
+	}
+	return "", fmt.Errorf("invalid 'mode' value %q (expected prefix, partial, or fuzzy)", v)
 }
 
 // parseBoolParam interprets a query-string flag. Accepts the common

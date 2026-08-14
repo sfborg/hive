@@ -488,7 +488,10 @@ func taxonComboSource(a *hive.Archive) comboboxSource {
 			if len(trimmed) < 2 {
 				return comboboxResultsMsg{query: q, results: nil}
 			}
-			hits, err := a.SearchTaxa(context.Background(), trimmed, 20, true)
+			hits, err := a.SearchTaxa(context.Background(), trimmed, hive.SearchOpts{
+				IncludeSynonyms: true,
+				Limit:           20,
+			})
 			if err != nil {
 				return comboboxResultsMsg{query: q, results: nil}
 			}

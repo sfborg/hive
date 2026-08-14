@@ -194,6 +194,14 @@ type apiTaxonHit struct {
 	// canonical for synonym matches. Elided when unset (list
 	// endpoints leave it empty; front-ends fall back to name).
 	MatchedName string `json:"matched_name,omitempty"`
+	// Parent carries the immediate parent taxon's id + rendered
+	// label (rank baked in via BuildLabel) so front-ends can
+	// disambiguate homonyms — two accepted taxa sharing a canonical
+	// — and give synonym rows a "you land under X" cue. Populated
+	// only by SearchTaxa; list endpoints (children, roots) leave it
+	// nil, which the JSON omitempty erases. Root-level taxa also
+	// leave it nil.
+	Parent *apiRef `json:"parent,omitempty"`
 }
 
 // apiNameHit is a name-search projection.
@@ -221,9 +229,16 @@ type apiLabel struct {
 // curator can't read (parent taxon, according-to reference, name
 // relations, ...). Nested objects keep the top-level API tidy even as
 // more resolved references get added.
+//
+// Rank is populated only where callers need it for disambiguation
+// (search hits' parent, currently); other uses leave it empty and the
+// JSON omitempty erases it. BuildLabel's text form doesn't carry the
+// rank, so front-ends that want a "Panthera (genus)" style hint read
+// this field directly.
 type apiRef struct {
 	ID    string   `json:"id"`
 	Label apiLabel `json:"label,omitzero"`
+	Rank  string   `json:"rank,omitempty"`
 }
 
 // apiTaxon is the detail-view projection for GET /api/taxon/{id}. Covers
@@ -817,7 +832,7 @@ func applyNamePatch(n *coldp.Name, p apiNamePatch) {
 // ---------- converters ----------
 
 func hitToAPI(h hive.TaxonHit) apiTaxonHit {
-	return apiTaxonHit{
+	out := apiTaxonHit{
 		ID:          h.ID,
 		ParentID:    h.ParentID,
 		NameID:      h.NameID,
@@ -831,6 +846,19 @@ func hitToAPI(h hive.TaxonHit) apiTaxonHit {
 		IsSynonym:   h.IsSynonym,
 		MatchedName: h.MatchedName,
 	}
+	// Parent context is search-only. List endpoints leave ParentName
+	// empty so the wire object stays nil (omitempty drops the field).
+	if h.ParentName != "" {
+		out.Parent = &apiRef{
+			ID: h.ParentID,
+			Label: apiLabel{
+				Text: h.ParentLabel.Text,
+				HTML: h.ParentLabel.HTML,
+			},
+			Rank: h.ParentRank,
+		}
+	}
+	return out
 }
 
 func nameHitToAPI(h hive.NameHit) apiNameHit {

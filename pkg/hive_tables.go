@@ -191,6 +191,55 @@ CREATE INDEX IF NOT EXISTS idx_name_canonical_simple_nocase
 -- the name→synonym lookup would otherwise scan the 2.7M-row synonym
 -- table.
 CREATE INDEX IF NOT EXISTS idx_synonym_name_id ON synonym (col__name_id);
+
+-- hive__name_fts is an FTS5 mirror of name.gn__canonical_simple and
+-- name.col__scientific_name, tokenized with unicode61 (word-based,
+-- diacritic-stripped). Backs the "partial" search mode: curators can
+-- type an epithet like "rusci" and MATCH 'rusci*' finds "Ceroplastes
+-- rusci" via token-prefix, or a multi-word fragment like "cero rusci"
+-- and MATCH 'cero* rusci*' finds it regardless of word order.
+--
+-- content='name' is FTS5's external-content mode — the FTS table
+-- stores only the tokenized index, not the text itself, so storage
+-- overhead is small (~4% on COL 26-07: 5.4M rows, ~200MB index).
+-- Query results give us name.rowid; we JOIN back for the actual
+-- columns.
+--
+-- Initial populate is a one-shot INSERT ... SELECT that runs the
+-- first time hive opens an archive with a populated name table but
+-- an empty FTS mirror (see ensureNameFTSPopulated). On COL 26-07 the
+-- build takes ~9s; subsequent opens are instant.
+--
+-- remove_diacritics 2 strips accents so 'Flüela' and 'Fluela' match
+-- interchangeably — useful for taxonomic names that carry Latin /
+-- German umlauts.
+CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts USING fts5(
+  gn__canonical_simple,
+  col__scientific_name,
+  content='name',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Triggers keep the FTS index in sync with the name table on every
+-- INSERT / UPDATE / DELETE. External-content FTS5 requires the
+-- special 'delete' command form for removals — passing old.rowid +
+-- old columns tells FTS5 which tokens to unindex. On UPDATE we emit
+-- a delete + insert pair so a canonical-name change (e.g., gnparser
+-- refresh) doesn't leave stale tokens.
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_ai AFTER INSERT ON name BEGIN
+  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+END;
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_ad AFTER DELETE ON name BEGIN
+  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+END;
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_au AFTER UPDATE ON name BEGIN
+  INSERT INTO hive__name_fts(hive__name_fts, rowid, gn__canonical_simple, col__scientific_name)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+  INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+END;
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
@@ -231,6 +280,59 @@ func ensureHiveTables(ctx context.Context, db *sql.DB) error {
 	)
 	if err != nil {
 		return fmt.Errorf("core: backfill hive__metadata_touched: %w", err)
+	}
+	if err := ensureNameFTSPopulated(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureNameFTSPopulated runs the one-shot initial build of
+// hive__name_fts when the FTS mirror's token index is empty but the
+// name table is not. Handles two cases:
+//
+//  1. Fresh archive from a non-hive tool (harvester, sf, older
+//     hive without FTS support) — the CREATE VIRTUAL TABLE runs
+//     for the first time and the token index is empty.
+//  2. Archive where an earlier hive version's populate path used
+//     `INSERT INTO fts(rowid, col1, col2) SELECT ...`, which under
+//     modernc.org/sqlite silently populates the docsize shadow
+//     table without actually tokenizing content — leaving MATCH
+//     queries returning zero results despite `SELECT COUNT(*) FROM
+//     hive__name_fts` reporting a positive number.
+//
+// Detection checks `hive__name_fts_idx`, the segment index shadow
+// table that FTS5's own build path populates. Docsize-populated-
+// but-idx-empty is the broken state; `rebuild` fixes it without a
+// DROP TABLE round-trip. On a truly empty archive both shadow
+// tables are empty, and we skip the rebuild.
+//
+// Deliberately does NOT try to repair partial staleness (name rows
+// added by an external tool that bypasses the sync triggers).
+// v0 assumes hive is the sole writer once an archive is opened by
+// hive; a POST /api/reindex/name-fts endpoint would let curators
+// force a rebuild if that assumption breaks.
+//
+// Build cost on COL 26-07 (5.4M name rows): ~9 seconds one-time.
+func ensureNameFTSPopulated(ctx context.Context, db *sql.DB) error {
+	var idxRows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM hive__name_fts_idx`).Scan(&idxRows); err != nil {
+		return fmt.Errorf("core: count hive__name_fts_idx: %w", err)
+	}
+	if idxRows > 0 {
+		return nil
+	}
+	var nameRows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM name`).Scan(&nameRows); err != nil {
+		return fmt.Errorf("core: count name: %w", err)
+	}
+	if nameRows == 0 {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO hive__name_fts(hive__name_fts) VALUES('rebuild')`,
+	); err != nil {
+		return fmt.Errorf("core: rebuild hive__name_fts: %w", err)
 	}
 	return nil
 }
