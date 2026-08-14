@@ -54,6 +54,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon/{id}/vernaculars", s.handleCreateVernacular)
 	mux.HandleFunc("PATCH /api/vernacular/{id}", s.handlePatchVernacular)
 	mux.HandleFunc("DELETE /api/vernacular/{id}", s.handleDeleteVernacular)
+	mux.HandleFunc("GET /api/taxon/{id}/distributions", s.handleListDistributions)
+	mux.HandleFunc("POST /api/taxon/{id}/distributions", s.handleCreateDistribution)
+	mux.HandleFunc("PATCH /api/distribution/{id}", s.handlePatchDistribution)
+	mux.HandleFunc("DELETE /api/distribution/{id}", s.handleDeleteDistribution)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
@@ -697,6 +701,165 @@ func ptrBoolToNull(p *bool) sql.NullBool {
 		return sql.NullBool{}
 	}
 	return sql.NullBool{Bool: *p, Valid: true}
+}
+
+// handleListDistributions returns every distribution row attached
+// to the given taxon, ordered by gazetteer + area. Same rowid-as-
+// string handle pattern as vernaculars — front-ends address rows
+// via PATCH/DELETE /api/distribution/{id}.
+func (s *server) handleListDistributions(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	hits, err := s.a.ListDistributions(r.Context(), taxonID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiDistribution, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, distributionHitToAPI(h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiDistribution]{Items: items})
+}
+
+// handleCreateDistribution writes a new distribution row attached
+// to the {id} taxon and returns the freshly-hydrated
+// apiDistribution so the caller can splice it into local state
+// without a follow-up list refresh. TaxonID is taken from the
+// path, not the body — consistent with the vernacular create.
+func (s *server) handleCreateDistribution(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	var body apiDistribution
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.TaxonID = taxonID
+	var newID int64
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		id, err := tx.AddDistribution(coldp.Distribution{
+			TaxonID:     body.TaxonID,
+			SourceID:    body.SourceID,
+			Area:        body.Area,
+			AreaID:      body.AreaID,
+			Gazetteer:   coldp.NewGazetteerEnt(body.Gazetteer),
+			Status:      coldp.NewDistrStatus(body.Status),
+			ReferenceID: body.ReferenceID,
+			Remarks:     body.Remarks,
+		})
+		newID = id
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetDistribution(r.Context(), newID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, distributionHitToAPI(*fresh))
+}
+
+// handlePatchDistribution applies a partial update. Nil fields on
+// the patch mean "leave alone"; a set pointer to zero-value
+// clears the field. TaxonID is not editable — reparent via
+// delete+add on the new taxon.
+func (s *server) handlePatchDistribution(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseDistributionRowID(w, r)
+	if !ok {
+		return
+	}
+	var patch apiDistributionPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		current, err := s.a.GetDistribution(r.Context(), rowid)
+		if err != nil {
+			return err
+		}
+		merged := coldp.Distribution{
+			TaxonID:     current.TaxonID,
+			SourceID:    current.SourceID,
+			Area:        current.Area,
+			AreaID:      current.AreaID,
+			Gazetteer:   current.Gazetteer,
+			Status:      current.Status,
+			ReferenceID: current.ReferenceID,
+			Remarks:     current.Remarks,
+		}
+		applyDistributionPatch(&merged, patch)
+		return tx.UpdateDistribution(rowid, merged)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetDistribution(r.Context(), rowid)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, distributionHitToAPI(*fresh))
+}
+
+// handleDeleteDistribution removes the row at the given rowid.
+// Unknown row → 404 via ErrNotFound.
+func (s *server) handleDeleteDistribution(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseDistributionRowID(w, r)
+	if !ok {
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteDistribution(rowid)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseDistributionRowID pulls the {id} path parameter and parses
+// it as an int64. Mirrors parseVernacularRowID.
+func parseDistributionRowID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeBadRequest(w, r, "invalid distribution id: "+raw)
+		return 0, false
+	}
+	return n, true
+}
+
+// applyDistributionPatch layers the pointer-optional patch onto
+// the merged coldp.Distribution. Enum fields (gazetteer, status)
+// go through coldp constructors so empty-string means "clear the
+// enum" cleanly.
+func applyDistributionPatch(d *coldp.Distribution, p apiDistributionPatch) {
+	if p.Area != nil {
+		d.Area = *p.Area
+	}
+	if p.AreaID != nil {
+		d.AreaID = *p.AreaID
+	}
+	if p.Gazetteer != nil {
+		d.Gazetteer = coldp.NewGazetteerEnt(*p.Gazetteer)
+	}
+	if p.Status != nil {
+		d.Status = coldp.NewDistrStatus(*p.Status)
+	}
+	if p.SourceID != nil {
+		d.SourceID = *p.SourceID
+	}
+	if p.ReferenceID != nil {
+		d.ReferenceID = *p.ReferenceID
+	}
+	if p.Remarks != nil {
+		d.Remarks = *p.Remarks
+	}
 }
 
 func (s *server) handleGetName(w http.ResponseWriter, r *http.Request) {

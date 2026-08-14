@@ -457,6 +457,52 @@ type apiVernacularPatch struct {
 	Remarks         *string `json:"remarks,omitempty"`
 }
 
+// apiDistribution is the wire form of a distribution row. Same
+// rowid-as-string handle as apiVernacular; sfga's distribution
+// table has no col__id column, so hive uses SQLite's implicit
+// rowid.
+//
+// Area is the free-text label for the region ("Australia: Western
+// Australia"); AreaID is the code within the gazetteer ("AU-WA").
+// Both may be set together or one alone — TEXT-gazetteer rows
+// carry only Area; ISO/TDWG/TEOW-gazetteer rows usually carry
+// both. Gazetteer and Status are enum ids matching sfga's
+// gazetteer / distribution_status vocab tables (served by
+// /api/vocab).
+type apiDistribution struct {
+	ID          string `json:"id"`
+	TaxonID     string `json:"taxon_id"`
+	Area        string `json:"area,omitempty"`
+	AreaID      string `json:"area_id,omitempty"`
+	Gazetteer   string `json:"gazetteer,omitempty"`
+	Status      string `json:"status,omitempty"`
+	SourceID    string `json:"source_id,omitempty"`
+	ReferenceID string `json:"reference_id,omitempty"`
+	Remarks     string `json:"remarks,omitempty"`
+	Modified    string `json:"modified,omitempty"`
+	ModifiedBy  string `json:"modified_by,omitempty"`
+	// IssueCount is the number of open validation issues currently
+	// filed against this distribution row (table_name='distribution',
+	// not-yet-acknowledged). Zero → elided from JSON. Front-ends
+	// render a warn icon on the row when > 0.
+	IssueCount int `json:"issue_count,omitempty"`
+}
+
+// apiDistributionPatch mirrors apiDistribution as pointer-optional
+// fields so a curator can send only what changed. Same "nil =
+// leave alone, set to zero-value = clear" contract as
+// apiVernacularPatch. TaxonID isn't included — reparenting a
+// distribution is delete+add on a different taxon.
+type apiDistributionPatch struct {
+	Area        *string `json:"area,omitempty"`
+	AreaID      *string `json:"area_id,omitempty"`
+	Gazetteer   *string `json:"gazetteer,omitempty"`
+	Status      *string `json:"status,omitempty"`
+	SourceID    *string `json:"source_id,omitempty"`
+	ReferenceID *string `json:"reference_id,omitempty"`
+	Remarks     *string `json:"remarks,omitempty"`
+}
+
 // apiSynonym is the wire form of a synonym link. `label` is a server-
 // rendered display (text + html) for the associated name so front-ends
 // don't have to re-fetch each name row — matches the shape used for
@@ -1113,6 +1159,27 @@ func vernacularHitToAPI(h hive.VernacularHit) apiVernacular {
 		Remarks:         h.Remarks,
 		Modified:        h.Modified,
 		ModifiedBy:      h.ModifiedBy,
+		IssueCount:      h.IssueCount,
+	}
+}
+
+// distributionHitToAPI mirrors vernacularHitToAPI for the
+// distribution wire type. Stringifies the rowid handle and turns
+// the coldp enum values into their string ids for the wire.
+func distributionHitToAPI(h hive.DistributionHit) apiDistribution {
+	return apiDistribution{
+		ID:          strconv.FormatInt(h.RowID, 10),
+		TaxonID:     h.TaxonID,
+		Area:        h.Area,
+		AreaID:      h.AreaID,
+		Gazetteer:   h.Gazetteer.ID(),
+		Status:      h.Status.ID(),
+		SourceID:    h.SourceID,
+		ReferenceID: h.ReferenceID,
+		Remarks:     h.Remarks,
+		Modified:    h.Modified,
+		ModifiedBy:  h.ModifiedBy,
+		IssueCount:  h.IssueCount,
 	}
 }
 

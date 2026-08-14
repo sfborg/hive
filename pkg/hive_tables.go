@@ -183,6 +183,13 @@ CREATE INDEX IF NOT EXISTS idx_name_scientific_name_nocase
 CREATE INDEX IF NOT EXISTS idx_name_canonical_simple_nocase
 	ON name (gn__canonical_simple COLLATE NOCASE);
 
+-- idx_distribution_taxon_id supports GET /api/taxon/{id}/distributions
+-- and any per-taxon distribution query. sfga ships an index on
+-- vernacular.col__taxon_id but NOT on distribution.col__taxon_id;
+-- COL 26-07 has 2.2M distribution rows, so an unindexed lookup would
+-- scan the whole table on every taxon-detail render.
+CREATE INDEX IF NOT EXISTS idx_distribution_taxon_id ON distribution (col__taxon_id);
+
 -- idx_synonym_name_id makes the synonym arm of SearchTaxa
 -- (include_synonyms=true) fast: after matching a synonym's name row
 -- via the NOCASE prefix indices above, hive follows synonym.col__name_id
