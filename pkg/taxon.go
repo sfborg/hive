@@ -427,12 +427,18 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, opts SearchOpts) ([]
 			return nil, err
 		}
 	case SearchModeFuzzy:
-		// Step 3 will back this mode with a trigram FTS5 mirror.
-		// Until then, fall through to prefix — the WUI's fuzzy chip
-		// already exists and this keeps it from erroring out mid-
-		// rollout. Errors would fail the search silently in the
-		// combobox and hide the mode toggle's effect entirely.
-		body, args = a.searchArmsPrefix(q, opts.IncludeSynonyms, opts.Limit)
+		body, args, err = a.searchArmsFuzzy(q, opts.IncludeSynonyms, opts.Limit)
+		if err != nil {
+			return nil, err
+		}
+		if body == "" {
+			// Query too short to yield trigrams (< 3 characters) —
+			// fall back to prefix so the curator gets *some*
+			// candidates for a 1- or 2-char lead. Also matches the
+			// combobox's implicit contract: whatever they typed
+			// produces reasonable results.
+			body, args = a.searchArmsPrefix(q, opts.IncludeSynonyms, opts.Limit)
+		}
 	default:
 		return nil, fmt.Errorf("core: search taxa: unknown mode %q: %w", opts.Mode, ErrValidation)
 	}
@@ -458,6 +464,13 @@ func (a *Archive) SearchTaxa(ctx context.Context, q string, opts SearchOpts) ([]
 // LIMIT — so the JOIN runs on at most `limit` rows (typically ≤ 50).
 // Both joins are PK lookups; LEFT JOIN keeps root-level taxa (empty
 // parent_id) and orphaned parent links from dropping the row.
+// Each search arm supplies a rank column: 0 for prefix arms (no
+// FTS ordering signal, tiebreak on matched_name below), and
+// bm25(...) for FTS-backed arms (lower = better match by SQLite's
+// convention). The wrapper's dedup and outer ORDER BY both key on
+// rank first, so relevance ordering from partial and fuzzy modes
+// survives into the final result set — the pre-rank version
+// silently re-alphabetized everything and threw away bm25's work.
 func wrapSearchBody(body string) string {
 	return `SELECT
 		picked.id,
@@ -476,14 +489,14 @@ func wrapSearchBody(body string) string {
 		COALESCE(pn.col__rank_id, '') AS parent_rank
 	FROM (
 		SELECT *, ROW_NUMBER() OVER (
-			PARTITION BY id ORDER BY is_synonym, matched_name
+			PARTITION BY id ORDER BY is_synonym, rank, matched_name
 		) AS rn
 		FROM (` + body + `)
 	) picked
 	LEFT JOIN taxon pt ON pt.col__id = picked.parent_id AND picked.parent_id <> ''
 	LEFT JOIN name  pn ON pn.col__id = pt.col__name_id
 	WHERE picked.rn = 1
-	ORDER BY picked.matched_name
+	ORDER BY picked.rank, picked.matched_name
 	LIMIT ?`
 }
 
@@ -540,7 +553,8 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				COALESCE(t.col__status_id, '') AS status_id,
 				t.col__extinct AS extinct,
 				0 AS is_synonym,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				0.0 AS rank
 			FROM name n
 			JOIN taxon t ON t.col__name_id = n.col__id
 			WHERE n.gn__canonical_simple LIKE ? COLLATE NOCASE
@@ -558,7 +572,8 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				0,
-				n.col__scientific_name
+				n.col__scientific_name,
+				0.0
 			FROM name n
 			JOIN taxon t ON t.col__name_id = n.col__id
 			WHERE n.col__scientific_name LIKE ? COLLATE NOCASE
@@ -577,7 +592,8 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				sname.gn__canonical_simple
+				sname.gn__canonical_simple,
+				0.0
 			FROM name sname
 			JOIN synonym s ON s.col__name_id = sname.col__id
 			JOIN taxon t ON t.col__id = s.col__taxon_id
@@ -597,7 +613,8 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				sname.col__scientific_name
+				sname.col__scientific_name,
+				0.0
 			FROM name sname
 			JOIN synonym s ON s.col__name_id = sname.col__id
 			JOIN taxon t ON t.col__id = s.col__taxon_id
@@ -656,7 +673,8 @@ func (a *Archive) searchArmsPartial(q string, includeSynonyms bool, limit int) (
 				COALESCE(t.col__status_id, '') AS status_id,
 				t.col__extinct AS extinct,
 				0 AS is_synonym,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				bm25(hive__name_fts) AS rank
 			FROM hive__name_fts fts
 			JOIN name n ON n.rowid = fts.rowid
 			JOIN taxon t ON t.col__name_id = n.col__id
@@ -677,7 +695,8 @@ func (a *Archive) searchArmsPartial(q string, includeSynonyms bool, limit int) (
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, '')
+				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
+				bm25(hive__name_fts)
 			FROM hive__name_fts fts
 			JOIN name sname ON sname.rowid = fts.rowid
 			JOIN synonym s ON s.col__name_id = sname.col__id
@@ -746,6 +765,159 @@ func ftsMatchFromTokens(tokens []string) string {
 		parts = append(parts, `"`+t+`"*`)
 	}
 	return strings.Join(parts, " ")
+}
+
+// searchArmsFuzzy builds the UNION ALL body for fuzzy-mode search:
+// trigram-OR MATCH against the hive__name_fts_tri mirror. The
+// query is broken into its own overlapping 3-character sequences
+// (via buildFTSTrigramMatch), OR-joined, and the FTS bm25 rank
+// picks the rows with the most trigram overlap.
+//
+// One accepted arm and (when includeSynonyms is set) one synonym
+// arm — the trigram tokenizer indexes both name columns together,
+// so no per-column split is needed.
+//
+// Returns "" body when the query yields no trigrams (< 3 chars);
+// the caller falls back to prefix mode in that case.
+//
+// Interim bm25 ranking sometimes lets long noise-y names outrank
+// the intended match (e.g., "Osmia hyperplastica" outrunning
+// "Ceroplastes" for query "Cerpolastes"). Step 4's composite
+// ranking layers Levenshtein re-scoring on top to fix this.
+func (a *Archive) searchArmsFuzzy(q string, includeSynonyms bool, limit int) (string, []any, error) {
+	match := a.buildFTSTrigramMatch(q)
+	if match == "" {
+		return "", nil, nil
+	}
+	perArmLimit := max(limit*4, 50)
+	acceptedArm := `
+		SELECT * FROM (
+			SELECT
+				t.col__id AS id,
+				COALESCE(t.col__parent_id, '') AS parent_id,
+				t.col__name_id AS name_id,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(n.col__authorship, '') AS authorship,
+				COALESCE(n.col__rank_id, '') AS rank_id,
+				COALESCE(t.col__status_id, '') AS status_id,
+				t.col__extinct AS extinct,
+				0 AS is_synonym,
+				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				bm25(hive__name_fts_tri) AS rank
+			FROM hive__name_fts_tri fts
+			JOIN name n ON n.rowid = fts.rowid
+			JOIN taxon t ON t.col__name_id = n.col__id
+			WHERE hive__name_fts_tri MATCH ?
+			ORDER BY bm25(hive__name_fts_tri)
+			LIMIT ?
+		)`
+	synonymArm := `
+		UNION ALL
+		SELECT * FROM (
+			SELECT
+				t.col__id,
+				COALESCE(t.col__parent_id, ''),
+				t.col__name_id,
+				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(acc.col__authorship, ''),
+				COALESCE(acc.col__rank_id, ''),
+				COALESCE(t.col__status_id, ''),
+				t.col__extinct,
+				1,
+				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
+				bm25(hive__name_fts_tri)
+			FROM hive__name_fts_tri fts
+			JOIN name sname ON sname.rowid = fts.rowid
+			JOIN synonym s ON s.col__name_id = sname.col__id
+			JOIN taxon t ON t.col__id = s.col__taxon_id
+			JOIN name acc ON acc.col__id = t.col__name_id
+			WHERE hive__name_fts_tri MATCH ?
+			ORDER BY bm25(hive__name_fts_tri)
+			LIMIT ?
+		)`
+	body := acceptedArm
+	args := []any{match, perArmLimit}
+	if includeSynonyms {
+		body += synonymArm
+		args = append(args, match, perArmLimit)
+	}
+	return body, args, nil
+}
+
+// buildFTSTrigramMatch turns a user query into an FTS5 MATCH
+// expression for the trigram-tokenized mirror. Splits the query
+// into overlapping 3-character windows, dedupes, quotes each
+// trigram, and joins with OR so any partial match returns
+// candidates (bm25 then ranks by cumulative trigram overlap so
+// higher-overlap rows float to the top).
+//
+// gnparser preprocessing mirrors buildFTSMatch: a parseable
+// binomial has its authorship stripped before trigram generation,
+// so pasting "Panthera leo (Linnaeus, 1758)" doesn't produce
+// authorship trigrams that would pollute the OR predicate.
+//
+// Query is lowercased before trigram generation to match the
+// trigram tokenizer's case-folded index (unicode61-style case
+// folding is baked into the trigram tokenizer).
+//
+// Trigram count is capped at 30 to bound OR expansion. Longer
+// queries drop trigrams from the middle — start and end carry
+// more signal for anchor / termination matching. Returns "" for
+// queries that yield no trigrams (< 3 characters after preprocess).
+func (a *Archive) buildFTSTrigramMatch(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return ""
+	}
+	a.parserMu.Lock()
+	parsed := a.parser.ParseName(q).Flatten()
+	a.parserMu.Unlock()
+	text := q
+	if parsed.Cardinality >= 2 && parsed.CanonicalSimple != "" {
+		text = parsed.CanonicalSimple
+	}
+	trigrams := generateTrigrams(strings.ToLower(text), 15)
+	if len(trigrams) == 0 {
+		return ""
+	}
+	parts := make([]string, len(trigrams))
+	for i, tg := range trigrams {
+		parts[i] = `"` + strings.ReplaceAll(tg, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, " OR ")
+}
+
+// generateTrigrams builds a deduped list of overlapping 3-rune
+// windows from s. Order-preserving; skips repeats. Returns nil for
+// inputs shorter than 3 runes.
+//
+// If cap > 0 and the deduped list exceeds cap, keeps the first
+// half from the beginning and the remainder from the end. The
+// middle of a long query carries the weakest disambiguating signal
+// — start-anchor and end-anchor trigrams help identify which name
+// the curator meant.
+func generateTrigrams(s string, cap int) []string {
+	r := []rune(s)
+	if len(r) < 3 {
+		return nil
+	}
+	seen := make(map[string]bool, len(r))
+	out := make([]string, 0, len(r)-2)
+	for i := 0; i <= len(r)-3; i++ {
+		tg := string(r[i : i+3])
+		if seen[tg] {
+			continue
+		}
+		seen[tg] = true
+		out = append(out, tg)
+	}
+	if cap > 0 && len(out) > cap {
+		keep := cap / 2
+		head := out[:keep]
+		tail := out[len(out)-(cap-keep):]
+		out = append(append(make([]string, 0, cap), head...), tail...)
+	}
+	return out
 }
 
 // ListChildrenPage returns direct children with SQL-level LIMIT/OFFSET

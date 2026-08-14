@@ -345,6 +345,128 @@ func TestSearchTaxaPartialStripsAuthorship(t *testing.T) {
 	}
 }
 
+// TestSearchTaxaFuzzyFindsTypo — Step 3. Fuzzy mode uses the
+// trigram FTS mirror with an OR-joined query so a 1-2 character
+// typo still surfaces the intended match (trigram overlap stays
+// high enough for the target row to rank).
+func TestSearchTaxaFuzzyFindsTypo(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "tester")
+
+	var targetID string
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		nm := insertTestName(t, tx, "Ceroplastes")
+		if _, err := tx.tx.ExecContext(tx.ctx,
+			`UPDATE name SET gn__canonical_simple = ? WHERE col__id = ?`,
+			"Ceroplastes", nm,
+		); err != nil {
+			return err
+		}
+		id, err := tx.CreateTaxon(taxonForTest(nm))
+		if err != nil {
+			return err
+		}
+		targetID = id
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	// "Cerpolastes" is Ceroplastes with the 'o' and 'p' swapped —
+	// trigram overlap should still surface the intended match.
+	hits, err := a.SearchTaxa(ctx, "Cerpolastes", SearchOpts{
+		Mode:  SearchModeFuzzy,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchTaxa fuzzy: %v", err)
+	}
+	var found bool
+	for _, h := range hits {
+		if h.ID == targetID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("fuzzy mode did not match target for a 2-char typo; hits=%+v", hits)
+	}
+}
+
+// TestSearchTaxaFuzzyShortQueryFallback — a query too short to
+// yield any trigrams (< 3 chars) falls back to prefix so the
+// curator gets *some* candidates from the leading characters.
+func TestSearchTaxaFuzzyShortQueryFallback(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "tester")
+
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		nm := insertTestName(t, tx, "Panthera")
+		if _, err := tx.CreateTaxon(taxonForTest(nm)); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+
+	// 2-char query has no trigrams; expect prefix-style match.
+	hits, err := a.SearchTaxa(ctx, "Pa", SearchOpts{
+		Mode:  SearchModeFuzzy,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchTaxa fuzzy short: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatalf("2-char fuzzy query returned no hits; expected prefix fallback to find Panthera")
+	}
+}
+
+// TestGenerateTrigrams covers the rune-aware sliding window,
+// dedup semantics, and the cap-with-head+tail truncation.
+func TestGenerateTrigrams(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		cap  int
+		want []string
+	}{
+		{"empty", "", 0, nil},
+		{"too short", "ab", 0, nil},
+		{"exactly 3", "cat", 0, []string{"cat"}},
+		{"deduped", "aaaa", 0, []string{"aaa"}},
+		{"basic", "abcd", 0, []string{"abc", "bcd"}},
+		{"unicode", "æøå_", 0, []string{"æøå", "øå_"}},
+		{
+			// cap=4 keeps head 2 + tail 2 = 4, dropping "cde" and "def"
+			// from the middle of "abcdefgh" (trigrams: abc bcd cde def
+			// efg fgh — cap=4 → abc bcd fgh + one tail, so keep head=2
+			// and last 2).
+			name: "cap drops middle",
+			in:   "abcdefgh",
+			cap:  4,
+			want: []string{"abc", "bcd", "efg", "fgh"},
+		},
+	}
+	for _, tc := range cases {
+		got := generateTrigrams(tc.in, tc.cap)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: len=%d want %d; got %v want %v",
+				tc.name, len(got), len(tc.want), got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: [%d] = %q want %q; got %v",
+					tc.name, i, got[i], tc.want[i], got)
+			}
+		}
+	}
+}
+
 // TestFTSMatchFromTokens covers the small syntax builder. Punctuation
 // in a token gets quoted so it doesn't collide with FTS5 operators;
 // embedded double quotes are escaped by doubling.

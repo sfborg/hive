@@ -240,6 +240,50 @@ CREATE TRIGGER IF NOT EXISTS hive__name_fts_au AFTER UPDATE ON name BEGIN
   INSERT INTO hive__name_fts(rowid, gn__canonical_simple, col__scientific_name)
   VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
 END;
+
+-- hive__name_fts_tri is a second FTS5 mirror using the trigram
+-- tokenizer — every column value is broken into overlapping 3-
+-- character sequences. Backs the "fuzzy" search mode: at query
+-- time we split the user's input into its own trigrams and OR
+-- them against the index, so a typo like "Cerpolastes" (which
+-- shares 5 of 8 trigrams with "Ceroplastes") still surfaces the
+-- intended match. bm25 ranks by cumulative trigram overlap so
+-- the closest matches float to the top.
+--
+-- Costs more to build and to store than the unicode61 mirror
+-- (COL 26-07: ~26 s build one-time, ~700 MB overhead vs 200 MB)
+-- because it indexes overlapping windows rather than words, but
+-- storage is still under 15% of the archive and query time stays
+-- under 500 ms per fuzzy search — well inside the combobox's
+-- 500 ms debounce.
+--
+-- remove_diacritics 1 (rather than the unicode61 mirror's 2)
+-- strips accents without extra Unicode normalization — enough
+-- for taxonomic names and cheaper on very large builds.
+CREATE VIRTUAL TABLE IF NOT EXISTS hive__name_fts_tri USING fts5(
+  gn__canonical_simple,
+  col__scientific_name,
+  content='name',
+  tokenize='trigram remove_diacritics 1'
+);
+
+-- Trigger set mirrors the unicode61 sync pattern above. Every
+-- INSERT / UPDATE / DELETE on name propagates to the trigram
+-- index so both mirrors stay coherent under normal editing.
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_ai AFTER INSERT ON name BEGIN
+  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+END;
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_ad AFTER DELETE ON name BEGIN
+  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+END;
+CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_au AFTER UPDATE ON name BEGIN
+  INSERT INTO hive__name_fts_tri(hive__name_fts_tri, rowid, gn__canonical_simple, col__scientific_name)
+  VALUES ('delete', old.rowid, old.gn__canonical_simple, old.col__scientific_name);
+  INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name)
+  VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name);
+END;
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
@@ -281,31 +325,34 @@ func ensureHiveTables(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("core: backfill hive__metadata_touched: %w", err)
 	}
-	if err := ensureNameFTSPopulated(ctx, db); err != nil {
+	if err := ensureFTSPopulated(ctx, db, "hive__name_fts"); err != nil {
+		return err
+	}
+	if err := ensureFTSPopulated(ctx, db, "hive__name_fts_tri"); err != nil {
 		return err
 	}
 	return nil
 }
 
-// ensureNameFTSPopulated runs the one-shot initial build of
-// hive__name_fts when the FTS mirror's token index is empty but the
-// name table is not. Handles two cases:
+// ensureFTSPopulated runs the one-shot initial build of an FTS5
+// mirror table when its token index is empty but the name table is
+// not. Handles two cases:
 //
 //  1. Fresh archive from a non-hive tool (harvester, sf, older
-//     hive without FTS support) — the CREATE VIRTUAL TABLE runs
-//     for the first time and the token index is empty.
+//     hive without the mirror in question) — the CREATE VIRTUAL
+//     TABLE runs for the first time and the token index is empty.
 //  2. Archive where an earlier hive version's populate path used
 //     `INSERT INTO fts(rowid, col1, col2) SELECT ...`, which under
 //     modernc.org/sqlite silently populates the docsize shadow
 //     table without actually tokenizing content — leaving MATCH
 //     queries returning zero results despite `SELECT COUNT(*) FROM
-//     hive__name_fts` reporting a positive number.
+//     fts` reporting a positive number.
 //
-// Detection checks `hive__name_fts_idx`, the segment index shadow
-// table that FTS5's own build path populates. Docsize-populated-
-// but-idx-empty is the broken state; `rebuild` fixes it without a
-// DROP TABLE round-trip. On a truly empty archive both shadow
-// tables are empty, and we skip the rebuild.
+// Detection checks `<fts>_idx`, the segment index shadow table that
+// FTS5's own build path populates. Docsize-populated-but-idx-empty
+// is the broken state; `rebuild` fixes it without a DROP TABLE
+// round-trip. On a truly empty archive both shadow tables are
+// empty, and we skip the rebuild.
 //
 // Deliberately does NOT try to repair partial staleness (name rows
 // added by an external tool that bypasses the sync triggers).
@@ -313,11 +360,19 @@ func ensureHiveTables(ctx context.Context, db *sql.DB) error {
 // hive; a POST /api/reindex/name-fts endpoint would let curators
 // force a rebuild if that assumption breaks.
 //
-// Build cost on COL 26-07 (5.4M name rows): ~9 seconds one-time.
-func ensureNameFTSPopulated(ctx context.Context, db *sql.DB) error {
+// ftsTable is a code-controlled constant (see ensureHiveTables); it
+// is string-interpolated into the SQL, which is safe because it is
+// never user-derived.
+//
+// Build cost on COL 26-07 (5.4M name rows): ~9 s for unicode61,
+// ~26 s for trigram — both one-time. Total first-open latency on a
+// COL-scale archive with both mirrors missing is ~35 s.
+func ensureFTSPopulated(ctx context.Context, db *sql.DB, ftsTable string) error {
 	var idxRows int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM hive__name_fts_idx`).Scan(&idxRows); err != nil {
-		return fmt.Errorf("core: count hive__name_fts_idx: %w", err)
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM `+ftsTable+`_idx`,
+	).Scan(&idxRows); err != nil {
+		return fmt.Errorf("core: count %s_idx: %w", ftsTable, err)
 	}
 	if idxRows > 0 {
 		return nil
@@ -330,9 +385,9 @@ func ensureNameFTSPopulated(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO hive__name_fts(hive__name_fts) VALUES('rebuild')`,
+		`INSERT INTO `+ftsTable+`(`+ftsTable+`) VALUES('rebuild')`,
 	); err != nil {
-		return fmt.Errorf("core: rebuild hive__name_fts: %w", err)
+		return fmt.Errorf("core: rebuild %s: %w", ftsTable, err)
 	}
 	return nil
 }
