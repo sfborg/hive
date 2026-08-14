@@ -721,29 +721,36 @@ function referenceHitLabel(h) {
   return parts.join(" ");
 }
 
-// taxonSource hits the server. Uses the server-rendered label.text so
-// dagger + authorship formatting stays consistent with the tree.
+// taxonSource hits /api/taxon/search and normalises hits for the
+// combobox. Options:
+//   * include_synonyms — extend results with accepted taxa reached
+//     via a matching synonym.
+//   * mode — "prefix" (default, backend-implicit), "partial", or
+//     "fuzzy" (see backend rollout; unknown modes fall back to
+//     prefix server-side, so passing "partial" before backend step 2
+//     lands is a graceful no-op).
 //
-// include_synonyms=true so curators searching by a synonymous name
-// still land on the accepted taxon — parent pickers and the top-bar
-// combobox both benefit. Synonym rows carry `matched` (the synonym
-// text that matched the query) and `isSynonym: true`; the combobox
-// renders those rows as "matched → name" (see DESIGN.md § Search
-// combobox synonym rendering). On pick, `id` is the accepted taxon's
-// id in both cases, so the reveal / navigate path is unchanged.
-async function taxonSource(q) {
+// The row shape the combobox expects:
+//   { id, name, isSynonym, matched, parent? }
+// where `id` is always the accepted taxon (backend contract — synonym
+// hits resolve to their accepted taxon's id), and `parent` is a
+// {id, label, rank} object elided for root taxa. The combobox uses
+// parent for synonym-hint and homonym-disambiguation rendering (see
+// DESIGN.md § Search combobox result-row hints).
+async function taxonSource(q, opts = {}) {
   if (!q || q.length < 2) return [];
+  const includeSynonyms = opts.includeSynonyms !== false; // default on
+  const mode = opts.mode || "prefix";
   try {
-    const page = await api.taxon.search({
-      q,
-      limit: 20,
-      include_synonyms: true,
-    });
+    const params = { q, limit: 20, include_synonyms: includeSynonyms };
+    if (mode && mode !== "prefix") params.mode = mode;
+    const page = await api.taxon.search(params);
     return (page.items || []).map((hit) => ({
       id: hit.id,
       name: hit.label?.text || hit.name,
       isSynonym: !!hit.is_synonym,
       matched: hit.matched_name || "",
+      parent: hit.parent || null,
     }));
   } catch (_) {
     return [];
@@ -784,6 +791,14 @@ class SfgaApp extends LitElement {
     // _onIssueNavigate when a reference-scoped issue is opened, so
     // the References component focuses that row on first render.
     _pendingReferenceId: { state: true },
+    // Omnibox filter state — persists to localStorage under
+    // "hive-search-filters". See DESIGN.md § Search combobox filter
+    // chips. `mode` is "prefix" (default) / "partial" / "fuzzy" —
+    // matches the /api/taxon/search backend contract. `synonyms` is
+    // the affirmative form of the "Accepted only" chip (checked =
+    // synonyms off = accepted-only). Kept as an affirmative here so
+    // the API param maps directly: include_synonyms=this.synonyms.
+    _searchFilters: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -1002,8 +1017,76 @@ class SfgaApp extends LitElement {
     this.helpOpen = false;
     this._pendingWarnings = null;
     this._pendingReferenceId = "";
+    this._searchFilters = this._loadSearchFilters();
+    // Bind the top-bar source once so the combobox reference is
+    // stable across renders; the closure reads `this._searchFilters`
+    // live, so filter toggles pick up on the next _runSearch tick
+    // without needing to rebuild the source.
+    this._taxonSearchSource = (q) =>
+      taxonSource(q, {
+        mode: this._searchFilters.mode,
+        includeSynonyms: this._searchFilters.synonyms,
+      });
     this._applyTheme();
     this._onGlobalKey = this._onGlobalKey.bind(this);
+  }
+
+  // _loadSearchFilters reads persisted omnibox toggles from
+  // localStorage; returns the defaults from § Search combobox filter
+  // chips (prefix mode, synonyms on) for a fresh curator or any
+  // parse failure. Guarded against schema drift by validating each
+  // field before accepting it.
+  _loadSearchFilters() {
+    const defaults = { mode: "prefix", synonyms: true };
+    try {
+      const raw = localStorage.getItem("hive-search-filters");
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw);
+      const mode = ["prefix", "partial", "fuzzy"].includes(parsed.mode)
+        ? parsed.mode
+        : "prefix";
+      const synonyms =
+        typeof parsed.synonyms === "boolean" ? parsed.synonyms : true;
+      return { mode, synonyms };
+    } catch (_) {
+      return defaults;
+    }
+  }
+
+  _saveSearchFilters() {
+    try {
+      localStorage.setItem(
+        "hive-search-filters",
+        JSON.stringify(this._searchFilters),
+      );
+    } catch (_) {
+      // localStorage unavailable (private mode, quota) — filters
+      // still work for the session, just don't persist.
+    }
+  }
+
+  // _onSearchFilterChange handles a `filter-change` event from the
+  // top-bar combobox. Chip keys map to filter state as follows:
+  //   * "partial"  → mode = partial   (toggling off restores prefix)
+  //   * "fuzzy"    → mode = fuzzy     (toggling off restores prefix)
+  //   * "accepted" → synonyms = !value (chip is affirmative
+  //                                     "accepted only", state is
+  //                                     affirmative "synonyms on")
+  // Partial and fuzzy are mutually exclusive at the mode level; the
+  // chip UI presents them as independent toggles so curators can
+  // switch between the two without an intermediate "clear" step.
+  _onSearchFilterChange(e) {
+    const { key, value } = e.detail;
+    const next = { ...this._searchFilters };
+    if (key === "partial") {
+      next.mode = value ? "partial" : "prefix";
+    } else if (key === "fuzzy") {
+      next.mode = value ? "fuzzy" : "prefix";
+    } else if (key === "accepted") {
+      next.synonyms = !value;
+    }
+    this._searchFilters = next;
+    this._saveSearchFilters();
   }
 
   async connectedCallback() {
@@ -1708,9 +1791,33 @@ class SfgaApp extends LitElement {
                 class="search"
                 min-search-chars="2"
                 placeholder="Search taxa…"
-                .source=${taxonSource}
+                .source=${this._taxonSearchSource}
                 .resolver=${taxonResolver}
+                .filters=${[
+                  {
+                    key: "partial",
+                    label: "Partial",
+                    value: this._searchFilters.mode === "partial",
+                    description:
+                      "Match epithets in any position (e.g., 'rusci' finds Ceroplastes rusci)",
+                  },
+                  {
+                    key: "fuzzy",
+                    label: "Fuzzy",
+                    value: this._searchFilters.mode === "fuzzy",
+                    description:
+                      "Tolerate typos (e.g., 'Cerpolastes' finds Ceroplastes)",
+                  },
+                  {
+                    key: "accepted",
+                    label: "Accepted only",
+                    value: !this._searchFilters.synonyms,
+                    description:
+                      "Skip synonym matches; only return accepted-name matches",
+                  },
+                ]}
                 @pick=${(e) => this._onSearchPick(e)}
+                @filter-change=${(e) => this._onSearchFilterChange(e)}
               ></sfga-combobox>
               <div class="tree-scroll">
                 ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : ""}
@@ -5391,6 +5498,14 @@ class SfgaCombobox extends LitElement {
     // it does NOT commit the input value as the picker's selection.
     // See DESIGN.md § Combobox pinned actions.
     actions: { attribute: false },
+    // Filter chips rendered as a single compact row above actions and
+    // results. Each entry:
+    //   { key: string, label: string, value: boolean, description?: string }
+    // Toggling a chip fires `filter-change` with detail {key, value}
+    // and the combobox re-runs its source; the dropdown does NOT close.
+    // Caller owns the state (persist / reset / defaults). See DESIGN.md
+    // § Search combobox filter chips.
+    filters: { attribute: false },
     _input: { state: true },
     _results: { state: true },
     _open: { state: true },
@@ -5487,20 +5602,90 @@ class SfgaCombobox extends LitElement {
       background: var(--bg);
       color: var(--dim);
     }
-    /* Synonym result rows: "<accepted taxon> (=<matched synonym>)".
-       Accepted name leads so the curator sees the taxon they'll
-       navigate to first; the parenthesised (=synonym) uses the CoLDP
-       "=" synonym marker to signal why the row appeared. The paren
-       group is dimmed against the accepted-name lead so the eye
-       reads accepted-then-context. On hover (selection highlight)
-       both sides invert to accent-fg together so contrast stays
-       readable. See DESIGN.md § Search combobox synonym rendering. */
-    .results li.synonym .syn-matched {
-      color: var(--dim);
-      margin-left: var(--sp-1);
+    /* Result-row hint line — the small dimmed second line that
+       carries "via <synonym>" (synonym-matched hits) and/or
+       "in <family> <name>" (parent context for homonym
+       disambiguation). Displayed as a dedicated block under the
+       primary label so scanning the accepted names stays cheap; the
+       hint is context, not the row's identity. On hover the hint
+       inverts to accent-fg with the primary label so both lines
+       stay legible against the selection background. See DESIGN.md
+       § Search combobox result-row hints. */
+    .results li.result.has-hint {
+      /* Row layout switches to block so the hint sits below the
+         primary label instead of running off in one long ellipsised
+         line. Left padding preserves the single-line rhythm for
+         plain rows. */
+      white-space: normal;
+      line-height: 1.3;
+      padding-top: var(--sp-1);
+      padding-bottom: var(--sp-1);
     }
-    .results li.synonym.hover .syn-matched {
+    .results li.result .row-primary {
+      display: block;
+    }
+    .results li.result .row-hint {
+      display: block;
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-family: var(--font-body);
+      margin-top: 1px;
+    }
+    .results li.result.hover .row-hint {
       color: var(--accent-fg);
+    }
+    /* Filter chip row (see DESIGN.md § Search combobox filter chips).
+       Single <li> holds all chips inline so the row stays compact.
+       Sits at the very top of the dropdown; a border-bottom (via the
+       .divider class on the last pinned row) separates the pinned
+       zone from search results below. Non-mono body font signals
+       "control, not data" — same rationale as .action rows. */
+    .results li.filters {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--sp-1);
+      padding: var(--sp-2);
+      font-family: var(--font-body);
+      background: color-mix(in oklab, var(--accent) 4%, var(--bg));
+    }
+    .results li.filters.divider {
+      border-bottom: 1px solid var(--border);
+    }
+    .results li.filters button.chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      background: var(--bg);
+      color: var(--dim);
+      font: inherit;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      transition: background var(--transition-fast),
+        color var(--transition-fast), border-color var(--transition-fast);
+    }
+    .results li.filters button.chip[aria-checked="true"] {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: var(--accent);
+    }
+    .results li.filters button.chip:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .results li.filters button.chip:hover {
+      color: var(--fg);
+    }
+    .results li.filters button.chip[aria-checked="true"]:hover {
+      color: var(--accent-fg);
+    }
+    .results li.filters .chip-check {
+      display: inline-flex;
+      width: 0.9em;
+      justify-content: center;
     }
     /* Pinned action rows (see DESIGN.md § Combobox pinned actions).
        Three visual differentiators so curators don't miss the action
@@ -5548,6 +5733,7 @@ class SfgaCombobox extends LitElement {
     this.source = async () => [];
     this.resolver = null;
     this.actions = [];
+    this.filters = [];
     this._input = "";
     this._results = [];
     this._open = false;
@@ -5591,28 +5777,35 @@ class SfgaCombobox extends LitElement {
 
   _onFocus() {
     this._focused = true;
-    // Open the dropdown on focus in three cases:
+    // Open the dropdown on focus in four cases:
     //   1. Empty input + minSearchChars=0 (vocab picker; show all).
     //   2. Pinned actions exist (curator should see "Add new …"
     //      immediately without having to type first).
-    //   3. Input already has content above the search threshold
+    //   3. Filter chips exist (curator should see current filter
+    //      state and be able to flip a chip before typing).
+    //   4. Input already has content above the search threshold
     //      (curator re-focusing a picker with a partial query — the
     //      existing results should re-appear).
-    // Runs a search in cases (1) and (3) so results populate.
+    // Runs a search in cases (1) and (4) so results populate.
     const hasActions = (this.actions?.length || 0) > 0;
+    const hasFilters = (this.filters?.length || 0) > 0;
     if (this._input.length === 0 && this.minSearchChars === 0) {
       this._runSearch();
       this._open = true;
-    } else if (hasActions) {
+    } else if (hasActions || hasFilters) {
       this._open = true;
       // If input meets the search threshold, refresh results too so
-      // the dropdown shows current data alongside the pinned actions.
+      // the dropdown shows current data alongside the pinned rows.
       if (this._input.length >= this.minSearchChars) {
         this._runSearch();
-      } else {
+      } else if (hasActions) {
         // No results yet, but we still want the hover cursor on the
-        // first action so Enter works immediately.
+        // first action so Enter works immediately. Filters are not
+        // in the hover cycle (they're focused via Tab / mouse), so
+        // we only anchor hover onto the first action if actions exist.
         this._hover = 0;
+      } else {
+        this._hover = -1;
       }
     }
   }
@@ -5622,6 +5815,16 @@ class SfgaCombobox extends LitElement {
     // and revert. Also handled by @mousedown+preventDefault on those
     // elements as a belt-and-braces measure.
     setTimeout(() => {
+      // If focus moved to a descendant of this combobox (e.g., a
+      // filter chip clicked or Tab-navigated onto), keep the dropdown
+      // open — the curator hasn't left the widget. Shadow DOM makes
+      // this fiddly; we walk the deep active element up through any
+      // shadow boundaries and see if we hit `this`.
+      let el = this.renderRoot?.activeElement || document.activeElement;
+      while (el) {
+        if (el === this) return;
+        el = el.parentNode || el.host || null;
+      }
       this._focused = false;
       this._open = false;
       // If the user typed something and didn't pick, revert to the last
@@ -5736,6 +5939,35 @@ class SfgaCombobox extends LitElement {
     action.handler();
   }
 
+  // _toggleFilter emits `filter-change` so the caller can update its
+  // state, then re-runs the source so results reflect the new filter
+  // set. Caller-owned state is the single source of truth: the chip's
+  // rendered value comes from the caller's next-render filters prop,
+  // never from a local mutation. Not optimistic on purpose — mutual-
+  // exclusion cases (turning Partial on while Fuzzy is on) need the
+  // parent to update *both* chip values consistently before the
+  // combobox re-renders, otherwise both chips would briefly appear on.
+  //
+  // The dropdown stays open and the input keeps its value — flipping
+  // filters is a refinement, not a selection.
+  _toggleFilter(key, e) {
+    if (e) e.preventDefault();
+    const filter = (this.filters || []).find((f) => f.key === key);
+    if (!filter) return;
+    this.dispatchEvent(
+      new CustomEvent("filter-change", {
+        detail: { key, value: !filter.value },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    // Refresh results with the new filter set. Only fire if the input
+    // meets the search threshold — no point running an empty query.
+    if (this._input.length >= this.minSearchChars) {
+      this._runSearch();
+    }
+  }
+
   _pick(item) {
     this.value = item.id;
     this.valueName = item.name;
@@ -5782,11 +6014,51 @@ class SfgaCombobox extends LitElement {
   render() {
     const actions = this.actions || [];
     const nActions = actions.length;
-    // Actions render first, always visible (see DESIGN.md § Combobox
-    // pinned actions). The last action carries `.divider` when any
-    // result row follows so the border-bottom partitions the two
-    // zones cleanly. mousedown (not click) so the dropdown's blur
-    // handler doesn't dismiss us before the handler fires.
+    const filters = this.filters || [];
+    const hasFilters = filters.length > 0;
+    // Filters render as a single compact row at the very top of the
+    // dropdown; the row carries `.divider` when no actions follow so
+    // the visual partition sits directly below the filters. Chips are
+    // real buttons — Tab moves focus onto them, Space/Enter (native
+    // button behavior) toggles. mousedown+preventDefault keeps the
+    // input focused for pointer users while still allowing Tab entry
+    // for keyboard users (see _onBlur). See DESIGN.md § Search
+    // combobox filter chips.
+    const filterRow = hasFilters
+      ? html`
+          <li class=${"filters" + (nActions === 0 ? " divider" : "")}>
+            ${filters.map(
+              (f) => html`
+                <button
+                  type="button"
+                  class="chip"
+                  role="switch"
+                  aria-checked=${f.value ? "true" : "false"}
+                  title=${f.description || f.label}
+                  @mousedown=${(e) => this._toggleFilter(f.key, e)}
+                  @keydown=${(e) => {
+                    if (e.key === " " || e.key === "Enter") {
+                      e.preventDefault();
+                      this._toggleFilter(f.key, null);
+                    }
+                  }}
+                >
+                  <span class="chip-check" aria-hidden="true"
+                    >${f.value ? "✓" : "○"}</span
+                  >
+                  <span>${f.label}</span>
+                </button>
+              `,
+            )}
+          </li>
+        `
+      : "";
+    // Actions render below filters, always visible (see DESIGN.md
+    // § Combobox pinned actions). The last action carries `.divider`
+    // when any result row follows so the border-bottom partitions the
+    // pinned zone from the results zone cleanly. mousedown (not click)
+    // so the dropdown's blur handler doesn't dismiss us before the
+    // handler fires.
     const actionRows = actions.map((a, i) => {
       const cls = ["action"];
       if (i === this._hover) cls.push("hover");
@@ -5818,26 +6090,64 @@ class SfgaCombobox extends LitElement {
     ) {
       resultRows = html`<li class="empty">No matches</li>`;
     } else {
+      // Homonym disambiguation: when the same accepted-name string
+      // appears more than once in the current result set, every hit
+      // with that name earns a parent-context hint so the curator can
+      // tell them apart (see DESIGN.md § Search combobox result-row
+      // hints). Detection is O(n²) over the small result set; a Map
+      // avoids the quadratic when n grows.
+      const nameCounts = new Map();
+      for (const r of this._results) {
+        nameCounts.set(r.name, (nameCounts.get(r.name) || 0) + 1);
+      }
       resultRows = this._results.map((r, i) => {
         const cls = ["result"];
         if (nActions + i === this._hover) cls.push("hover");
-        // Synonym rows render "<matched> → <accepted>" so the curator
-        // sees which name text matched their query and which taxon
-        // picking will land on. Guard against matched === name (name
-        // change between search & render, or backend chose to elide
-        // matched) so we don't render a redundant "X → X".
+        // Hint composition — up to two clauses on the second line:
+        //   * "via <matched>" — set when the hit came via a synonym
+        //     and the matched text differs from the accepted label
+        //     (guards against a redundant "via X" when they match).
+        //   * "in <family> <name>" — set when this row is a synonym
+        //     match OR when the accepted-name string is duplicated in
+        //     the result set (homonym disambiguation). Uses the
+        //     server-rendered parent label; skipped if parent is
+        //     absent (root taxa) or if the parent's own label matches
+        //     the row's parent-side render (unlikely).
         const isSynRow = r.isSynonym && r.matched && r.matched !== r.name;
-        if (isSynRow) cls.push("synonym");
-        // Screen-reader label collapses "<accepted> (=<matched>)" into
-        // a single announcement so listeners get the same information
-        // sighted curators do from the parenthesised marker. The
-        // paren-group markup is decorative for a11y (aria-hidden on
-        // the raw punctuation would still leave "= X" parsed as an
-        // equation by some readers), so the entire visual is aria-
-        // hidden'd inside the li and the aria-label carries meaning.
-        const ariaLabel = isSynRow
-          ? `${r.name}, matched via synonym ${r.matched}`
-          : undefined;
+        const isHomonym = (nameCounts.get(r.name) || 0) > 1;
+        const showParent = r.parent && (isSynRow || isHomonym);
+        const hasHint = isSynRow || showParent;
+        if (hasHint) cls.push("has-hint");
+        // Screen-reader label folds the hint clauses into one
+        // sentence so listeners hear the same disambiguating context
+        // sighted curators get from the second line.
+        let ariaLabel;
+        if (isSynRow || showParent) {
+          const parts = [r.name];
+          if (isSynRow) parts.push(`matched via synonym ${r.matched}`);
+          if (showParent) {
+            const rank = r.parent.rank
+              ? r.parent.rank.toLowerCase()
+              : "parent";
+            parts.push(`in ${rank} ${r.parent.label?.text || ""}`);
+          }
+          ariaLabel = parts.filter(Boolean).join(", ");
+        }
+        // Hint fragments: prefer HTML from server (italicises genus /
+        // species labels) but fall back to text if HTML absent.
+        const hintFragments = [];
+        if (isSynRow) {
+          hintFragments.push(html`<span>via ${r.matched}</span>`);
+        }
+        if (showParent) {
+          const rank = r.parent.rank ? r.parent.rank.toLowerCase() : "";
+          const parentLabel = r.parent.label?.html
+            ? unsafeHTML(r.parent.label.html)
+            : r.parent.label?.text || "";
+          hintFragments.push(
+            html`<span>in ${rank ? rank + " " : ""}${parentLabel}</span>`,
+          );
+        }
         return html`
           <li
             class=${cls.join(" ")}
@@ -5848,17 +6158,19 @@ class SfgaCombobox extends LitElement {
             }}
             @mouseenter=${() => (this._hover = nActions + i)}
           >
-            ${isSynRow
-              ? html`<span class="syn-accepted">${r.name}</span
-                  ><span class="syn-matched" aria-hidden="true"
-                    >(=${r.matched})</span
-                  >`
-              : r.name || "(unset)"}
+            <span class="row-primary">${r.name || "(unset)"}</span>
+            ${hasHint
+              ? html`<span class="row-hint" aria-hidden="true">
+                  ${hintFragments.map(
+                    (frag, idx) => html`${idx > 0 ? " · " : ""}${frag}`,
+                  )}
+                </span>`
+              : ""}
           </li>
         `;
       });
     }
-    const dropdown = html`${actionRows}${resultRows}`;
+    const dropdown = html`${filterRow}${actionRows}${resultRows}`;
 
     return html`
       <div class="wrap">
