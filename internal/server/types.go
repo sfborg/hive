@@ -518,6 +518,50 @@ type apiDistributionPatch struct {
 // rendered display (text + html) for the associated name so front-ends
 // don't have to re-fetch each name row — matches the shape used for
 // apiTaxon and any other resolved reference. See hive.BuildLabel.
+// apiSpeciesInteraction is the wire form of a species-interaction
+// row. Same rowid-as-string handle as vernacular / distribution;
+// sfga's species_interaction table has no col__id.
+//
+// Directional per sfga: taxon_id is the subject, related_taxon_id
+// the object ("parasite parasiteOf host"). GET
+// /api/taxon/{id}/species-interactions only returns rows where the
+// taxon is the subject; the reverse view is available from the
+// related taxon's page.
+//
+// RelatedTaxonScientificName is a free-text annotation stored
+// alongside the FK — useful when a curator wants to preserve the
+// exact citation form the source used. sfga still requires
+// RelatedTaxonID to point at a real taxon; the scientific-name
+// field can't stand on its own. RelatedTaxonLabel is the server-
+// resolved display for the FK'd taxon so front-ends don't need a
+// per-row fetch.
+type apiSpeciesInteraction struct {
+	ID                         string   `json:"id"`
+	TaxonID                    string   `json:"taxon_id"`
+	RelatedTaxonID             string   `json:"related_taxon_id,omitempty"`
+	RelatedTaxonScientificName string   `json:"related_taxon_scientific_name,omitempty"`
+	RelatedTaxonLabel          apiLabel `json:"related_taxon_label,omitzero"`
+	Type                       string   `json:"type,omitempty"`
+	SourceID                   string   `json:"source_id,omitempty"`
+	ReferenceID                string   `json:"reference_id,omitempty"`
+	Remarks                    string   `json:"remarks,omitempty"`
+	Modified                   string   `json:"modified,omitempty"`
+	ModifiedBy                 string   `json:"modified_by,omitempty"`
+	IssueCount                 int      `json:"issue_count,omitempty"`
+}
+
+// apiSpeciesInteractionPatch — pointer-optional editable fields.
+// TaxonID isn't included (delete+add on a different taxon to
+// reparent).
+type apiSpeciesInteractionPatch struct {
+	RelatedTaxonID             *string `json:"related_taxon_id,omitempty"`
+	RelatedTaxonScientificName *string `json:"related_taxon_scientific_name,omitempty"`
+	Type                       *string `json:"type,omitempty"`
+	SourceID                   *string `json:"source_id,omitempty"`
+	ReferenceID                *string `json:"reference_id,omitempty"`
+	Remarks                    *string `json:"remarks,omitempty"`
+}
+
 type apiSynonym struct {
 	ID         string   `json:"id,omitempty"`
 	TaxonID    string   `json:"taxon_id"`
@@ -1196,6 +1240,32 @@ func distributionHitToAPI(h hive.DistributionHit) apiDistribution {
 
 // nullBoolToPtr converts sql.NullBool → *bool. Invalid → nil (omitted from
 // JSON via omitempty). Valid → &bool.
+// speciesInteractionHitToAPI mirrors the vernacular / distribution
+// converters. Stringifies the rowid handle, projects the enum id,
+// and lifts the resolved RelatedTaxonLabel across to the wire.
+func speciesInteractionHitToAPI(h hive.SpeciesInteractionHit) apiSpeciesInteraction {
+	out := apiSpeciesInteraction{
+		ID:                         strconv.FormatInt(h.RowID, 10),
+		TaxonID:                    h.TaxonID,
+		RelatedTaxonID:             h.RelatedTaxonID,
+		RelatedTaxonScientificName: h.RelatedTaxonScientificName,
+		Type:                       h.Type.ID(),
+		SourceID:                   h.SourceID,
+		ReferenceID:                h.ReferenceID,
+		Remarks:                    h.Remarks,
+		Modified:                   h.Modified,
+		ModifiedBy:                 h.ModifiedBy,
+		IssueCount:                 h.IssueCount,
+	}
+	if h.RelatedTaxonLabel.Text != "" || h.RelatedTaxonLabel.HTML != "" {
+		out.RelatedTaxonLabel = apiLabel{
+			Text: h.RelatedTaxonLabel.Text,
+			HTML: h.RelatedTaxonLabel.HTML,
+		}
+	}
+	return out
+}
+
 func nullBoolToPtr(nb sql.NullBool) *bool {
 	if !nb.Valid {
 		return nil

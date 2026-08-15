@@ -183,6 +183,14 @@ CREATE INDEX IF NOT EXISTS idx_name_scientific_name_nocase
 CREATE INDEX IF NOT EXISTS idx_name_canonical_simple_nocase
 	ON name (gn__canonical_simple COLLATE NOCASE);
 
+-- idx_species_interaction_taxon_id supports
+-- GET /api/taxon/{id}/species-interactions. sfga ships no index on
+-- either species_interaction.col__taxon_id or col__related_taxon_id,
+-- so per-taxon listing would scan the whole table on any archive
+-- that populates this vocabulary.
+CREATE INDEX IF NOT EXISTS idx_species_interaction_taxon_id
+	ON species_interaction (col__taxon_id);
+
 -- idx_distribution_taxon_id supports GET /api/taxon/{id}/distributions
 -- and any per-taxon distribution query. sfga ships an index on
 -- vernacular.col__taxon_id but NOT on distribution.col__taxon_id;

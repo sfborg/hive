@@ -58,6 +58,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon/{id}/distributions", s.handleCreateDistribution)
 	mux.HandleFunc("PATCH /api/distribution/{id}", s.handlePatchDistribution)
 	mux.HandleFunc("DELETE /api/distribution/{id}", s.handleDeleteDistribution)
+	mux.HandleFunc("GET /api/taxon/{id}/species-interactions", s.handleListSpeciesInteractions)
+	mux.HandleFunc("POST /api/taxon/{id}/species-interactions", s.handleCreateSpeciesInteraction)
+	mux.HandleFunc("PATCH /api/species-interaction/{id}", s.handlePatchSpeciesInteraction)
+	mux.HandleFunc("DELETE /api/species-interaction/{id}", s.handleDeleteSpeciesInteraction)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
@@ -860,6 +864,161 @@ func applyDistributionPatch(d *coldp.Distribution, p apiDistributionPatch) {
 	}
 	if p.Remarks != nil {
 		d.Remarks = *p.Remarks
+	}
+}
+
+// handleListSpeciesInteractions returns every interaction row
+// where the given taxon is the subject (col__taxon_id). Same
+// rowid-as-string handle pattern as vernacular / distribution.
+// Each row carries a server-resolved related-taxon label so the
+// front-end row can render without a follow-up fetch.
+func (s *server) handleListSpeciesInteractions(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	hits, err := s.a.ListSpeciesInteractions(r.Context(), taxonID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiSpeciesInteraction, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, speciesInteractionHitToAPI(h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiSpeciesInteraction]{Items: items})
+}
+
+// handleCreateSpeciesInteraction writes a new interaction row
+// attached to the {id} taxon and returns the freshly-hydrated
+// apiSpeciesInteraction so the caller can splice it into local
+// state without a follow-up list refresh. TaxonID from path
+// wins over body.
+func (s *server) handleCreateSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	var body apiSpeciesInteraction
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.TaxonID = taxonID
+	var newID int64
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		id, err := tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
+			TaxonID:                    body.TaxonID,
+			RelatedTaxonID:             body.RelatedTaxonID,
+			RelatedTaxonScientificName: body.RelatedTaxonScientificName,
+			SourceID:                   body.SourceID,
+			Type:                       coldp.NewSpInteractionType(body.Type),
+			ReferenceID:                body.ReferenceID,
+			Remarks:                    body.Remarks,
+		})
+		newID = id
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetSpeciesInteraction(r.Context(), newID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, speciesInteractionHitToAPI(*fresh))
+}
+
+// handlePatchSpeciesInteraction applies a partial update. Nil
+// fields on the patch mean "leave alone"; a set pointer to
+// zero-value clears the field. TaxonID is not editable —
+// reparent via delete+add on the new taxon.
+func (s *server) handlePatchSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseSpeciesInteractionRowID(w, r)
+	if !ok {
+		return
+	}
+	var patch apiSpeciesInteractionPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		current, err := s.a.GetSpeciesInteraction(r.Context(), rowid)
+		if err != nil {
+			return err
+		}
+		merged := coldp.SpeciesInteraction{
+			TaxonID:                    current.TaxonID,
+			RelatedTaxonID:             current.RelatedTaxonID,
+			RelatedTaxonScientificName: current.RelatedTaxonScientificName,
+			SourceID:                   current.SourceID,
+			Type:                       current.Type,
+			ReferenceID:                current.ReferenceID,
+			Remarks:                    current.Remarks,
+		}
+		applySpeciesInteractionPatch(&merged, patch)
+		return tx.UpdateSpeciesInteraction(rowid, merged)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetSpeciesInteraction(r.Context(), rowid)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, speciesInteractionHitToAPI(*fresh))
+}
+
+// handleDeleteSpeciesInteraction removes the row at the given
+// rowid. Unknown row → 404 via ErrNotFound.
+func (s *server) handleDeleteSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseSpeciesInteractionRowID(w, r)
+	if !ok {
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteSpeciesInteraction(rowid)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseSpeciesInteractionRowID pulls the {id} path parameter and
+// parses it as an int64. Mirrors parseVernacularRowID /
+// parseDistributionRowID.
+func parseSpeciesInteractionRowID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeBadRequest(w, r, "invalid species-interaction id: "+raw)
+		return 0, false
+	}
+	return n, true
+}
+
+// applySpeciesInteractionPatch layers the pointer-optional patch
+// onto the merged coldp.SpeciesInteraction. Type goes through the
+// coldp constructor so empty-string means "clear the enum" cleanly.
+func applySpeciesInteractionPatch(s *coldp.SpeciesInteraction, p apiSpeciesInteractionPatch) {
+	if p.RelatedTaxonID != nil {
+		s.RelatedTaxonID = *p.RelatedTaxonID
+	}
+	if p.RelatedTaxonScientificName != nil {
+		s.RelatedTaxonScientificName = *p.RelatedTaxonScientificName
+	}
+	if p.Type != nil {
+		s.Type = coldp.NewSpInteractionType(*p.Type)
+	}
+	if p.SourceID != nil {
+		s.SourceID = *p.SourceID
+	}
+	if p.ReferenceID != nil {
+		s.ReferenceID = *p.ReferenceID
+	}
+	if p.Remarks != nil {
+		s.Remarks = *p.Remarks
 	}
 }
 
