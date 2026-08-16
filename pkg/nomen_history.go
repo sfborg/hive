@@ -57,6 +57,17 @@ type NomenName struct {
 	Involvement string
 	SynonymID   string
 	ReferenceID string
+	// Atomized authorship — surfaced alongside the pre-formatted
+	// Authorship string so the WUI's "Standardized authorship" render
+	// can compose the hybrid "(basionym_author, basionym_year)
+	// combination_author, combination_year" form neither ICZN nor ICN
+	// produces on its own. Empty fields fall back to whichever pieces
+	// exist. Same source as apiName's equivalent fields — comes from
+	// gnparser's atomization on write (or curator override).
+	BasionymAuthorship        string
+	BasionymAuthorshipYear    string
+	CombinationAuthorship     string
+	CombinationAuthorshipYear string
 	// IssueCount is the number of __gsvalidator_results rows currently
 	// open against this name row (table_name='name', any severity).
 	// Populated per-name by a single batched query in
@@ -211,14 +222,18 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 				continue
 			}
 			entry := NomenName{
-				NameID:      id,
-				Authorship:  row.authorship,
-				Rank:        row.rank,
-				Year:        row.year,
-				IsBasionym:  id == anchor,
-				ReferenceID: row.referenceID,
-				IssueCount:  issueCounts[id],
-				Label:       BuildLabel(row.canonical, row.authorship, row.rank, false),
+				NameID:                    id,
+				Authorship:                row.authorship,
+				Rank:                      row.rank,
+				Year:                      row.year,
+				IsBasionym:                id == anchor,
+				ReferenceID:               row.referenceID,
+				BasionymAuthorship:        row.basionymAuthor,
+				BasionymAuthorshipYear:    row.basionymAuthorYear,
+				CombinationAuthorship:     row.combinationAuthor,
+				CombinationAuthorshipYear: row.combinationAuthYear,
+				IssueCount:                issueCounts[id],
+				Label:                     BuildLabel(row.canonical, row.authorship, row.rank, false),
 			}
 			if inv, ok := involved[id]; ok {
 				entry.Involvement = inv.role
@@ -245,11 +260,15 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 // batchNomenNameRows. Kept private to this file — the exported
 // NomenName carries the rendered Label.
 type nomenNameRow struct {
-	canonical   string
-	authorship  string
-	rank        string
-	year        string
-	referenceID string
+	canonical           string
+	authorship          string
+	rank                string
+	year                string
+	referenceID         string
+	basionymAuthor      string
+	basionymAuthorYear  string
+	combinationAuthor   string
+	combinationAuthYear string
 }
 
 // batchBasionymAnchors returns a map nameID → basionym-target-nameID
@@ -330,7 +349,11 @@ func (a *Archive) batchNomenNameRows(ctx context.Context, ids []string) (map[str
 		COALESCE(NULLIF(col__combination_authorship_year, ''),
 		         NULLIF(col__basionym_authorship_year, ''),
 		         NULLIF(col__published_in_year, ''), ''),
-		COALESCE(col__reference_id, '')
+		COALESCE(col__reference_id, ''),
+		COALESCE(col__basionym_authorship, ''),
+		COALESCE(col__basionym_authorship_year, ''),
+		COALESCE(col__combination_authorship, ''),
+		COALESCE(col__combination_authorship_year, '')
 	FROM name WHERE col__id IN (` + placeholders(len(ids)) + `)`
 	args := make([]any, len(ids))
 	for i, id := range ids {
@@ -346,7 +369,9 @@ func (a *Archive) batchNomenNameRows(ctx context.Context, ids []string) (map[str
 			id string
 			r  nomenNameRow
 		)
-		if err := rows.Scan(&id, &r.canonical, &r.authorship, &r.rank, &r.year, &r.referenceID); err != nil {
+		if err := rows.Scan(&id, &r.canonical, &r.authorship, &r.rank, &r.year,
+			&r.referenceID, &r.basionymAuthor, &r.basionymAuthorYear,
+			&r.combinationAuthor, &r.combinationAuthYear); err != nil {
 			return nil, fmt.Errorf("core: nomen history scan name row: %w", err)
 		}
 		out[id] = r

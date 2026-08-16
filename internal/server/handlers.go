@@ -464,16 +464,20 @@ func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Reque
 		}
 		for _, n := range c.Names {
 			row := apiNomenName{
-				NameID:      n.NameID,
-				Label:       apiLabel{Text: n.Label.Text, HTML: n.Label.HTML},
-				Authorship:  n.Authorship,
-				Rank:        n.Rank,
-				Year:        n.Year,
-				IsBasionym:  n.IsBasionym,
-				Involvement: n.Involvement,
-				SynonymID:   n.SynonymID,
-				ReferenceID: n.ReferenceID,
-				IssueCount:  n.IssueCount,
+				NameID:                    n.NameID,
+				Label:                     apiLabel{Text: n.Label.Text, HTML: n.Label.HTML},
+				Authorship:                n.Authorship,
+				Rank:                      n.Rank,
+				Year:                      n.Year,
+				IsBasionym:                n.IsBasionym,
+				Involvement:               n.Involvement,
+				SynonymID:                 n.SynonymID,
+				ReferenceID:               n.ReferenceID,
+				BasionymAuthorship:        n.BasionymAuthorship,
+				BasionymAuthorshipYear:    n.BasionymAuthorshipYear,
+				CombinationAuthorship:     n.CombinationAuthorship,
+				CombinationAuthorshipYear: n.CombinationAuthorshipYear,
+				IssueCount:                n.IssueCount,
 			}
 			row.ReferenceLabel = s.referenceLabel(r.Context(), firstCSVID(row.ReferenceID))
 			outC.Names = append(outC.Names, row)
@@ -1298,11 +1302,23 @@ func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		return tx.LinkNameRelation(coldp.NameRelation{
+		if err := tx.LinkNameRelation(coldp.NameRelation{
 			NameID:        currentNameID,
 			RelatedNameID: nameID,
 			Type:          coldp.NewNomRelType("BASIONYM"),
-		})
+		}); err != nil {
+			return err
+		}
+		// Backfill both names' atomized year fields from the citation
+		// graph. Order matters: fill the basionym first (originals
+		// path — populates its own basionym_year from its own
+		// reference) so when we then backfill the current combination
+		// (recomb path — needs the basionym's year for the sanity
+		// gate), the plausibility check has a value to compare against.
+		if err := tx.BackfillAuthorshipYears(nameID); err != nil {
+			return err
+		}
+		return tx.BackfillAuthorshipYears(currentNameID)
 	})
 	if err != nil {
 		writeProblem(w, r, err)
@@ -1352,20 +1368,68 @@ func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "code is required")
 		return
 	}
+	if body.BasionymNameID != "" && body.Basionym != nil {
+		writeBadRequest(w, r,
+			"set exactly one of basionym_name_id (link existing) or basionym (create new)")
+		return
+	}
+	if body.Basionym != nil {
+		if strings.TrimSpace(body.Basionym.ScientificName) == "" {
+			writeBadRequest(w, r, "basionym.scientific_name is required")
+			return
+		}
+		if strings.TrimSpace(body.Basionym.Code) == "" {
+			writeBadRequest(w, r, "basionym.code is required")
+			return
+		}
+	}
 	var newNameID string
 	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		// Create the basionym first (when supplied) so we have a
+		// name id to hang the BASIONYM relation off before writing
+		// the primary. Curator-supplied atomized fields on the
+		// basionym payload survive; empty ones get gnparser fill-
+		// from-parse inside CreateName.
+		basionymID := body.BasionymNameID
+		if body.Basionym != nil {
+			id, err := tx.CreateName(body.Basionym.toColdpName())
+			if err != nil {
+				return err
+			}
+			basionymID = id
+		}
 		nameID, err := tx.CreateName(body.toColdpName())
 		if err != nil {
 			return err
 		}
 		newNameID = nameID
-		_, err = tx.AddSynonym(coldp.Synonym{
+		if _, err = tx.AddSynonym(coldp.Synonym{
 			TaxonID: taxonID,
 			NameID:  nameID,
-			// Status defaults to SYNONYM inside AddSynonym; modified /
-			// modified_by come from the tx actor.
-		})
-		return err
+			Status:  coldp.NewTaxonomicStatus(body.SynonymStatus),
+			// modified / modified_by come from the tx actor. Empty
+			// SynonymStatus → coldp.NewTaxonomicStatus returns the
+			// zero value; AddSynonym then defaults to SYNONYM.
+		}); err != nil {
+			return err
+		}
+		if basionymID != "" {
+			if err := tx.LinkNameRelation(coldp.NameRelation{
+				NameID:        nameID,
+				RelatedNameID: basionymID,
+				Type:          coldp.NewNomRelType("BASIONYM"),
+			}); err != nil {
+				return err
+			}
+			// Backfill the basionym first (originals path — its own
+			// reference year fills basionym_authorship_year), so the
+			// primary's recomb-path backfill has a value for the
+			// sanity gate.
+			if err := tx.BackfillAuthorshipYears(basionymID); err != nil {
+				return err
+			}
+		}
+		return tx.BackfillAuthorshipYears(nameID)
 	})
 	if err != nil {
 		writeProblem(w, r, err)
@@ -1500,9 +1564,35 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "code is required")
 		return
 	}
+	if body.BasionymNameID != "" && body.Basionym != nil {
+		writeBadRequest(w, r,
+			"set exactly one of basionym_name_id (link existing) or basionym (create new)")
+		return
+	}
+	if body.Basionym != nil {
+		if strings.TrimSpace(body.Basionym.ScientificName) == "" {
+			writeBadRequest(w, r, "basionym.scientific_name is required")
+			return
+		}
+		if strings.TrimSpace(body.Basionym.Code) == "" {
+			writeBadRequest(w, r, "basionym.code is required")
+			return
+		}
+	}
 
 	var newID, newNameID string
 	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		// Create the basionym first (when supplied) so we have a
+		// name id available before writing the primary name — lets us
+		// LinkNameRelation in the same tx after the primary lands.
+		basionymID := body.BasionymNameID
+		if body.Basionym != nil {
+			id, err := tx.CreateName(body.Basionym.toColdpName())
+			if err != nil {
+				return err
+			}
+			basionymID = id
+		}
 		nameID, err := tx.CreateName(body.toColdpName())
 		if err != nil {
 			return err
@@ -1517,7 +1607,21 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 		}
 		newID = id
 		newNameID = nameID
-		return nil
+		if basionymID != "" {
+			if err := tx.LinkNameRelation(coldp.NameRelation{
+				NameID:        nameID,
+				RelatedNameID: basionymID,
+				Type:          coldp.NewNomRelType("BASIONYM"),
+			}); err != nil {
+				return err
+			}
+			// Basionym first (originals path) so the primary's
+			// recomb-path backfill sees a value for the sanity gate.
+			if err := tx.BackfillAuthorshipYears(basionymID); err != nil {
+				return err
+			}
+		}
+		return tx.BackfillAuthorshipYears(nameID)
 	})
 	if err != nil {
 		writeProblem(w, r, err)
@@ -2099,6 +2203,16 @@ func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 		// stamp intact.
 		if patch.Status != nil {
 			if err := tx.SetNameStatus(id, *patch.Status); err != nil {
+				return err
+			}
+		}
+		// Reference change is the common trigger for backfill — if the
+		// curator just picked the combination paper, the reference's
+		// year can now populate col__combination_authorship_year (and
+		// the linked basionym's year via the sanity check). Skip when
+		// no reference field was touched; the two years won't move.
+		if patch.ReferenceID != nil {
+			if err := tx.BackfillAuthorshipYears(id); err != nil {
 				return err
 			}
 		}

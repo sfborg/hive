@@ -743,6 +743,182 @@ func (t *Tx) SetNameStatus(nameID, status string) error {
 //     col__related_name_id). The sfga schema does not declare ON DELETE
 //     CASCADE, so hive does the cleanup explicitly.
 //   - Missing name → ErrNotFound.
+// BackfillAuthorshipYears fills the two atomized year fields on the
+// given name from the citation graph — its own reference and, if
+// linked, its basionym's reference. Runs after write paths so curators
+// who don't expand the atomized-fields section still get years
+// populated when the graph makes them derivable.
+//
+// Two shapes:
+//
+//   - Recombination (name has an outgoing BASIONYM relation):
+//     combination_year ← this name's reference.issued
+//     basionym_year    ← the linked basionym name's reference.issued
+//     Plausibility gate: basionym_year MUST be strictly less than
+//     combination_year. Equal (same paper cited both — likely wrong)
+//     or reversed (impossible ordering) → skip entirely; the
+//     validation rule surfaces the mismatch for curator review.
+//
+//   - Original combination (no BASIONYM relation):
+//     basionym_year    ← this name's own reference.issued
+//     There's no separate combination act, so combination_year is
+//     left alone. The Standardized-authorship render falls back to
+//     basionym_year for originals anyway.
+//
+// Never overwrites curator-set values. Idempotent — running twice
+// with the same graph is a no-op.
+func (t *Tx) BackfillAuthorshipYears(nameID string) error {
+	if nameID == "" {
+		return fmt.Errorf("core: backfill authorship years: %w: id required", ErrValidation)
+	}
+	// Pull this name's existing atomized years + reference_id +
+	// authorship shape. The authorship + combination_authorship
+	// fields tell us whether this name is a recomb even before its
+	// BASIONYM relation is linked — a recomb-without-relation-yet
+	// shouldn't get its basionym_year filled from its OWN reference
+	// (which is the combination paper, not the basionym's).
+	var (
+		basYearHave  sql.NullString
+		combYearHave sql.NullString
+		refIDRaw     sql.NullString
+		authorship   sql.NullString
+		combAuth     sql.NullString
+	)
+	err := t.tx.QueryRowContext(t.ctx,
+		`SELECT col__basionym_authorship_year, col__combination_authorship_year,
+		        col__reference_id, col__authorship, col__combination_authorship
+		 FROM name WHERE col__id = ?`, nameID,
+	).Scan(&basYearHave, &combYearHave, &refIDRaw, &authorship, &combAuth)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core: backfill authorship years %s: %w", nameID, ErrNotFound)
+		}
+		return fmt.Errorf("core: backfill authorship years %s: %w", nameID, err)
+	}
+	setBasY := !basYearHave.Valid || basYearHave.String == ""
+	setCombY := !combYearHave.Valid || combYearHave.String == ""
+	// Nothing to backfill — both fields already set. Curator wins.
+	if !setBasY && !setCombY {
+		return nil
+	}
+
+	// This name's own reference-year — used as combination_year for
+	// recombs, or as basionym_year for originals (see below).
+	ownYear := yearFromReference(t.ctx, t.tx, PrimaryReferenceID(refIDRaw.String))
+
+	// Look up the outgoing BASIONYM relation, if any.
+	var basNameID string
+	err = t.tx.QueryRowContext(t.ctx,
+		`SELECT col__related_name_id FROM name_relation
+		 WHERE col__type_id = 'BASIONYM' AND col__name_id = ? LIMIT 1`,
+		nameID,
+	).Scan(&basNameID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("core: backfill authorship years: basionym relation %s: %w", nameID, err)
+	}
+
+	// Compute what to write into which field.
+	var newBasYear, newCombYear string
+	if basNameID != "" {
+		// Recomb path — need the basionym's own reference year.
+		var basRefRaw sql.NullString
+		if err := t.tx.QueryRowContext(t.ctx,
+			`SELECT col__reference_id FROM name WHERE col__id = ?`, basNameID,
+		).Scan(&basRefRaw); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core: backfill authorship years: basionym name %s: %w", basNameID, err)
+		}
+		basYear := yearFromReference(t.ctx, t.tx, PrimaryReferenceID(basRefRaw.String))
+		// Plausibility: both years extractable AND basionym strictly
+		// older. Anything else = skip; validation rule flags it.
+		if basYear == "" || ownYear == "" || basYear >= ownYear {
+			return nil
+		}
+		newBasYear = basYear
+		newCombYear = ownYear
+	} else {
+		// Original path — no basionym relation.
+		//
+		// Guard: only treat as an original when the authorship shape
+		// agrees. A name with parenthetical authorship OR a populated
+		// combination_authorship is a recomb that just hasn't had its
+		// BASIONYM relation linked yet; filling basionym_year from its
+		// OWN reference (which is the combination paper) would be
+		// wrong AND would then block the correct value when the
+		// basionym gets linked later (curator-set-wins semantics
+		// preserve the bad value). Skip until the graph is complete.
+		looksLikeRecomb :=
+			strings.HasPrefix(strings.TrimSpace(authorship.String), "(") ||
+				(combAuth.Valid && strings.TrimSpace(combAuth.String) != "")
+		if looksLikeRecomb {
+			return nil
+		}
+		// This name's own reference year IS the basionym year (the
+		// name-establishment act). Leave combination_year alone —
+		// there's no separate combination act on an original.
+		if ownYear == "" {
+			return nil
+		}
+		newBasYear = ownYear
+	}
+
+	// Build the UPDATE dynamically so we only touch empty fields.
+	set := make([]string, 0, 2)
+	args := make([]any, 0, 3)
+	if setBasY && newBasYear != "" {
+		set = append(set, "col__basionym_authorship_year = ?")
+		args = append(args, newBasYear)
+	}
+	if setCombY && newCombYear != "" {
+		set = append(set, "col__combination_authorship_year = ?")
+		args = append(args, newCombYear)
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	args = append(args, nameID)
+	_, err = t.tx.ExecContext(t.ctx,
+		"UPDATE name SET "+strings.Join(set, ", ")+" WHERE col__id = ?",
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("core: backfill authorship years %s: %w", nameID, err)
+	}
+	return nil
+}
+
+// yearFromReference returns the 4-digit year prefix of the reference's
+// col__issued column, or "" when the reference is missing / has no
+// year. Empty refID short-circuits so callers can pass PrimaryReferenceID
+// output without pre-checking.
+func yearFromReference(ctx context.Context, tx *sql.Tx, refID string) string {
+	if refID == "" {
+		return ""
+	}
+	var issued sql.NullString
+	err := tx.QueryRowContext(ctx,
+		`SELECT col__issued FROM reference WHERE col__id = ?`, refID,
+	).Scan(&issued)
+	if err != nil {
+		return ""
+	}
+	if !issued.Valid || issued.String == "" {
+		return ""
+	}
+	// col__issued is ISO 8601-ish — "YYYY" or "YYYY-MM" or full date.
+	// First four chars is the year if it looks like a year.
+	s := issued.String
+	if len(s) < 4 {
+		return ""
+	}
+	y := s[:4]
+	for i := 0; i < 4; i++ {
+		if y[i] < '0' || y[i] > '9' {
+			return ""
+		}
+	}
+	return y
+}
+
 func (t *Tx) DeleteName(id string) error {
 	if id == "" {
 		return fmt.Errorf("core: delete name: %w: id required", ErrValidation)

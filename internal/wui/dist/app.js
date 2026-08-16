@@ -267,6 +267,92 @@ function renderLabel(label, fallback = "") {
   return label.text || fallback;
 }
 
+// nomActFieldLabel returns the reference-field label for any name-
+// model form (create pane, taxon-edit name section, pencil-edit name
+// editor). Prefixes the label with "Original" or "Subsequent" based
+// on multiple recomb signals so the label flips correctly even when
+// the curator authored the name via the atomized fields directly
+// (bypassing the parenthetical-verbatim shortcut). Empty draft → no
+// prefix.
+//
+// Recomb signals (any one triggers "Subsequent"):
+//   1. Verbatim authorship starts with `(` — the standard cross-code
+//      convention.
+//   2. basionym_authorship and combination_authorship are BOTH set
+//      AND differ — curator explicitly said the recombining author
+//      differs from the original. (COL redundantly populates both
+//      fields with the SAME author on originals — Sarg./Sarg. —
+//      which is why we require a difference, not just presence.)
+//   3. basionym_authorship_year and combination_authorship_year are
+//      BOTH set AND differ — same signal via years for archives that
+//      atomize years without duplicating them.
+//
+// Terminology is nomenclatural-code-neutral per CLAUDE.md § PWA
+// (web/) conventions: "original combination" and "subsequent
+// combination" read correctly to curators from either code, and the
+// label itself is self-explanatory enough that we don't add a hint
+// paragraph beneath the input.
+function nomActFieldLabel(draft) {
+  const auth = (draft?.authorship || "").trim();
+  const basA = (draft?.basionym_authorship || "").trim();
+  const cA = (draft?.combination_authorship || "").trim();
+  const basY = (draft?.basionym_authorship_year || "").trim();
+  const cY = (draft?.combination_authorship_year || "").trim();
+  if (!auth && !basA && !cA && !basY && !cY) {
+    return "Nomenclatural act citation";
+  }
+  const isRecomb =
+    auth.startsWith("(") ||
+    (basA && cA && basA !== cA) ||
+    (basY && cY && basY !== cY);
+  if (isRecomb) return "Subsequent nomenclatural act citation";
+  return "Original nomenclatural act citation";
+}
+
+// stripAuthorshipFromLabelHTML returns the label HTML with the
+// trailing authorship string removed — so the caller can compose a
+// different authorship rendering next to the italicized canonical.
+// Server's BuildLabel formats as "<i>Canonical</i> Authorship" for
+// italicized ranks and "Canonical Authorship" for higher ranks; both
+// have the raw authorship at the tail. We try the raw form first,
+// then the HTML-escaped form (BuildLabel escapes `&`/`<`/`>` in the
+// html field), then give up — if nothing matches, return the HTML
+// unchanged so the caller falls back to renderLabel(label).
+function stripAuthorshipFromLabelHTML(labelHTML, authorship) {
+  if (!labelHTML) return "";
+  const suffix = (authorship || "").trim();
+  if (!suffix) return labelHTML;
+  const candidates = [suffix];
+  const escaped = htmlEscape(suffix);
+  if (escaped !== suffix) candidates.push(escaped);
+  for (const s of candidates) {
+    const trailing = " " + s;
+    if (labelHTML.endsWith(trailing)) {
+      return labelHTML.slice(0, -trailing.length);
+    }
+  }
+  return labelHTML;
+}
+
+function htmlEscape(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// normalizeAuthorField translates a pipe-separated author list (COL's
+// storage convention for multi-author atomized authorship fields) into
+// the display form "A & B & C". Single-author values pass through
+// unchanged. Empty in → empty out.
+function normalizeAuthorField(s) {
+  return (s || "")
+    .split("|")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .join(" & ");
+}
+
 // severityChip renders a small pill for a gsvalidator result severity.
 // Color comes from --sev-* CSS custom properties (traffic-light default,
 // swap via html[data-severity-palette="cvd"]). A leading glyph carries
@@ -584,6 +670,33 @@ function vocabResolver(name) {
   };
 }
 
+// synonymStatusSource restricts the taxonomic_status vocab to the
+// three values that describe a SYNONYM row's relationship to its
+// accepted taxon. sfga's taxonomic_status vocab mixes accepted-side
+// (ACCEPTED, PROVISIONALLY_ACCEPTED, VALID, PROVISIONALLY_VALID,
+// BARE_NAME) and synonym-side (SYNONYM, AMBIGUOUS_SYNONYM,
+// MISAPPLIED) terms together — the synonym form only ever wants the
+// synonym-side subset, per CoLDP practice. See CLAUDE.md
+// § Nomenclatural-code-neutral copy for the reasoning: BARE_NAME is
+// inferred from "name row with no synonym or taxon link," not
+// something curators pick.
+function synonymStatusSource() {
+  const allowed = new Set(["SYNONYM", "AMBIGUOUS_SYNONYM", "MISAPPLIED"]);
+  return (q) => {
+    const terms = api.vocab.get("taxonomic_status");
+    const needle = (q || "").toLowerCase().trim();
+    return terms
+      .filter((t) => allowed.has(t.id))
+      .filter(
+        (t) =>
+          !needle ||
+          (t.name || "").toLowerCase().includes(needle) ||
+          (t.id || "").toLowerCase().includes(needle),
+      )
+      .map((t) => ({ id: t.id, name: t.name || t.id || "(unset)" }));
+  };
+}
+
 // isoSource / isoResolver back the ISO-vocab pickers (countries,
 // languages, sex). Each entry renders as "<name> - <primary code>[ -
 // <secondary code>]" so the curator can search either by human name
@@ -747,34 +860,6 @@ async function referenceResolver(id) {
 // referenceHitLabel composes the "Author (Year) Title" line used by
 // both the picker source and the resolver. Falls back to citation or
 // id when structured fields are missing.
-// referenceLabelFor returns the reference-picker label text on the
-// name-add form, sharpened to name what the curator's atomized
-// authorship fields say the reference is for. Combination author or
-// year set → "Reference for the combination (X, YYYY)". Basionym set
-// but no combination → "Reference (basionym: X, YYYY)" (nudging the
-// curator toward the basionym flow, since the ref is really for a
-// separate name row). Neither → plain "Reference".
-//
-// The label points at whatever the curator just typed, so it's hard
-// to mistake which combination the reference is being attached to.
-function referenceLabelFor(d) {
-  const combA = (d.combination_authorship || "").trim();
-  const combY = (d.combination_authorship_year || "").trim();
-  const basA = (d.basionym_authorship || "").trim();
-  const basY = (d.basionym_authorship_year || "").trim();
-  const fmt = (a, y) =>
-    a && y ? `${a}, ${y}` : a || y || "";
-  if (combA || combY) {
-    const who = fmt(combA, combY);
-    return `Reference for the combination${who ? ` (${who})` : ""}`;
-  }
-  if (basA || basY) {
-    const who = fmt(basA, basY);
-    return `Reference${who ? ` (basionym: ${who})` : ""}`;
-  }
-  return "Reference";
-}
-
 function referenceHitLabel(h) {
   const parts = [];
   if (h.author) parts.push(h.author);
@@ -834,6 +919,39 @@ async function taxonResolver(id) {
     return t.label?.text || id;
   } catch (_) {
     return "(lookup failed)";
+  }
+}
+
+// nameSource hits /api/name/search. Backs the "link existing original
+// combination" picker in the create pane's basionym section (and any
+// future name-picker use case). Returns rows shaped {id, name} where
+// `name` reads like a citation line — canonical + authorship. The
+// backend orders by canonical; ties break by authorship.
+async function nameSource(q) {
+  if (!q || q.length < 2) return [];
+  try {
+    const page = await api.name.search({ q, limit: 20 });
+    return (page.items || []).map((h) => ({
+      id: h.id,
+      name: [h.scientific || h.full, h.authorship].filter(Boolean).join(" "),
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+async function nameResolver(id) {
+  if (!id) return "";
+  try {
+    const n = await api.name.get(id);
+    return [
+      n.scientific_name || n.canonical_simple || n.canonical_full,
+      n.authorship,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  } catch (_) {
+    return id;
   }
 }
 
@@ -1484,6 +1602,20 @@ class SfgaApp extends LitElement {
                 detail._askDelete();
               }
               return;
+          }
+        }
+        // WUI-only detail toggle: "a" flips the Standardized
+        // Authorship render on the Nomenclatural History section.
+        // Not in the shared keymap because the TUI hasn't picked up
+        // the section yet — will graduate once the TUI has a
+        // Nomen History equivalent. Bare letter, so gated by the
+        // enclosing "not typing" check.
+        if (this.selectedId && !e.altKey && !e.ctrlKey && !e.metaKey && e.key === "a") {
+          const detail = this.renderRoot.querySelector("sfga-detail");
+          if (detail && typeof detail.toggleStandardizedAuthorship === "function") {
+            e.preventDefault();
+            detail.toggleStandardizedAuthorship();
+            return;
           }
         }
       }
@@ -2867,6 +2999,14 @@ class SfgaDetail extends LitElement {
     // {phase, synonymId, nameId, label, deps, cascade, confirmText,
     // busy, error} while open. See _renderSynonymDeleteModal.
     _synonymDelete: { state: true },
+    // "Standardized authorship" toggle for the Nomenclatural History
+    // section. When true, each row renders the hybrid form
+    //   <canonical> (basionym_author, basionym_year) combination_author, combination_year
+    // instead of the code-conventional pre-formatted Authorship string.
+    // Persisted to localStorage as "hive-standardized-authorship" so
+    // curators' preference carries across sessions. See
+    // DESIGN.md § Standardized authorship.
+    _standardizedAuthorship: { state: true },
     // Modal state for the name-editor (invoked from the pencil on any
     // synonym or basionym row in Nomenclatural history). Null when
     // closed; {phase: "loading"|"edit", id, original, draft, etag,
@@ -2925,6 +3065,13 @@ class SfgaDetail extends LitElement {
     // creating a synonym so the curator sees which taxon they're
     // adding a synonym of.
     _creatingSynonymForName: { state: true },
+    // Inline original-combination (basionym) subform inside the create
+    // pane. Null when collapsed / not in use; {draft: {…}} when the
+    // curator clicked "Create new original combination…" and is
+    // filling in the sibling name that will be BASIONYM-linked to the
+    // primary. On save, both records + the name_relation land in one
+    // transaction. See CLAUDE.md § Nomenclatural-code-neutral copy.
+    _createBasionymInline: { state: true },
     // Parent id + label the pending create attaches to. Distinguishes
     // "new child" (id = current taxon) from "new sister" (id = current
     // taxon's parent). Stored at open time so _submitCreate has a
@@ -3090,6 +3237,44 @@ class SfgaDetail extends LitElement {
     }
     section.nomen-history li {
       padding: 1px 0;
+    }
+    /* Toolbar strip between the section header and the ul — holds
+       the Standardized authorship chip. Small right-aligned row so
+       it doesn't compete visually with the section title. */
+    section.nomen-history .nomen-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: var(--sp-2);
+    }
+    section.nomen-history .nomen-toolbar button.chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: var(--sp-1);
+      padding: 2px var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      background: var(--bg);
+      color: var(--dim);
+      font: inherit;
+      font-family: var(--font-body);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      transition: background var(--transition-fast),
+        color var(--transition-fast), border-color var(--transition-fast);
+    }
+    section.nomen-history .nomen-toolbar button.chip.on {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: var(--accent);
+    }
+    section.nomen-history .nomen-toolbar button.chip:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    section.nomen-history .nomen-toolbar button.chip .chip-check {
+      display: inline-flex;
+      width: 0.9em;
+      justify-content: center;
     }
     /* Every row (accepted, basionym, recombs) uses the same indented
        three-column grid so glyphs align in a single column, labels
@@ -3551,6 +3736,20 @@ class SfgaDetail extends LitElement {
       font-family: var(--font-body);
       font-size: var(--fs-lg);
     }
+    /* Modal header row — h3 title on the left, close-x on the right.
+       Used by every form-shaped modal in SfgaDetail (name editor,
+       vernacular, distribution, synonym delete). Confirms via
+       Escape / Cancel button too — the × is the pointer-user
+       counterpart of Escape. */
+    .modal .modal-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--sp-2);
+    }
+    .modal .modal-header h3 {
+      margin: 0;
+    }
     .modal p {
       margin: 0;
       color: var(--dim);
@@ -3789,6 +3988,8 @@ class SfgaDetail extends LitElement {
     this._distributionForm = null;
     this._synonymDelete = null;
     this._nameEditor = null;
+    this._standardizedAuthorship =
+      localStorage.getItem("hive-standardized-authorship") === "true";
     this._error = "";
     this._loading = false;
     this._editing = false;
@@ -3815,6 +4016,7 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
+    this._createBasionymInline = null;
     this._createParentID = "";
     this._createParentLabel = "";
     this._createChildRanks = null;
@@ -3999,6 +4201,7 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
+    this._createBasionymInline = null;
     if (parentID) {
       try {
         const [codeResp, prefixResp, childRanksResp] = await Promise.all([
@@ -4047,6 +4250,7 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
+    this._createBasionymInline = null;
   }
 
   // _advanceToPreview fires the server-side parse (POST /api/name/parse)
@@ -4086,6 +4290,17 @@ class SfgaDetail extends LitElement {
       delete merged.canonical_full;
       delete merged.canonical_stemmed;
       delete merged.reference_label;
+      // Preserve draft-only meta fields that gnparser knows nothing
+      // about — synonym_status (set by _openCreateSynonym), and
+      // basionym_name_id (set either by _openCreateSynonym's cluster-`+`
+      // shortcut or by the curator picking an existing name in the
+      // Original combination section of a prior step 1 render).
+      if (this._createDraft.synonym_status) {
+        merged.synonym_status = this._createDraft.synonym_status;
+      }
+      if (this._createDraft.basionym_name_id) {
+        merged.basionym_name_id = this._createDraft.basionym_name_id;
+      }
       this._createDraft = merged;
       this._createStep = 1;
     } catch (err) {
@@ -4136,9 +4351,15 @@ class SfgaDetail extends LitElement {
         // Synonym write path — POST /api/taxon/{X}/synonym creates
         // Name + Synonym link atomically. Stay on the same accepted
         // taxon so the newly-added synonym appears in the refreshed
-        // Nomenclatural history section.
+        // Nomenclatural history section. When the inline original-
+        // combination subform is open OR a picker id is set, the
+        // backend also creates/links the original combination in the
+        // same transaction.
         const revealID = this._creatingSynonymFor;
-        await api.taxon.addSynonym(this._creatingSynonymFor, this._createDraft);
+        await api.taxon.addSynonym(
+          this._creatingSynonymFor,
+          this._buildCreateBody(),
+        );
         this._cancelCreate();
         this.dispatchEvent(
           new CustomEvent("taxon-moved", {
@@ -4152,7 +4373,7 @@ class SfgaDetail extends LitElement {
         // time so new-child and new-sister route to the right parent
         // regardless of tree state.
         const body = {
-          ...this._createDraft,
+          ...this._buildCreateBody(),
           parent_id: this._createParentID || "",
         };
         const created = await api.taxon.create(body);
@@ -4171,6 +4392,30 @@ class SfgaDetail extends LitElement {
     } finally {
       this._createBusy = false;
     }
+  }
+
+  // _buildCreateBody assembles the POST body for the create-taxon /
+  // add-synonym / add-basionym endpoints. Adds the optional basionym
+  // link fields (mutually exclusive):
+  //   * basionym_name_id — set when the picker was used to link an
+  //     existing name.
+  //   * basionym — nested object when the inline subform is expanded
+  //     for creating a new original-combination name in the same
+  //     transaction.
+  // Neither → today's behavior (no basionym link on write).
+  _buildCreateBody() {
+    const body = { ...this._createDraft };
+    if (this._createBasionymInline) {
+      // Inline-new wins over picker (mutually exclusive; UI clears
+      // picker on inline-open, but be defensive).
+      delete body.basionym_name_id;
+      body.basionym = { ...this._createBasionymInline.draft };
+    } else if (body.basionym_name_id) {
+      // Picker set — send basionym_name_id verbatim.
+    } else {
+      delete body.basionym_name_id;
+    }
+    return body;
   }
 
   // _submitCreateThenBasionym is the "Create + add original combination"
@@ -4378,6 +4623,24 @@ class SfgaDetail extends LitElement {
         <input type="text" .value=${d.authorship || ""} @input=${set("authorship")} />
       </fieldset>
 
+      ${this._creatingSynonymFor
+        ? html`
+            <fieldset>
+              <legend>synonym type</legend>
+              <label>Type</label>
+              <sfga-combobox
+                min-search-chars="0"
+                placeholder="synonym / ambiguous synonym / misapplied"
+                .source=${synonymStatusSource()}
+                .resolver=${vocabResolver("taxonomic_status")}
+                .value=${d.synonym_status || "SYNONYM"}
+                @pick=${(e) =>
+                  this._createFieldChange("synonym_status", e.detail.id)}
+              ></sfga-combobox>
+            </fieldset>
+          `
+        : ""}
+
       <label class="atomized-toggle">
         <input
           type="checkbox"
@@ -4399,7 +4662,7 @@ class SfgaDetail extends LitElement {
 
       <fieldset>
         <legend>publication</legend>
-        <label>${referenceLabelFor(d)}</label>
+        <label>${nomActFieldLabel(d)}</label>
         <sfga-combobox
           min-search-chars="2"
           placeholder="Search references…"
@@ -4456,6 +4719,10 @@ class SfgaDetail extends LitElement {
         ></sfga-combobox>
       </fieldset>
 
+      ${this._creatingBasionymFor
+        ? ""
+        : this._renderOriginalCombinationSection(d, set)}
+
       <div class="toolbar">
         <button @click=${() => this._backToVerbatim()}>← back</button>
         <button
@@ -4471,21 +4738,141 @@ class SfgaDetail extends LitElement {
                 ? "add synonym"
                 : "create"}
         </button>
-        ${this._shouldOfferBasionymAfterCreate(d)
-          ? html`
-              <button
-                @click=${() => this._submitCreateThenBasionym()}
-                ?disabled=${this._createBusy}
-                title="Save the current combination, then enter the original combination as its basionym"
-              >
-                create + add original combination →
-              </button>
-            `
-          : ""}
         <button @click=${() => this._cancelCreate()}>Cancel</button>
       </div>
       ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
     `;
+  }
+
+  // _renderOriginalCombinationSection is the inline basionym-link
+  // section at the bottom of the create form. Two paths through it:
+  //   * Empty picker + inline form collapsed → save creates just the
+  //     primary name (today's behavior).
+  //   * Picker set → save links a BASIONYM relation to the picked
+  //     name in the same tx.
+  //   * "Create new" expanded → save creates the primary + the inline
+  //     basionym name + the BASIONYM relation in the same tx.
+  //
+  // Hidden when we're already in basionym-add mode (avoid recursion —
+  // a basionym doesn't get its own basionym via this pane).
+  // Terminology: unified "original combination" for both codes; the
+  // underlying sfga field is `name_relation.col__type_id = 'BASIONYM'`
+  // — this is a display choice, not a schema choice.
+  _renderOriginalCombinationSection(d, set) {
+    const inline = this._createBasionymInline || null;
+    const bDraft = inline?.draft || {};
+    const bSet = (field) => (e) =>
+      this._createBasionymInlineFieldChange(field, e.target.value);
+    return html`
+      <fieldset>
+        <legend>original combination (optional)</legend>
+        ${inline
+          ? html`
+              <p class="hint" style="grid-column: 1 / -1; margin: 0 0 var(--sp-1) 0;">
+                Creating a new original combination inline. Both records
+                save together.
+              </p>
+              <label>Scientific name <span class="req">*</span></label>
+              <input
+                type="text"
+                placeholder="e.g. Aus bus L."
+                .value=${bDraft.scientific_name || ""}
+                @input=${bSet("scientific_name")}
+              />
+              <label>Verbatim authorship</label>
+              <input
+                type="text"
+                .value=${bDraft.authorship || ""}
+                @input=${bSet("authorship")}
+              />
+              <label>Code</label>
+              <sfga-combobox
+                min-search-chars="0"
+                placeholder="Nomenclatural code…"
+                .source=${vocabSource("nom_code")}
+                .resolver=${vocabResolver("nom_code")}
+                .value=${bDraft.code || d.code || ""}
+                @pick=${(e) =>
+                  this._createBasionymInlineFieldChange("code", e.detail.id)}
+              ></sfga-combobox>
+              <label>Original nomenclatural act citation</label>
+              <sfga-combobox
+                min-search-chars="2"
+                placeholder="Search author / title / citation / DOI…"
+                .source=${referenceSource}
+                .resolver=${referenceResolver}
+                .value=${bDraft.reference_id || ""}
+                @pick=${(e) =>
+                  this._createBasionymInlineFieldChange(
+                    "reference_id",
+                    e.detail.id,
+                  )}
+              ></sfga-combobox>
+              <label>Remarks</label>
+              <input
+                type="text"
+                .value=${bDraft.remarks || ""}
+                @input=${bSet("remarks")}
+              />
+              <div class="toolbar" style="grid-column: 1 / -1">
+                <button
+                  type="button"
+                  @click=${() => this._cancelCreateBasionymInline()}
+                >
+                  Cancel this original combination
+                </button>
+              </div>
+            `
+          : html`
+              <label>Link existing name</label>
+              <sfga-combobox
+                min-search-chars="2"
+                placeholder="Search names in this archive…"
+                .source=${nameSource}
+                .resolver=${nameResolver}
+                .value=${d.basionym_name_id || ""}
+                .actions=${[
+                  {
+                    label: "Create new original combination…",
+                    icon: "plus",
+                    handler: () => this._openCreateBasionymInline(),
+                  },
+                ]}
+                @pick=${(e) =>
+                  this._createFieldChange("basionym_name_id", e.detail.id)}
+              ></sfga-combobox>
+              <p class="hint" style="grid-column: 1 / -1; margin: 0;">
+                Leave empty if this name IS the original combination
+                (no earlier basionym exists in this archive) or if you
+                plan to add its original combination later.
+              </p>
+            `}
+      </fieldset>
+    `;
+  }
+
+  // _openCreateBasionymInline expands the inline basionym subform,
+  // seeding it with the primary draft's code so the common ICN/ICZN
+  // case doesn't need an extra pick. Clears any picker selection —
+  // the two paths are mutually exclusive.
+  _openCreateBasionymInline() {
+    this._createBasionymInline = {
+      draft: { code: this._createDraft?.code || "" },
+    };
+    // Ensure the picker's basionym_name_id doesn't also submit.
+    this._createFieldChange("basionym_name_id", "");
+  }
+
+  _cancelCreateBasionymInline() {
+    this._createBasionymInline = null;
+  }
+
+  _createBasionymInlineFieldChange(field, value) {
+    if (!this._createBasionymInline) return;
+    this._createBasionymInline = {
+      ...this._createBasionymInline,
+      draft: { ...this._createBasionymInline.draft, [field]: value },
+    };
   }
 
   // _shouldOfferBasionymAfterCreate returns true when the current draft
@@ -5369,7 +5756,7 @@ class SfgaDetail extends LitElement {
   // atomized fields, same dynamic reference label. Curators learn one
   // form and use it for both create and edit.
   _renderNameSection() {
-    // Merge the current name + any in-flight draft so referenceLabelFor
+    // Merge the current name + any in-flight draft so nomActFieldCopy
     // sees whatever atomized authorship values the curator has typed.
     const merged = { ...(this._name || {}), ...this._nameDraft };
     return html`
@@ -5439,7 +5826,7 @@ class SfgaDetail extends LitElement {
         @pick=${(e) => this._nameFieldChange("status", e.detail.id)}
       ></sfga-combobox>
 
-      <label>${referenceLabelFor(merged)}</label>
+      <label>${nomActFieldLabel(merged)}</label>
       <sfga-combobox
         min-search-chars="2"
         placeholder="Search references…"
@@ -5554,11 +5941,54 @@ class SfgaDetail extends LitElement {
           handler: () => this._addNomenEntry(),
           title: "add synonym",
         })}
+        ${this._renderStandardizedAuthorshipToggle()}
         <ul>
           ${clusters.map((c) => this._renderNomenCluster(c))}
         </ul>
       </section>
     `;
+  }
+
+  // _renderStandardizedAuthorshipToggle draws the small chip that flips
+  // between the code-conventional pre-formatted Authorship string and
+  // the hybrid "(basionym_author, basionym_year) combination_author,
+  // combination_year" render. Persist state to localStorage so the
+  // preference carries across sessions. Hotkey is `a` when the taxa
+  // screen has focus and the curator isn't typing — see SfgaApp's
+  // _onGlobalKey.
+  _renderStandardizedAuthorshipToggle() {
+    const on = !!this._standardizedAuthorship;
+    return html`
+      <div class="nomen-toolbar">
+        <button
+          class=${"chip" + (on ? " on" : "")}
+          role="switch"
+          aria-checked=${on ? "true" : "false"}
+          title=${"Standardized authorship — hybrid render that keeps both the basionym year (ICZN convention) and the combination author (ICN convention) on every row. Full nomenclatural-act context, code-agnostic. Toggle with `a`."}
+          @click=${() => this.toggleStandardizedAuthorship()}
+        >
+          <span class="chip-check" aria-hidden="true">${on ? "✓" : "○"}</span>
+          <span>Standardized authorship</span>
+        </button>
+      </div>
+    `;
+  }
+
+  // toggleStandardizedAuthorship flips the standardized-authorship
+  // preference. Public (unprefixed name) because SfgaApp calls it
+  // from the global keydown handler when `a` is pressed on the taxa
+  // screen.
+  toggleStandardizedAuthorship() {
+    this._standardizedAuthorship = !this._standardizedAuthorship;
+    try {
+      localStorage.setItem(
+        "hive-standardized-authorship",
+        this._standardizedAuthorship ? "true" : "false",
+      );
+    } catch (_) {
+      // localStorage unavailable (private mode / quota) — preference
+      // is session-only, which is fine.
+    }
   }
 
   // _addNomenEntry handles the Nomenclatural History + button — opens
@@ -5573,16 +6003,29 @@ class SfgaDetail extends LitElement {
   // create; on submit the pane calls api.taxon.addSynonym with the
   // accepted taxon id captured at open time. See DESIGN.md § Add
   // affordance.
-  async _openCreateSynonym() {
+  async _openCreateSynonym(opts = {}) {
     const taxonID = this._taxon?.id || "";
     if (!taxonID) return;
     const taxonLabel =
       this._taxon?.label?.text || this._taxon?.name || this._taxon?.id || "";
     // Seed the code from the accepted name so ICZN stays ICZN etc.
     // Curator can override on step 1 for the odd case (e.g. an ICN
-    // name synonymised into a mixed-code project).
+    // name synonymised into a mixed-code project). Synonym type
+    // defaults to SYNONYM (the overwhelming common case); curator
+    // can flip to AMBIGUOUS_SYNONYM or MISAPPLIED on step 1.
+    // basionymNameID (optional) pre-populates the original-combination
+    // picker at the bottom of the form — the cluster-`+` shortcut in
+    // Nomen History uses this to skip the picker step.
     const code = this._name?.code || "";
-    this._createDraft = { scientific_name: "", code };
+    const draft = {
+      scientific_name: "",
+      code,
+      synonym_status: "SYNONYM",
+    };
+    if (opts.basionymNameID) {
+      draft.basionym_name_id = opts.basionymNameID;
+    }
+    this._createDraft = draft;
     this._createStep = 0;
     this._createError = "";
     this._createBusy = false;
@@ -5619,26 +6062,104 @@ class SfgaDetail extends LitElement {
         cls = "history accepted";
         glyph = "✓";
       } else if (isBasionymRow) {
-        // Basionym anchor of the cluster. `≡` only when this basionym
-        // is the accepted's own (accepted-cluster basionym); other
-        // synonym clusters' basionyms use `=` because they're just
-        // heterotypic synonyms of the accepted from the curator's POV.
+        // Cluster anchor (basionym). Homotypic-vs-heterotypic
+        // distinction relative to the accepted:
+        //   * Accepted cluster's basionym → homotypic with accepted → ≡
+        //   * Any other cluster's basionym → heterotypic to accepted → =
         cls = "history";
         glyph = isAccepted ? "≡" : "=";
       } else {
-        // Recomb within the cluster. Indent 2 if there's a separate
-        // basionym above (it hangs off that anchor); indent 1 when the
-        // accepted is its own basionym (no anchor row to hang off).
+        // Non-anchor, non-accepted row: a recombination sharing this
+        // cluster's basionym → homotypic with the anchor above it → ≡.
+        // Applies uniformly whether the cluster is the accepted cluster
+        // or a heterotypic-synonym cluster — either way, "same basionym"
+        // means "same type" means "homotypic." Indent 2 when there's a
+        // separate anchor row above; indent 1 when the accepted is its
+        // own basionym (no anchor line above to hang off).
         cls = hasSeparateBasionym ? "history nested" : "history";
-        glyph = "=";
+        glyph = "≡";
       }
       const cite = this._citeRef(n.reference_id, n.reference_label);
+      // Two render paths for the label:
+      //   * default — the server-formatted code-conventional label
+      //     (ICZN-style parenthetical for recombs; ICN-style two-author
+      //     chain for basionym→recomb pairs).
+      //   * standardized — hybrid canonical + (basionym, basionym_year)
+      //     combination, combination_year that carries the full nom-act
+      //     context regardless of code, falling back to whichever
+      //     atomized pieces are populated.
+      const nameCell = this._standardizedAuthorship
+        ? this._renderStandardizedAuthorshipLabel(n)
+        : renderLabel(n.label, n.name_id);
       return html`<li class=${cls}>
         <span class="glyph" aria-hidden="true">${glyph}</span>
-        <span>${renderLabel(n.label, n.name_id)}${cite}</span>
+        <span>${nameCell}${cite}</span>
         ${isAcceptedName ? "" : this._renderNomenRowActions(n)}
       </li>`;
     });
+  }
+
+  // _renderStandardizedAuthorshipLabel composes the hybrid render for
+  // one NomenName. Formula:
+  //
+  //   <canonical HTML from BuildLabel>  ← italics preserved
+  //   [ (basionym_author[, basionym_year]) ] [ combination_author[, combination_year] ]
+  //
+  // Empty pieces are elided so the render degrades gracefully on rows
+  // where the archive only carries some of the atomized authorship.
+  // The canonical portion is extracted from the server-supplied
+  // label.html — BuildLabel renders "<i>Canonical</i> Authorship" for
+  // ranks that italicize, so we strip the trailing " Authorship" and
+  // keep only the italicized canonical span. When canonical HTML can't
+  // be cleanly extracted (unusual), fall back to label.text minus its
+  // authorship suffix, which is the same value the server used.
+  _renderStandardizedAuthorshipLabel(n) {
+    const label = n.label || {};
+    const authorship = n.authorship || "";
+    // Detect a subsequent combination: only recombs get the
+    // "(basionym) combination" bracketing. Originals render as a
+    // single author line — even when COL's data has both basionym_*
+    // and combination_* populated (they're the same author, just
+    // stored redundantly).
+    const isRecomb = authorship.startsWith("(");
+    const canonicalHTML = stripAuthorshipFromLabelHTML(label.html || "", authorship);
+    const canonicalNode = canonicalHTML
+      ? html`${unsafeHTML(canonicalHTML)}`
+      : label.text || n.name_id;
+
+    // COL stores multi-author atomized fields with pipe separators
+    // (e.g. "E.J.Palmer|Steyerm."). Normalize to "A & B" display form.
+    const bAuth = normalizeAuthorField(n.basionym_authorship);
+    const bYear = (n.basionym_authorship_year || "").trim();
+    const cAuth = normalizeAuthorField(n.combination_authorship);
+    const cYear = (n.combination_authorship_year || "").trim();
+
+    let suffix = "";
+    if (isRecomb) {
+      // Recomb: (basionym[, year]) combination[, year] — either half
+      // may be empty and elides gracefully.
+      const parts = [];
+      if (bAuth || bYear) {
+        parts.push(`(${[bAuth, bYear].filter(Boolean).join(", ")})`);
+      }
+      if (cAuth || cYear) {
+        parts.push([cAuth, cYear].filter(Boolean).join(", "));
+      }
+      suffix = parts.join(" ");
+    } else {
+      // Original: single author line. Prefer basionym atomization
+      // (that's the canonical author field); fall back to combination
+      // atomization when basionym is empty. Year falls back the same
+      // way. When both fields carry the same author (COL convention),
+      // the picker still shows one, not two.
+      const auth = bAuth || cAuth;
+      const year = bYear || cYear;
+      suffix = [auth, year].filter(Boolean).join(", ");
+    }
+    // Nothing atomized to render → fall back to the pre-formatted
+    // code-conventional label so the row is never blank.
+    if (!suffix) return renderLabel(label, n.name_id);
+    return html`${canonicalNode} ${suffix}`;
   }
 
   // _renderNomenRowActions draws the hover-reveal action strip on a
@@ -5659,8 +6180,27 @@ class SfgaDetail extends LitElement {
   // See DEFERRED.md when those follow-up slices land.
   _renderNomenRowActions(n) {
     const hasIssues = (n.issue_count || 0) > 0;
+    // The + button surfaces on cluster-anchor rows (is_basionym:
+    // true) as a shortcut for "add another subsequent combination
+    // sharing this original combination." Opens the standard
+    // create-synonym form with basionym_name_id pre-populated to
+    // this row's name_id, so the curator skips the picker step.
+    // Placed first because on a cluster anchor, "add another
+    // recomb" is often why the curator hovered the row in the first
+    // place.
+    const isClusterAnchor = !!n.is_basionym;
     return html`
       <span class="row-actions">
+        ${isClusterAnchor
+          ? html`<button
+              class="icon-btn subtle"
+              @click=${(e) => this._onNomenRowAddRecomb(e, n)}
+              title="add subsequent combination of this original combination"
+              aria-label="add subsequent combination"
+            >
+              ${renderIcon("plus", 14)}
+            </button>`
+          : ""}
         ${hasIssues
           ? html`<button
               class="icon-btn subtle warn"
@@ -5690,6 +6230,17 @@ class SfgaDetail extends LitElement {
         </button>
       </span>
     `;
+  }
+
+  // _onNomenRowAddRecomb opens the create-synonym form with the
+  // clicked row's name_id pre-populated as basionym_name_id — the
+  // "add another recomb sharing this basionym" shortcut on cluster-
+  // anchor rows in Nomen History. See DESIGN.md § Basionym cluster
+  // + button.
+  _onNomenRowAddRecomb(e, n) {
+    e.stopPropagation();
+    if (!n.name_id) return;
+    this._openCreateSynonym({ basionymNameID: n.name_id });
   }
 
   _onNomenRowEdit(e, n) {
@@ -5861,6 +6412,27 @@ class SfgaDetail extends LitElement {
     const set = (field) => (e) =>
       this._nameEditorFieldChange(field, e.target.value);
     const referenceID = this._nameEditorValue("reference_id");
+    // Dynamic label / hint for the reference field. The name-model
+    // reference is single-valued and is meant to be the nomenclatural
+    // act — the paper where this specific name (or subsequent
+    // combination) was established. Prefix Original / Subsequent from
+    // the authorship's parenthetical shape so curators authoring a
+    // recomb see the right guidance without having to guess.
+    // Build a draft-shaped object from the editor state so
+    // nomActFieldLabel sees the effective values (draft override on
+    // top of the loaded original).
+    const draftView = {
+      authorship: this._nameEditorValue("authorship"),
+      basionym_authorship: this._nameEditorValue("basionym_authorship"),
+      basionym_authorship_year: this._nameEditorValue(
+        "basionym_authorship_year",
+      ),
+      combination_authorship: this._nameEditorValue("combination_authorship"),
+      combination_authorship_year: this._nameEditorValue(
+        "combination_authorship_year",
+      ),
+    };
+    const nomActLabel = nomActFieldLabel(draftView);
     return html`
       <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
         <div
@@ -5875,9 +6447,20 @@ class SfgaDetail extends LitElement {
             }
           }}
         >
-          <h3 id="name-editor-heading">
-            ${ed.synonymID ? "Edit synonym" : "Edit name"}
-          </h3>
+          <div class="modal-header">
+            <h3 id="name-editor-heading">
+              ${ed.synonymID ? "Edit synonym" : "Edit name"}
+            </h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._cancelNameEditor()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
           ${ed.issues && ed.issues.length > 0
             ? html`
                 <div class="warning-banner">
@@ -5973,7 +6556,7 @@ class SfgaDetail extends LitElement {
                 this._nameEditorFieldChange("code", e.detail.id)}
             ></sfga-combobox>
 
-            <label>Reference</label>
+            <label>${nomActLabel}</label>
             <sfga-combobox
               min-search-chars="2"
               placeholder="Search author / title / citation / DOI…"
@@ -6547,7 +7130,18 @@ class SfgaDetail extends LitElement {
             }
           }}
         >
-          <h3 id="vernacular-modal-heading">${heading}</h3>
+          <div class="modal-header">
+            <h3 id="vernacular-modal-heading">${heading}</h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._cancelVernacularForm()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
           ${f.issues && f.issues.length > 0
             ? html`
                 <div class="warning-banner">
@@ -6916,7 +7510,18 @@ class SfgaDetail extends LitElement {
             }
           }}
         >
-          <h3 id="distribution-modal-heading">${heading}</h3>
+          <div class="modal-header">
+            <h3 id="distribution-modal-heading">${heading}</h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._cancelDistributionForm()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
           ${f.issues && f.issues.length > 0
             ? html`
                 <div class="warning-banner">

@@ -410,6 +410,16 @@ type apiNomenName struct {
 	// apiSynonym).
 	ReferenceID    string `json:"reference_id,omitempty"`
 	ReferenceLabel string `json:"reference_label,omitempty"`
+	// Atomized authorship — surfaced so the WUI's "Standardized
+	// authorship" toggle can compose the hybrid render (basionym
+	// author+year in parens, then combination author+year) that
+	// bridges ICZN and ICN conventions without dropping either
+	// side's information. Absent when the underlying column is
+	// empty — the toggle falls back to whichever pieces exist.
+	BasionymAuthorship        string `json:"basionym_authorship,omitempty"`
+	BasionymAuthorshipYear    string `json:"basionym_authorship_year,omitempty"`
+	CombinationAuthorship     string `json:"combination_authorship,omitempty"`
+	CombinationAuthorshipYear string `json:"combination_authorship_year,omitempty"`
 	// IssueCount is the number of open validation issues currently
 	// filed against this name row (table_name='name', not-yet-
 	// acknowledged). Zero → elided from JSON so the wire shape stays
@@ -727,6 +737,34 @@ type createTaxonBody struct {
 	// Taxon aggregate.
 	ParentID   string `json:"parent_id,omitempty"`
 	NamePhrase string `json:"name_phrase,omitempty"`
+
+	// SynonymStatus is applied by handleAddSynonym only — the
+	// taxonomic_status of the synonym-link row (SYNONYM,
+	// AMBIGUOUS_SYNONYM, MISAPPLIED). Ignored by other endpoints
+	// (handleCreateTaxon / handleAddBasionym). Empty defaults to
+	// SYNONYM inside AddSynonym.
+	SynonymStatus string `json:"synonym_status,omitempty"`
+
+	// Optional basionym link — set exactly ONE of the following to
+	// link this new name to its original combination in the same
+	// atomic transaction as the primary create. See CLAUDE.md
+	// § Combination bracketing rules.
+	//
+	//   BasionymNameID — id of an existing name row already in the
+	//     archive. Handler links a BASIONYM name_relation from the
+	//     primary name to this id.
+	//
+	//   Basionym       — nested createTaxonBody-shaped payload for a
+	//     brand-new original-combination name. Handler CreateNames
+	//     it first, then uses the resulting id as the BASIONYM link
+	//     target.
+	//
+	// Setting both is a 400 (ambiguous intent). Setting neither
+	// preserves today's behavior (no basionym link — the primary
+	// name is either an original combination or a curator-added-later-
+	// basionym recomb).
+	BasionymNameID string           `json:"basionym_name_id,omitempty"`
+	Basionym       *createTaxonBody `json:"basionym,omitempty"`
 }
 
 // toColdpName packs the name-side fields into a coldp.Name ready for
