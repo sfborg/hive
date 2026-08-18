@@ -810,6 +810,93 @@ func miscFixtures() []RuleFixture {
 			},
 		},
 		{
+			RuleID:      "hive_infraspecific_marker_missing",
+			Description: "Infraspecific name lacks its rank marker in the scientific name string",
+			Bad: []FixtureCase{
+				{Note: "ICN variety without var.", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Quercus alba pinnatifida",
+							Rank:           ParseRank("variety"),
+							Code:           nomcode.New("icn"),
+						})
+						return err
+					})
+				}},
+				{Note: "ICN form without f.", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Quercus alba pinnatifida",
+							Rank:           ParseRank("form"),
+							Code:           nomcode.New("icn"),
+						})
+						return err
+					})
+				}},
+				{Note: "ICZN variety without var. (historical synonym)", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Panthera leo persica",
+							Rank:           ParseRank("variety"),
+							Code:           nomcode.New("iczn"),
+						})
+						return err
+					})
+				}},
+				{Note: "empty code + subspecies without subsp. (safe default)", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Panthera leo persica",
+							Rank:           ParseRank("subspecies"),
+						})
+						return err
+					})
+				}},
+			},
+			Good: []FixtureCase{
+				{Note: "ICZN subspecies without marker (marker optional under ICZN)", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Panthera leo persica",
+							Rank:           ParseRank("subspecies"),
+							Code:           nomcode.New("iczn"),
+						})
+						return err
+					})
+				}},
+				{Note: "ICVCN skipped entirely", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Alphavirus subalphavirus alphagenus",
+							Rank:           ParseRank("subspecies"),
+							Code:           nomcode.New("icvcn"),
+						})
+						return err
+					})
+				}},
+				{Note: "ICN variety with var. present", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Quercus alba var. pinnatifida",
+							Rank:           ParseRank("variety"),
+							Code:           nomcode.New("icn"),
+						})
+						return err
+					})
+				}},
+				{Note: "species rank (not infraspecific)", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateName(coldp.Name{
+							ScientificName: "Panthera leo",
+							Rank:           ParseRank("species"),
+							Code:           nomcode.New("iczn"),
+						})
+						return err
+					})
+				}},
+			},
+		},
+		{
 			RuleID:      "clb_duplicate_name",
 			Description: "Two name records share the same canonical form",
 			Bad: []FixtureCase{

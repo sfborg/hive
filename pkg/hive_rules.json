@@ -631,6 +631,20 @@
       "warning_message": "Reference has a citation but is missing structured author or issued.",
       "is_active": true,
       "priority": 20
+    },
+    {
+      "rule_id": "hive_infraspecific_marker_missing",
+      "table_name": "name",
+      "field_name": "col__scientific_name",
+      "rule_name": "Infraspecific name missing rank marker",
+      "validator_type": "hive.infraspecific_marker_missing",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Infraspecific name is missing its rank marker.",
+      "is_active": true,
+      "priority": 20
     }
   ]
 }

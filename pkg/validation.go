@@ -144,6 +144,14 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// the inline-quick-fix UX that resolves flagged rows without a
 	// side quest to the References screen.
 	registry.Register(newReferenceMetadataValidator())
+	// Hive-native: soft-warn when an infraspecific name lacks its
+	// rank marker (var., f., subsp., subvar., subf.) in the scientific
+	// name string. Code-aware: skips ICZN + SUBSPECIES (marker is
+	// optional under ICZN) and ICVCN (no formal subspecies rank).
+	// Fires for ICN / ICNP / empty-code on any covered infraspecific
+	// rank and for ICZN on variety/subvariety/form/subform ranks
+	// (historical rows in synonymy).
+	registry.Register(newInfraspecificMarkerValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)
