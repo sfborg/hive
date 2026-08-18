@@ -223,7 +223,8 @@ type parsePreviewMsg struct {
 func (m *detailModel) parsePreviewCmd(verbatim, code string) tea.Cmd {
 	a := m.a
 	return func() tea.Msg {
-		return parsePreviewMsg{preview: a.ParseNamePreview(code, verbatim)}
+		preview, _ := a.ParseNamePreview(code, verbatim)
+		return parsePreviewMsg{preview: preview}
 	}
 }
 

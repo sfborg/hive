@@ -82,6 +82,13 @@ const iconPaths = {
     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
   `,
+  // star — five-pointed star → "reference is fully solid" badge on
+  // the reference picker (structured metadata + JATS sidecar
+  // available for annotation). Lucide's star. Rendered filled via
+  // the .variant-solid CSS treatment.
+  star: svg`
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  `,
   // help-circle — circled question mark → open the keyboard help modal
   "help-circle": svg`
     <circle cx="12" cy="12" r="10" />
@@ -784,12 +791,48 @@ function childRankSource(allowed) {
   };
 }
 
+// NOMEN terms hidden from the picker. Two categories, both driven
+// by "these should never be a positive curator pick because the
+// natural default carries the same signal":
+//
+//   Redundant "valid" markers — blank col__status_id already means
+//   "valid" across all four codes. NOMEN-OWL round-tripping into
+//   ChecklistBank once mapped "ICZN valid" onto CoLDP's
+//   POTENTIALLY_VALID, which read as "not valid yet" and upset
+//   zoological taxonomists. Convention since then: leave status
+//   empty for valid names.
+//
+//   Fossil markers — CoLDP models fossil-ness as a taxon-level
+//   `extinct` flag, not a name-level status. A name-level fossil
+//   pick overlaps with taxon.extinct and produces duplicate /
+//   inconsistent signal; hive routes curators to taxon.extinct
+//   instead. NOMEN_0000206 ("ICZN based on fossil genus formula")
+//   is NOT filtered — it describes how the name was constructed,
+//   not whether the taxon is fossil.
+//
+// Legacy rows that already carry a filtered URI still resolve to
+// their label via nomenResolver — picker-only filtering; the
+// display path is untouched.
+const NOMEN_HIDDEN_URIS = new Set([
+  // Valid — redundant with blank.
+  "http://purl.obolibrary.org/obo/NOMEN_0000007", // ICN validly published name
+  "http://purl.obolibrary.org/obo/NOMEN_0000084", // ICNP validly published name
+  "http://purl.obolibrary.org/obo/NOMEN_0000125", // ICVCN valid
+  "http://purl.obolibrary.org/obo/NOMEN_0000224", // ICZN valid
+  // Fossil — belongs on taxon.extinct, not name.status.
+  "http://purl.obolibrary.org/obo/NOMEN_0000055", // ICZN fossil
+  "http://purl.obolibrary.org/obo/NOMEN_0000057", // ICN fossil
+]);
+
 // nomenSource(codeID) returns a combobox source that filters NOMEN
 // terms by the current name's nomenclatural code. Empty codeID → all
-// terms. Matches against label or short local identifier.
+// terms. Matches against label or short local identifier. Terms in
+// NOMEN_HIDDEN_URIS are dropped from the picker.
 function nomenSource(codeID) {
   return (q) => {
-    const scoped = api.nomen.filterByCode(codeID);
+    const scoped = api.nomen
+      .filterByCode(codeID)
+      .filter((t) => !NOMEN_HIDDEN_URIS.has(t.id));
     const needle = (q || "").toLowerCase().trim();
     const filtered = needle
       ? scoped.filter(
@@ -831,10 +874,152 @@ async function referenceSource(q) {
     return (page.items || []).map((h) => ({
       id: h.id,
       name: referenceHitLabel(h),
+      // Badge is always attached for references — the picker never
+      // looks non-interactive for a resolved reference. Icon +
+      // color depend on whether the row needs curator attention;
+      // referenceIssueCount combines the server's persisted
+      // __gsvalidator_results count with an inline structured-
+      // metadata check that runs on already-fetched fields (no
+      // per-row sync required). This lets the warning surface
+      // instantly on large archives that haven't been through a
+      // full validation reindex. has_source_doc drives the gold-
+      // star tier when the JATS sidecar is attached (Slice 3 of
+      // REFERENCE_PDF_PLAN.md; falsy today until PDF ingest lands).
+      // max_severity from the server's batched issue-summary lookup
+      // colors the triangle when count > 0 (via validationSeverityBadge).
+      badge: referenceEditBadge(
+        referenceIssueCount(h),
+        !!h.has_source_doc,
+        h.max_severity,
+      ),
     }));
   } catch (_) {
     return [];
   }
+}
+
+// referenceIssueCount folds together the persisted gsvalidator
+// count (from __gsvalidator_results, batched into apiReferenceHit /
+// apiReference) with an inline "missing structured metadata" check
+// on the reference's own fields. Either signal on its own is enough
+// to mark the reference as needing attention.
+//
+// The inline check mirrors hive.reference_missing_structured_metadata
+// (server-side validator). Duplicated on purpose: the server rule
+// ships the persistent Issues-view row, the inline check lets the
+// picker badge surface WITHOUT waiting for a validation reindex
+// (which can take hours on large archives like CoL). If either
+// says "not clean", the badge shows.
+function referenceIssueCount(ref) {
+  const persisted = ref.issue_count || 0;
+  const citation = (ref.citation || "").trim();
+  const author = (ref.author || "").trim();
+  // Search hits carry `year` (derived from `issued`); detail rows
+  // carry `issued` directly. Accept either.
+  const year = (ref.year || ref.issued || "").trim();
+  const inlineGap = citation !== "" && (author === "" || year === "");
+  return persisted + (inlineGap ? 1 : 0);
+}
+
+// validationSeverityBadge builds the "record has open issues" badge
+// used by every picker / list surface (reference picker, name picker,
+// Nomen History rows, any future one). One helper → one visual
+// language: triangle-alert icon, color = highest severity present,
+// tooltip = short curator-facing summary, badge-click dispatches
+// `kind` so the parent's handler routes to the right fix flow.
+//
+// Severity mapping:
+//
+//   error → red   (--sev-error)     hard-blocker or seriously wrong data
+//   warn  → amber (--sev-warn)      curator should look
+//   info  → green (--sev-info)      informational; no action forced
+//   debug → dim                     diagnostic-only; rarely rendered
+//
+// Unknown / missing severity falls back to "warn" so a badge still
+// surfaces — better to render an amber triangle than to hide the
+// issue because the wire projection didn't include severity.
+//
+// tooltip override: pass opts.tooltip when the surface has a more
+// specific short line (e.g., "This reference has an open issue —
+// click to fix"). Default is a short generic phrasing.
+function validationSeverityBadge(count, maxSeverity, kind, opts = {}) {
+  const n = count || 0;
+  const sev = normalizeSeverity(maxSeverity);
+  let tooltip = opts.tooltip;
+  if (!tooltip) {
+    const plural = n === 1 ? "" : "s";
+    tooltip = `${n} open ${sev} issue${plural} — click to view`;
+  }
+  return {
+    icon: "triangle-alert",
+    tooltip,
+    kind: kind || "record-issue",
+    variant: `sev-${sev}`,
+  };
+}
+
+function normalizeSeverity(s) {
+  switch (s) {
+    case "error":
+    case "warn":
+    case "info":
+    case "debug":
+      return s;
+    default:
+      return "warn";
+  }
+}
+
+// referenceEditBadge builds the always-present affordance the
+// sfga-combobox renders next to a reference row (in dropdown or
+// in-input). Three visual states, one click target — all open the
+// same reference-edit modal via badge-click:
+//
+//   * count > 0                    → triangle-alert (colored by
+//                                    maxSeverity; see
+//                                    validationSeverityBadge).
+//                                    "Click to fix issues."
+//   * count == 0, no source doc    → book (dim color).
+//                                    "Click to view or edit."
+//   * count == 0, source doc ready → star (gold, filled).
+//                                    "This reference is solid —
+//                                     structured + source attached."
+//
+// Gold-star gamifies the "make this reference solid" workflow:
+// curators start with all books / warnings, learn the click flow,
+// and watch the pane fill with stars as they upgrade references
+// with structured metadata + ingested source PDFs.
+//
+// Design rationale for the icons: pencil was rejected because it
+// reads as "edit the picker" rather than "edit the referenced
+// object"; domain-typed icons (book for references, star for
+// solid/complete) are clearer signal-per-glance.
+function referenceEditBadge(count, hasSourceDoc, maxSeverity) {
+  const n = count || 0;
+  if (n > 0) {
+    const plural = n === 1 ? "" : "s";
+    return validationSeverityBadge(n, maxSeverity, "reference-issue", {
+      tooltip:
+        n > 1
+          ? `${n} open issue${plural} on this reference — click to fix`
+          : "This reference has an open issue — click to fix",
+    });
+  }
+  if (hasSourceDoc) {
+    return {
+      icon: "star",
+      tooltip:
+        "Reference is solid — structured metadata + source document attached. Click to view or edit.",
+      kind: "reference-solid",
+      variant: "solid",
+    };
+  }
+  return {
+    icon: "book",
+    tooltip: "View or edit this reference",
+    kind: "reference-edit",
+    variant: "info",
+  };
 }
 
 // referenceResolver — id → display label. The name-detail response
@@ -844,17 +1029,191 @@ async function referenceSource(q) {
 // available.
 async function referenceResolver(id) {
   if (!id) return "";
-  try {
-    const r = await api.reference.get(id);
-    return referenceHitLabel({
-      author: r.author,
-      year: r.issued ? String(r.issued).slice(0, 4) : "",
-      title: r.title,
-      citation: r.citation,
-    });
-  } catch (_) {
-    return id;
+  // Same policy as nameResolver: throw on fetch failure. Swallowing
+  // and returning the id makes the combobox cache the id as its
+  // display value, which then sticks past the transient failure.
+  //
+  // Always returns {name, badge} for references — the picker never
+  // looks non-interactive for a resolved reference. Badge state
+  // (warning vs. book) follows referenceIssueCount, which combines
+  // persisted __gsvalidator_results with an inline structured-
+  // metadata check on the fetched row.
+  const [r, issues] = await Promise.all([
+    api.reference.get(id),
+    api.issue
+      .list({ table: "reference", record_id: id, limit: 20 })
+      .catch(() => ({ items: [] })),
+  ]);
+  const name = referenceHitLabel({
+    author: r.author,
+    year: r.issued ? String(r.issued).slice(0, 4) : "",
+    title: r.title,
+    citation: r.citation,
+  });
+  const persistedCount = (issues.items || []).length;
+  const merged = referenceIssueCount({
+    ...r,
+    issue_count: persistedCount,
+  });
+  // Compute max severity from the fetched issues list — same signal
+  // the batched issue-summary sends on search hits, computed here
+  // for the in-input case where we already had the full list.
+  const maxSev = maxSeverityOf(issues.items || []);
+  return {
+    name,
+    badge: referenceEditBadge(merged, !!r.has_source_doc, maxSev),
+  };
+}
+
+// maxSeverityOf returns the highest severity in an issues array,
+// using the same error > warn > info > debug ordering as the server.
+// Returns empty string on an empty array.
+function maxSeverityOf(issues) {
+  const rank = { error: 3, warn: 2, info: 1, debug: 0 };
+  let bestRank = -1;
+  let best = "";
+  for (const i of issues) {
+    const r = rank[i.severity] ?? -1;
+    if (r > bestRank) {
+      bestRank = r;
+      best = i.severity;
+    }
   }
+  return best;
+}
+
+// refCitationAuthorAndYear returns (author, year) for a reference,
+// preferring the atomized author + issued columns and falling back
+// to parsing the citation string when those are empty. Many
+// CoL-derived archives populate only the free-text citation field
+// (e.g., "Johnson, J. Y. (1863). Description of a new species...")
+// and leave author / issued NULL; the fallback pulls what it can so
+// the citation-pick backfill still produces useful values.
+//
+// Year extraction: first 4-digit run in the range 1600-2099.
+// Author extraction: first token when the citation starts with a
+// surname-shaped word (capitalized, letters only, followed by an
+// initial or a comma). Skips citations that lead with a title or
+// abbreviation ("Suppl. Johnson's Gard. Dict.: 1015 (1882)" → no
+// author extracted). Fallback is heuristic; fill-empty-only
+// semantics limit the blast radius when it guesses wrong.
+function refCitationAuthorAndYear(ref) {
+  let author = refFirstAuthor(ref.author || "");
+  let year = (ref.issued || "").slice(0, 4);
+  const citation = (ref.citation || "").trim();
+
+  if (!year && citation) {
+    const m = /\b(1[6-9]\d{2}|20\d{2})\b/.exec(citation);
+    if (m) year = m[1];
+  }
+
+  if (!author && citation) {
+    // Two shapes we support:
+    //   "Johnson, J. Y. (1863)..."        surname , initials
+    //   "HÁVA J. 2009..."             surname initials
+    //   "Biscaccianti A. B., Esser J..."  surname initials, ...
+    // Reject leading tokens with digits, dots (abbreviations), or
+    // lowercase — those signal title text like "Suppl." or
+    // "ed. 2." leading a bare-title citation.
+    const m = /^([A-ZÀ-Ž][A-Za-zÀ-ž'-]+)(?:,|\s+(?:[A-Z]\.?|[A-Z][a-z]))/.exec(
+      citation,
+    );
+    if (m) author = m[1];
+  }
+
+  return { author, year };
+}
+
+// emptyManualReference is the seed for the add-reference modal's
+// Manual tab in add-mode. All fields present as empty strings so
+// the form doesn't get bit by undefined-vs-empty conditionals.
+function emptyManualReference() {
+  return {
+    author: "",
+    editor: "",
+    title: "",
+    title_short: "",
+    container_title: "",
+    container_title_short: "",
+    container_author: "",
+    issued: "",
+    volume: "",
+    issue: "",
+    edition: "",
+    page: "",
+    publisher: "",
+    publisher_place: "",
+    isbn: "",
+    issn: "",
+    doi: "",
+    link: "",
+    type: "",
+    remarks: "",
+    citation: "",
+  };
+}
+
+// manualFromReference hydrates the Manual tab's draft from a loaded
+// apiReference. Symmetric with emptyManualReference — every field
+// present, empty strings for unset values.
+function manualFromReference(r) {
+  return {
+    author: r.author || "",
+    editor: r.editor || "",
+    title: r.title || "",
+    title_short: r.title_short || "",
+    container_title: r.container_title || "",
+    container_title_short: r.container_title_short || "",
+    container_author: r.container_author || "",
+    issued: r.issued || "",
+    volume: r.volume || "",
+    issue: r.issue || "",
+    edition: r.edition || "",
+    page: r.page || "",
+    publisher: r.publisher || "",
+    publisher_place: r.publisher_place || "",
+    isbn: r.isbn || "",
+    issn: r.issn || "",
+    doi: r.doi || "",
+    link: r.link || "",
+    type: r.type || "",
+    remarks: r.remarks || "",
+    citation: r.citation || "",
+  };
+}
+
+// refFirstAuthor extracts a single surname-ish token from a
+// reference's author string, for the citation-pick backfill of
+// combination_authorship. CoLDP references store the author field in
+// a variety of shapes across datasets:
+//
+//   "Linnaeus, C."          (surname-first, CoL style)
+//   "Sturm, H."             (surname-first)
+//   "Smith, J.; Jones, K."  (multi-author, semicolon-separated)
+//   "Smith, J., Jones, K."  (multi-author, comma-separated with initials)
+//   "Smith, J. & Jones, K." (multi-author, ampersand)
+//   "J.W.Sturm"             (initials-first, single token — some CoL rows)
+//   "Sturm|Ker"             (pipe-separated, ChecklistBank export)
+//
+// The heuristic: take the first author unit (split on ; | or & or
+// " and "), then extract the surname — the piece before the first
+// comma, or the whole token when there's no comma. Falls back to
+// the raw first-unit when the token has no obvious surname
+// structure. Empty in → empty out.
+//
+// This is best-effort — the atomized authorship convention is
+// surname-only ("Linnaeus", "Smith"), but reference formats vary
+// wildly. Fill-empty-only semantics limit the blast radius: curator
+// can override anything that looks wrong.
+function refFirstAuthor(raw) {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  const first = s.split(/;|\||\s&\s|\sand\s/)[0].trim();
+  if (!first) return "";
+  // Surname-first "Linnaeus, C." → "Linnaeus". Keep the comma-first
+  // token; drop trailing initials and commas.
+  const beforeComma = first.split(",")[0].trim();
+  return beforeComma || first;
 }
 
 // referenceHitLabel composes the "Author (Year) Title" line used by
@@ -942,17 +1301,19 @@ async function nameSource(q) {
 
 async function nameResolver(id) {
   if (!id) return "";
-  try {
-    const n = await api.name.get(id);
-    return [
-      n.scientific_name || n.canonical_simple || n.canonical_full,
-      n.authorship,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  } catch (_) {
-    return id;
-  }
+  // Don't swallow errors here — a transient fetch failure (server
+  // restart, connection blip) that "falls back to the id" produces
+  // a stuck picker: the combobox caches the id as valueName, its
+  // `!valueName` re-attempt guard is false forever, and the curator
+  // sees the raw id where they expected a name. Let the combobox
+  // handle failure (renders "(lookup failed)" + retries on focus).
+  const n = await api.name.get(id);
+  return [
+    n.scientific_name || n.canonical_simple || n.canonical_full,
+    n.authorship,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // ---------- <sfga-app> ----------
@@ -3007,44 +3368,52 @@ class SfgaDetail extends LitElement {
     // curators' preference carries across sessions. See
     // DESIGN.md § Standardized authorship.
     _standardizedAuthorship: { state: true },
-    // Modal state for the name-editor (invoked from the pencil on any
-    // synonym or basionym row in Nomenclatural history). Null when
-    // closed; {phase: "loading"|"edit", id, original, draft, etag,
-    // busy, error} while open. Loads the full name row from
-    // /api/name/{id} on open so the form can seed all fields; PATCH
-    // sends only fields that differ.
-    _nameEditor: { state: true },
     // Classification chain from GET /api/taxon/{id}/classification —
     // root-down list including the taxon itself as the last entry.
     // Backs the breadcrumb strip above the taxon heading.
     _classification: { state: true },
     _error: { state: true },
     _loading: { state: true },
-    // Edit-mode state — taxon and name drafts are tracked separately so
-    // the PATCH round-trip only touches an aggregate whose fields changed.
-    _editing: { state: true },
-    _draft: { state: true }, // taxon patch payload
-    _nameDraft: { state: true }, // name patch payload
-    _saving: { state: true },
-    _saveError: { state: true },
-    // Create-child modal state. Two-step flow:
-    //   step 0 — verbatim scientific name + code picker; server-side
-    //            parse fires on "next" to compute the atomized breakdown.
-    //   step 1 — atomized preview: every col__ field editable, rank
-    //            pre-selected from RankGuess. Curator confirms and saves.
+    // Create-child pane state. Single-page form: scientific-name input
+    // at the top of the name fieldset, Enter or blur re-parses via
+    // POST /api/name/parse and re-fills the atomized fields below.
+    // Curator-authored fields (reference, remarks, synonym_status,
+    // basionym_name_id) survive re-parse untouched.
     _creating: { state: true },
-    _createStep: { state: true },
     _createDraft: { state: true },
     _createBusy: { state: true },
     _createError: { state: true },
-    // Progressive disclosure toggle for step 1: collapsed shows just
-    // scientific name + rank + verbatim authorship + reference + status
-    // + notes; expanded reveals the atomized name (uninomial/genus/…)
-    // and atomized authorship (basionym + combination pairs). Parsing
-    // runs regardless — the toggle only affects visibility. Power users
-    // who want to verify the parse crack it open; curators who trust
-    // the parse leave it collapsed. gsvalidator's parse-mismatch rule
-    // catches the poorly-parsed cases in either mode.
+    // Guards the re-parse trigger so blur / repeat-Enter on an
+    // unchanged scientific-name string doesn't fire redundant parses.
+    // Cleared to "" on every _openCreate* so the first Enter/blur
+    // always parses.
+    _createLastParsedVerbatim: { state: true },
+    // gnparser's parse_quality (0-4) for the current draft scientific
+    // name. Number when a parse has completed, null before first parse
+    // or when the current draft's verbatim has been edited past the
+    // last-parsed value. Surfaced as an inline ✓/⚠/✗ glyph next to
+    // the scientific-name input.
+    _createParseQuality: { state: true },
+    // Unparsed tail from the most recent parse of the draft's sci-name.
+    //   null = no parse has run yet in this session
+    //   ""   = clean parse (no tail)
+    //   "…"  = parser rejected this trailing text
+    // Drives the top-of-pane warning banner. Never persisted — the
+    // backend re-derives the tail via the hive.parse_tail validator
+    // and persists it as a __gsvalidator_results row so edit-mode
+    // opens on old badly-parsed rows still show the diagnostic.
+    _createParseTail: { state: true },
+    // Persisted validation issues on the name being edited. Populated
+    // by _openEditTaxon (parallel with the taxon load); empty in
+    // create mode. Read by _renderCreateForm to surface the persisted
+    // parse-tail issue when no live parse has run yet.
+    _editingNameIssues: { state: true },
+    // Progressive disclosure toggle inside the name fieldset: collapsed
+    // hides the atomized breakdown (uninomial / genus / … + atomized
+    // authorship pairs); expanded reveals them so curators can verify
+    // or override the parse. Parsing runs regardless — the toggle only
+    // affects visibility. gsvalidator's parse-mismatch rule catches the
+    // poorly-parsed cases either way.
     _createShowAtomized: { state: true },
     // When set, the create pane's Save writes to the "add basionym"
     // endpoint (POST /api/taxon/{X}/basionym) instead of POST /api/taxon.
@@ -3072,6 +3441,11 @@ class SfgaDetail extends LitElement {
     // primary. On save, both records + the name_relation land in one
     // transaction. See CLAUDE.md § Nomenclatural-code-neutral copy.
     _createBasionymInline: { state: true },
+    // Guards the re-parse trigger inside the inline basionym subform.
+    // Same shape as _createLastParsedVerbatim but scoped to the
+    // basionym draft's scientific-name field. Cleared on inline-open
+    // and on subform cancel.
+    _createBasionymInlineLastParsedVerbatim: { state: true },
     // Parent id + label the pending create attaches to. Distinguishes
     // "new child" (id = current taxon) from "new sister" (id = current
     // taxon's parent). Stored at open time so _submitCreate has a
@@ -3102,26 +3476,52 @@ class SfgaDetail extends LitElement {
     _deleteConfirmText: { state: true },
     // Add-reference modal state. The modal is a self-contained component
     // (<sfga-add-reference-modal>) — this flag just toggles rendering,
-    // and _pickedReferenceLabel carries the label into the combobox
-    // after a successful pick so the display updates immediately without
-    // waiting on the resolver's second fetch.
+    // and _pickedCreateReferenceLabel carries the label into the
+    // combobox display without waiting on the resolver's second fetch.
     // _addingReferenceFor tracks which form context requested the
-    // add-reference modal — "edit" or "create" — so _onReferencePicked
-    // routes the picked id back into the right draft. Empty string
-    // means the modal is closed. Replaces the earlier boolean
-    // _addingReference now that the create form uses the same modal
-    // (see DESIGN.md § Reference-picker on every data-entry form).
+    // add-reference modal — "create" / "vernacular" / "distribution" /
+    // "section" — so _onReferencePicked routes the picked id back
+    // into the right draft. Empty string means the modal is closed.
     _addingReferenceFor: { state: true },
-    _pickedReferenceLabel: { state: true },
-    // Same idea for the create form's picker — carries the freshly-
-    // added reference label into the combobox display without waiting
-    // on the resolver's second GET.
     _pickedCreateReferenceLabel: { state: true },
-    // Edit-mode progressive-disclosure toggle for the atomized name +
-    // atomized authorship blocks. Mirrors _createShowAtomized on the
-    // create form; edit and create both surface the same widget set
-    // so curators learn one form.
-    _editShowAtomized: { state: true },
+    // Edit-mode-of-unified-form state. Non-empty _editingTaxonID means
+    // the create pane is open as an editor for an existing taxon: reads
+    // are hydrated into _createDraft on open; on save, deltas against
+    // _editingOriginalTaxon / _editingOriginalName are PATCHed with
+    // If-Match. Empty means the pane is either closed or in create mode.
+    _editingTaxonID: { state: true },
+    _editingTaxonEtag: { state: true },
+    _editingNameEtag: { state: true },
+    _editingOriginalTaxon: { state: true },
+    _editingOriginalName: { state: true },
+    // Parent-move draft while editing. `null` means "no change requested";
+    // "" means "move to archive root"; non-empty string means "reparent
+    // to this taxon id." Handled separately from PATCH since parent
+    // moves route through POST /api/taxon/{id}/move.
+    _editingParentDraft: { state: true },
+    _editingParentDraftName: { state: true },
+    // Synonym-edit mode of the unified form. When _editingSynonymID is
+    // non-empty, the pane opens as a name-editor for a synonym row:
+    // taxon-side fields are hidden (a synonym has no independent
+    // taxon), an accepted-taxon picker replaces the parent picker for
+    // move-synonym flows, and submit routes PATCH /api/name/{id} +
+    // optional POST /api/synonym/{id}/move. _editingAcceptedTaxonID
+    // remembers the original attachment for change detection.
+    _editingSynonymID: { state: true },
+    _editingAcceptedTaxonID: { state: true },
+    _editingAcceptedTaxonDraft: { state: true },
+    _editingAcceptedTaxonDraftName: { state: true },
+    // Reference-quick-fix modal state. Opens over the create/edit
+    // taxon pane when a curator clicks the book/warning badge on a
+    // reference picker. Scoped to the fields most likely to need
+    // fixing (author, issued, title, doi, type); full-fidelity
+    // editing lives in the dedicated References screen.
+    // See feedback_no_side_quests + REFERENCE_PDF_PLAN.md.
+    // Non-empty when the reference-edit modal is open; the modal
+    // (sfga-add-reference-modal in edit mode) owns all the working
+    // state internally, so the pane only needs to know which
+    // reference is being edited.
+    _editRefID: { state: true },
   };
 
   static styles = [severityChipStyles, buttonStyles, formFieldStyles, css`
@@ -3366,11 +3766,35 @@ class SfgaDetail extends LitElement {
        attention" signal, not a subtle affordance. Same treatment as
        the nomen-history warn icon. */
     section.vernaculars td.actions .row-actions .warn {
+      /* Default is warn-amber; variant-sev-* below overrides for
+         higher- or lower-severity records. Same shared-badge pattern
+         as nomen-history. */
       visibility: visible;
       color: var(--sev-warn);
     }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-error {
+      color: var(--sev-error);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-info {
+      color: var(--sev-info);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-debug {
+      color: var(--dim);
+    }
     section.vernaculars td.actions .row-actions .warn:hover:not(:disabled) {
       background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-error:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-error) 18%, transparent);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-info:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-info) 18%, transparent);
+    }
+    section.vernaculars td.actions .row-actions .warn.variant-sev-debug:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
     }
     /* Distribution table — same shape as vernaculars, minus the
        preferred column and with a wider area column since gazetteer
@@ -3424,11 +3848,34 @@ class SfgaDetail extends LitElement {
       visibility: visible;
     }
     section.distributions td.actions .row-actions .warn {
+      /* Default warn-amber with variant-sev-* overrides — same shared
+         severity-badge pattern as nomen-history and vernaculars. */
       visibility: visible;
       color: var(--sev-warn);
     }
+    section.distributions td.actions .row-actions .warn.variant-sev-error {
+      color: var(--sev-error);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-info {
+      color: var(--sev-info);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-debug {
+      color: var(--dim);
+    }
     section.distributions td.actions .row-actions .warn:hover:not(:disabled) {
       background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-error:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-error) 18%, transparent);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-info:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-info) 18%, transparent);
+    }
+    section.distributions td.actions .row-actions .warn.variant-sev-debug:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
     }
     /* Distribution modal form matches the vernacular form conventions
        (label/input grid inherited from the shared form rule; toolbar
@@ -3581,14 +4028,36 @@ class SfgaDetail extends LitElement {
          row with open validation issues is a "please look at this"
          signal, not a peripheral affordance. Kept visible at rest
          with the severity color so scanning the list surfaces every
-         row that needs attention. */
+         row that needs attention. Default color is warn-amber; the
+         variant-sev-* classes below override for higher- or lower-
+         severity records (max severity computed server-side; see
+         validationSeverityBadge on the WUI side). */
       visibility: visible;
       color: var(--sev-warn);
     }
+    section.nomen-history li.history .row-actions .warn.variant-sev-error {
+      color: var(--sev-error);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-info {
+      color: var(--sev-info);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-debug {
+      color: var(--dim);
+    }
     section.nomen-history li.history .row-actions .warn:hover:not(:disabled) {
-      /* Hover tints the button background with a soft warn wash for
-         feedback without escalating the icon color itself. */
       background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-error:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-error) 18%, transparent);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-info:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-info) 18%, transparent);
+    }
+    section.nomen-history li.history .row-actions .warn.variant-sev-debug:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
     }
     /* Inline citation superscripts — small numbered link that points
        at the References section at page bottom. Number is dim-accented
@@ -3899,9 +4368,16 @@ class SfgaDetail extends LitElement {
       padding: 0.5rem 0.75rem;
       margin: 0;
       display: grid;
-      grid-template-columns: max-content 1fr;
+      /* minmax(0, ...) on both tracks lets rows shrink below their
+         content's intrinsic size — otherwise a long label like
+         "Subsequent nomenclatural act citation" locks the label column
+         to its full width and overflows the pane horizontally.
+         Combined with min-width: 0 (fieldset defaults to
+         min-width: min-content which blocks flex/grid shrinking). */
+      grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
       gap: 0.4rem 0.75rem;
       align-items: center;
+      min-width: 0;
     }
     fieldset legend {
       color: var(--dim);
@@ -3930,32 +4406,115 @@ class SfgaDetail extends LitElement {
     }
 
     /* The create pane takes over the whole right-pane while active.
-       Selector-scope its layout to .create-pane so the atomized-preview
-       fieldsets don't leak into other panes. Modal wrappers were
+       Selector-scope its layout to .create-pane so the pane grid and
+       fieldset styles don't leak into other panes. Modal wrappers were
        removed — clicking outside used to lose curator work, and a
        pane-native form has no such risk. */
+    /* Both the pane and the form-within-it use a strict single-column
+       grid. Without an explicit grid-template-columns, a child
+       carrying grid-column: 1 / -1 (e.g. .save-error, or the
+       atomized-toggle inside the name fieldset) can extend the
+       implicit grid to multiple columns and cascade sibling
+       fieldsets into a two-column layout that overflows the pane. */
     .create-pane {
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 0.5rem;
+      min-width: 0;
     }
-    .create-pane .step-indicator {
-      color: var(--dim);
-      font-weight: normal;
-      font-size: 0.85em;
-      margin-left: 0.5rem;
-    }
-    .create-pane .preview-verbatim {
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-      color: var(--dim);
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.3rem;
-    }
-    .create-pane .preview-verbatim span {
-      color: var(--fg);
+    .create-pane .create-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.5rem;
+      min-width: 0;
     }
     .create-pane .toolbar {
       justify-content: flex-end;
+    }
+    /* The name fieldset carries a nested atomized-fields fieldset and
+       the authorship-pair div. Both need to span the parent grid's
+       two columns (max-content 1fr) so they render full-width rather
+       than squeezing into the value column. Same treatment for the
+       toggle checkbox row inside the name fieldset. */
+    .create-pane .name-fieldset > fieldset,
+    .create-pane .name-fieldset > .authorship-pair {
+      grid-column: 1 / -1;
+      margin-top: 0.35rem;
+    }
+    .create-pane .name-fieldset > .atomized-toggle {
+      margin-top: 0.25rem;
+    }
+    /* Scientific-name cell: the parse-quality glyph overlays the
+       right edge of the input (matching the omnibox's inline clear-x
+       treatment) rather than sitting outside it. Position: relative
+       on the wrapper anchors the absolutely-positioned glyph;
+       padding-right on the input reserves space so the caret and
+       long names don't slide under it. */
+    .create-pane .sci-input-cell {
+      position: relative;
+      display: block;
+      min-width: 0;
+    }
+    .create-pane .sci-input-cell > .sci-input {
+      padding-right: 1.75rem;
+    }
+    .create-pane .parse-quality {
+      position: absolute;
+      right: 0.4rem;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      padding: 0.15rem;
+      color: inherit;
+      font-size: 1.05em;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      user-select: none;
+      line-height: 1;
+      border-radius: 3px;
+    }
+    .create-pane .parse-quality:hover {
+      background: color-mix(in oklab, currentColor 12%, transparent);
+    }
+    .create-pane .parse-quality:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .create-pane .parse-quality.pq-ok { color: var(--sev-info); }
+    .create-pane .parse-quality.pq-warn { color: var(--sev-warn); }
+    .create-pane .parse-quality.pq-err { color: var(--sev-error); }
+    /* Stale = curator has edited the sci-name past the last-parsed
+       value; the glyph dims to signal "hit Enter to refresh." */
+    .create-pane .parse-quality.pq-stale {
+      color: var(--dim);
+      opacity: 0.5;
+    }
+    /* Unparsed-tail token in the top-of-pane warning banner. Monospace
+       + subtle backdrop so the rejected text reads as raw parser
+       output rather than prose. Wraps on narrow panes. */
+    .create-pane .parse-tail-text {
+      font-family: var(--font-mono);
+      background: color-mix(in oklab, var(--sev-warn) 14%, transparent);
+      padding: 0.05rem 0.3rem;
+      border-radius: 2px;
+      word-break: break-word;
+    }
+    /* Read-only linked-basionym cell in edit mode — matches the input
+       styling so the pane's visual rhythm stays consistent. */
+    .create-pane .linked-basionym {
+      padding: 0.3rem 0.4rem;
+      min-width: 0;
+    }
+    .create-pane .linked-basionym > a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .create-pane .linked-basionym > a:hover {
+      text-decoration: underline;
     }
     /* Row wrapping a combobox + adjacent action button so the button
        shrinks and the picker gets the remaining width. */
@@ -3987,26 +4546,17 @@ class SfgaDetail extends LitElement {
     this._distributions = [];
     this._distributionForm = null;
     this._synonymDelete = null;
-    this._nameEditor = null;
     this._standardizedAuthorship =
       localStorage.getItem("hive-standardized-authorship") === "true";
     this._error = "";
     this._loading = false;
-    this._editing = false;
-    this._draft = {};
-    this._nameDraft = {};
-    // Parent moves are a separate operation (POST /api/taxon/{id}/move),
-    // not a field patch. Tracked here as the desired new parent ID (empty
-    // means "root"; null/undefined means "no change requested").
-    this._parentDraft = null;
-    this._parentDraftName = ""; // display name captured from the picker
-    this._saving = false;
-    this._saveError = "";
     this._creating = false;
-    this._createStep = 0;
     this._createDraft = {};
     this._createBusy = false;
     this._createError = "";
+    this._createLastParsedVerbatim = "";
+    this._createParseQuality = null;
+    this._createParseTail = null;
     // Both atomized toggles seed from localStorage so a curator who
     // wants to see the parser's atomization gets that view immediately
     // on every taxon they open (not just the first). Persists across
@@ -4017,10 +4567,23 @@ class SfgaDetail extends LitElement {
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
     this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
     this._createParentID = "";
     this._createParentLabel = "";
     this._createChildRanks = null;
-    this._editShowAtomized = readAtomizedPref();
+    this._editingTaxonID = "";
+    this._editingTaxonEtag = "";
+    this._editingNameEtag = "";
+    this._editingOriginalTaxon = null;
+    this._editingOriginalName = null;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingNameIssues = [];
+    this._editingSynonymID = "";
+    this._editingAcceptedTaxonID = "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
     this._confirmDelete = false;
     this._deleteError = "";
     this._deletePreview = null;
@@ -4033,17 +4596,30 @@ class SfgaDetail extends LitElement {
     if (changed.has("taxonId")) {
       // Discard any in-flight edit or in-flight create when the
       // selection changes. Same rule as the TUI's SetCurrent.
-      this._editing = false;
-      this._draft = {};
-      this._nameDraft = {};
-      this._saveError = "";
       this._creating = false;
-      this._createStep = 0;
       this._createDraft = {};
       this._createError = "";
+      this._createLastParsedVerbatim = "";
+      this._createParseQuality = null;
+      this._createParseTail = null;
       this._createShowAtomized = readAtomizedPref();
       this._creatingBasionymFor = null;
       this._creatingBasionymForName = "";
+      this._createBasionymInline = null;
+      this._createBasionymInlineLastParsedVerbatim = "";
+      this._editingTaxonID = "";
+      this._editingTaxonEtag = "";
+      this._editingNameEtag = "";
+      this._editingOriginalTaxon = null;
+      this._editingOriginalName = null;
+      this._editingParentDraft = null;
+      this._editingParentDraftName = "";
+      this._editingNameIssues = [];
+      this._editingSynonymID = "";
+      this._editingAcceptedTaxonID = "";
+      this._editingAcceptedTaxonDraft = null;
+      this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
       // Retain a handle to the in-flight load so callers of
       // performAction() can await the selection catching up before
       // firing the action against a partially-loaded state. See
@@ -4055,7 +4631,6 @@ class SfgaDetail extends LitElement {
     // header slot. See DESIGN.md § Screen actions.
     if (
       changed.has("_taxon") ||
-      changed.has("_editing") ||
       changed.has("_creating") ||
       changed.has("editable")
     ) {
@@ -4130,24 +4705,6 @@ class SfgaDetail extends LitElement {
     }
   }
 
-  _startEdit() {
-    this._draft = {};
-    this._nameDraft = {};
-    this._parentDraft = null;
-    this._parentDraftName = "";
-    this._saveError = "";
-    this._editing = true;
-  }
-
-  _cancelEdit() {
-    this._draft = {};
-    this._nameDraft = {};
-    this._parentDraft = null;
-    this._parentDraftName = "";
-    this._saveError = "";
-    this._editing = false;
-  }
-
   // startCreateRoot is the public entry the shell calls when the tree
   // is empty and the curator clicks "Add first taxon". Opens the
   // create pane with an empty parent so the new taxon is added at
@@ -4191,9 +4748,12 @@ class SfgaDetail extends LitElement {
   // field empty and the curator types manually.
   async _openCreateWithParent(parentID, parentLabel) {
     this._createDraft = { scientific_name: "", code: "" };
-    this._createStep = 0;
     this._createError = "";
     this._createBusy = false;
+    this._createLastParsedVerbatim = "";
+    this._createParseQuality = null;
+    this._createParseTail = null;
+    this._pickedCreateReferenceLabel = undefined;
     this._createParentID = parentID;
     this._createParentLabel = parentLabel;
     this._creating = true;
@@ -4202,6 +4762,20 @@ class SfgaDetail extends LitElement {
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
     this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
+    this._editingTaxonID = "";
+    this._editingTaxonEtag = "";
+    this._editingNameEtag = "";
+    this._editingOriginalTaxon = null;
+    this._editingOriginalName = null;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingNameIssues = [];
+    this._editingSynonymID = "";
+    this._editingAcceptedTaxonID = "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
     if (parentID) {
       try {
         const [codeResp, prefixResp, childRanksResp] = await Promise.all([
@@ -4232,8 +4806,8 @@ class SfgaDetail extends LitElement {
     // even for empty-prefix cases (autofocus + cursor at 0) so the
     // flow is uniform.
     await this.updateComplete;
-    if (this._creating && this._createStep === 0) {
-      const input = this.renderRoot.querySelector(".create-pane input[type='text']");
+    if (this._creating) {
+      const input = this.renderRoot.querySelector(".create-pane .sci-input");
       if (input) {
         input.focus();
         const end = input.value.length;
@@ -4242,96 +4816,724 @@ class SfgaDetail extends LitElement {
     }
   }
 
-  _cancelCreate() {
-    this._creating = false;
-    this._createStep = 0;
+  // _openEditTaxon opens the unified pane in edit mode against the
+  // currently-loaded taxon. Hydrates the draft with the existing
+  // taxon + attached name fields so every input renders its current
+  // value; on submit the pane diffs the draft against the loaded
+  // originals and PATCHes only the changed slice on each aggregate
+  // (with If-Match). See TAXON_EDITOR_PLAN.md § Unified create/edit
+  // form.
+  //
+  // Parent changes route through POST /api/taxon/{id}/move (tracked
+  // via _editingParentDraft) rather than a PATCH field, matching the
+  // sfga model where a reparent isn't a plain column update.
+  //
+  // Requires _taxon (and, if present, _name) already loaded — the
+  // pencil is only surfaced from renderHeaderActions after the taxon
+  // detail loads, so this precondition holds at the call sites.
+  async _openEditTaxon() {
+    const t = this._taxon;
+    if (!t) return;
+    const n = this._name || null;
+    // Seed the draft with every editable field. Missing values become
+    // empty strings so re-parse's parser-derived-clobber path has a
+    // consistent shape to diff against.
+    const draft = {
+      // Name-side (curator-authored + parser-derived — everything the
+      // create form knows how to edit).
+      scientific_name: n?.scientific_name || n?.scientific_name_string || "",
+      scientific_name_string: n?.scientific_name_string || "",
+      authorship: n?.authorship || "",
+      rank: n?.rank || "",
+      code: n?.code || "",
+      status: n?.status || "",
+      uninomial: n?.uninomial || "",
+      genus: n?.genus || "",
+      infrageneric_epithet: n?.infrageneric_epithet || "",
+      specific_epithet: n?.specific_epithet || "",
+      infraspecific_epithet: n?.infraspecific_epithet || "",
+      cultivar_epithet: n?.cultivar_epithet || "",
+      combination_authorship: n?.combination_authorship || "",
+      combination_ex_authorship: n?.combination_ex_authorship || "",
+      combination_authorship_year: n?.combination_authorship_year || "",
+      basionym_authorship: n?.basionym_authorship || "",
+      basionym_ex_authorship: n?.basionym_ex_authorship || "",
+      basionym_authorship_year: n?.basionym_authorship_year || "",
+      reference_id: n?.reference_id || "",
+      published_in_year: n?.published_in_year || "",
+      published_in_page: n?.published_in_page || "",
+      published_in_page_link: n?.published_in_page_link || "",
+      etymology: n?.etymology || "",
+      // Name-side remarks — the create form's remarks textarea maps here.
+      remarks: n?.remarks || "",
+      // Taxon-side fields (edited via the "additional taxon fields"
+      // fieldset that only renders in edit mode).
+      name_phrase: t.name_phrase || "",
+      scrutinizer: t.scrutinizer || "",
+      scrutinizer_id: t.scrutinizer_id || "",
+      scrutinizer_date: t.scrutinizer_date || "",
+      extinct:
+        t.extinct === undefined || t.extinct === null ? "" : String(t.extinct),
+      link: t.link || "",
+      taxon_remarks: t.remarks || "",
+    };
+    // Pre-populate the reference-label cache so the picker shows the
+    // hydrated reference by name rather than a lookup-in-flight state.
+    if (n?.reference_label) {
+      this._pickedCreateReferenceLabel = n.reference_label;
+    } else {
+      this._pickedCreateReferenceLabel = undefined;
+    }
+    this._createDraft = draft;
     this._createError = "";
+    this._createBusy = false;
+    // Seed the re-parse guard with the current sci-name so a Tab-out
+    // without editing doesn't fire a redundant parse.
+    this._createLastParsedVerbatim = draft.scientific_name.trim();
+    // Hydrate parse_quality from the loaded name so the glyph shows
+    // meaningful state on open. Falls back to null when the row
+    // predates the gn__parse_quality column (or when the loaded value
+    // is missing).
+    this._createParseQuality =
+      typeof n?.parse_quality === "number" ? n.parse_quality : null;
+    // _createParseTail stays null on open — the tail is discovered
+    // either from the persisted parse-tail issue (loaded below) or
+    // from a fresh in-session re-parse (curator edits + Enter).
+    this._createParseTail = null;
+    this._editingNameIssues = [];
+    this._createParentID = "";
+    this._createParentLabel = "";
+    this._createChildRanks = null;
+    this._creating = true;
     this._creatingBasionymFor = null;
     this._creatingBasionymForName = "";
     this._creatingSynonymFor = null;
     this._creatingSynonymForName = "";
     this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
+    this._editingTaxonID = t.id;
+    this._editingTaxonEtag = t.__etag || this._etag || "";
+    this._editingNameEtag = n?.__etag || this._nameEtag || "";
+    this._editingOriginalTaxon = t;
+    this._editingOriginalName = n;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingSynonymID = "";
+    this._editingAcceptedTaxonID = "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
+    // Fire an async fetch of persisted issues on this name so any
+    // parse-tail (or other soft) issue renders in the top-of-pane
+    // banner. Best-effort — a fetch failure leaves _editingNameIssues
+    // empty and the banner just won't render.
+    if (n?.id) {
+      const nameID = n.id;
+      api.issue
+        .list({ table: "name", record_id: nameID, limit: 100 })
+        .then((resp) => {
+          if (this._editingTaxonID === t.id) {
+            this._editingNameIssues = resp.items || [];
+          }
+        })
+        .catch(() => {
+          /* leave issues empty; banner just won't render */
+        });
+    }
+    this._maybeBackfillOnOpen();
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector(".create-pane .sci-input");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   }
 
-  // _advanceToPreview fires the server-side parse (POST /api/name/parse)
-  // and pre-fills the atomized preview form with the result. Step 0 →
-  // step 1. Fills only fields the curator hasn't already touched — same
-  // "caller-supplied wins" rule the server uses on write.
-  async _advanceToPreview() {
-    const sci = (this._createDraft.scientific_name || "").trim();
-    if (!sci) {
-      this._createError = "scientific name is required";
+  // _maybeBackfillOnOpen runs the same citation-backfill pass that
+  // fires on reference-pick, but against the reference the loaded
+  // name already carries. Fixes the "open a name whose combination
+  // author/year are empty but whose reference is set" case — no
+  // pick event fires on open, so the backfill would otherwise never
+  // run. Fill-empty-only semantics preserve any curator-typed values
+  // that are already populated.
+  async _maybeBackfillOnOpen() {
+    const refID = (this._createDraft?.reference_id || "").trim();
+    if (refID) {
+      let ref;
+      try {
+        ref = await api.reference.get(refID);
+      } catch (_) {
+        /* fall through — still try the basionym backfill */
+      }
+      // Guard: bail if the pane closed or the reference changed while
+      // the fetch was in flight.
+      if (
+        ref &&
+        this._creating &&
+        this._createDraft?.reference_id === refID
+      ) {
+        this._backfillCombinationFromCitation(ref);
+      }
+    }
+    // Also backfill basionym_year on a recomb from the LINKED
+    // basionym's own reference. The primary reference above is the
+    // subseq citation; the original year lives on the basionym's
+    // own reference row. Fires when the loaded name has a linked
+    // basionym (via name_relation) OR the draft carries a
+    // basionym_name_id (create-synonym flow via cluster-`+`).
+    const linkedID =
+      this._editingOriginalName?.basionym?.id ||
+      (this._createDraft?.basionym_name_id || "").trim();
+    if (linkedID) {
+      await this._backfillPrimaryBasionymFromLinkedName(linkedID);
+    }
+  }
+
+  // _onBasionymPickerPick handles a pick on the primary form's
+  // basionym combobox. Sets basionym_name_id and — since the picked
+  // name comes with its own reference (the original citation) —
+  // also walks that reference to fill any empty basionym_authorship
+  // / basionym_authorship_year on the primary draft. Handles the ICN
+  // recomb case where curator picked the basionym after having
+  // parsed a verbatim like `Aus bus (L.)` (basA populated, basY
+  // empty) — the year materializes from the picked basionym's own
+  // reference.
+  async _onBasionymPickerPick(basionymID) {
+    this._createFieldChange("basionym_name_id", basionymID);
+    if (!basionymID) return;
+    await this._backfillPrimaryBasionymFromLinkedName(basionymID);
+  }
+
+  // _backfillPrimaryBasionymFromLinkedName walks a linked basionym
+  // name → its reference → extracts author + year, and fills the
+  // primary draft's basionym_authorship / basionym_authorship_year
+  // when empty. Handles the ICN subseq recomb case where the primary
+  // reference is the SUBSEQUENT citation and the original year lives
+  // on the basionym's own reference row.
+  //
+  // Fill-empty-only preserves anything gnparser already extracted
+  // from the verbatim (usually author for ICN, sometimes year for
+  // ICZN-style parenthetical `(L., 1758)`).
+  async _backfillPrimaryBasionymFromLinkedName(basionymNameID) {
+    if (!basionymNameID) return;
+    let bName;
+    try {
+      bName = await api.name.get(basionymNameID);
+    } catch (_) {
       return;
     }
-    // Code is optional here — pre-fetched from CodeForParent for the
-    // common inherit-from-parent case, empty for root taxa. Passing
-    // "" to /api/name/parse just skips the suffix-rule tier of
-    // RankGuess. Curator can set/override on step 1's bottom row.
+    if (!this._creating) return;
+    const bRefID = (bName?.reference_id || "").trim();
+    if (!bRefID) return;
+    let bRef;
+    try {
+      bRef = await api.reference.get(bRefID);
+    } catch (_) {
+      return;
+    }
+    if (!this._creating) return;
+    const { author: refA, year: refY } = refCitationAuthorAndYear(bRef);
+    if (!refA && !refY) return;
+    const d = this._createDraft;
+    const patch = {};
+    if (!(d.basionym_authorship || "").trim() && refA) {
+      patch.basionym_authorship = refA;
+    }
+    if (!(d.basionym_authorship_year || "").trim() && refY) {
+      patch.basionym_authorship_year = refY;
+    }
+    if (Object.keys(patch).length > 0) {
+      this._createDraft = { ...this._createDraft, ...patch };
+    }
+  }
+
+  // _openEditSynonym opens the unified pane as a name-editor for a
+  // synonym row (the pencil on Nomenclatural-history rows routes
+  // here). Fetches the name row and any persisted issues, hydrates
+  // _createDraft from the name, and enters synonym-edit mode:
+  //
+  //   * Header renders "Edit synonym <name>".
+  //   * Taxon-fields fieldset (name_phrase / scrutinizer / extinct /
+  //     link / taxon_remarks) is hidden — a synonym has no
+  //     independent taxon row.
+  //   * An accepted-taxon picker fieldset replaces the parent picker,
+  //     so a curator can move the synonym to a different accepted
+  //     taxon via POST /api/synonym/{id}/move on save.
+  //   * Original-combination info renders read-only when the name has
+  //     a linked basionym (same treatment as taxon-edit mode).
+  //
+  // Delegates identical name-side setup to _openEditTaxon's pattern —
+  // hydration of _createDraft, parse_quality seeding, issue fetch —
+  // so curators see one form regardless of whether they edit an
+  // accepted taxon or a synonym.
+  async _openEditSynonym(nameID, synonymID, currentTaxonID) {
+    if (!nameID) return;
+    // Two-phase fetch: name row + validation issues in parallel.
+    // Issue fetch failure is silent (banner just won't render).
+    this._creating = true;
+    this._createError = "";
+    this._createBusy = true;
+    this._createLastParsedVerbatim = "";
+    this._createParseQuality = null;
+    this._createParseTail = null;
+    this._createDraft = { scientific_name: "" };
+    this._pickedCreateReferenceLabel = undefined;
+    this._createParentID = "";
+    this._createParentLabel = "";
+    this._createChildRanks = null;
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
+    this._creatingSynonymFor = null;
+    this._creatingSynonymForName = "";
+    this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
+    this._editingTaxonID = "";
+    this._editingTaxonEtag = "";
+    this._editingOriginalTaxon = null;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingNameIssues = [];
+    this._editingSynonymID = synonymID || "";
+    this._editingAcceptedTaxonID = currentTaxonID || "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
+    this._editingNameEtag = "";
+    this._editingOriginalName = null;
+    try {
+      const [name, issueResp] = await Promise.all([
+        api.name.get(nameID),
+        api.issue
+          .list({ table: "name", record_id: nameID, limit: 100 })
+          .catch(() => ({ items: [] })),
+      ]);
+      // Bail if the curator navigated away or opened a different
+      // synonym while this fetch was in flight.
+      if (this._editingSynonymID !== (synonymID || "")) return;
+      const draft = {
+        scientific_name: name.scientific_name || name.scientific_name_string || "",
+        scientific_name_string: name.scientific_name_string || "",
+        authorship: name.authorship || "",
+        rank: name.rank || "",
+        code: name.code || "",
+        status: name.status || "",
+        uninomial: name.uninomial || "",
+        genus: name.genus || "",
+        infrageneric_epithet: name.infrageneric_epithet || "",
+        specific_epithet: name.specific_epithet || "",
+        infraspecific_epithet: name.infraspecific_epithet || "",
+        cultivar_epithet: name.cultivar_epithet || "",
+        combination_authorship: name.combination_authorship || "",
+        combination_ex_authorship: name.combination_ex_authorship || "",
+        combination_authorship_year: name.combination_authorship_year || "",
+        basionym_authorship: name.basionym_authorship || "",
+        basionym_ex_authorship: name.basionym_ex_authorship || "",
+        basionym_authorship_year: name.basionym_authorship_year || "",
+        reference_id: name.reference_id || "",
+        published_in_year: name.published_in_year || "",
+        published_in_page: name.published_in_page || "",
+        published_in_page_link: name.published_in_page_link || "",
+        etymology: name.etymology || "",
+        remarks: name.remarks || "",
+      };
+      if (name.reference_label) {
+        this._pickedCreateReferenceLabel = name.reference_label;
+      }
+      this._createDraft = draft;
+      this._createLastParsedVerbatim = draft.scientific_name.trim();
+      this._createParseQuality =
+        typeof name.parse_quality === "number" ? name.parse_quality : null;
+      this._editingOriginalName = name;
+      this._editingNameEtag = name.__etag || "";
+      this._editingNameIssues = issueResp.items || [];
+    } catch (err) {
+      this._createError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._createBusy = false;
+    }
+    this._maybeBackfillOnOpen();
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector(".create-pane .sci-input");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+
+  _cancelCreate() {
+    this._creating = false;
+    this._createError = "";
+    this._createLastParsedVerbatim = "";
+    this._createParseQuality = null;
+    this._createParseTail = null;
+    this._creatingBasionymFor = null;
+    this._creatingBasionymForName = "";
+    this._creatingSynonymFor = null;
+    this._creatingSynonymForName = "";
+    this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
+    this._editingTaxonID = "";
+    this._editingTaxonEtag = "";
+    this._editingNameEtag = "";
+    this._editingOriginalTaxon = null;
+    this._editingOriginalName = null;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingNameIssues = [];
+    this._editingSynonymID = "";
+    this._editingAcceptedTaxonID = "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
+  }
+
+  // _openEditReference opens the unified reference modal
+  // (sfga-add-reference-modal) in edit mode over the current
+  // create/edit taxon pane. The modal owns all the working state
+  // (load, form draft, PATCH round-trip); the pane only tracks
+  // which reference is being edited via _editRefID so the render
+  // knows to mount the modal. Save → the modal dispatches
+  // reference-updated, caught by _onReferenceUpdated on the pane
+  // to refresh picker badges + re-run backfill.
+  _openEditReference(id) {
+    if (!id) return;
+    this._editRefID = id;
+  }
+
+  _cancelEditReference() {
+    this._editRefID = "";
+  }
+
+  // _renderEditReferenceModal mounts the unified reference modal in
+  // edit mode. Empty return when no id is set — modal only exists
+  // in the render tree while the curator is actively editing.
+  _renderEditReferenceModal() {
+    if (!this._editRefID) return "";
+    // Feed the BHLnames tab with the current taxon-form context so
+    // "look up this reference in BHL" can search on the name the
+    // curator was working on. Prefers the currently-open draft's
+    // sci-name (curator may have edited it since the taxon loaded)
+    // and falls back to the loaded name row.
+    const draftSci =
+      (this._createDraft?.scientific_name || "").trim() ||
+      (this._createDraft?.scientific_name_string || "").trim();
+    const canonical =
+      this._name?.canonical_simple ||
+      draftSci ||
+      this._name?.scientific_name ||
+      "";
+    const authors =
+      this._createDraft?.authorship ||
+      this._name?.authors ||
+      this._name?.authorship ||
+      "";
+    const rawYear =
+      this._createDraft?.basionym_authorship_year ||
+      this._createDraft?.combination_authorship_year ||
+      this._name?.published_in_year ||
+      "";
+    const year = parseInt(rawYear, 10) || 0;
+    // The modal's reference-updated event bubbles up to the pane
+    // wrapper's @reference-updated handler (_onReferenceUpdated),
+    // which refreshes picker badges and re-runs backfill. This
+    // local listener just closes the modal — Lit event ordering
+    // guarantees both fire in the same event tick.
+    return html`
+      <sfga-add-reference-modal
+        .editID=${this._editRefID}
+        .contextCanonical=${canonical}
+        .contextAuthors=${authors}
+        .contextYear=${year}
+        @reference-updated=${() => this._cancelEditReference()}
+        @reference-picked=${() => this._cancelEditReference()}
+        @close=${() => this._cancelEditReference()}
+      ></sfga-add-reference-modal>
+    `;
+  }
+
+  // Fields cleared before each re-parse. Everything gnparser
+  // (re-)derives from the verbatim string — canonical parts, atomized
+  // authorship, and the umbrella `authorship`. Curator-authored
+  // fields (reference_id, remarks, synonym_status, basionym_name_id,
+  // code, rank) are preserved by the SURVIVES rule in _reparseVerbatim.
+  static _PARSER_DERIVED_FIELDS = [
+    "uninomial",
+    "genus",
+    "infrageneric_epithet",
+    "specific_epithet",
+    "infraspecific_epithet",
+    "cultivar_epithet",
+    "authorship",
+    "basionym_authorship",
+    "basionym_ex_authorship",
+    "basionym_authorship_year",
+    "combination_authorship",
+    "combination_ex_authorship",
+    "combination_authorship_year",
+  ];
+
+  // _reparseVerbatim fires the server-side parse (POST /api/name/parse)
+  // and re-fills the atomized fields from the result. Called on Enter
+  // or blur from the scientific-name input at the top of the create
+  // form. Guarded so a repeat trigger on the same verbatim string does
+  // nothing — Tab-out + Tab-in shouldn't refire.
+  //
+  // Re-parse always clobbers parser-derived fields (see
+  // _PARSER_DERIVED_FIELDS) so a corrected verbatim string produces
+  // fresh atomized values. Curator-authored fields (reference_id,
+  // remarks, synonym_status, basionym_name_id, published_in_page,
+  // etymology, status, parent_id, code, rank) survive untouched.
+  //
+  // Empty input is a no-op — validation of "scientific name is
+  // required" happens at submit time so curators can still open the
+  // form, browse the fieldsets, and enter data in any order.
+  async _reparseVerbatim(rawSci) {
+    const sci = (rawSci || "").trim();
+    if (!sci) return;
+    if (sci === this._createLastParsedVerbatim) return;
     this._createBusy = true;
     this._createError = "";
     try {
       const preview = await api.name.parse(sci, this._createDraft.code);
-      // Merge: preview values fill fields the curator hasn't set. The
-      // verbatim + code the curator entered on step 0 always win.
-      const merged = { ...preview };
+      // Start from the current draft to preserve curator-authored
+      // fields, then overlay only the parser-derived slice.
+      const merged = { ...this._createDraft };
+      for (const f of SfgaDetail._PARSER_DERIVED_FIELDS) {
+        merged[f] = preview[f] || "";
+      }
       merged.scientific_name = sci;
       merged.scientific_name_string = sci;
-      merged.code = this._createDraft.code;
-      // Strip fields we don't want to send back on POST /api/taxon
-      // (server-authored on write).
-      delete merged.id;
-      delete merged.modified;
-      delete merged.modified_by;
-      delete merged.parse_quality;
-      delete merged.cardinality;
-      delete merged.gn_id;
-      delete merged.authors;
-      delete merged.canonical_simple;
-      delete merged.canonical_full;
-      delete merged.canonical_stemmed;
-      delete merged.reference_label;
-      // Preserve draft-only meta fields that gnparser knows nothing
-      // about — synonym_status (set by _openCreateSynonym), and
-      // basionym_name_id (set either by _openCreateSynonym's cluster-`+`
-      // shortcut or by the curator picking an existing name in the
-      // Original combination section of a prior step 1 render).
-      if (this._createDraft.synonym_status) {
-        merged.synonym_status = this._createDraft.synonym_status;
-      }
-      if (this._createDraft.basionym_name_id) {
-        merged.basionym_name_id = this._createDraft.basionym_name_id;
-      }
+      // Rank only fills when empty — the curator's explicit pick wins
+      // over gnparser's guess. Same rule for code (which is separately
+      // pre-seeded from CodeForParent and shouldn't be overwritten by
+      // a parse guess).
+      if (!merged.rank && preview.rank) merged.rank = preview.rank;
       this._createDraft = merged;
-      this._createStep = 1;
+      this._createLastParsedVerbatim = sci;
+      this._createParseQuality =
+        typeof preview.parse_quality === "number" ? preview.parse_quality : null;
+      // "" for a clean parse, non-empty when gnparser rejected trailing
+      // text. Drives the top-of-pane warning banner. Live in-session
+      // value overrides any persisted parse-tail issue.
+      this._createParseTail =
+        typeof preview.tail === "string" ? preview.tail : "";
+      // After the parse-driven re-render lands, if the authorship
+      // input is the currently-focused element (curator tab-blurred
+      // out of the sci-name and Tab landed on Authorship), position
+      // the caret at the end of the freshly-populated value so a
+      // backspace deletes the last character rather than doing
+      // nothing at position 0. No effect when authorship stayed
+      // empty (empty inputs have position 0 either way) or when
+      // focus is somewhere else entirely.
+      await this.updateComplete;
+      const auth = this.renderRoot.querySelector(
+        ".create-pane .authorship-input",
+      );
+      if (
+        auth &&
+        this.shadowRoot?.activeElement === auth &&
+        auth.value
+      ) {
+        auth.setSelectionRange(auth.value.length, auth.value.length);
+      }
     } catch (err) {
       this._createError =
         err instanceof Problem ? `${err.title}: ${err.detail || err.message}` : String(err);
+      // Parse failed → clear the quality indicator so the stale glyph
+      // doesn't mislead. The atomized fields we cleared above stay
+      // empty; the sci-input still shows what the curator typed.
+      this._createParseQuality = null;
+      this._createParseTail = null;
     } finally {
       this._createBusy = false;
     }
   }
 
-  _backToVerbatim() {
-    // Preserve the verbatim + code so the curator doesn't lose their
-    // typing. Everything else is discarded — re-parsing the same
-    // verbatim from step 0 will re-fill it.
-    const keep = {
-      scientific_name: this._createDraft.scientific_name || "",
-      code: this._createDraft.code || "",
-    };
-    this._createDraft = keep;
-    this._createStep = 0;
-    this._createError = "";
+  // Enter-key gate for the scientific-name input. Enter re-parses;
+  // Escape cancels. Guard against IME composition so Enter to commit
+  // a CJK candidate doesn't accidentally trigger a parse.
+  _onSciInputKeydown(e) {
+    if (e.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      this._reparseVerbatim(e.target.value);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      this._cancelCreate();
+    }
+  }
+
+  // _renderParseQualityGlyph draws the small inline indicator overlaid
+  // on the right edge of the scientific-name input:
+  //   * ✓ (green)         — parse_quality 1 (clean)
+  //   * triangle-alert   — parse_quality 2-3 (imperfect, amber)
+  //                         and parse_quality 4 (unparseable, red)
+  //
+  // Rendered as a <button> so clicking opens the atomized-fields view
+  // — the natural next step when the curator wants to inspect what
+  // gnparser produced. The triangle-alert shape matches the sygil hive
+  // uses for validation issues elsewhere; on purpose the red case does
+  // NOT look like an "×" so it doesn't get confused with the omnibox
+  // clear-x directly below the input.
+  //
+  // Renders nothing when no parse has run yet. When the curator has
+  // edited the sci-name past _createLastParsedVerbatim, the glyph
+  // dims to signal "hit Enter to refresh" without hiding it entirely
+  // — the previous quality is still useful context.
+  //
+  // gnparser's parse_quality scale: 1 = clean parse, 2 = imperfect
+  // but recognizable, 3 = poor / recoverable, 4 = unparseable.
+  // See github.com/gnames/gnparser docs for the full semantics.
+  _renderParseQualityGlyph(currentSci) {
+    const q = this._createParseQuality;
+    if (q === null || q === undefined) return "";
+    const stale =
+      (currentSci || "").trim() !== (this._createLastParsedVerbatim || "");
+    let content, cls, note;
+    if (q === 4) {
+      content = renderIcon("triangle-alert", 16);
+      cls = "pq-err";
+      note = "unparseable";
+    } else if (q >= 2) {
+      content = renderIcon("triangle-alert", 16);
+      cls = "pq-warn";
+      note = "imperfect parse";
+    } else {
+      content = html`✓`;
+      cls = "pq-ok";
+      note = "clean parse";
+    }
+    const staleCls = stale ? " pq-stale" : "";
+    const title = stale
+      ? `${note} (quality ${q}/4) — click to show atomized fields; press Enter in the input to re-parse`
+      : `${note} (quality ${q}/4) — click to show atomized fields`;
+    return html`<button
+      type="button"
+      class="parse-quality ${cls}${staleCls}"
+      title=${title}
+      aria-label=${title}
+      @click=${() => this._showAtomizedFields()}
+    >
+      ${content}
+    </button>`;
+  }
+
+  // _showAtomizedFields is the click target for the parse-quality
+  // glyph. Opens the atomized-fields section (persisted per the
+  // shared preference) so the curator can inspect / correct what
+  // gnparser produced.
+  _showAtomizedFields() {
+    this._createShowAtomized = true;
+    writeAtomizedPref(true);
   }
 
   _createFieldChange(field, value) {
     this._createDraft = { ...this._createDraft, [field]: value };
   }
 
+  // _onCreateReferencePick handles a reference pick on the primary
+  // form's publication combobox. Sets reference_id (same as the plain
+  // handler) and — when the draft looks like a recomb and the picked
+  // citation is NOT the basionym's own citation — backfills any empty
+  // combination_authorship / combination_authorship_year from the
+  // reference's author + year.
+  //
+  // Fill rule (matches the rest of hive's editor pattern):
+  //   * Fill-empty-only. Curator-typed values in
+  //     combination_authorship / _year survive.
+  //   * Recomb-only. Original combinations don't get combination_*
+  //     backfill; the parenthetical-authorship or populated-basionym-
+  //     authorship signal gates the fill.
+  //   * Skip when (citation author, year) matches (basionym author,
+  //     year) — that's either the original citation being picked in
+  //     error, or the rare same-author-same-year recomb; either way,
+  //     don't materialize the (probably wrong) duplicate. Legacy
+  //     rows already carrying the pattern surface via the
+  //     hive_combination_matches_basionym validation rule.
+  //
+  // Fetches full reference detail on pick to see author+year (the
+  // combobox pick event only carries id+label). One extra HTTP call
+  // per pick; harmless. Best-effort — a fetch failure just no-ops.
+  async _onCreateReferencePick(refID) {
+    this._createFieldChange("reference_id", refID);
+    if (!refID) return;
+    let ref;
+    try {
+      ref = await api.reference.get(refID);
+    } catch (_) {
+      return;
+    }
+    // The pane may have closed / advanced by the time the fetch lands.
+    if (!this._creating || this._createDraft.reference_id !== refID) return;
+    this._backfillCombinationFromCitation(ref);
+  }
+
+  _backfillCombinationFromCitation(ref) {
+    const d = this._createDraft;
+    // Prefer atomized author/issued when set; fall back to parsing
+    // the citation string for CoL-derived references that populate
+    // only the free-text citation field.
+    const { author: refA, year: refY } = refCitationAuthorAndYear(ref);
+    if (!refA && !refY) return;
+
+    const auth = (d.authorship || "").trim();
+    const basA = (d.basionym_authorship || "").trim();
+    const basY = (d.basionym_authorship_year || "").trim();
+    const combA = (d.combination_authorship || "").trim();
+    // Recomb: parenthetical authorship, OR combination_authorship
+    // populated and differs from basionym_authorship. Bare-basionym
+    // (basA populated, combA empty, no parens) is the ICN original
+    // convention where CoL redundantly fills basionym_authorship —
+    // treat as an original, not a recomb.
+    const isRecomb =
+      auth.startsWith("(") || (combA !== "" && combA !== basA);
+
+    if (isRecomb) {
+      // Subsequent-combination citation → fill combination_* pair.
+      // Gate: skip when the citation matches the basionym pair (the
+      // picker likely landed on the original citation, or the rare
+      // same-author-same-year recomb — see
+      // hive_combination_matches_basionym validator).
+      if (refA && refY && refA === basA && refY === basY) return;
+      const patch = {};
+      if (!combA && refA) patch.combination_authorship = refA;
+      if (!(d.combination_authorship_year || "").trim() && refY) {
+        patch.combination_authorship_year = refY;
+      }
+      if (Object.keys(patch).length > 0) {
+        this._createDraft = { ...this._createDraft, ...patch };
+      }
+      return;
+    }
+
+    // Original-combination citation → fill basionym_* pair. The
+    // basionym pair on an original describes the name's own
+    // establishment, so the citation's author + year map directly.
+    // Fill-empty-only preserves anything the parse already extracted
+    // from the verbatim.
+    const patch = {};
+    if (!basA && refA) patch.basionym_authorship = refA;
+    if (!basY && refY) patch.basionym_authorship_year = refY;
+    if (Object.keys(patch).length > 0) {
+      this._createDraft = { ...this._createDraft, ...patch };
+    }
+  }
+
   async _submitCreate() {
     this._createBusy = true;
     this._createError = "";
     try {
+      if (this._editingTaxonID) {
+        await this._submitEdit();
+        return;
+      }
+      if (this._editingSynonymID) {
+        await this._submitEditSynonym();
+        return;
+      }
       if (this._creatingBasionymFor) {
         // Basionym write path — POST /api/taxon/{X}/basionym creates
         // Name + Synonym + BASIONYM name_relation atomically. Reveals
@@ -4340,6 +5542,12 @@ class SfgaDetail extends LitElement {
         const revealID = this._creatingBasionymFor;
         await api.taxon.addBasionym(this._creatingBasionymFor, this._createDraft);
         this._cancelCreate();
+        // Refresh the local nomen history so the newly-added basionym
+        // shows immediately. Same-id "taxon-moved" round-trips through
+        // the shell without re-firing the detail pane's _load (Lit
+        // skips reactive property updates when the value is unchanged),
+        // so we refresh in-place before dispatching.
+        await this._refreshNomenHistory();
         this.dispatchEvent(
           new CustomEvent("taxon-moved", {
             detail: { id: revealID },
@@ -4361,6 +5569,10 @@ class SfgaDetail extends LitElement {
           this._buildCreateBody(),
         );
         this._cancelCreate();
+        // Same-id dispatch below won't re-fire _load; refresh the
+        // history locally so the newly-added synonym renders on the
+        // next paint rather than leaving the section stale.
+        await this._refreshNomenHistory();
         this.dispatchEvent(
           new CustomEvent("taxon-moved", {
             detail: { id: revealID },
@@ -4394,6 +5606,189 @@ class SfgaDetail extends LitElement {
     }
   }
 
+  // Field partition for the edit-mode diff. Every field in _createDraft
+  // belongs to exactly one aggregate; the partition drives which PATCH
+  // payload each delta lands in. `remarks` maps to the name aggregate
+  // to match the create-form semantics; the taxon's own remarks column
+  // is edited via _createDraft.taxon_remarks and translated back to
+  // "remarks" on the taxon PATCH body.
+  static _EDIT_TAXON_FIELDS = new Set([
+    "name_phrase",
+    "scrutinizer",
+    "scrutinizer_id",
+    "scrutinizer_date",
+    "extinct",
+    "link",
+    "taxon_remarks",
+  ]);
+  static _EDIT_NAME_FIELDS = new Set([
+    "scientific_name",
+    "scientific_name_string",
+    "authorship",
+    "rank",
+    "code",
+    "status",
+    "uninomial",
+    "genus",
+    "infrageneric_epithet",
+    "specific_epithet",
+    "infraspecific_epithet",
+    "cultivar_epithet",
+    "combination_authorship",
+    "combination_ex_authorship",
+    "combination_authorship_year",
+    "basionym_authorship",
+    "basionym_ex_authorship",
+    "basionym_authorship_year",
+    "reference_id",
+    "published_in_year",
+    "published_in_page",
+    "published_in_page_link",
+    "etymology",
+    "remarks",
+  ]);
+
+  // _submitEdit computes the diff between _createDraft and the loaded
+  // originals, partitions it into taxon-side and name-side patches,
+  // fires an optional parent-move, then PATCHes each aggregate whose
+  // slice changed (with If-Match against the etag captured at open).
+  // Called from _submitCreate when _editingTaxonID is set.
+  //
+  // Order: move first (since move refreshes col__modified and would
+  // invalidate the taxon-PATCH etag if run in the other order), then
+  // PATCH taxon, then PATCH name. Each half can fail independently —
+  // partial success leaves the archive consistent per aggregate.
+  async _submitEdit() {
+    const t = this._editingOriginalTaxon || {};
+    const n = this._editingOriginalName || {};
+    const d = this._createDraft;
+    const taxonPatch = {};
+    const namePatch = {};
+    for (const [key, value] of Object.entries(d)) {
+      if (SfgaDetail._EDIT_TAXON_FIELDS.has(key)) {
+        const original =
+          key === "taxon_remarks"
+            ? t.remarks || ""
+            : key === "extinct"
+              ? t.extinct === undefined || t.extinct === null
+                ? ""
+                : String(t.extinct)
+              : t[key] || "";
+        if (value !== original) {
+          if (key === "taxon_remarks") {
+            taxonPatch.remarks = value;
+          } else if (key === "extinct") {
+            // Tri-state select: "" means "clear" (send null); "true" /
+            // "false" become bool.
+            if (value === "") taxonPatch.extinct = null;
+            else taxonPatch.extinct = value === "true";
+          } else {
+            taxonPatch[key] = value;
+          }
+        }
+      } else if (SfgaDetail._EDIT_NAME_FIELDS.has(key)) {
+        const original = n[key] || "";
+        if (value !== original) namePatch[key] = value;
+      }
+    }
+    const hasTaxonEdits = Object.keys(taxonPatch).length > 0;
+    const hasNameEdits = Object.keys(namePatch).length > 0 && n && n.id;
+    const hasParentMove =
+      this._editingParentDraft !== null &&
+      this._editingParentDraft !== (t.parent_id ?? "");
+    if (!hasTaxonEdits && !hasNameEdits && !hasParentMove) {
+      this._cancelCreate();
+      return;
+    }
+    let taxonEtag = this._editingTaxonEtag;
+    let revealID = t.id;
+    if (hasParentMove) {
+      const moved = await api.taxon.move(
+        t.id,
+        this._editingParentDraft,
+        taxonEtag,
+      );
+      taxonEtag = moved.__etag || taxonEtag;
+      revealID = moved.id;
+    }
+    if (hasTaxonEdits) {
+      const updated = await api.taxon.patch(t.id, taxonPatch, taxonEtag);
+      taxonEtag = updated.__etag || taxonEtag;
+    }
+    if (hasNameEdits) {
+      await api.name.patch(n.id, namePatch, this._editingNameEtag);
+    }
+    this._cancelCreate();
+    this.dispatchEvent(
+      new CustomEvent("taxon-moved", {
+        detail: { id: revealID },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  // _submitEditSynonym is the synonym-edit-mode counterpart to
+  // _submitEdit. Computes the name-side diff (same partition table
+  // as _submitEdit's _EDIT_NAME_FIELDS), optionally moves the synonym
+  // to a different accepted taxon, then PATCHes the name row with
+  // If-Match. Order: move first (POST /api/synonym/{id}/move) so a
+  // subsequent name-patch failure still leaves the synonym at the
+  // curator's intended taxon.
+  //
+  // Reveal semantics: if the synonym was moved, jump to the NEW
+  // accepted taxon so the moved synonym stays in view. Otherwise
+  // stay on the current taxon and refresh the local nomen history
+  // so the updated name renders on the next paint.
+  async _submitEditSynonym() {
+    const n = this._editingOriginalName || {};
+    const d = this._createDraft;
+    const namePatch = {};
+    for (const [key, value] of Object.entries(d)) {
+      if (SfgaDetail._EDIT_NAME_FIELDS.has(key)) {
+        const original = n[key] || "";
+        if (value !== original) namePatch[key] = value;
+      }
+    }
+    const hasNameEdits = Object.keys(namePatch).length > 0 && n && n.id;
+    const hasSynonymMove =
+      this._editingAcceptedTaxonDraft !== null &&
+      this._editingAcceptedTaxonDraft !== this._editingAcceptedTaxonID;
+    if (!hasNameEdits && !hasSynonymMove) {
+      this._cancelCreate();
+      return;
+    }
+    let moved = false;
+    let revealID = this._editingAcceptedTaxonID;
+    if (hasSynonymMove) {
+      await api.synonym.move(
+        this._editingSynonymID,
+        this._editingAcceptedTaxonDraft,
+      );
+      moved = true;
+      revealID = this._editingAcceptedTaxonDraft;
+    }
+    if (hasNameEdits) {
+      await api.name.patch(n.id, namePatch, this._editingNameEtag);
+    }
+    this._cancelCreate();
+    if (moved) {
+      // Synonym is no longer attached to the taxon the curator was
+      // viewing — jump to the new accepted taxon so it stays in view.
+      this.dispatchEvent(
+        new CustomEvent("taxon-moved", {
+          detail: { id: revealID },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    } else {
+      // Name-only change — refresh the local history so the updated
+      // label renders in place without a full navigation.
+      await this._refreshNomenHistory();
+    }
+  }
+
   // _buildCreateBody assembles the POST body for the create-taxon /
   // add-synonym / add-basionym endpoints. Adds the optional basionym
   // link fields (mutually exclusive):
@@ -4421,9 +5816,9 @@ class SfgaDetail extends LitElement {
   // _submitCreateThenBasionym is the "Create + add original combination"
   // path. Saves the current combination first (POST /api/taxon), then
   // transitions the same pane into basionym-add mode targeting the
-  // just-created taxon. The curator lands on step 0 with a fresh
-  // scientific-name input; when they save that, the basionym write
-  // (POST /api/taxon/{X}/basionym) fires and the pane closes.
+  // just-created taxon. The curator lands on a fresh scientific-name
+  // input; when they save that, the basionym write (POST
+  // /api/taxon/{X}/basionym) fires and the pane closes.
   //
   // Two-step commit — either half can fail independently. If the
   // accepted-name save fails, the pane stays put and shows the error.
@@ -4445,7 +5840,7 @@ class SfgaDetail extends LitElement {
       // so the curator types the original name fresh.
       const keepCode = this._createDraft.code || "";
       this._createDraft = { scientific_name: "", code: keepCode };
-      this._createStep = 0;
+      this._createLastParsedVerbatim = "";
       this._createShowAtomized = readAtomizedPref();
       this._creatingBasionymFor = created.id;
       this._creatingBasionymForName =
@@ -4530,217 +5925,543 @@ class SfgaDetail extends LitElement {
   _renderCreatePane() {
     // Parent label was captured at open time (new-child vs new-sister)
     // so the heading names the right ancestor regardless of any tree
-    // selection changes since.
+    // selection changes since. Edit mode heads with the current
+    // scientific-name so the curator sees which record they're
+    // editing without needing to look at a separate context row.
     const parentLabel = this._createParentLabel || "(root)";
-    const heading = this._creatingBasionymFor
-      ? html`Add original combination for
-          <em>${this._creatingBasionymForName}</em>`
-      : this._creatingSynonymFor
-        ? html`Add synonym of
-            <em>${this._creatingSynonymForName}</em>`
-        : html`New taxon under ${parentLabel}`;
+    const heading = this._editingSynonymID
+      ? html`Edit synonym
+          <em>
+            ${this._editingOriginalName?.scientific_name ||
+            this._editingSynonymID}
+          </em>`
+      : this._editingTaxonID
+        ? html`Edit
+            <em>
+              ${this._editingOriginalName?.scientific_name ||
+              this._editingOriginalTaxon?.label?.text ||
+              this._editingTaxonID}
+            </em>`
+        : this._creatingBasionymFor
+          ? html`Add original combination for
+              <em>${this._creatingBasionymForName}</em>`
+          : this._creatingSynonymFor
+            ? html`Add synonym of
+                <em>${this._creatingSynonymForName}</em>`
+            : html`New taxon under ${parentLabel}`;
     return html`
-      <div class="create-pane">
-        <h2>
-          ${heading}
-          <span class="step-indicator">
-            step ${this._createStep + 1} / 2 —
-            ${this._createStep === 0 ? "verbatim" : "atomized preview"}
-          </span>
-        </h2>
+      <div
+        class="create-pane"
+        @reference-updated=${(e) => this._onReferenceUpdated(e)}
+      >
+        <h2>${heading}</h2>
         <hr />
         ${this._createError
           ? html`<div class="error" role="alert">${this._createError}</div>`
           : ""}
-        ${this._createStep === 0
-          ? this._renderCreateStep0()
-          : this._renderCreateStep1()}
+        ${this._renderParseTailBanner()}
+        ${this._renderEditingIssuesBanner()}
+        ${this._renderCreateForm()}
       </div>
+      ${this._renderEditReferenceModal()}
     `;
   }
 
-  // Step 0: just the verbatim scientific name. Code has moved to the
-  // bottom of step 1 so the common inherit-from-parent path never
-  // requires focusing it. The pre-fetched default from
-  // api.taxon.codeDefault(parentId) still flows into ParseName's
-  // rank-guess so suffix rules work invisibly.
-  _renderCreateStep0() {
+  // _onReferenceUpdated fires when the reference-quick-fix modal
+  // saves. Two things need refreshing:
+  //   1. Every reference picker in the pane needs to re-resolve so
+  //      its cached display + badge state reflect the fresh data.
+  //      combobox.refresh() clears the resolver cache and triggers
+  //      updated().
+  //   2. Backfill re-runs so a freshly-filled author + issued
+  //      populates the atomized combination / basionym fields on
+  //      the current draft (the whole point of the inline fix).
+  async _onReferenceUpdated(e) {
+    const updatedID = e.detail?.id;
+    if (!updatedID) return;
+    // Refresh every combobox in this pane so any picker showing the
+    // updated reference re-resolves. Cheap; no-ops for pickers with
+    // a different value set.
+    const boxes = this.renderRoot.querySelectorAll(
+      ".create-pane sfga-combobox",
+    );
+    for (const box of boxes) {
+      if (typeof box.refresh === "function" && box.value === updatedID) {
+        box.refresh();
+      }
+    }
+    // Re-run the backfill so newly-populated author + issued land
+    // in the current draft.
+    if (this._createDraft?.reference_id === updatedID) {
+      try {
+        const ref = await api.reference.get(updatedID);
+        this._backfillCombinationFromCitation(ref);
+      } catch (_) {
+        /* silent */
+      }
+    }
+    if (this._createBasionymInline?.draft?.reference_id === updatedID) {
+      await this._onInlineBasionymReferencePick(updatedID);
+    }
+    // Basionym-side backfill if the updated reference belongs to the
+    // linked basionym (basionym_name_id via cluster-`+` OR
+    // _editingOriginalName.basionym.id in edit mode). Walks the
+    // linked name's reference; refires when the ids match.
+    const linkedID =
+      this._editingOriginalName?.basionym?.id ||
+      (this._createDraft?.basionym_name_id || "").trim();
+    if (linkedID) {
+      try {
+        const linked = await api.name.get(linkedID);
+        if (linked?.reference_id === updatedID) {
+          await this._backfillPrimaryBasionymFromLinkedName(linkedID);
+        }
+      } catch (_) {
+        /* silent */
+      }
+    }
+  }
+
+  // _renderParseTailBanner surfaces gnparser's "unparsed tail"
+  // diagnostic at the top of the pane where curators can't miss it.
+  // Two sources feed the banner and the fresher one wins:
+  //
+  //   1. Live: _createParseTail set from a re-parse this session.
+  //      Non-null means "a parse ran"; "" means "clean parse, no
+  //      tail" (banner suppressed); non-empty renders the banner.
+  //
+  //   2. Persisted: an existing hive_parse_tail row in
+  //      __gsvalidator_results loaded on _openEditTaxon. Used only
+  //      when no live parse has run (_createParseTail === null) so
+  //      re-parsing a stale bad row instantly reflects the current
+  //      gnparser's opinion.
+  //
+  // Placement at the top of the pane matches the name-editor modal's
+  // issue-banner treatment and stays visible regardless of whether
+  // the curator has expanded the atomized-fields section.
+  _renderParseTailBanner() {
+    let tail = "";
+    let source = "";
+    if (this._createParseTail !== null && this._createParseTail !== undefined) {
+      if (this._createParseTail === "") return "";
+      tail = this._createParseTail;
+      source = "live";
+    } else if (this._editingNameIssues && this._editingNameIssues.length > 0) {
+      const persisted = this._editingNameIssues.find(
+        (i) => i.rule_id === "hive_parse_tail",
+      );
+      if (!persisted) return "";
+      // Persisted issues carry the tail on `actual_value` (set by
+      // the hive.parse_tail validator's Result). Fall back to
+      // extracting it from the message when actual_value is missing
+      // for any reason.
+      tail = persisted.actual_value || "";
+      if (!tail) {
+        const m = /Unparsed tail:\s*"([^"]*)"/.exec(persisted.message || "");
+        tail = m ? m[1] : "";
+      }
+      source = "persisted";
+    }
+    if (!tail) return "";
+    const note =
+      source === "live"
+        ? "gnparser could not fully parse this scientific name. Trailing text below wasn't recognized:"
+        : "gnparser flagged this scientific name at save time. Trailing text below wasn't recognized:";
     return html`
-      <label>Scientific name + authorship <span class="req">*</span></label>
-      <input
-        type="text"
-        .value=${this._createDraft.scientific_name || ""}
-        placeholder="e.g. Panthera onca (Linnaeus, 1758)"
-        @input=${(e) => this._createFieldChange("scientific_name", e.target.value)}
-        @keydown=${(e) => {
-          if (e.key === "Enter") this._advanceToPreview();
-          if (e.key === "Escape") this._cancelCreate();
-        }}
-        autofocus
-      />
-      <div class="toolbar">
-        <button
-          class="primary"
-          @click=${() => this._advanceToPreview()}
-          ?disabled=${this._createBusy}
-        >
-          ${this._createBusy ? "Parsing…" : "Next → preview"}
-        </button>
-        <button @click=${() => this._cancelCreate()}>Cancel</button>
+      <div class="warning-banner" role="alert">
+        <ul>
+          <li>
+            ${severityChip("warn")}
+            <span>
+              <span class="warning-rule">unparsed tail</span>:
+              ${note}
+              <code class="parse-tail-text">${tail}</code>
+            </span>
+          </li>
+        </ul>
       </div>
     `;
   }
 
-  // Step 1: atomized preview. Curator sees the essentials up front
-  // (name recap, rank, verbatim authorship, reference, status, notes)
-  // and can expand a "show atomized fields" toggle to reveal + edit
-  // the individual col__ columns gnparser derived. Parsing runs
-  // regardless — the toggle only affects visibility. gsvalidator will
-  // flag parse-mismatch cases regardless of whether the curator ever
-  // opened the expanded view, so trust-the-parse and verify-the-parse
-  // paths both stay safe.
-  _renderCreateStep1() {
+  // _renderEditingIssuesBanner surfaces every other persisted
+  // validation issue on the name being edited (edit-taxon or
+  // edit-synonym mode). The parse-tail issue is intentionally
+  // excluded — it already has a dedicated banner just above with
+  // richer formatting (the unparsed tail token gets its own
+  // monospace pill).
+  _renderEditingIssuesBanner() {
+    if (!this._editingTaxonID && !this._editingSynonymID) return "";
+    const all = this._editingNameIssues || [];
+    const rest = all.filter((i) => i.rule_id !== "hive_parse_tail");
+    if (rest.length === 0) return "";
+    return html`
+      <div class="warning-banner" role="status">
+        <strong>
+          ${rest.length} open
+          issue${rest.length > 1 ? "s" : ""} on this name:
+        </strong>
+        <ul>
+          ${rest.map(
+            (i) => html`<li>
+              ${severityChip(i.severity)}
+              <span>
+                <span class="warning-rule"
+                  >${i.rule_name || i.rule_id}</span
+                >:
+                ${i.message}
+                ${i.field_name
+                  ? html` <span class="warning-rule"
+                      >(${i.field_name})</span
+                    >`
+                  : ""}
+              </span>
+            </li>`,
+          )}
+        </ul>
+      </div>
+    `;
+  }
+
+  // _renderCreateForm renders the single-page create/add pane. The
+  // scientific-name input sits at the top of the name fieldset; Enter
+  // or blur triggers _reparseVerbatim which repopulates the atomized
+  // fields nested inside the same fieldset. Curator-authored fields
+  // (reference, remarks, synonym_status, basionym_name_id, code)
+  // survive re-parse untouched — see _reparseVerbatim for the split.
+  //
+  // The form wraps its contents in a <form> so Enter in a plain text
+  // input submits, matching the standard browser convention. Buttons
+  // that shouldn't submit are marked type="button"; the primary Save
+  // button is type="submit". The scientific-name input intercepts
+  // Enter for re-parse instead. Textareas keep Enter=newline (default).
+  _renderCreateForm() {
     const d = this._createDraft;
     const set = (f) => (e) => this._createFieldChange(f, e.target.value);
     return html`
-      <div class="preview-verbatim">
-        Verbatim: <span>${d.scientific_name}</span>
-      </div>
+      <form
+        class="create-form"
+        @submit=${(e) => {
+          e.preventDefault();
+          this._submitCreate();
+        }}
+      >
+        <fieldset class="name-fieldset">
+          <legend>Name</legend>
+          <label>Scientific name <span class="req">*</span></label>
+          <div class="sci-input-cell">
+            <input
+              class="sci-input"
+              type="text"
+              placeholder="e.g. Panthera onca (Linnaeus, 1758)"
+              .value=${d.scientific_name || ""}
+              @input=${(e) => this._createFieldChange("scientific_name", e.target.value)}
+              @keydown=${(e) => this._onSciInputKeydown(e)}
+              @blur=${(e) => this._reparseVerbatim(e.target.value)}
+              autofocus
+            />
+            ${this._renderParseQualityGlyph(d.scientific_name || "")}
+          </div>
 
+          <!-- Verbatim authorship above Rank so Tab-blur from the
+               scientific-name input lands here (the field most likely
+               to hold a value the curator wants to review or edit
+               after a parse). Rank is picker-only and typically stays
+               correct once the parse populates it; keeping it below
+               keeps the natural tab order aligned with review
+               priority. -->
+          <label>Verbatim authorship</label>
+          <input
+            class="authorship-input"
+            type="text"
+            .value=${d.authorship || ""}
+            @input=${set("authorship")}
+          />
+
+          <label>Rank</label>
+          <sfga-combobox
+            min-search-chars="0"
+            placeholder="Rank…"
+            .source=${childRankSource(this._createChildRanks)}
+            .resolver=${vocabResolver("rank")}
+            .value=${d.rank || ""}
+            @pick=${(e) => this._createFieldChange("rank", e.detail.id)}
+          ></sfga-combobox>
+
+          <label class="atomized-toggle" style="grid-column: 1 / -1">
+            <input
+              type="checkbox"
+              .checked=${this._createShowAtomized}
+              @change=${(e) => {
+                this._createShowAtomized = e.target.checked;
+                writeAtomizedPref(e.target.checked);
+              }}
+            />
+            Show atomized fields
+            <span class="hint">
+              (verify or override the parse; hive parses in the
+              background regardless)
+            </span>
+          </label>
+
+          ${this._createShowAtomized
+            ? this._renderAtomizedFieldset(d, set)
+            : ""}
+        </fieldset>
+
+        ${this._creatingSynonymFor
+          ? html`
+              <fieldset>
+                <legend>Synonym type</legend>
+                <label>Type</label>
+                <sfga-combobox
+                  min-search-chars="0"
+                  placeholder="synonym / ambiguous synonym / misapplied"
+                  .source=${synonymStatusSource()}
+                  .resolver=${vocabResolver("taxonomic_status")}
+                  .value=${d.synonym_status || "SYNONYM"}
+                  @pick=${(e) =>
+                    this._createFieldChange("synonym_status", e.detail.id)}
+                ></sfga-combobox>
+              </fieldset>
+            `
+          : ""}
+
+        <fieldset>
+          <legend>Publication</legend>
+          <label>${nomActFieldLabel(d)}</label>
+          <sfga-combobox
+            min-search-chars="2"
+            placeholder="Search references…"
+            .source=${referenceSource}
+            .resolver=${referenceResolver}
+            .value=${d.reference_id || ""}
+            .valueName=${this._pickedCreateReferenceLabel !== undefined
+              ? this._pickedCreateReferenceLabel
+              : ""}
+            .actions=${[
+              {
+                label: "Add new reference…",
+                icon: "plus",
+                handler: () => (this._addingReferenceFor = "create"),
+              },
+            ]}
+            @pick=${(e) => this._onCreateReferencePick(e.detail.id)}
+            @badge-click=${(e) =>
+              this._openEditReference(e.detail.id || d.reference_id)}
+          ></sfga-combobox>
+          <label>Published in page</label>
+          <input
+            type="text"
+            .value=${d.published_in_page || ""}
+            @input=${set("published_in_page")}
+          />
+        </fieldset>
+
+        <fieldset>
+          <legend>Metadata</legend>
+          <label>Nom status</label>
+          <sfga-combobox
+            placeholder="Nomenclatural status…"
+            .source=${nomenSource(d.code)}
+            .resolver=${nomenResolver}
+            .value=${d.status || ""}
+            @pick=${(e) => this._createFieldChange("status", e.detail.id)}
+          ></sfga-combobox>
+          <label>Etymology</label>
+          <input
+            type="text"
+            .value=${d.etymology || ""}
+            @input=${set("etymology")}
+          />
+          <label>Remarks</label>
+          <textarea
+            .value=${d.remarks || ""}
+            @input=${set("remarks")}
+          ></textarea>
+        </fieldset>
+
+        <!-- Nomenclatural code lives at the very bottom.
+             CodeForParent pre-fills it from the parent's name so the
+             common path never focuses this row; the affordance is here
+             for the exceptions (root taxa, deliberate mixed-code
+             subtrees like protists). Matches the TUI's placement. -->
+        <fieldset>
+          <legend>Nomenclatural code</legend>
+          <label>Code</label>
+          <sfga-combobox
+            min-search-chars="0"
+            placeholder="Nomenclatural code…"
+            .source=${vocabSource("nom_code")}
+            .resolver=${vocabResolver("nom_code")}
+            .value=${d.code || ""}
+            @pick=${(e) => this._createFieldChange("code", e.detail.id)}
+          ></sfga-combobox>
+        </fieldset>
+
+        ${this._editingTaxonID ? this._renderEditTaxonFieldset(d, set) : ""}
+
+        ${this._editingSynonymID ? this._renderEditSynonymFieldset() : ""}
+
+        ${this._creatingBasionymFor
+          ? ""
+          : this._editingTaxonID || this._editingSynonymID
+            ? this._renderLinkedBasionymInfo()
+            : this._renderOriginalCombinationSection(d, set)}
+
+        <div class="toolbar">
+          <button
+            type="submit"
+            class="primary"
+            ?disabled=${this._createBusy}
+          >
+            ${this._createBusy
+              ? this._editingTaxonID || this._editingSynonymID
+                ? "Saving…"
+                : "Creating…"
+              : this._editingTaxonID || this._editingSynonymID
+                ? "Save"
+                : this._creatingBasionymFor
+                  ? "Add basionym"
+                  : this._creatingSynonymFor
+                    ? "Add synonym"
+                    : "Create"}
+          </button>
+          <button
+            type="button"
+            @click=${() => this._cancelCreate()}
+            ?disabled=${this._createBusy}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+      ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
+    `;
+  }
+
+  // _renderEditTaxonFieldset renders the taxon-side fields that only
+  // appear in edit mode — parent picker, name-phrase, scrutinizer
+  // trio, extinct, link, taxon-remarks. Values flow through
+  // _createDraft (hydrated by _openEditTaxon); taxon-remarks lives at
+  // draft.taxon_remarks to avoid colliding with the name-side
+  // "remarks" field the create metadata fieldset owns.
+  _renderEditTaxonFieldset(d, set) {
+    const t = this._editingOriginalTaxon || {};
+    const currentParentID = t.parent_id ?? "";
+    const parentID =
+      this._editingParentDraft !== null
+        ? this._editingParentDraft
+        : currentParentID;
+    const extinctValue = d.extinct === undefined ? "" : d.extinct;
+    return html`
       <fieldset>
-        <legend>name</legend>
-        <label>Rank</label>
-        <sfga-combobox
-          min-search-chars="0"
-          placeholder="Rank…"
-          .source=${childRankSource(this._createChildRanks)}
-          .resolver=${vocabResolver("rank")}
-          .value=${d.rank || ""}
-          @pick=${(e) => this._createFieldChange("rank", e.detail.id)}
-        ></sfga-combobox>
-
-        <label>Verbatim authorship</label>
-        <input type="text" .value=${d.authorship || ""} @input=${set("authorship")} />
-      </fieldset>
-
-      ${this._creatingSynonymFor
-        ? html`
-            <fieldset>
-              <legend>synonym type</legend>
-              <label>Type</label>
-              <sfga-combobox
-                min-search-chars="0"
-                placeholder="synonym / ambiguous synonym / misapplied"
-                .source=${synonymStatusSource()}
-                .resolver=${vocabResolver("taxonomic_status")}
-                .value=${d.synonym_status || "SYNONYM"}
-                @pick=${(e) =>
-                  this._createFieldChange("synonym_status", e.detail.id)}
-              ></sfga-combobox>
-            </fieldset>
-          `
-        : ""}
-
-      <label class="atomized-toggle">
-        <input
-          type="checkbox"
-          .checked=${this._createShowAtomized}
-          @change=${(e) => {
-            this._createShowAtomized = e.target.checked;
-            this._editShowAtomized = e.target.checked;
-            writeAtomizedPref(e.target.checked);
-          }}
-        />
-        Show atomized fields
-        <span class="hint">
-          (verify or override the parse; hive parses in the background
-          regardless)
-        </span>
-      </label>
-
-      ${this._createShowAtomized ? this._renderAtomizedFieldset(d, set) : ""}
-
-      <fieldset>
-        <legend>publication</legend>
-        <label>${nomActFieldLabel(d)}</label>
+        <legend>Taxon fields</legend>
+        <label>Parent</label>
         <sfga-combobox
           min-search-chars="2"
-          placeholder="Search references…"
-          .source=${referenceSource}
-          .resolver=${referenceResolver}
-          .value=${d.reference_id || ""}
-          .valueName=${this._pickedCreateReferenceLabel !== undefined
-            ? this._pickedCreateReferenceLabel
+          placeholder="Type to search, or leave empty for a top-level taxon"
+          .source=${taxonSource}
+          .resolver=${taxonResolver}
+          .value=${parentID}
+          .valueName=${this._editingParentDraft !== null
+            ? this._editingParentDraftName
             : ""}
-          .actions=${[
-            {
-              label: "Add new reference…",
-              icon: "plus",
-              handler: () => (this._addingReferenceFor = "create"),
-            },
-          ]}
-          @pick=${(e) => this._createFieldChange("reference_id", e.detail.id)}
+          @pick=${(e) => {
+            this._editingParentDraft = e.detail.id;
+            this._editingParentDraftName = e.detail.name;
+          }}
         ></sfga-combobox>
-        <label>Published in page</label>
-        <input type="text" .value=${d.published_in_page || ""} @input=${set("published_in_page")} />
-      </fieldset>
 
-      <fieldset>
-        <legend>metadata</legend>
-        <label>Nom status</label>
-        <sfga-combobox
-          placeholder="Nomenclatural status…"
-          .source=${nomenSource(d.code)}
-          .resolver=${nomenResolver}
-          .value=${d.status || ""}
-          @pick=${(e) => this._createFieldChange("status", e.detail.id)}
-        ></sfga-combobox>
-        <label>Etymology</label>
-        <input type="text" .value=${d.etymology || ""} @input=${set("etymology")} />
-        <label>Remarks</label>
-        <textarea .value=${d.remarks || ""} @input=${set("remarks")}></textarea>
-      </fieldset>
+        <label>Name phrase</label>
+        <input
+          type="text"
+          .value=${d.name_phrase || ""}
+          @input=${set("name_phrase")}
+        />
 
-      <!-- Nomenclatural code lives at the very bottom.
-           CodeForParent pre-fills it from the parent's name so the
-           common path never focuses this row; the affordance is here
-           for the exceptions (root taxa, deliberate mixed-code
-           subtrees like protists). Matches the TUI's placement. -->
-      <fieldset>
-        <legend>nomenclatural code</legend>
-        <label>Code</label>
-        <sfga-combobox
-          min-search-chars="0"
-          placeholder="Nomenclatural code…"
-          .source=${vocabSource("nom_code")}
-          .resolver=${vocabResolver("nom_code")}
-          .value=${d.code || ""}
-          @pick=${(e) => this._createFieldChange("code", e.detail.id)}
-        ></sfga-combobox>
-      </fieldset>
+        <label>Scrutinizer</label>
+        <input
+          type="text"
+          .value=${d.scrutinizer || ""}
+          @input=${set("scrutinizer")}
+        />
 
-      ${this._creatingBasionymFor
-        ? ""
-        : this._renderOriginalCombinationSection(d, set)}
+        <label>Scrutinizer ID</label>
+        <input
+          type="text"
+          placeholder="ORCID or other identifier"
+          .value=${d.scrutinizer_id || ""}
+          @input=${set("scrutinizer_id")}
+        />
 
-      <div class="toolbar">
-        <button @click=${() => this._backToVerbatim()}>← back</button>
-        <button
-          class="primary"
-          @click=${() => this._submitCreate()}
-          ?disabled=${this._createBusy}
+        <label>Scrutinizer date</label>
+        <input
+          type="date"
+          .value=${d.scrutinizer_date || ""}
+          @input=${set("scrutinizer_date")}
+        />
+
+        <label>Extinct</label>
+        <select
+          .value=${extinctValue}
+          @change=${(e) => this._createFieldChange("extinct", e.target.value)}
         >
-          ${this._createBusy
-            ? "creating…"
-            : this._creatingBasionymFor
-              ? "add basionym"
-              : this._creatingSynonymFor
-                ? "add synonym"
-                : "create"}
-        </button>
-        <button @click=${() => this._cancelCreate()}>Cancel</button>
-      </div>
-      ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
+          <option value="">(unset)</option>
+          <option value="true">yes</option>
+          <option value="false">no</option>
+        </select>
+
+        <label>Link</label>
+        <input
+          type="text"
+          .value=${d.link || ""}
+          @input=${set("link")}
+        />
+
+        <label>Taxon remarks</label>
+        <textarea
+          .value=${d.taxon_remarks || ""}
+          @input=${set("taxon_remarks")}
+        ></textarea>
+      </fieldset>
+    `;
+  }
+
+  // _renderEditSynonymFieldset is the counterpart to
+  // _renderEditTaxonFieldset for synonym-edit mode. Only surfaces the
+  // synonym-only fields — currently just the accepted-taxon picker
+  // for moving a synonym to a different accepted taxon (POST
+  // /api/synonym/{id}/move on save). Empty picker keeps the current
+  // attachment; picking a new taxon queues a move.
+  //
+  // taxonomic_status editing (SYNONYM / AMBIGUOUS_SYNONYM /
+  // MISAPPLIED) is intentionally omitted from this MVP — the
+  // apiNomenName projection doesn't carry the current value and no
+  // PATCH /api/synonym endpoint exists. Curators wanting to change
+  // the type today delete + re-add. When the backend gains synonym
+  // PATCH, add the picker here (same shape as create-synonym mode
+  // via synonymStatusSource()).
+  _renderEditSynonymFieldset() {
+    const currentTaxonID = this._editingAcceptedTaxonID || "";
+    const draft = this._editingAcceptedTaxonDraft;
+    const shown = draft !== null ? draft : currentTaxonID;
+    return html`
+      <fieldset>
+        <legend>Synonym attachment</legend>
+        <label>Accepted taxon</label>
+        <sfga-combobox
+          min-search-chars="2"
+          placeholder="Search accepted taxa…"
+          .source=${taxonSource}
+          .resolver=${taxonResolver}
+          .value=${shown}
+          .valueName=${draft !== null ? this._editingAcceptedTaxonDraftName : ""}
+          @pick=${(e) => {
+            this._editingAcceptedTaxonDraft = e.detail.id;
+            this._editingAcceptedTaxonDraftName = e.detail.name;
+          }}
+        ></sfga-combobox>
+      </fieldset>
     `;
   }
 
@@ -4765,7 +6486,7 @@ class SfgaDetail extends LitElement {
       this._createBasionymInlineFieldChange(field, e.target.value);
     return html`
       <fieldset>
-        <legend>original combination (optional)</legend>
+        <legend>Original combination (optional)</legend>
         ${inline
           ? html`
               <p class="hint" style="grid-column: 1 / -1; margin: 0 0 var(--sp-1) 0;">
@@ -4774,10 +6495,14 @@ class SfgaDetail extends LitElement {
               </p>
               <label>Scientific name <span class="req">*</span></label>
               <input
+                class="sci-input"
                 type="text"
                 placeholder="e.g. Aus bus L."
                 .value=${bDraft.scientific_name || ""}
                 @input=${bSet("scientific_name")}
+                @keydown=${(e) => this._onInlineBasionymSciInputKeydown(e)}
+                @blur=${(e) =>
+                  this._reparseInlineBasionymVerbatim(e.target.value)}
               />
               <label>Verbatim authorship</label>
               <input
@@ -4785,6 +6510,56 @@ class SfgaDetail extends LitElement {
                 .value=${bDraft.authorship || ""}
                 @input=${bSet("authorship")}
               />
+              <label>Rank</label>
+              <sfga-combobox
+                min-search-chars="0"
+                placeholder="Rank…"
+                .source=${vocabSource("rank")}
+                .resolver=${vocabResolver("rank")}
+                .value=${bDraft.rank || d.rank || ""}
+                @pick=${(e) =>
+                  this._createBasionymInlineFieldChange("rank", e.detail.id)}
+              ></sfga-combobox>
+              <label>Nom status</label>
+              <sfga-combobox
+                placeholder="Nomenclatural status…"
+                .source=${nomenSource(bDraft.code || d.code)}
+                .resolver=${nomenResolver}
+                .value=${bDraft.status || ""}
+                @pick=${(e) =>
+                  this._createBasionymInlineFieldChange("status", e.detail.id)}
+              ></sfga-combobox>
+              <label>Original nomenclatural act citation</label>
+              <sfga-combobox
+                min-search-chars="2"
+                placeholder="Search author / title / citation / DOI…"
+                .source=${referenceSource}
+                .resolver=${referenceResolver}
+                .value=${bDraft.reference_id || ""}
+                @pick=${(e) =>
+                  this._onInlineBasionymReferencePick(e.detail.id)}
+                @badge-click=${(e) =>
+                  this._openEditReference(
+                    e.detail.id || bDraft.reference_id,
+                  )}
+              ></sfga-combobox>
+              <label>Published in page</label>
+              <input
+                type="text"
+                .value=${bDraft.published_in_page || ""}
+                @input=${bSet("published_in_page")}
+              />
+              <label>Etymology</label>
+              <input
+                type="text"
+                .value=${bDraft.etymology || ""}
+                @input=${bSet("etymology")}
+              />
+              <label>Remarks</label>
+              <textarea
+                .value=${bDraft.remarks || ""}
+                @input=${bSet("remarks")}
+              ></textarea>
               <label>Code</label>
               <sfga-combobox
                 min-search-chars="0"
@@ -4795,25 +6570,9 @@ class SfgaDetail extends LitElement {
                 @pick=${(e) =>
                   this._createBasionymInlineFieldChange("code", e.detail.id)}
               ></sfga-combobox>
-              <label>Original nomenclatural act citation</label>
-              <sfga-combobox
-                min-search-chars="2"
-                placeholder="Search author / title / citation / DOI…"
-                .source=${referenceSource}
-                .resolver=${referenceResolver}
-                .value=${bDraft.reference_id || ""}
-                @pick=${(e) =>
-                  this._createBasionymInlineFieldChange(
-                    "reference_id",
-                    e.detail.id,
-                  )}
-              ></sfga-combobox>
-              <label>Remarks</label>
-              <input
-                type="text"
-                .value=${bDraft.remarks || ""}
-                @input=${bSet("remarks")}
-              />
+              ${this._createShowAtomized
+                ? this._renderAtomizedFieldset(bDraft, bSet)
+                : ""}
               <div class="toolbar" style="grid-column: 1 / -1">
                 <button
                   type="button"
@@ -4838,8 +6597,7 @@ class SfgaDetail extends LitElement {
                     handler: () => this._openCreateBasionymInline(),
                   },
                 ]}
-                @pick=${(e) =>
-                  this._createFieldChange("basionym_name_id", e.detail.id)}
+                @pick=${(e) => this._onBasionymPickerPick(e.detail.id)}
               ></sfga-combobox>
               <p class="hint" style="grid-column: 1 / -1; margin: 0;">
                 Leave empty if this name IS the original combination
@@ -4851,20 +6609,91 @@ class SfgaDetail extends LitElement {
     `;
   }
 
+  // _renderLinkedBasionymInfo is the edit-mode counterpart to
+  // _renderOriginalCombinationSection. Read-only for now: displays the
+  // linked basionym name (when present) or a hint pointing curators at
+  // the existing "add original combination" affordance (when absent).
+  //
+  // Link/unlink actions are deferred — they require new backend
+  // endpoints (POST /api/name/{id}/basionym-link and DELETE .../link)
+  // that don't exist yet. In the meantime curators can:
+  //   * add a basionym via the pencil-header action on the current
+  //     taxon (routes through POST /api/taxon/{id}/basionym).
+  //   * edit or delete the linked basionym itself via the pencil on
+  //     its row in the Nomenclatural history section below.
+  // Both paths keep this edit-mode form scoped to name-fields only
+  // and defer the two-sided link-mutation surface until it's built.
+  _renderLinkedBasionymInfo() {
+    const n = this._editingOriginalName;
+    const basionym = n?.basionym;
+    if (basionym && basionym.id) {
+      return html`
+        <fieldset>
+          <legend>Original combination</legend>
+          <label>Linked</label>
+          <div class="linked-basionym">
+            <a
+              href="#/taxon/${this._editingTaxonID}?name=${basionym.id}"
+              @click=${(e) => this._onLinkedBasionymClick(e, basionym.id)}
+              title="scroll to this basionym in Nomenclatural history"
+              >${renderLabel(basionym.label, basionym.id)}</a
+            >
+          </div>
+          <p class="hint" style="grid-column: 1 / -1; margin: 0;">
+            Edit or unlink this original combination via its row in the
+            Nomenclatural history section (below the edit form).
+          </p>
+        </fieldset>
+      `;
+    }
+    return html`
+      <fieldset>
+        <legend>original combination</legend>
+        <p class="hint" style="grid-column: 1 / -1; margin: 0;">
+          No original combination linked. Use the "add original
+          combination" action to create or link one for this name.
+        </p>
+      </fieldset>
+    `;
+  }
+
+  // _onLinkedBasionymClick cancels the edit pane and defers to the
+  // usual navigation. In-page anchor for now — the Nomenclatural
+  // history section renders the basionym row with its own pencil, so
+  // dismissing edit mode drops the curator back on the taxon detail
+  // where they can find it. When we add a "focus this name in the
+  // history" behavior, this handler is where to wire it.
+  _onLinkedBasionymClick(e, nameID) {
+    e.preventDefault();
+    if (!nameID) return;
+    this._cancelCreate();
+    // Basionyms are synonym-side names, so route through the same
+    // synonym-edit flow the Nomen History pencil uses. Empty synonym
+    // id (basionym isn't a synonym of the current taxon) still opens
+    // the form as a name-only edit — the accepted-taxon picker just
+    // renders empty in that case.
+    this._openEditSynonym(nameID, "", this._taxon?.id || "");
+  }
+
   // _openCreateBasionymInline expands the inline basionym subform,
   // seeding it with the primary draft's code so the common ICN/ICZN
   // case doesn't need an extra pick. Clears any picker selection —
-  // the two paths are mutually exclusive.
+  // the two paths are mutually exclusive. Scientific-name stays
+  // empty by default (see TAXON_EDITOR_PLAN.md § Non-goals — basionyms
+  // usually live in a different genus than the recomb, so the primary
+  // draft's prefix would fight the workflow more than it helps).
   _openCreateBasionymInline() {
     this._createBasionymInline = {
       draft: { code: this._createDraft?.code || "" },
     };
+    this._createBasionymInlineLastParsedVerbatim = "";
     // Ensure the picker's basionym_name_id doesn't also submit.
     this._createFieldChange("basionym_name_id", "");
   }
 
   _cancelCreateBasionymInline() {
     this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
   }
 
   _createBasionymInlineFieldChange(field, value) {
@@ -4873,6 +6702,100 @@ class SfgaDetail extends LitElement {
       ...this._createBasionymInline,
       draft: { ...this._createBasionymInline.draft, [field]: value },
     };
+  }
+
+  // _onInlineBasionymReferencePick sets the inline basionym's
+  // reference_id and backfills empty basionym_authorship /
+  // basionym_authorship_year from the citation's author + year. The
+  // inline subform IS an original combination — its citation is the
+  // establishment reference, so the author + year map directly to
+  // the basionym pair. Fill-empty-only preserves anything gnparser
+  // already extracted from the verbatim.
+  async _onInlineBasionymReferencePick(refID) {
+    this._createBasionymInlineFieldChange("reference_id", refID);
+    if (!refID) return;
+    let ref;
+    try {
+      ref = await api.reference.get(refID);
+    } catch (_) {
+      return;
+    }
+    const inline = this._createBasionymInline;
+    if (!inline || inline.draft.reference_id !== refID) return;
+    const { author: refA, year: refY } = refCitationAuthorAndYear(ref);
+    if (!refA && !refY) return;
+    const d = inline.draft;
+    const patch = {};
+    if (!(d.basionym_authorship || "").trim() && refA) {
+      patch.basionym_authorship = refA;
+    }
+    if (!(d.basionym_authorship_year || "").trim() && refY) {
+      patch.basionym_authorship_year = refY;
+    }
+    if (Object.keys(patch).length > 0) {
+      this._createBasionymInline = {
+        ...inline,
+        draft: { ...d, ...patch },
+      };
+    }
+    // Mirror to the primary draft — the inline basionym IS this
+    // primary recomb's original combination, so its author + year
+    // fill the primary's basionym_* pair too (empty-only).
+    const primary = this._createDraft;
+    const primaryPatch = {};
+    if (!(primary.basionym_authorship || "").trim() && refA) {
+      primaryPatch.basionym_authorship = refA;
+    }
+    if (!(primary.basionym_authorship_year || "").trim() && refY) {
+      primaryPatch.basionym_authorship_year = refY;
+    }
+    if (Object.keys(primaryPatch).length > 0) {
+      this._createDraft = { ...primary, ...primaryPatch };
+    }
+  }
+
+  // _reparseInlineBasionymVerbatim mirrors _reparseVerbatim but for
+  // the inline original-combination subform. Same clear-derived /
+  // preserve-authored contract, scoped to the basionym draft. Guarded
+  // by _createBasionymInlineLastParsedVerbatim so blur/repeat-Enter
+  // on unchanged text doesn't refire.
+  async _reparseInlineBasionymVerbatim(rawSci) {
+    if (!this._createBasionymInline) return;
+    const sci = (rawSci || "").trim();
+    if (!sci) return;
+    if (sci === this._createBasionymInlineLastParsedVerbatim) return;
+    this._createBusy = true;
+    this._createError = "";
+    try {
+      const code = this._createBasionymInline.draft?.code || "";
+      const preview = await api.name.parse(sci, code);
+      const merged = { ...this._createBasionymInline.draft };
+      for (const f of SfgaDetail._PARSER_DERIVED_FIELDS) {
+        merged[f] = preview[f] || "";
+      }
+      merged.scientific_name = sci;
+      if (!merged.rank && preview.rank) merged.rank = preview.rank;
+      this._createBasionymInline = {
+        ...this._createBasionymInline,
+        draft: merged,
+      };
+      this._createBasionymInlineLastParsedVerbatim = sci;
+    } catch (err) {
+      this._createError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._createBusy = false;
+    }
+  }
+
+  _onInlineBasionymSciInputKeydown(e) {
+    if (e.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      this._reparseInlineBasionymVerbatim(e.target.value);
+    }
   }
 
   // _shouldOfferBasionymAfterCreate returns true when the current draft
@@ -4900,7 +6823,7 @@ class SfgaDetail extends LitElement {
   _renderAtomizedFieldset(d, set) {
     return html`
       <fieldset>
-        <legend>atomized name</legend>
+        <legend>Atomized name</legend>
         <label>Uninomial</label>
         <input type="text" .value=${d.uninomial || ""} @input=${set("uninomial")} />
         <label>Genus</label>
@@ -4917,14 +6840,14 @@ class SfgaDetail extends LitElement {
 
       <div class="authorship-pair">
         <fieldset>
-          <legend>basionym (original)</legend>
+          <legend>Basionym (original)</legend>
           <label>Author</label>
           <input type="text" .value=${d.basionym_authorship || ""} @input=${set("basionym_authorship")} />
           <label>Year</label>
           <input type="text" .value=${d.basionym_authorship_year || ""} @input=${set("basionym_authorship_year")} />
         </fieldset>
         <fieldset>
-          <legend>combination (current)</legend>
+          <legend>Combination (current)</legend>
           <label>Author</label>
           <input type="text" .value=${d.combination_authorship || ""} @input=${set("combination_authorship")} />
           <label>Year</label>
@@ -4936,12 +6859,21 @@ class SfgaDetail extends LitElement {
 
   _renderAddReferenceModal() {
     // Context for the BHLnames tab: canonical + authorship + year.
-    // Read from the *current* form values so a curator who has been
-    // editing the scientific name gets a BHLnames match on what
-    // they've typed, not the pre-edit form.
+    // Read from the *current* form values when the create/edit pane
+    // is open — a curator who has been typing the scientific name
+    // gets a BHLnames match on what's on-screen, not the pre-edit
+    // form. Falls back to the loaded name row for callers outside
+    // the pane (Nomenclatural history rows, distribution/vernacular
+    // modals).
+    const draftSci =
+      this._creating && this._createDraft
+        ? this._createDraft.scientific_name ||
+          this._createDraft.scientific_name_string ||
+          ""
+        : "";
     const canonical =
       this._name?.canonical_simple ||
-      this._nameFieldValue("scientific_name_string") ||
+      draftSci ||
       this._name?.scientific_name ||
       "";
     const authors = this._name?.authors || "";
@@ -4975,34 +6907,26 @@ class SfgaDetail extends LitElement {
   }
 
   _onReferencePicked(e) {
-    // Modal supplies {id, label}. Three call sites:
-    //   * "create" — new-taxon create pane picked / added a reference
-    //   * "edit"   — taxon edit form picked / added a reference
+    // Modal supplies {id, label}. Call sites:
+    //   * "create" — create/edit pane picked / added a reference
+    //     (edit mode reuses the create-pane draft, so same target).
+    //   * "vernacular" / "distribution" — per-row modals.
     //   * "section" — References section's + button; no form to route
-    //     the pick into, just close (the reference is already in the
-    //     archive; it'll appear in the References section once some
-    //     row on this page cites it).
-    // Legacy callers with an unrecognised target fall through to the
-    // edit-form routing so a stale caller doesn't drop the pick on
-    // the floor.
+    //     the pick into (the reference is already in the archive;
+    //     it'll appear in the References section once some row cites
+    //     it).
     const { id, label } = e.detail;
     const target = this._addingReferenceFor;
     if (target === "create") {
-      this._createFieldChange("reference_id", id);
       this._pickedCreateReferenceLabel = label || "";
+      // Route through _onCreateReferencePick so a freshly-added
+      // reference gets the same combination-backfill treatment as a
+      // picked existing one.
+      this._onCreateReferencePick(id);
     } else if (target === "vernacular") {
-      // Pick flows into the vernacular add/edit modal's draft. The
-      // combobox will resolve the display label from the id on its
-      // own; no need to shortcut a label cache for this flow.
       this._vernacularFieldChange("reference_id", id);
     } else if (target === "distribution") {
       this._distributionFieldChange("reference_id", id);
-    } else if (target === "nameEditor") {
-      // Pick flows into the pencil-edit name editor's draft.
-      this._nameEditorFieldChange("reference_id", id);
-    } else if (target !== "section") {
-      this._nameFieldChange("reference_id", id);
-      this._pickedReferenceLabel = label || "";
     }
     this._addingReferenceFor = "";
   }
@@ -5149,104 +7073,6 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  _onParentPick(e) {
-    // The picker emits {id, name}; empty id means "move to root".
-    this._parentDraft = e.detail.id;
-    this._parentDraftName = e.detail.name;
-  }
-
-  _fieldChange(field, value) {
-    this._draft = { ...this._draft, [field]: value };
-  }
-
-  _nameFieldChange(field, value) {
-    this._nameDraft = { ...this._nameDraft, [field]: value };
-  }
-
-  async _save() {
-    if (!this._taxon) return;
-    const hasTaxonEdits = Object.keys(this._draft).length > 0;
-    const hasNameEdits = Object.keys(this._nameDraft).length > 0 && this._name;
-    const hasParentMove =
-      this._parentDraft !== null && this._parentDraft !== (this._taxon.parent_id ?? "");
-    if (!hasTaxonEdits && !hasNameEdits && !hasParentMove) {
-      this._editing = false;
-      return;
-    }
-    this._saving = true;
-    this._saveError = "";
-    try {
-      // Order: move first, then patch. Rationale: a move refreshes the
-      // taxon's col__modified, so doing patch first and then move would
-      // burn the patch's ETag on the subsequent move call. Move first,
-      // capture its new ETag, then patch against that.
-      //
-      // Still NOT atomic across the three operations. A future batch
-      // endpoint (POST /api/taxon/{id}/apply with a plan body) would fix it.
-      let parentMoved = false;
-      if (hasParentMove) {
-        const moved = await api.taxon.move(this._taxon.id, this._parentDraft, this._etag);
-        this._taxon = moved;
-        this._etag = moved.__etag || "";
-        this._parentDraft = null;
-        this._parentDraftName = "";
-        parentMoved = true;
-      }
-      if (hasTaxonEdits) {
-        const updated = await api.taxon.patch(this._taxon.id, this._draft, this._etag);
-        this._taxon = updated;
-        this._etag = updated.__etag || "";
-        this._draft = {};
-      }
-      if (hasNameEdits) {
-        const updated = await api.name.patch(this._name.id, this._nameDraft, this._nameEtag);
-        this._name = updated;
-        this._nameEtag = updated.__etag || "";
-        this._nameDraft = {};
-      }
-      this._editing = false;
-      if (parentMoved) {
-        // Tell the shell to reveal the taxon in its new tree location.
-        // The tree pane fetches ancestors, expands the chain, and scrolls
-        // the moved row into view so the curator sees the result of their
-        // reparent without a full page reload.
-        this.dispatchEvent(
-          new CustomEvent("taxon-moved", {
-            detail: { id: this._taxon.id },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      }
-    } catch (err) {
-      // 409 (stale If-Match) is the common case; render its detail so
-      // curators know why their save didn't land. A future refinement
-      // could offer a "reload and retry" button.
-      if (err instanceof Problem) {
-        this._saveError = `${err.title}: ${err.detail || err.message}`;
-      } else {
-        this._saveError = String(err);
-      }
-    } finally {
-      this._saving = false;
-    }
-  }
-
-  // _fieldValue returns the current in-form value for a field: the draft
-  // override if the user has touched it, otherwise the current taxon value.
-  // Handles booleans (Extinct) specially — the draft may explicitly set
-  // false/true, which are both legal draft values.
-  _fieldValue(field) {
-    if (Object.hasOwn(this._draft, field)) return this._draft[field];
-    return this._taxon[field] ?? "";
-  }
-
-  // Parallel of _fieldValue for the name aggregate.
-  _nameFieldValue(field) {
-    if (Object.hasOwn(this._nameDraft, field)) return this._nameDraft[field];
-    return this._name?.[field] ?? "";
-  }
-
   render() {
     // Create mode takes over the whole pane — hoisted above the
     // no-selection guard because the empty-archive flow needs to open
@@ -5297,23 +7123,17 @@ class SfgaDetail extends LitElement {
       <hr />
       ${this._renderBreadcrumbs()}
       ${this._renderPendingWarnings()}
-      ${this._editing
-        ? this._renderEditForm()
-        : html`
-            ${this._renderNomenclaturalHistory()}
-            ${this._renderVernaculars()}
-            ${this._renderDistributions()}
-            ${this._renderReferences()}
-            ${this._renderViewFields()}
-          `}
+      ${this._renderNomenclaturalHistory()}
+      ${this._renderVernaculars()}
+      ${this._renderDistributions()}
+      ${this._renderReferences()}
+      ${this._renderViewFields()}
       ${this._vernacularForm ? this._renderVernacularModal() : ""}
       ${this._distributionForm ? this._renderDistributionModal() : ""}
       ${this._synonymDelete ? this._renderSynonymDeleteModal() : ""}
-      ${this._nameEditor ? this._renderNameEditorModal() : ""}
       ${this._addingReferenceFor === "section" ||
       this._addingReferenceFor === "vernacular" ||
-      this._addingReferenceFor === "distribution" ||
-      this._addingReferenceFor === "nameEditor"
+      this._addingReferenceFor === "distribution"
         ? this._renderAddReferenceModal()
         : ""}
     `;
@@ -5459,7 +7279,7 @@ class SfgaDetail extends LitElement {
     const fresh = (this.pendingWarnings && this.pendingWarnings.length)
       ? this.pendingWarnings
       : (this._taxon?.warnings || []);
-    if (fresh.length === 0 || this._editing) return "";
+    if (fresh.length === 0 || this._creating) return "";
     const warnings = fresh;
     const heading = `${warnings.length} open issue${warnings.length > 1 ? "s" : ""}:`;
     return html`
@@ -5490,12 +7310,12 @@ class SfgaDetail extends LitElement {
   // local styles do not apply.
   renderHeaderActions() {
     if (!this.editable) return "";
-    if (this._editing || this._creating) return "";
+    if (this._creating) return "";
     if (!this._taxon) return "";
     return html`
       <button
         class="icon-btn subtle"
-        @click=${() => this._startEdit()}
+        @click=${() => this._openEditTaxon()}
         title="edit (e)"
         aria-label="edit"
       >
@@ -5539,7 +7359,7 @@ class SfgaDetail extends LitElement {
     }
     if (!this._taxon) return;
     switch (action) {
-      case "edit": this._startEdit(); break;
+      case "edit": this._openEditTaxon(); break;
       case "new-child": this._openCreate(); break;
       case "new-sister": this._openCreateSister(); break;
       case "delete": this._askDelete(); break;
@@ -5627,284 +7447,6 @@ class SfgaDetail extends LitElement {
       </dl>
       </section>
       ${this._confirmDelete ? this._renderDeleteModal() : ""}
-    `;
-  }
-
-  _renderEditForm() {
-    // Extinct is a tri-state (unknown / yes / no) — represented as an
-    // empty-string / "true" / "false" select. On save, "" is treated as
-    // "leave alone" (draft doesn't include the field); the other two are
-    // sent as bool.
-    const extinctValue =
-      this._draft.extinct === undefined
-        ? this._taxon.extinct === undefined
-          ? ""
-          : this._taxon.extinct
-            ? "true"
-            : "false"
-        : this._draft.extinct === true
-          ? "true"
-          : "false";
-
-    // Parent picker: reads either the draft (if the user picked) or the
-    // current taxon.parent_id. Empty means "root."
-    const currentParentID = this._taxon.parent_id ?? "";
-    const parentID =
-      this._parentDraft !== null ? this._parentDraft : currentParentID;
-
-    return html`
-      <form @submit=${(e) => e.preventDefault()}>
-        <label>Parent</label>
-        <sfga-combobox
-          min-search-chars="2"
-          placeholder="Type to search, or leave empty for a top-level taxon"
-          .source=${taxonSource}
-          .resolver=${taxonResolver}
-          .value=${parentID}
-          .valueName=${this._parentDraft !== null ? this._parentDraftName : ""}
-          @pick=${(e) => this._onParentPick(e)}
-        ></sfga-combobox>
-
-        <label for="edit-name-phrase">Name phrase</label>
-        <input
-          id="edit-name-phrase"
-          type="text"
-          .value=${this._fieldValue("name_phrase")}
-          @input=${(e) => this._fieldChange("name_phrase", e.target.value)}
-        />
-
-        <label for="edit-scrutinizer">Scrutinizer</label>
-        <input
-          id="edit-scrutinizer"
-          type="text"
-          .value=${this._fieldValue("scrutinizer")}
-          @input=${(e) => this._fieldChange("scrutinizer", e.target.value)}
-        />
-
-        <label for="edit-scrutinizer-id">Scrutinizer ID</label>
-        <input
-          id="edit-scrutinizer-id"
-          type="text"
-          placeholder="ORCID or other identifier"
-          .value=${this._fieldValue("scrutinizer_id")}
-          @input=${(e) => this._fieldChange("scrutinizer_id", e.target.value)}
-        />
-
-        <label for="edit-scrutinizer-date">Scrutinizer date</label>
-        <input
-          id="edit-scrutinizer-date"
-          type="date"
-          .value=${this._fieldValue("scrutinizer_date")}
-          @input=${(e) => this._fieldChange("scrutinizer_date", e.target.value)}
-        />
-
-        <label for="edit-extinct">Extinct</label>
-        <select
-          id="edit-extinct"
-          .value=${extinctValue}
-          @change=${(e) => {
-            const v = e.target.value;
-            if (v === "") {
-              // Remove from draft — send nothing for this field.
-              const { extinct, ...rest } = this._draft;
-              this._draft = rest;
-              this.requestUpdate();
-            } else {
-              this._fieldChange("extinct", v === "true");
-            }
-          }}
-        >
-          <option value="">(unset)</option>
-          <option value="true">yes</option>
-          <option value="false">no</option>
-        </select>
-
-        <label for="edit-link">Link</label>
-        <input
-          id="edit-link"
-          type="text"
-          .value=${this._fieldValue("link")}
-          @input=${(e) => this._fieldChange("link", e.target.value)}
-        />
-
-        <label for="edit-remarks">Taxon remarks</label>
-        <textarea
-          id="edit-remarks"
-          .value=${this._fieldValue("remarks")}
-          @input=${(e) => this._fieldChange("remarks", e.target.value)}
-        ></textarea>
-
-        ${this._name ? this._renderNameSection() : ""}
-
-        ${this._saveError ? html`<div class="save-error">${this._saveError}</div>` : ""}
-
-        <div class="toolbar" style="grid-column: 1 / -1">
-          <button class="primary" @click=${() => this._save()} ?disabled=${this._saving}>
-            ${this._saving ? "Saving…" : "Save"}
-          </button>
-          <button @click=${() => this._cancelEdit()} ?disabled=${this._saving}>
-            cancel
-          </button>
-        </div>
-      </form>
-    `;
-  }
-
-  // _renderNameSection renders the name-editing block. Hidden when the
-  // taxon has no attached name. Mirrors the create pane's step-1 form
-  // structure — same field set, same progressive-disclosure toggle for
-  // atomized fields, same dynamic reference label. Curators learn one
-  // form and use it for both create and edit.
-  _renderNameSection() {
-    // Merge the current name + any in-flight draft so nomActFieldCopy
-    // sees whatever atomized authorship values the curator has typed.
-    const merged = { ...(this._name || {}), ...this._nameDraft };
-    return html`
-      <h3 class="section" style="grid-column: 1 / -1; margin: 0.75rem 0 0 0; color: var(--dim); font-size: 0.95em;">
-        ── Name ──
-      </h3>
-
-      <label for="edit-scientific">Scientific name</label>
-      <input
-        id="edit-scientific"
-        type="text"
-        placeholder="Verbatim string with authorship"
-        .value=${this._nameFieldValue("scientific_name_string")}
-        @input=${(e) => this._nameFieldChange("scientific_name_string", e.target.value)}
-      />
-
-      <label>Rank</label>
-      <sfga-combobox
-        placeholder="Rank…"
-        .source=${vocabSource("rank")}
-        .resolver=${vocabResolver("rank")}
-        .value=${this._nameFieldValue("rank")}
-        @pick=${(e) => this._nameFieldChange("rank", e.detail.id)}
-      ></sfga-combobox>
-
-      <label>Code</label>
-      <sfga-combobox
-        placeholder="Nomenclatural code…"
-        .source=${vocabSource("nom_code")}
-        .resolver=${vocabResolver("nom_code")}
-        .value=${this._nameFieldValue("code")}
-        @pick=${(e) => this._nameFieldChange("code", e.detail.id)}
-      ></sfga-combobox>
-
-      <label>Verbatim authorship</label>
-      <input
-        type="text"
-        .value=${this._nameFieldValue("authorship")}
-        @input=${(e) => this._nameFieldChange("authorship", e.target.value)}
-      />
-
-      <label class="atomized-toggle" style="grid-column: 1 / -1">
-        <input
-          type="checkbox"
-          .checked=${this._editShowAtomized}
-          @change=${(e) => {
-            this._editShowAtomized = e.target.checked;
-            this._createShowAtomized = e.target.checked;
-            writeAtomizedPref(e.target.checked);
-          }}
-        />
-        Show atomized fields
-        <span class="hint">
-          (verify or override the parse — hive parses in the background
-          regardless)
-        </span>
-      </label>
-
-      ${this._editShowAtomized ? this._renderAtomizedEditFields() : ""}
-
-      <label>Nom status</label>
-      <sfga-combobox
-        placeholder="Nomenclatural status…"
-        .source=${nomenSource(this._nameFieldValue("code"))}
-        .resolver=${nomenResolver}
-        .value=${this._nameFieldValue("status")}
-        @pick=${(e) => this._nameFieldChange("status", e.detail.id)}
-      ></sfga-combobox>
-
-      <label>${nomActFieldLabel(merged)}</label>
-      <sfga-combobox
-        min-search-chars="2"
-        placeholder="Search references…"
-        .source=${referenceSource}
-        .resolver=${referenceResolver}
-        .value=${this._nameFieldValue("reference_id")}
-        .valueName=${this._pickedReferenceLabel !== undefined
-          ? this._pickedReferenceLabel
-          : Object.hasOwn(this._nameDraft, "reference_id")
-            ? ""
-            : this._name?.reference_label || ""}
-        .actions=${[
-          {
-            label: "Add new reference…",
-            icon: "plus",
-            handler: () => (this._addingReferenceFor = "edit"),
-          },
-        ]}
-        @pick=${(e) => this._nameFieldChange("reference_id", e.detail.id)}
-      ></sfga-combobox>
-      ${this._addingReferenceFor ? this._renderAddReferenceModal() : ""}
-
-      <label for="edit-etymology">Etymology</label>
-      <input
-        id="edit-etymology"
-        type="text"
-        .value=${this._nameFieldValue("etymology")}
-        @input=${(e) => this._nameFieldChange("etymology", e.target.value)}
-      />
-
-      <label for="edit-name-remarks">Name remarks</label>
-      <textarea
-        id="edit-name-remarks"
-        .value=${this._nameFieldValue("remarks")}
-        @input=${(e) => this._nameFieldChange("remarks", e.target.value)}
-      ></textarea>
-    `;
-  }
-
-  // _renderAtomizedEditFields is the collapsed section revealed by the
-  // "show atomized fields" toggle on the edit form. Shape matches the
-  // create pane's atomized fieldset (name grid + basionym/combination
-  // pair) so curators see the same widget in both contexts.
-  _renderAtomizedEditFields() {
-    const v = (f) => this._nameFieldValue(f);
-    const set = (f) => (e) => this._nameFieldChange(f, e.target.value);
-    return html`
-      <fieldset style="grid-column: 1 / -1">
-        <legend>atomized name</legend>
-        <label>Uninomial</label>
-        <input type="text" .value=${v("uninomial")} @input=${set("uninomial")} />
-        <label>Genus</label>
-        <input type="text" .value=${v("genus")} @input=${set("genus")} />
-        <label>Subgenus</label>
-        <input type="text" .value=${v("infrageneric_epithet")} @input=${set("infrageneric_epithet")} />
-        <label>Specific epithet</label>
-        <input type="text" .value=${v("specific_epithet")} @input=${set("specific_epithet")} />
-        <label>Infraspecific epithet</label>
-        <input type="text" .value=${v("infraspecific_epithet")} @input=${set("infraspecific_epithet")} />
-        <label>Cultivar epithet</label>
-        <input type="text" .value=${v("cultivar_epithet")} @input=${set("cultivar_epithet")} />
-      </fieldset>
-      <div class="authorship-pair" style="grid-column: 1 / -1">
-        <fieldset>
-          <legend>basionym (original)</legend>
-          <label>Author</label>
-          <input type="text" .value=${v("basionym_authorship")} @input=${set("basionym_authorship")} />
-          <label>Year</label>
-          <input type="text" .value=${v("basionym_authorship_year")} @input=${set("basionym_authorship_year")} />
-        </fieldset>
-        <fieldset>
-          <legend>combination (current)</legend>
-          <label>Author</label>
-          <input type="text" .value=${v("combination_authorship")} @input=${set("combination_authorship")} />
-          <label>Year</label>
-          <input type="text" .value=${v("combination_authorship_year")} @input=${set("combination_authorship_year")} />
-        </fieldset>
-      </div>
     `;
   }
 
@@ -6026,9 +7568,12 @@ class SfgaDetail extends LitElement {
       draft.basionym_name_id = opts.basionymNameID;
     }
     this._createDraft = draft;
-    this._createStep = 0;
     this._createError = "";
     this._createBusy = false;
+    this._createLastParsedVerbatim = "";
+    this._createParseQuality = null;
+    this._createParseTail = null;
+    this._pickedCreateReferenceLabel = undefined;
     // Parent doesn't apply to synonym mode; clear so the render's
     // parent-picker code path is bypassed cleanly.
     this._createParentID = "";
@@ -6038,7 +7583,28 @@ class SfgaDetail extends LitElement {
     this._creatingBasionymForName = "";
     this._creatingSynonymFor = taxonID;
     this._creatingSynonymForName = taxonLabel;
+    this._createBasionymInline = null;
+    this._createBasionymInlineLastParsedVerbatim = "";
+    this._editingTaxonID = "";
+    this._editingTaxonEtag = "";
+    this._editingNameEtag = "";
+    this._editingOriginalTaxon = null;
+    this._editingOriginalName = null;
+    this._editingParentDraft = null;
+    this._editingParentDraftName = "";
+    this._editingNameIssues = [];
+    this._editingSynonymID = "";
+    this._editingAcceptedTaxonID = "";
+    this._editingAcceptedTaxonDraft = null;
+    this._editingAcceptedTaxonDraftName = "";
+    this._editRefID = "";
     this._creating = true;
+    // Fire the on-open backfill so a pre-populated basionym_name_id
+    // (from the cluster-`+` shortcut in Nomen History) pulls
+    // basionym_authorship_year from the linked basionym's own
+    // reference. No primary reference yet in create mode, so the
+    // reference-side branch inside _maybeBackfillOnOpen no-ops.
+    this._maybeBackfillOnOpen();
   }
 
   _renderNomenCluster(cluster) {
@@ -6202,14 +7768,26 @@ class SfgaDetail extends LitElement {
             </button>`
           : ""}
         ${hasIssues
-          ? html`<button
-              class="icon-btn subtle warn"
-              @click=${(e) => this._onNomenRowIssues(e, n)}
-              title="open name editor at validation issues"
-              aria-label="validation issues on this name"
-            >
-              ${renderIcon("triangle-alert", 14)}
-            </button>`
+          ? (() => {
+              // Use the shared validationSeverityBadge so the color
+              // + icon + tooltip match what pickers render for the
+              // same record. n.max_severity comes from the server's
+              // batched issue-summary query; falls back to "warn"
+              // in normalizeSeverity when absent.
+              const badge = validationSeverityBadge(
+                n.issue_count || 0,
+                n.max_severity,
+                "name-issue",
+              );
+              return html`<button
+                class=${"icon-btn subtle warn variant-" + badge.variant}
+                @click=${(e) => this._onNomenRowIssues(e, n)}
+                title=${badge.tooltip}
+                aria-label=${badge.tooltip}
+              >
+                ${renderIcon(badge.icon, 14)}
+              </button>`;
+            })()
           : ""}
         <button
           class="icon-btn subtle"
@@ -6246,377 +7824,19 @@ class SfgaDetail extends LitElement {
   _onNomenRowEdit(e, n) {
     e.stopPropagation();
     if (!n.name_id) return;
-    // Pass the synonym context (id + current accepted-taxon id) so the
-    // modal can render an accepted-taxon combobox for the "fix the
-    // mis-linked synonym" flow. If the row has no synonym_id (rare
-    // for a Nomen History row but possible on the accepted-name row
-    // if we ever surface actions there), the modal falls back to a
-    // name-only editor.
-    this._openNameEditor(n.name_id, {
-      synonymID: n.synonym_id || "",
-      currentTaxonID: this.taxonId || "",
-    });
-  }
-
-  // _openNameEditor loads the name row and opens the editor modal.
-  // Two-phase: "loading" while api.name.get is in-flight, then
-  // "edit" once the row is hydrated. Draft starts empty — the
-  // form's field values fall through to `original` until the curator
-  // touches something; only fields the curator actually changed go
-  // into the PATCH body.
-  //
-  // `ctx` (optional) carries synonym context so the modal can render
-  // the accepted-taxon combobox for the move-synonym flow:
-  //   { synonymID, currentTaxonID }
-  async _openNameEditor(id, ctx = {}) {
-    this._nameEditor = {
-      phase: "loading",
-      id,
-      synonymID: ctx.synonymID || "",
-      currentTaxonID: ctx.currentTaxonID || "",
-      newTaxonID: ctx.currentTaxonID || "",
-      original: null,
-      draft: {},
-      etag: "",
-      issues: [],
-      busy: false,
-      error: "",
-    };
-    try {
-      // Fetch the name row + any open validation issues on it in
-      // parallel. Issues render as a banner at the top of the modal
-      // so the curator sees the problem before editing — same shape
-      // as _renderPendingWarnings. Issue-fetch failure is silent (the
-      // banner just won't render) so a transient issue-endpoint hiccup
-      // doesn't block editing.
-      const [name, issueResp] = await Promise.all([
-        api.name.get(id),
-        api.issue
-          .list({ table: "name", record_id: id, limit: 100 })
-          .catch(() => ({ items: [] })),
-      ]);
-      if (!this._nameEditor || this._nameEditor.id !== id) return;
-      this._nameEditor = {
-        ...this._nameEditor,
-        phase: "edit",
-        original: name,
-        etag: name.__etag || "",
-        issues: issueResp.items || [],
-      };
-    } catch (err) {
-      if (!this._nameEditor || this._nameEditor.id !== id) return;
-      this._nameEditor = {
-        ...this._nameEditor,
-        phase: "edit",
-        error:
-          err instanceof Problem
-            ? `${err.title}: ${err.detail || err.message}`
-            : String(err),
-      };
-    }
-  }
-
-  _cancelNameEditor() {
-    this._nameEditor = null;
-  }
-
-  _nameEditorFieldChange(field, value) {
-    if (!this._nameEditor) return;
-    this._nameEditor = {
-      ...this._nameEditor,
-      draft: { ...this._nameEditor.draft, [field]: value },
-    };
-  }
-
-  _nameEditorValue(field) {
-    const ed = this._nameEditor;
-    if (!ed) return "";
-    if (Object.hasOwn(ed.draft, field)) return ed.draft[field];
-    return ed.original?.[field] ?? "";
-  }
-
-  async _submitNameEditor() {
-    const ed = this._nameEditor;
-    if (!ed || !ed.original) return;
-    const patch = { ...ed.draft };
-    const nameChanged = Object.keys(patch).length > 0;
-    const taxonChanged =
-      ed.synonymID &&
-      ed.newTaxonID &&
-      ed.newTaxonID !== ed.currentTaxonID;
-    if (!nameChanged && !taxonChanged) {
-      this._nameEditor = null;
-      return;
-    }
-    this._nameEditor = { ...ed, busy: true, error: "" };
-    try {
-      // Move first, then name-patch. Order chosen so the curator's
-      // subsequent nav decision (below) is based on the completed
-      // move state; a name-patch failure after a successful move
-      // still leaves the synonym at the intended taxon.
-      if (taxonChanged) {
-        await api.synonym.move(ed.synonymID, ed.newTaxonID);
-      }
-      if (nameChanged) {
-        await api.name.patch(ed.id, patch, ed.etag);
-      }
-      const moved = taxonChanged;
-      const newTaxon = ed.newTaxonID;
-      this._nameEditor = null;
-      if (moved) {
-        // The synonym is no longer attached to the taxon the curator
-        // was viewing — jump to the new accepted taxon so the moved
-        // synonym is still in view.
-        this.dispatchEvent(
-          new CustomEvent("taxon-moved", {
-            detail: { id: newTaxon },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      } else {
-        // Name changed only — refetch the section so the label updates
-        // in place.
-        await this._refreshNomenHistory();
-      }
-    } catch (err) {
-      this._nameEditor = {
-        ...this._nameEditor,
-        busy: false,
-        error:
-          err instanceof Problem
-            ? `${err.title}: ${err.detail || err.message}`
-            : String(err),
-      };
-    }
-  }
-
-  _renderNameEditorModal() {
-    const ed = this._nameEditor;
-    if (!ed) return "";
-    if (ed.phase === "loading") {
-      return html`
-        <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
-          <div
-            class="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="name-editor-loading"
-          >
-            <h3 id="name-editor-loading">Edit name</h3>
-            <p role="status">Loading name…</p>
-          </div>
-        </div>
-      `;
-    }
-    const set = (field) => (e) =>
-      this._nameEditorFieldChange(field, e.target.value);
-    const referenceID = this._nameEditorValue("reference_id");
-    // Dynamic label / hint for the reference field. The name-model
-    // reference is single-valued and is meant to be the nomenclatural
-    // act — the paper where this specific name (or subsequent
-    // combination) was established. Prefix Original / Subsequent from
-    // the authorship's parenthetical shape so curators authoring a
-    // recomb see the right guidance without having to guess.
-    // Build a draft-shaped object from the editor state so
-    // nomActFieldLabel sees the effective values (draft override on
-    // top of the loaded original).
-    const draftView = {
-      authorship: this._nameEditorValue("authorship"),
-      basionym_authorship: this._nameEditorValue("basionym_authorship"),
-      basionym_authorship_year: this._nameEditorValue(
-        "basionym_authorship_year",
-      ),
-      combination_authorship: this._nameEditorValue("combination_authorship"),
-      combination_authorship_year: this._nameEditorValue(
-        "combination_authorship_year",
-      ),
-    };
-    const nomActLabel = nomActFieldLabel(draftView);
-    return html`
-      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
-        <div
-          class="modal name-editor"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="name-editor-heading"
-          @keydown=${(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              this._cancelNameEditor();
-            }
-          }}
-        >
-          <div class="modal-header">
-            <h3 id="name-editor-heading">
-              ${ed.synonymID ? "Edit synonym" : "Edit name"}
-            </h3>
-            <button
-              class="close-x"
-              type="button"
-              @click=${() => this._cancelNameEditor()}
-              title="close"
-              aria-label="close"
-            >
-              ×
-            </button>
-          </div>
-          ${ed.issues && ed.issues.length > 0
-            ? html`
-                <div class="warning-banner">
-                  <strong>
-                    ${ed.issues.length} open
-                    issue${ed.issues.length > 1 ? "s" : ""} on this name:
-                  </strong>
-                  <ul>
-                    ${ed.issues.map(
-                      (i) => html`<li>
-                        ${severityChip(i.severity)}
-                        <span>
-                          <span class="warning-rule"
-                            >${i.rule_name || i.rule_id}</span
-                          >:
-                          ${i.message}
-                          ${i.field_name
-                            ? html` <span class="warning-rule"
-                                >(${i.field_name})</span
-                              >`
-                            : ""}
-                        </span>
-                      </li>`,
-                    )}
-                  </ul>
-                </div>
-              `
-            : ""}
-          ${ed.error
-            ? html`<div class="error" role="alert">${ed.error}</div>`
-            : ""}
-          <form
-            class="name-editor-form"
-            @submit=${(e) => {
-              e.preventDefault();
-              this._submitNameEditor();
-            }}
-          >
-            ${ed.synonymID
-              ? html`
-                  <label>Accepted taxon</label>
-                  <sfga-combobox
-                    min-search-chars="2"
-                    placeholder="Search taxa…"
-                    .source=${taxonSource}
-                    .resolver=${taxonResolver}
-                    .value=${ed.newTaxonID}
-                    @pick=${(e) =>
-                      (this._nameEditor = {
-                        ...this._nameEditor,
-                        newTaxonID: e.detail.id || "",
-                      })}
-                  ></sfga-combobox>
-                `
-              : ""}
-
-            <label for="ne-sci">Scientific name</label>
-            <input
-              id="ne-sci"
-              type="text"
-              .value=${this._nameEditorValue("scientific_name")}
-              @input=${set("scientific_name")}
-              autofocus
-            />
-
-            <label for="ne-auth">Authorship</label>
-            <input
-              id="ne-auth"
-              type="text"
-              .value=${this._nameEditorValue("authorship")}
-              @input=${set("authorship")}
-            />
-
-            <label>Rank</label>
-            <sfga-combobox
-              min-search-chars="0"
-              placeholder="Rank…"
-              .source=${vocabSource("rank")}
-              .resolver=${vocabResolver("rank")}
-              .value=${this._nameEditorValue("rank")}
-              @pick=${(e) =>
-                this._nameEditorFieldChange("rank", e.detail.id)}
-            ></sfga-combobox>
-
-            <label>Code</label>
-            <sfga-combobox
-              min-search-chars="0"
-              placeholder="Nomenclatural code…"
-              .source=${vocabSource("nom_code")}
-              .resolver=${vocabResolver("nom_code")}
-              .value=${this._nameEditorValue("code")}
-              @pick=${(e) =>
-                this._nameEditorFieldChange("code", e.detail.id)}
-            ></sfga-combobox>
-
-            <label>${nomActLabel}</label>
-            <sfga-combobox
-              min-search-chars="2"
-              placeholder="Search author / title / citation / DOI…"
-              .source=${referenceSource}
-              .resolver=${referenceResolver}
-              .value=${referenceID}
-              .actions=${[
-                {
-                  label: "Add new reference",
-                  icon: "plus",
-                  handler: () => (this._addingReferenceFor = "nameEditor"),
-                },
-              ]}
-              @pick=${(e) =>
-                this._nameEditorFieldChange("reference_id", e.detail.id)}
-            ></sfga-combobox>
-
-            <label for="ne-year">Published year</label>
-            <input
-              id="ne-year"
-              type="text"
-              placeholder="YYYY"
-              .value=${this._nameEditorValue("published_in_year")}
-              @input=${set("published_in_year")}
-            />
-
-            <label for="ne-remarks">Remarks</label>
-            <textarea
-              id="ne-remarks"
-              rows="2"
-              .value=${this._nameEditorValue("remarks")}
-              @input=${set("remarks")}
-            ></textarea>
-
-            <div class="toolbar">
-              <button
-                type="button"
-                @click=${() => this._cancelNameEditor()}
-                ?disabled=${ed.busy}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                class="primary"
-                ?disabled=${ed.busy || !ed.original}
-              >
-                ${ed.busy ? "Saving…" : "Save changes"}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    `;
+    // Routes through _openEditSynonym so the pencil opens the same
+    // unified form as the taxon-edit pencil — one form shape for
+    // both accepted-name and synonym-name editing. Falls through to
+    // a name-only edit when the row has no synonym_id (legacy
+    // archives where synonym.col__id wasn't set); the accepted-taxon
+    // picker just renders empty in that case, harmless.
+    this._openEditSynonym(n.name_id, n.synonym_id || "", this.taxonId || "");
   }
 
   _onNomenRowIssues(e, n) {
-    // Same target as the pencil — the editor modal fetches and
-    // renders open issues at the top, so opening it "on the issues"
-    // is just opening it.
+    // Same target as the pencil — the unified edit form fetches and
+    // renders open issues at the top of the pane, so opening it "on
+    // the issues" is just opening it.
     this._onNomenRowEdit(e, n);
   }
 
@@ -6936,14 +8156,22 @@ class SfgaDetail extends LitElement {
         <td class="actions">
           <span class="row-actions">
             ${(v.issue_count || 0) > 0
-              ? html`<button
-                  class="icon-btn subtle warn"
-                  @click=${() => this._openVernacularEdit(v)}
-                  title="open editor at validation issues"
-                  aria-label="validation issues on this vernacular"
-                >
-                  ${renderIcon("triangle-alert", 14)}
-                </button>`
+              ? (() => {
+                  const badge = validationSeverityBadge(
+                    v.issue_count || 0,
+                    v.max_severity,
+                    "vernacular-issue",
+                    { tooltip: "open editor at validation issues" },
+                  );
+                  return html`<button
+                    class=${"icon-btn subtle warn variant-" + badge.variant}
+                    @click=${() => this._openVernacularEdit(v)}
+                    title=${badge.tooltip}
+                    aria-label="validation issues on this vernacular"
+                  >
+                    ${renderIcon(badge.icon, 14)}
+                  </button>`;
+                })()
               : ""}
             <button
               class="icon-btn subtle"
@@ -7341,14 +8569,22 @@ class SfgaDetail extends LitElement {
         <td class="actions">
           <span class="row-actions">
             ${(d.issue_count || 0) > 0
-              ? html`<button
-                  class="icon-btn subtle warn"
-                  @click=${() => this._openDistributionEdit(d)}
-                  title="open editor at validation issues"
-                  aria-label="validation issues on this distribution"
-                >
-                  ${renderIcon("triangle-alert", 14)}
-                </button>`
+              ? (() => {
+                  const badge = validationSeverityBadge(
+                    d.issue_count || 0,
+                    d.max_severity,
+                    "distribution-issue",
+                    { tooltip: "open editor at validation issues" },
+                  );
+                  return html`<button
+                    class=${"icon-btn subtle warn variant-" + badge.variant}
+                    @click=${() => this._openDistributionEdit(d)}
+                    title=${badge.tooltip}
+                    aria-label="validation issues on this distribution"
+                  >
+                    ${renderIcon(badge.icon, 14)}
+                  </button>`;
+                })()
               : ""}
             <button
               class="icon-btn subtle"
@@ -7684,14 +8920,23 @@ class SfgaAddReferenceModal extends LitElement {
     contextAuthors: { attribute: false },
     contextYear: { attribute: false },
     // defaultTab lets the caller land the modal on a specific tab.
-    // Values: "project" | "bhlnames" | "doi" | "bibtex". Callers with
-    // a name context (curator most likely adding the protologue paper)
-    // typically want "project"; non-name contexts (vernacular,
-    // distribution, section-level References) prefer "doi" since the
-    // curator usually has a paper reference in hand. See DESIGN.md
+    // Values: "project" | "bhlnames" | "doi" | "bibtex" | "manual".
+    // Callers with a name context (curator most likely adding the
+    // protologue paper) typically want "project"; non-name contexts
+    // (vernacular, distribution, section-level References) prefer
+    // "doi" since the curator usually has a paper reference in hand.
+    // Edit-mode (editID set) defaults to "manual". See DESIGN.md
     // § Reference-picker on every data-entry form.
     defaultTab: { attribute: false },
-    _tab: { state: true }, // 0..3
+    // editID, when non-empty, opens the modal in edit mode: loads the
+    // existing reference, defaults to the Manual tab, hydrates the
+    // form with the loaded values, and PATCHes on save instead of
+    // POST-creating a new row. Curator can still switch to any other
+    // tab, though (for now) the metadata-lookup tabs in edit mode
+    // still POST-create rather than PATCH-replace — Slice 2 wires
+    // those. See REFERENCE_PDF_PLAN.md.
+    editID: { attribute: false },
+    _tab: { state: true }, // 0..4
     // Tab 0 (project) — inline DOI preview when the local search
     // finds nothing and the query looks like a DOI. Shows a save-
     // and-pick affordance so the curator doesn't need to switch tabs.
@@ -7712,6 +8957,21 @@ class SfgaAddReferenceModal extends LitElement {
     _bibtexInput: { state: true },
     // Preview (shared by tabs 1/2/3 once a candidate resolves).
     _preview: { state: true },
+    // Tab 4 (Manual). _manual holds the form draft object shaped like
+    // apiReference; edit mode hydrates it from the loaded reference,
+    // add mode starts empty. _manualOriginal is the loaded reference
+    // in edit mode (used for If-Match etag). _manualBusy/_manualError
+    // track the save round-trip.
+    _manual: { state: true },
+    _manualOriginal: { state: true },
+    _manualBusy: { state: true },
+    _manualError: { state: true },
+    // Persisted validation issues on the reference being edited.
+    // Fetched alongside the reference in edit mode; rendered in a
+    // banner between the modal header and the tab row so issues
+    // stay visible while the curator switches tabs looking for the
+    // right fix path. Empty in add mode.
+    _issues: { state: true },
   };
 
   static styles = [
@@ -7739,6 +8999,37 @@ class SfgaAddReferenceModal extends LitElement {
         display: grid;
         gap: var(--sp-2);
         font-family: var(--font-body);
+      }
+      /* Manual-tab form: two-column label+input grid, similar shape
+         to the taxon edit form. Grid-column: 1 / -1 on textareas +
+         the toolbar so they span the full width. */
+      .manual-ref-form {
+        display: grid;
+        grid-template-columns: minmax(0, 10rem) minmax(0, 1fr);
+        gap: var(--sp-1) var(--sp-2);
+        align-items: center;
+        min-width: 0;
+      }
+      .manual-ref-form label {
+        text-align: right;
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .manual-ref-form input[type="text"],
+      .manual-ref-form textarea {
+        color: var(--fg);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-1) var(--sp-2);
+        font: inherit;
+        font-size: var(--fs-md);
+        width: 100%;
+        box-sizing: border-box;
+        min-width: 0;
+      }
+      .manual-ref-form textarea {
+        min-height: 3rem;
       }
       h3 {
         margin: 0;
@@ -7869,6 +9160,7 @@ class SfgaAddReferenceModal extends LitElement {
     this.contextAuthors = "";
     this.contextYear = 0;
     this.defaultTab = "project";
+    this.editID = "";
     this._tab = 0;
     this._busy = false;
     this._error = "";
@@ -7882,13 +9174,37 @@ class SfgaAddReferenceModal extends LitElement {
     this._doiInput = "";
     this._bibtexInput = "";
     this._preview = null;
+    this._manual = null;
+    this._manualOriginal = null;
+    this._manualBusy = false;
+    this._manualError = "";
+    this._issues = [];
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    // Land on the caller-requested tab (name-editor callers keep the
-    // project search default; non-name contexts prefer DOI).
-    this._tab = SfgaAddReferenceModal._tabIndex(this.defaultTab);
+  async _loadForEdit(id) {
+    this._manualBusy = true;
+    try {
+      const [ref, issueResp] = await Promise.all([
+        api.reference.get(id),
+        api.issue
+          .list({ table: "reference", record_id: id, limit: 100 })
+          .catch(() => ({ items: [] })),
+      ]);
+      // Guard: modal may have been closed / reopened on a different
+      // id while the fetch was in flight.
+      if (this.editID !== id) return;
+      this._manualOriginal = ref;
+      this._manual = manualFromReference(ref);
+      this._issues = issueResp.items || [];
+    } catch (err) {
+      if (this.editID !== id) return;
+      this._manualError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._manualBusy = false;
+    }
   }
 
   static _tabIndex(name) {
@@ -7899,6 +9215,8 @@ class SfgaAddReferenceModal extends LitElement {
         return 2;
       case "bibtex":
         return 3;
+      case "manual":
+        return 4;
       default:
         return 0;
     }
@@ -7929,6 +9247,23 @@ class SfgaAddReferenceModal extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // Edit-mode init: land on Manual so the curator sees loaded
+    // fields immediately, kick off the record + issues fetch.
+    // Non-edit mode: use the caller-supplied defaultTab.
+    //
+    // _manual is initialized synchronously with an empty template so
+    // any curator interaction before _loadForEdit resolves produces
+    // a complete field set (partial state → other inputs render
+    // undefined → literal "undefined" text — the bug this init
+    // prevents). _loadForEdit overwrites with the hydrated record
+    // when the fetch lands.
+    this._manual = emptyManualReference();
+    if (this.editID) {
+      this._tab = SfgaAddReferenceModal._tabIndex("manual");
+      this._loadForEdit(this.editID);
+    } else {
+      this._tab = SfgaAddReferenceModal._tabIndex(this.defaultTab);
+    }
     // Escape dismisses via the same guarded path as the × button and
     // the footer close, so a stray key doesn't discard a fetched
     // preview or a long BibTeX paste.
@@ -8013,7 +9348,9 @@ class SfgaAddReferenceModal extends LitElement {
           aria-labelledby="add-ref-title"
         >
           <div class="modal-header">
-            <h3 id="add-ref-title">Add reference</h3>
+            <h3 id="add-ref-title">
+              ${this.editID ? "Edit reference" : "Add reference"}
+            </h3>
             <button
               class="close-x"
               type="button"
@@ -8024,6 +9361,7 @@ class SfgaAddReferenceModal extends LitElement {
               ×
             </button>
           </div>
+          ${this._renderIssuesBanner()}
           <div class="tabs" role="tablist">
             <button role="tab" aria-selected=${this._tab === 0} @click=${() => this._selectTab(0)}>
               Project
@@ -8037,14 +9375,32 @@ class SfgaAddReferenceModal extends LitElement {
             <button role="tab" aria-selected=${this._tab === 3} @click=${() => this._selectTab(3)}>
               BibTeX
             </button>
+            <button role="tab" aria-selected=${this._tab === 4} @click=${() => this._selectTab(4)}>
+              Manual
+            </button>
           </div>
           <div class="pane">
             ${this._tab === 0 ? this._renderProjectPane() : ""}
             ${this._tab === 1 ? this._renderBHLnamesPane() : ""}
             ${this._tab === 2 ? this._renderDOIPane() : ""}
             ${this._tab === 3 ? this._renderBibTeXPane() : ""}
+            ${this._tab === 4 ? this._renderManualPane() : ""}
           </div>
           <div class="toolbar">
+            ${this._tab === 4
+              ? html`<button
+                    type="button"
+                    class="primary"
+                    ?disabled=${this._manualBusy}
+                    @click=${() => this._saveManual()}
+                  >
+                    ${this._manualBusy
+                      ? "Saving…"
+                      : this.editID
+                        ? "Save"
+                        : "Add & pick"}
+                  </button>`
+              : ""}
             <button @click=${() => this._requestClose()}>Close</button>
           </div>
         </div>
@@ -8387,6 +9743,262 @@ class SfgaAddReferenceModal extends LitElement {
       this._busy = false;
     }
   }
+
+  // ---------- Tab 4: Manual ----------
+  //
+  // Full-fidelity apiReference form grouped by section. Type picker
+  // at top drives per-type field emphasis (advisory only — nothing
+  // hides). In edit mode, hydrates from the loaded reference and
+  // PATCHes on save; in add mode, POSTs a fresh reference and picks
+  // it (same as the other tabs).
+  //
+  // Rationale for a Manual tab even when Project/DOI/BibTeX exist:
+  // curators sometimes have citation info that doesn't fit any of
+  // the structured-lookup paths (unpublished works, private
+  // communications, historical monographs BHL doesn't cover, papers
+  // without DOIs). The other tabs solve the "find and import"
+  // problem; Manual solves the "type it in" problem.
+  _renderManualPane() {
+    const d = this._manual || emptyManualReference();
+    const set = (field) => (e) => this._manualFieldChange(field, e.target.value);
+    if (this._manualBusy && !this._manualOriginal && this.editID) {
+      return html`<p role="status" class="empty">Loading reference…</p>`;
+    }
+    return html`
+      ${this._manualError
+        ? html`<div class="error" role="alert">${this._manualError}</div>`
+        : ""}
+      <form
+        class="manual-ref-form"
+        @submit=${(e) => {
+          e.preventDefault();
+          this._saveManual();
+        }}
+      >
+        <!--
+          Free-text citation goes first — most badge-click open flows
+          land on this tab with a citation already recorded (from a
+          legacy CoL import, say). Putting it up top gives the
+          curator a legible summary of what the record currently
+          says before they start filling in structured fields below.
+          The structured fields (Type / Author / Issued / …) follow;
+          those are the fields the citation-pick backfill and
+          validation rules actually read.
+        -->
+        <label>Citation</label>
+        <input
+          type="text"
+          placeholder="Free-text citation (auto-composed when empty)"
+          .value=${d.citation}
+          @input=${set("citation")}
+        />
+
+        <label>Type</label>
+        <sfga-combobox
+          min-search-chars="0"
+          placeholder="Reference type…"
+          .source=${vocabSource("reference_type")}
+          .resolver=${vocabResolver("reference_type")}
+          .value=${d.type || ""}
+          @pick=${(e) => this._manualFieldChange("type", e.detail.id)}
+        ></sfga-combobox>
+
+        <label>Author</label>
+        <input
+          type="text"
+          placeholder="Surname, Initials; Surname, Initials"
+          .value=${d.author}
+          @input=${set("author")}
+        />
+
+        <label>Editor</label>
+        <input type="text" .value=${d.editor} @input=${set("editor")} />
+
+        <label>Issued</label>
+        <input
+          type="text"
+          placeholder="YYYY or YYYY-MM-DD"
+          .value=${d.issued}
+          @input=${set("issued")}
+        />
+
+        <label>Title</label>
+        <input type="text" .value=${d.title} @input=${set("title")} />
+
+        <label>Container title</label>
+        <input
+          type="text"
+          placeholder="Journal / book / series title"
+          .value=${d.container_title}
+          @input=${set("container_title")}
+        />
+
+        <label>Container author</label>
+        <input
+          type="text"
+          placeholder="Book editor when this is a chapter"
+          .value=${d.container_author}
+          @input=${set("container_author")}
+        />
+
+        <label>Volume</label>
+        <input type="text" .value=${d.volume} @input=${set("volume")} />
+
+        <label>Issue</label>
+        <input type="text" .value=${d.issue} @input=${set("issue")} />
+
+        <label>Edition</label>
+        <input type="text" .value=${d.edition} @input=${set("edition")} />
+
+        <label>Page</label>
+        <input
+          type="text"
+          placeholder="17-42 or e12345"
+          .value=${d.page}
+          @input=${set("page")}
+        />
+
+        <label>Publisher</label>
+        <input type="text" .value=${d.publisher} @input=${set("publisher")} />
+
+        <label>Publisher place</label>
+        <input
+          type="text"
+          .value=${d.publisher_place}
+          @input=${set("publisher_place")}
+        />
+
+        <label>DOI</label>
+        <input
+          type="text"
+          placeholder="10.xxxx/xxxxx"
+          .value=${d.doi}
+          @input=${set("doi")}
+        />
+
+        <label>ISBN</label>
+        <input type="text" .value=${d.isbn} @input=${set("isbn")} />
+
+        <label>ISSN</label>
+        <input type="text" .value=${d.issn} @input=${set("issn")} />
+
+        <label>Link</label>
+        <input
+          type="text"
+          placeholder="https://…"
+          .value=${d.link}
+          @input=${set("link")}
+        />
+
+        <label>Remarks</label>
+        <textarea
+          .value=${d.remarks}
+          @input=${set("remarks")}
+        ></textarea>
+
+        <!--
+          Hidden submit button so Enter in any field submits the
+          form, but the visible Save button lives in the modal's
+          outer toolbar next to Close (both on one row instead of
+          two stacked toolbars).
+        -->
+        <button type="submit" hidden></button>
+      </form>
+    `;
+  }
+
+  _manualFieldChange(field, value) {
+    // Merge into emptyManualReference when _manual is null so any
+    // in-flight partial state still produces a complete field set —
+    // defensive belt-and-braces alongside the synchronous init in
+    // connectedCallback.
+    const base = this._manual || emptyManualReference();
+    this._manual = { ...base, [field]: value };
+  }
+
+  async _saveManual() {
+    if (!this._manual) return;
+    this._manualBusy = true;
+    this._manualError = "";
+    try {
+      if (this.editID) {
+        // Edit mode: PATCH the existing reference. Only send fields
+        // the curator actually changed (compared against the loaded
+        // original) so we don't clobber untouched fields with empty
+        // strings the form initialized to "".
+        const patch = {};
+        const original = this._manualOriginal || {};
+        for (const [k, v] of Object.entries(this._manual)) {
+          if ((original[k] || "") !== v) patch[k] = v;
+        }
+        if (Object.keys(patch).length === 0) {
+          // No changes — just close.
+          this._close();
+          return;
+        }
+        const etag = this._manualOriginal?.modified || "";
+        await api.reference.patch(this.editID, patch, etag);
+        // Fire the same reference-updated event the quick-fix modal
+        // dispatched — parent's _onReferenceUpdated refreshes picker
+        // badges and re-runs backfill.
+        this.dispatchEvent(
+          new CustomEvent("reference-updated", {
+            detail: { id: this.editID },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        this._close();
+      } else {
+        // Add mode: POST-create + pick, same path as _createAndPick.
+        const body = { ...this._manual, id: "" };
+        const saved = await api.reference.create(body);
+        this._pick(saved.id, referenceHitLabel(saved));
+      }
+    } catch (err) {
+      this._manualError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._manualBusy = false;
+    }
+  }
+
+  // Persistent issues banner between the modal header and the tab
+  // row. Only renders in edit mode when the loaded reference has
+  // open validation issues — curators see the same problem list
+  // regardless of which tab they're on, which matches the "fix
+  // in-context, don't send them elsewhere" principle
+  // (feedback_no_side_quests).
+  _renderIssuesBanner() {
+    const items = this._issues || [];
+    if (items.length === 0) return "";
+    return html`
+      <div class="warning-banner" role="status">
+        <strong>
+          ${items.length} open
+          issue${items.length > 1 ? "s" : ""} on this reference:
+        </strong>
+        <ul>
+          ${items.map(
+            (i) => html`<li>
+              ${severityChip(i.severity)}
+              <span>
+                <span class="warning-rule">${i.rule_name || i.rule_id}</span>:
+                ${i.message}
+                ${i.field_name
+                  ? html` <span class="warning-rule"
+                      >(${i.field_name})</span
+                    >`
+                  : ""}
+              </span>
+            </li>`,
+          )}
+        </ul>
+      </div>
+    `;
+  }
 }
 
 // ---------- <sfga-combobox> ----------
@@ -8444,6 +10056,12 @@ class SfgaCombobox extends LitElement {
     _open: { state: true },
     _loading: { state: true },
     _hover: { state: true },
+    // Warning badge attached to the currently-picked/resolved value.
+    // Shape: {icon, tooltip, kind} where kind is passed through in
+    // the badge-click event so the parent can route (e.g. open the
+    // reference-quick-fix modal for kind="reference-issue"). null =
+    // no badge for the current value. See feedback_no_side_quests.
+    _valueBadge: { state: true },
   };
 
   static styles = css`
@@ -8495,6 +10113,147 @@ class SfgaCombobox extends LitElement {
     }
     button.clear:hover {
       color: var(--fg);
+    }
+    /* Value badge — small icon rendered inside the input alongside
+       the picked value. Two variants: warn (open validation issue)
+       and info (view/edit-anyway affordance for clean references).
+       Both open the same fix modal on click. Always-present when
+       the source/resolver attaches a badge — the picker never looks
+       non-interactive for a resolved value (see feedback_no_side_quests). */
+    button.value-badge {
+      position: absolute;
+      right: 1.9rem;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: 0;
+      padding: 0 var(--sp-1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      cursor: pointer;
+    }
+    /* Severity variants: validation-issue badge colored by the
+       highest severity present on the record. Shared with .row-badge
+       below so every surface (in-input + dropdown row) uses the
+       same signal-per-color mapping. See validationSeverityBadge. */
+    button.value-badge.variant-sev-error {
+      color: var(--sev-error);
+    }
+    button.value-badge.variant-sev-error:hover {
+      color: color-mix(in oklab, var(--sev-error) 70%, var(--fg));
+    }
+    button.value-badge.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    button.value-badge.variant-sev-warn:hover {
+      color: color-mix(in oklab, var(--sev-warn) 70%, var(--fg));
+    }
+    button.value-badge.variant-sev-info {
+      color: var(--sev-info);
+    }
+    button.value-badge.variant-sev-info:hover {
+      color: color-mix(in oklab, var(--sev-info) 70%, var(--fg));
+    }
+    button.value-badge.variant-sev-debug {
+      color: var(--dim);
+    }
+    button.value-badge.variant-sev-debug:hover {
+      color: var(--fg);
+    }
+    /* Non-severity affordances: book (view/edit) + solid (gold star). */
+    button.value-badge.variant-info {
+      color: var(--dim);
+    }
+    button.value-badge.variant-info:hover {
+      color: var(--fg);
+    }
+    /* Gold star: reference has structured metadata AND a source
+       document ready in the sidecar. Filled + gold to read at a
+       glance as "you've upgraded this reference all the way".
+       Star svg is a polygon; the svg selector below fills it via
+       fill: currentColor. */
+    button.value-badge.variant-solid {
+      color: #d4a017;
+    }
+    button.value-badge.variant-solid svg {
+      fill: currentColor;
+      stroke: none;
+    }
+    button.value-badge.variant-solid:hover {
+      color: #b58712;
+    }
+    /* Adjust input padding when a value-badge is present so text
+       doesn't slide under it. */
+    .wrap.has-value-badge input {
+      padding-right: 3.4rem;
+    }
+    /* Per-result badge in the dropdown — rendered inline at the
+       right end of the row. Two variants match the value-badge:
+       warn (open issue) and info (view/edit affordance). */
+    .results li .row-badge {
+      background: transparent;
+      border: 0;
+      padding: 0 0 0 var(--sp-1);
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    /* Severity variants mirror the value-badge above. */
+    .results li .row-badge.variant-sev-error {
+      color: var(--sev-error);
+    }
+    .results li.hover .row-badge.variant-sev-error {
+      color: color-mix(in oklab, var(--sev-error) 60%, var(--accent-fg));
+    }
+    .results li .row-badge.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    .results li.hover .row-badge.variant-sev-warn {
+      color: color-mix(in oklab, var(--sev-warn) 60%, var(--accent-fg));
+    }
+    .results li .row-badge.variant-sev-info {
+      color: var(--sev-info);
+    }
+    .results li.hover .row-badge.variant-sev-info {
+      color: color-mix(in oklab, var(--sev-info) 60%, var(--accent-fg));
+    }
+    .results li .row-badge.variant-sev-debug {
+      color: var(--dim);
+    }
+    .results li.hover .row-badge.variant-sev-debug {
+      color: var(--accent-fg);
+    }
+    /* Non-severity affordances. */
+    .results li .row-badge.variant-info {
+      color: var(--dim);
+    }
+    .results li.hover .row-badge.variant-info {
+      color: var(--accent-fg);
+    }
+    /* Gold star per-result — same fill treatment as the value-badge. */
+    .results li .row-badge.variant-solid {
+      color: #d4a017;
+    }
+    .results li .row-badge.variant-solid svg {
+      fill: currentColor;
+      stroke: none;
+    }
+    .results li.hover .row-badge.variant-solid {
+      color: var(--accent-fg);
+    }
+    .results li.hover .row-badge.variant-solid svg {
+      fill: currentColor;
+    }
+    /* Row layout tweak so the badge floats right of the primary
+       text via margin-left: auto. */
+    .results li.result {
+      display: flex;
+      align-items: baseline;
+      gap: var(--sp-1);
     }
     .results {
       position: absolute;
@@ -8677,6 +10436,7 @@ class SfgaCombobox extends LitElement {
     this._lastQuery = null;
     this._focused = false;
     this._resolvingFor = ""; // id we're currently resolving to avoid duplicate work
+    this._valueBadge = null;
   }
 
   async updated(changed) {
@@ -8684,33 +10444,104 @@ class SfgaCombobox extends LitElement {
     if (changed.has("valueName") && !this._focused) {
       this._input = this.valueName || "";
     }
-    // If value is set but no valueName, ask the resolver to fill it in.
+    // If value is set, ask the resolver to fill in the display and
+    // any attached badge. Runs on every value change — even when the
+    // parent pre-populates valueName as a display optimization —
+    // because the resolver is now the only path that hydrates the
+    // value badge (e.g., reference "book / warning / gold star").
+    // Pickers whose resolver returns just a string (rank, taxon,
+    // name, vocab) get a redundant fetch on value-change, which is
+    // an acceptable trade for consistent badge state.
     if (
       changed.has("value") &&
       this.value &&
-      !this.valueName &&
       this.resolver &&
       this._resolvingFor !== this.value
     ) {
       this._resolvingFor = this.value;
       try {
-        const name = await this.resolver(this.value);
+        const resolved = await this.resolver(this.value);
         // Race guard: value may have changed while we were fetching.
         if (this._resolvingFor === this.value) {
-          this.valueName = name || "";
+          // Resolver may return a plain string (display name) or an
+          // object {name, badge}. Object form lets the resolver carry
+          // a warning badge (e.g. reference has open issues) that
+          // renders inside the picker + emits a badge-click event.
+          if (resolved && typeof resolved === "object") {
+            this.valueName = resolved.name || "";
+            this._valueBadge = resolved.badge || null;
+          } else {
+            this.valueName = resolved || "";
+            this._valueBadge = null;
+          }
           if (!this._focused) this._input = this.valueName;
         }
       } catch (_) {
         if (this._resolvingFor === this.value) {
           this.valueName = "(lookup failed)";
           if (!this._focused) this._input = this.valueName;
+          // Clear _resolvingFor so a subsequent focus (or value
+          // change back to this same id) re-attempts the fetch.
+          // Otherwise a transient failure (server restart, connection
+          // blip) leaves the picker permanently showing "(lookup
+          // failed)" for the current session.
+          this._resolvingFor = "";
         }
       }
     }
   }
 
+  // refresh is the public API for parents to force the picker to
+  // re-resolve its current value — used after the parent updates
+  // the underlying record (e.g., reference-quick-fix modal saves).
+  // Clears the resolver cache + valueName + valueBadge so the
+  // updated() branch re-runs the resolver and fresh state lands
+  // in the picker. No-op when no value is set.
+  refresh() {
+    if (!this.value || !this.resolver) return;
+    this._resolvingFor = "";
+    this._valueBadge = null;
+    // Clearing valueName to "" triggers the updated() re-resolve
+    // path because both valueName and value changes are tracked.
+    // The visible input keeps its text (this._input) until the
+    // resolver returns, avoiding a flash of empty content.
+    this.valueName = "";
+  }
+
+  async _retryResolveIfStuck() {
+    // Retry the resolver when the picker is in a stuck "value set,
+    // no display name" state (typically after a transient failure).
+    // Called from _onFocus so any curator interaction with the picker
+    // triggers a fresh attempt without needing a page reload.
+    if (
+      !this.value ||
+      this.valueName ||
+      !this.resolver ||
+      this._resolvingFor === this.value
+    ) {
+      return;
+    }
+    this._resolvingFor = this.value;
+    try {
+      const resolved = await this.resolver(this.value);
+      if (this._resolvingFor === this.value) {
+        if (resolved && typeof resolved === "object") {
+          this.valueName = resolved.name || "";
+          this._valueBadge = resolved.badge || null;
+        } else {
+          this.valueName = resolved || "";
+          this._valueBadge = null;
+        }
+        if (!this._focused) this._input = this.valueName;
+      }
+    } catch (_) {
+      this._resolvingFor = "";
+    }
+  }
+
   _onFocus() {
     this._focused = true;
+    this._retryResolveIfStuck();
     // Open the dropdown on focus in four cases:
     //   1. Empty input + minSearchChars=0 (vocab picker; show all).
     //   2. Pinned actions exist (curator should see "Add new …"
@@ -8926,11 +10757,35 @@ class SfgaCombobox extends LitElement {
     this.value = item.id;
     this.valueName = item.name;
     this._input = item.name;
+    // Carry the item's badge through so the in-input display shows
+    // the same warning icon that was on the dropdown row. Cleared
+    // when item has no badge (curator picked a clean row).
+    this._valueBadge = item.badge || null;
     this._open = false;
     this._results = [];
     this.dispatchEvent(
       new CustomEvent("pick", {
         detail: { id: item.id, name: item.name, item },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  // _onBadgeClick emits a badge-click event carrying the item id and
+  // the badge object. Parent decides what to do (typically open a
+  // fix modal). Called from both the in-input badge and per-row
+  // badges in the dropdown. Stops propagation so it doesn't also
+  // fire pick / clear / focus behaviors.
+  _onBadgeClick(e, id, badge) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!badge) return;
+    this.dispatchEvent(
+      new CustomEvent("badge-click", {
+        detail: { id, badge },
         bubbles: true,
         composed: true,
       }),
@@ -8943,6 +10798,7 @@ class SfgaCombobox extends LitElement {
     if (e) e.preventDefault();
     this.value = "";
     this.valueName = "";
+    this._valueBadge = null;
     this._input = "";
     this._results = [];
     this.dispatchEvent(
@@ -9120,14 +10976,27 @@ class SfgaCombobox extends LitElement {
                   )}
                 </span>`
               : ""}
+            ${r.badge
+              ? html`<button
+                  type="button"
+                  class=${"row-badge variant-" + (r.badge.variant || "warn")}
+                  tabindex="-1"
+                  title=${r.badge.tooltip || "issue on this item"}
+                  aria-label=${r.badge.tooltip || "issue on this item"}
+                  @mousedown=${(e) => this._onBadgeClick(e, r.id, r.badge)}
+                >
+                  ${renderIcon(r.badge.icon || "triangle-alert", 14)}
+                </button>`
+              : ""}
           </li>
         `;
       });
     }
     const dropdown = html`${filterRow}${actionRows}${resultRows}`;
 
+    const hasBadge = !!this._valueBadge;
     return html`
-      <div class="wrap">
+      <div class=${"wrap" + (hasBadge ? " has-value-badge" : "")}>
         <input
           type="text"
           placeholder=${this.placeholder}
@@ -9137,6 +11006,20 @@ class SfgaCombobox extends LitElement {
           @blur=${() => this._onBlur()}
           @keydown=${(e) => this._onKeyDown(e)}
         />
+        ${hasBadge
+          ? html`<button
+              class=${"value-badge variant-" +
+              (this._valueBadge.variant || "warn")}
+              type="button"
+              tabindex="-1"
+              title=${this._valueBadge.tooltip || "issue on this item"}
+              aria-label=${this._valueBadge.tooltip || "issue on this item"}
+              @mousedown=${(e) =>
+                this._onBadgeClick(e, this.value, this._valueBadge)}
+            >
+              ${renderIcon(this._valueBadge.icon || "triangle-alert", 14)}
+            </button>`
+          : ""}
         ${this._input
           ? html`<button
               class="clear"

@@ -89,6 +89,90 @@ func (a *Archive) syncIssuesWithSnapshot(ctx context.Context, table, recordID st
 	return nil
 }
 
+// IssueSummary is the per-record aggregate returned by
+// batchIssueSummaries — the two facts the WUI needs to render a
+// severity-colored validation badge on a picker or list row.
+type IssueSummary struct {
+	// Count is the number of open (not-yet-acknowledged) issues
+	// currently filed against the record.
+	Count int
+	// MaxSeverity is the highest severity present ("error" > "warn"
+	// > "info" > "debug"). Empty string when Count is 0. Drives
+	// the badge color on the WUI side via the shared
+	// validationSeverityBadge helper.
+	MaxSeverity string
+}
+
+// batchIssueSummaries is the shared per-record summary query used by
+// projections that need to surface open-issue badges (reference,
+// name, and any future picker/list). Single indexed lookup on
+// (table_name, record_id, acknowledged_at), grouped per record.
+// Missing ids (records with no open issues) are absent from the map;
+// callers treat absence as {Count: 0, MaxSeverity: ""}.
+//
+// Severity ranking mirrors gsvalidator's domain.Severity ordering:
+// error (3) > warn (2) > info (1) > debug (0). The SQL CASE-WHEN
+// gets the numeric rank per row; MAX gets the per-record highest;
+// the switch below turns it back into the enum string.
+func (a *Archive) batchIssueSummaries(ctx context.Context, table string, ids []string) (map[string]IssueSummary, error) {
+	out := make(map[string]IssueSummary, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	q := `SELECT record_id, COUNT(*),
+			MAX(CASE severity
+				WHEN 'error' THEN 3
+				WHEN 'warn'  THEN 2
+				WHEN 'info'  THEN 1
+				WHEN 'debug' THEN 0
+				ELSE 0
+			END) AS sev_rank
+		FROM __gsvalidator_results
+		WHERE table_name = ?
+		  AND (acknowledged_at IS NULL OR acknowledged_at = '')
+		  AND record_id IN (` + placeholders(len(ids)) + `)
+		GROUP BY record_id`
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, table)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := a.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("core: batch issue summaries for %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id      string
+			count   int
+			sevRank int
+		)
+		if err := rows.Scan(&id, &count, &sevRank); err != nil {
+			return nil, fmt.Errorf("core: scan issue summary: %w", err)
+		}
+		out[id] = IssueSummary{
+			Count:       count,
+			MaxSeverity: severityFromRank(sevRank),
+		}
+	}
+	return out, rows.Err()
+}
+
+func severityFromRank(r int) string {
+	switch r {
+	case 3:
+		return "error"
+	case 2:
+		return "warn"
+	case 1:
+		return "info"
+	case 0:
+		return "debug"
+	}
+	return ""
+}
+
 // deleteRecordIssues removes every __gsvalidator_results row for a
 // record that no longer exists. Runs when the write path marks the
 // record as deleted (see Tx.markNameDeleted / markTaxonDeleted).

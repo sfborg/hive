@@ -128,6 +128,22 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// Check-digit verification for common identifier formats
 	// (orcid, issn, isbn10, isbn13, luhn).
 	registry.Register(validator.NewCheckDigitValidator())
+	// Hive-native: re-parse the name at rule-eval time and flag any
+	// unparsed tail gnparser rejected. Not a generic validator — owns
+	// its own gnparser instance because the registry has no Archive
+	// reference to borrow the shared parser.
+	registry.Register(newParseTailValidator())
+	// Hive-native: soft-warn when the atomized combination_* pair
+	// exactly matches the basionym_* pair on the same row — almost
+	// always a data-entry mistake. See DEFERRED.md → moved-here-now.
+	registry.Register(newCombinationMatchesBasionymValidator())
+	// Hive-native: soft-warn when a reference has a free-text
+	// citation but is missing structured author or issued (year).
+	// Surfaces the data-quality gap that breaks the WUI citation-pick
+	// backfill on CoL-derived data. See feedback_no_side_quests for
+	// the inline-quick-fix UX that resolves flagged rows without a
+	// side quest to the References screen.
+	registry.Register(newReferenceMetadataValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)

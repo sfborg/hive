@@ -66,6 +66,18 @@ type ReferenceHit struct {
 	Title    string
 	Citation string
 	Type     string // reference_type ID (raw enum ID; front-end can pretty-print)
+	// IssueCount is the number of open (not-yet-acknowledged)
+	// validation issues currently filed against this reference row.
+	// Zero → elided from the wire projection (apiReferenceHit uses
+	// omitempty). Populated by scanReferenceHits via a batched
+	// __gsvalidator_results lookup.
+	IssueCount int
+	// MaxSeverity is the highest severity among the record's open
+	// issues ("error" > "warn" > "info" > "debug"). Empty when
+	// IssueCount is 0. Drives the WUI badge color via the shared
+	// validationSeverityBadge helper — same signal appears on every
+	// picker/list rendering this record.
+	MaxSeverity string
 }
 
 // ListReferencesPage returns references with SQL-level LIMIT/OFFSET
@@ -128,6 +140,8 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int) ([]
 // scanReferenceHits runs the given query with args and returns the
 // matching ReferenceHit slice. total is passed through unchanged (the
 // paginated list path fetches it separately; search returns 0).
+// Folds in open-issue counts per hit in a single batched pass —
+// mirrors the vernacular / distribution / nomen-history patterns.
 func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []any, total int) ([]ReferenceHit, int, error) {
 	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -146,6 +160,24 @@ func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []an
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("core: iterate references: %w", err)
 	}
+
+	if len(hits) > 0 {
+		ids := make([]string, len(hits))
+		for i, h := range hits {
+			ids[i] = h.ID
+		}
+		summaries, err := a.batchIssueSummaries(ctx, "reference", ids)
+		if err != nil {
+			return nil, 0, err
+		}
+		for i := range hits {
+			if s, ok := summaries[hits[i].ID]; ok {
+				hits[i].IssueCount = s.Count
+				hits[i].MaxSeverity = s.MaxSeverity
+			}
+		}
+	}
+
 	return hits, total, nil
 }
 

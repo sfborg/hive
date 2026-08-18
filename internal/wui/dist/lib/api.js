@@ -445,6 +445,13 @@ export const api = {
     get: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}`),
     search: (opts) => j("GET", `/api/reference/search${qs(opts)}`),
     create: (body) => j("POST", `/api/reference`, body),
+    patch: (id, patch, ifMatch) =>
+      j(
+        "PATCH",
+        `/api/reference/${encodeURIComponent(id)}`,
+        patch,
+        ifMatch ? { "If-Match": ifMatch } : {},
+      ),
     resolveDOI: (doi) => j("GET", `/api/reference/resolve-doi${qs({ doi })}`),
     lookupBHLnames: (body) => j("POST", `/api/reference/lookup-bhlnames`, body),
     // parseBibTeX sends the raw entry with the vendor MIME type — the

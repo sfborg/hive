@@ -75,6 +75,11 @@ type NomenName struct {
 	// icon on synonym / basionym rows that need attention without a
 	// per-row round trip.
 	IssueCount int
+	// MaxSeverity is the highest severity among the open issues on
+	// this name ("error" > "warn" > "info" > "debug"). Empty when
+	// IssueCount is 0. Drives the WUI badge color via the shared
+	// validationSeverityBadge helper.
+	MaxSeverity string
 }
 
 // NomenclaturalHistory returns the basionym-anchored cluster
@@ -200,12 +205,12 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 		return nil, err
 	}
 
-	// Step 5b: batch issue counts for every name in play. Single
-	// query over __gsvalidator_results returning nameID → count so
-	// the frontend can drape a warn icon on rows that need attention
-	// (see the WUI row-actions block). Cheap — indexed lookup on
-	// table_name + record_id.
-	issueCounts, err := a.batchNomenIssueCounts(ctx, keysOfBool(allNames))
+	// Step 5b: batch issue summaries (count + max severity) for
+	// every name in play. Single query over __gsvalidator_results
+	// so the frontend can drape a severity-colored warn icon on
+	// rows that need attention (see the WUI row-actions block).
+	// Cheap — indexed lookup on table_name + record_id.
+	issueSummaries, err := a.batchIssueSummaries(ctx, "name", keysOfBool(allNames))
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +237,8 @@ func (a *Archive) NomenclaturalHistory(ctx context.Context, taxonID string) (*No
 				BasionymAuthorshipYear:    row.basionymAuthorYear,
 				CombinationAuthorship:     row.combinationAuthor,
 				CombinationAuthorshipYear: row.combinationAuthYear,
-				IssueCount:                issueCounts[id],
+				IssueCount:                issueSummaries[id].Count,
+				MaxSeverity:               issueSummaries[id].MaxSeverity,
 				Label:                     BuildLabel(row.canonical, row.authorship, row.rank, false),
 			}
 			if inv, ok := involved[id]; ok {
@@ -379,39 +385,19 @@ func (a *Archive) batchNomenNameRows(ctx context.Context, ids []string) (map[str
 	return out, rows.Err()
 }
 
-// batchNomenIssueCounts returns nameID → open issue count for every
-// input id. Table filter is table_name='name'; acknowledged issues
-// are excluded (they don't need the warn icon anymore). Ids with no
-// issues are absent from the map (callers treat absence as 0).
+// batchNomenIssueCounts is retained as a thin wrapper for callers
+// that only need the count (no severity). New code should call
+// batchIssueSummaries directly for count + max severity in one pass.
 func (a *Archive) batchNomenIssueCounts(ctx context.Context, ids []string) (map[string]int, error) {
-	out := make(map[string]int, len(ids))
-	if len(ids) == 0 {
-		return out, nil
-	}
-	q := `SELECT record_id, COUNT(*)
-		FROM __gsvalidator_results
-		WHERE table_name = 'name'
-		  AND (acknowledged_at IS NULL OR acknowledged_at = '')
-		  AND record_id IN (` + placeholders(len(ids)) + `)
-		GROUP BY record_id`
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := a.db.QueryContext(ctx, q, args...)
+	summaries, err := a.batchIssueSummaries(ctx, "name", ids)
 	if err != nil {
-		return nil, fmt.Errorf("core: nomen history issue counts: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
-			return nil, fmt.Errorf("core: nomen history scan issue count: %w", err)
-		}
-		out[id] = n
+	out := make(map[string]int, len(summaries))
+	for id, s := range summaries {
+		out[id] = s.Count
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // sortNomenNames orders names within a cluster: basionym first

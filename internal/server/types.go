@@ -359,6 +359,13 @@ type apiName struct {
 	Remarks    string `json:"remarks,omitempty"`
 	Modified   string `json:"modified"`
 	ModifiedBy string `json:"modified_by,omitempty"`
+
+	// Tail is the unparseable trailing text gnparser rejected. Populated
+	// only on the /api/name/parse response — persisted name rows never
+	// carry a tail (gn__* is a cache; tail is re-derivable via re-parse).
+	// Empty for clean parses; front-ends render a soft-warning banner
+	// when non-empty so curators see exactly where the parse gave up.
+	Tail string `json:"tail,omitempty"`
 }
 
 // apiNomenHistory is the wire projection of a taxon's basionym-
@@ -426,6 +433,11 @@ type apiNomenName struct {
 	// flat for the common case; front-ends render a warn icon on
 	// Nomenclatural-history rows when > 0.
 	IssueCount int `json:"issue_count,omitempty"`
+	// MaxSeverity is the highest severity among the row's open
+	// issues ("error" / "warn" / "info" / "debug"). Empty when
+	// IssueCount is 0. Drives the WUI badge color via the shared
+	// validationSeverityBadge helper.
+	MaxSeverity string `json:"max_severity,omitempty"`
 }
 
 // apiVernacular is the wire form of a vernacular-name row on a
@@ -458,6 +470,11 @@ type apiVernacular struct {
 	// not-yet-acknowledged). Zero → elided from JSON. Front-ends
 	// render a warn icon on the row when > 0.
 	IssueCount int `json:"issue_count,omitempty"`
+	// MaxSeverity is the highest severity present among the row's
+	// open issues ("error", "warn", "info", "debug"). Empty when
+	// IssueCount is 0; elided from JSON in that case. Drives the
+	// badge color the WUI paints on the row.
+	MaxSeverity string `json:"max_severity,omitempty"`
 }
 
 // apiVernacularPatch mirrors apiVernacular but keeps every editable
@@ -507,6 +524,11 @@ type apiDistribution struct {
 	// not-yet-acknowledged). Zero → elided from JSON. Front-ends
 	// render a warn icon on the row when > 0.
 	IssueCount int `json:"issue_count,omitempty"`
+	// MaxSeverity is the highest severity present among the row's
+	// open issues ("error", "warn", "info", "debug"). Empty when
+	// IssueCount is 0; elided from JSON in that case. Drives the
+	// badge color the WUI paints on the row.
+	MaxSeverity string `json:"max_severity,omitempty"`
 }
 
 // apiDistributionPatch mirrors apiDistribution as pointer-optional
@@ -605,6 +627,28 @@ type apiReferenceHit struct {
 	Title    string `json:"title,omitempty"`
 	Citation string `json:"citation,omitempty"`
 	Type     string `json:"type,omitempty"`
+	// IssueCount is the number of open validation issues currently
+	// filed against this reference row. Zero → elided from JSON so
+	// the wire shape stays flat; front-ends render a warn badge on
+	// picker results when > 0 and route a click to the reference-
+	// quick-fix modal (feedback_no_side_quests).
+	IssueCount int `json:"issue_count,omitempty"`
+	// MaxSeverity is the highest severity among the record's open
+	// issues ("error" / "warn" / "info" / "debug"). Empty when
+	// IssueCount is 0. Drives the WUI badge color via the shared
+	// validationSeverityBadge helper so every picker/list surface
+	// renders the same signal.
+	MaxSeverity string `json:"max_severity,omitempty"`
+	// HasSourceDoc is true when the reference has an ingested source
+	// document available in the archive's sidecar directory (PDF
+	// → JATS conversion complete, ready for annotation and
+	// AI-assisted extraction — see REFERENCE_PDF_PLAN.md).
+	// Drives the gold-star tier of the reference-picker badge:
+	// structured-metadata + source-attached → curator has fully
+	// upgraded this reference. Elided from JSON (omitempty) so a
+	// legacy row with no source document doesn't clutter the wire
+	// shape. Falsy today until PDF ingest slice lands.
+	HasSourceDoc bool `json:"has_source_doc,omitempty"`
 }
 
 // apiReference is the detail projection for a single reference.
@@ -644,16 +688,26 @@ type apiReference struct {
 	Remarks             string `json:"remarks,omitempty"`
 	Modified            string `json:"modified,omitempty"`
 	ModifiedBy          string `json:"modified_by,omitempty"`
+	// HasSourceDoc mirrors the field on apiReferenceHit — true when
+	// the ingested source document is available in the sidecar.
+	// See apiReferenceHit for the full rationale.
+	//
+	// (Issue count + max severity are NOT mirrored here — the
+	// resolver on the WUI side fetches /api/issue directly and
+	// computes both locally to keep this endpoint fast.)
+	HasSourceDoc bool `json:"has_source_doc,omitempty"`
 }
 
 func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 	return apiReferenceHit{
-		ID:       h.ID,
-		Author:   h.Author,
-		Year:     h.Year,
-		Title:    h.Title,
-		Citation: h.Citation,
-		Type:     h.Type,
+		ID:          h.ID,
+		Author:      h.Author,
+		Year:        h.Year,
+		Title:       h.Title,
+		Citation:    h.Citation,
+		Type:        h.Type,
+		IssueCount:  h.IssueCount,
+		MaxSeverity: h.MaxSeverity,
 	}
 }
 
@@ -1075,6 +1129,136 @@ func applyNamePatch(n *coldp.Name, p apiNamePatch) {
 	}
 }
 
+// apiReferencePatch is the wire body for PATCH /api/reference/{id}.
+// Every field is a pointer so callers can distinguish "omit" (leave
+// alone) from "clear" (send empty string via a non-nil pointer to "").
+// Field set mirrors apiReference minus id / modified / modified_by
+// (server-authored).
+type apiReferencePatch struct {
+	AlternativeID       *string `json:"alternative_id,omitempty"`
+	SourceID            *string `json:"source_id,omitempty"`
+	Citation            *string `json:"citation,omitempty"`
+	Type                *string `json:"type,omitempty"`
+	Author              *string `json:"author,omitempty"`
+	AuthorID            *string `json:"author_id,omitempty"`
+	Editor              *string `json:"editor,omitempty"`
+	EditorID            *string `json:"editor_id,omitempty"`
+	Title               *string `json:"title,omitempty"`
+	TitleShort          *string `json:"title_short,omitempty"`
+	ContainerAuthor     *string `json:"container_author,omitempty"`
+	ContainerTitle      *string `json:"container_title,omitempty"`
+	ContainerTitleShort *string `json:"container_title_short,omitempty"`
+	Issued              *string `json:"issued,omitempty"`
+	Accessed            *string `json:"accessed,omitempty"`
+	CollectionTitle     *string `json:"collection_title,omitempty"`
+	CollectionEditor    *string `json:"collection_editor,omitempty"`
+	Volume              *string `json:"volume,omitempty"`
+	Issue               *string `json:"issue,omitempty"`
+	Edition             *string `json:"edition,omitempty"`
+	Page                *string `json:"page,omitempty"`
+	Publisher           *string `json:"publisher,omitempty"`
+	PublisherPlace      *string `json:"publisher_place,omitempty"`
+	Version             *string `json:"version,omitempty"`
+	ISBN                *string `json:"isbn,omitempty"`
+	ISSN                *string `json:"issn,omitempty"`
+	DOI                 *string `json:"doi,omitempty"`
+	Link                *string `json:"link,omitempty"`
+	Remarks             *string `json:"remarks,omitempty"`
+}
+
+// applyReferencePatch mutates r in place. Enum values (Type) go
+// through the empty-safe helper so unset stays unset instead of
+// coercing to a zero enum value.
+func applyReferencePatch(r *coldp.Reference, p apiReferencePatch) {
+	if p.AlternativeID != nil {
+		r.AlternativeID = *p.AlternativeID
+	}
+	if p.SourceID != nil {
+		r.SourceID = *p.SourceID
+	}
+	if p.Citation != nil {
+		r.Citation = *p.Citation
+	}
+	if p.Type != nil {
+		r.Type = coldp.NewReferenceType(*p.Type)
+	}
+	if p.Author != nil {
+		r.Author = *p.Author
+	}
+	if p.AuthorID != nil {
+		r.AuthorID = *p.AuthorID
+	}
+	if p.Editor != nil {
+		r.Editor = *p.Editor
+	}
+	if p.EditorID != nil {
+		r.EditorID = *p.EditorID
+	}
+	if p.Title != nil {
+		r.Title = *p.Title
+	}
+	if p.TitleShort != nil {
+		r.TitleShort = *p.TitleShort
+	}
+	if p.ContainerAuthor != nil {
+		r.ContainerAuthor = *p.ContainerAuthor
+	}
+	if p.ContainerTitle != nil {
+		r.ContainerTitle = *p.ContainerTitle
+	}
+	if p.ContainerTitleShort != nil {
+		r.ContainerTitleShort = *p.ContainerTitleShort
+	}
+	if p.Issued != nil {
+		r.Issued = *p.Issued
+	}
+	if p.Accessed != nil {
+		r.Accessed = *p.Accessed
+	}
+	if p.CollectionTitle != nil {
+		r.CollectionTitle = *p.CollectionTitle
+	}
+	if p.CollectionEditor != nil {
+		r.CollectionEditor = *p.CollectionEditor
+	}
+	if p.Volume != nil {
+		r.Volume = *p.Volume
+	}
+	if p.Issue != nil {
+		r.Issue = *p.Issue
+	}
+	if p.Edition != nil {
+		r.Edition = *p.Edition
+	}
+	if p.Page != nil {
+		r.Page = *p.Page
+	}
+	if p.Publisher != nil {
+		r.Publisher = *p.Publisher
+	}
+	if p.PublisherPlace != nil {
+		r.PublisherPlace = *p.PublisherPlace
+	}
+	if p.Version != nil {
+		r.Version = *p.Version
+	}
+	if p.ISBN != nil {
+		r.ISBN = *p.ISBN
+	}
+	if p.ISSN != nil {
+		r.ISSN = *p.ISSN
+	}
+	if p.DOI != nil {
+		r.DOI = *p.DOI
+	}
+	if p.Link != nil {
+		r.Link = *p.Link
+	}
+	if p.Remarks != nil {
+		r.Remarks = *p.Remarks
+	}
+}
+
 // ---------- converters ----------
 
 func hitToAPI(h hive.TaxonHit) apiTaxonHit {
@@ -1253,6 +1437,7 @@ func vernacularHitToAPI(h hive.VernacularHit) apiVernacular {
 		Modified:        h.Modified,
 		ModifiedBy:      h.ModifiedBy,
 		IssueCount:      h.IssueCount,
+		MaxSeverity:     h.MaxSeverity,
 	}
 }
 
@@ -1273,6 +1458,7 @@ func distributionHitToAPI(h hive.DistributionHit) apiDistribution {
 		Modified:    h.Modified,
 		ModifiedBy:  h.ModifiedBy,
 		IssueCount:  h.IssueCount,
+		MaxSeverity: h.MaxSeverity,
 	}
 }
 

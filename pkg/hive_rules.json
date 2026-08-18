@@ -589,6 +589,48 @@
       "warning_message": "Parser flagged this name. Open the record and confirm the parsed fields (canonical form, epithets, authorship) match what you intended.",
       "is_active": true,
       "priority": 20
+    },
+    {
+      "rule_id": "hive_parse_tail",
+      "table_name": "name",
+      "field_name": "col__scientific_name_string",
+      "rule_name": "Unparsed tail on scientific name",
+      "validator_type": "hive.parse_tail",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "gnparser could not fully parse this scientific name.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_combination_matches_basionym",
+      "table_name": "name",
+      "field_name": "col__combination_authorship",
+      "rule_name": "Combination authorship duplicates basionym authorship",
+      "validator_type": "hive.combination_matches_basionym",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Combination authorship + year duplicate the basionym pair on this name.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "hive_reference_missing_structured_metadata",
+      "table_name": "reference",
+      "field_name": "col__citation",
+      "rule_name": "Reference missing structured metadata",
+      "validator_type": "hive.reference_missing_structured_metadata",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Reference has a citation but is missing structured author or issued.",
+      "is_active": true,
+      "priority": 20
     }
   ]
 }

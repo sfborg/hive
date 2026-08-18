@@ -87,18 +87,21 @@ func PrimaryReferenceID(raw string) string {
 // ParseNamePreview runs the archive's gnparser on a verbatim scientific
 // name and returns a coldp.Name populated with everything the parser can
 // derive — gn__* cache + atomized col__* fields + a rank guess (via
-// RankGuess) scoped to the given nom_code. The returned Name is a
+// RankGuess) scoped to the given nom_code — plus the unparsed Tail
+// gnparser rejected (empty for clean parses). The returned Name is a
 // *preview* only: no row is written, ID is left empty, Modified/ModifiedBy
-// are not stamped.
+// are not stamped. Tail is a diagnostic aid for the create/edit form;
+// it is not persisted on the name row (gn__* is a cache — tail is
+// re-derivable from the verbatim string on demand).
 //
 // Backs the /api/name/parse endpoint that drives the two-step name-add
 // form. The same Archive gnparser instance is used (single-flight via
 // parserMu) so the preview and the eventual CreateName agree on the
 // atomization — same version, same options, same result.
-func (a *Archive) ParseNamePreview(codeID, verbatim string) *coldp.Name {
+func (a *Archive) ParseNamePreview(codeID, verbatim string) (*coldp.Name, string) {
 	verbatim = strings.TrimSpace(verbatim)
 	if verbatim == "" {
-		return &coldp.Name{}
+		return &coldp.Name{}, ""
 	}
 	// Feed the nomenclatural code into gnparser so its code-specific
 	// tuning kicks in — cultivar quotes, botanical hybrid marks,
@@ -137,7 +140,7 @@ func (a *Archive) ParseNamePreview(codeID, verbatim string) *coldp.Name {
 	if guess := rankguess.Guess(codeID, p, p.CanonicalSimple); guess != "" {
 		n.Rank = ParseRank(guess)
 	}
-	return n
+	return n, p.Tail
 }
 
 // parseCodeID mirrors core.ParseRank / ParseNomStatus: empty-in maps to

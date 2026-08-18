@@ -41,6 +41,10 @@ type DistributionHit struct {
 	// distribution set. Zero when the row is clean; front-ends
 	// render a warn icon on the row when > 0.
 	IssueCount int
+	// MaxSeverity is the highest severity ("error" > "warn" > "info"
+	// > "debug") among the row's open issues. Empty string when
+	// IssueCount is 0. Drives the badge color on the WUI row.
+	MaxSeverity string
 }
 
 // ListDistributions returns every distribution row attached to
@@ -89,37 +93,22 @@ func (a *Archive) ListDistributions(ctx context.Context, taxonID string) ([]Dist
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Fold in open-issue counts per rowid in one batched pass —
-	// mirrors the vernacular pattern. table_name = 'distribution',
-	// record_id is the stringified rowid.
+	// Fold in per-row open-issue summaries (count + max severity) in
+	// one batched pass via the shared helper. Record IDs are the
+	// rowid stringified (sfga distribution rows have no col__id).
 	if len(hits) > 0 {
-		ids := make([]any, len(hits))
+		ids := make([]string, len(hits))
 		for i, h := range hits {
 			ids[i] = fmt.Sprintf("%d", h.RowID)
 		}
-		q2 := `SELECT record_id, COUNT(*)
-			FROM __gsvalidator_results
-			WHERE table_name = 'distribution'
-			  AND (acknowledged_at IS NULL OR acknowledged_at = '')
-			  AND record_id IN (` + placeholders(len(ids)) + `)
-			GROUP BY record_id`
-		irows, err := a.db.QueryContext(ctx, q2, ids...)
+		summaries, err := a.batchIssueSummaries(ctx, "distribution", ids)
 		if err != nil {
-			return nil, fmt.Errorf("core: distribution issue counts of %q: %w", taxonID, err)
+			return nil, fmt.Errorf("core: distribution issue summaries of %q: %w", taxonID, err)
 		}
-		counts := make(map[string]int, len(hits))
-		for irows.Next() {
-			var id string
-			var n int
-			if err := irows.Scan(&id, &n); err != nil {
-				irows.Close()
-				return nil, fmt.Errorf("core: scan distribution issue count: %w", err)
-			}
-			counts[id] = n
-		}
-		irows.Close()
 		for i := range hits {
-			hits[i].IssueCount = counts[fmt.Sprintf("%d", hits[i].RowID)]
+			s := summaries[ids[i]]
+			hits[i].IssueCount = s.Count
+			hits[i].MaxSeverity = s.MaxSeverity
 		}
 	}
 	return hits, nil

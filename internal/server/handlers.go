@@ -93,6 +93,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference/lookup-bhlnames", s.handleLookupBHLnames)
 	mux.HandleFunc("POST /api/reference/parse-bibtex", s.handleParseBibTeX)
 	mux.HandleFunc("GET /api/reference/{id}", s.handleGetReference)
+	mux.HandleFunc("PATCH /api/reference/{id}", s.handlePatchReference)
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
@@ -478,6 +479,7 @@ func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Reque
 				CombinationAuthorship:     n.CombinationAuthorship,
 				CombinationAuthorshipYear: n.CombinationAuthorshipYear,
 				IssueCount:                n.IssueCount,
+				MaxSeverity:               n.MaxSeverity,
 			}
 			row.ReferenceLabel = s.referenceLabel(r.Context(), firstCSVID(row.ReferenceID))
 			outC.Names = append(outC.Names, row)
@@ -2043,6 +2045,51 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, referenceToAPI(ref))
 }
 
+// handlePatchReference applies a partial update to a reference row.
+// Mirrors the handlePatchName / handlePatchTaxon shape: pointer-
+// optional fields (omit vs. clear), If-Match optimistic concurrency,
+// re-stamps col__modified / col__modified_by inside the tx. Wraps
+// Tx.UpdateReference — the core primitive that carries the actual
+// write.
+//
+// Backs the reference-quick-fix modal (Slice D) that opens over the
+// create/edit taxon pane when a reference has a validation warning
+// on missing structured metadata. See feedback_no_side_quests for
+// the UX principle motivating in-context fixes.
+func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var patch apiReferencePatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	ifMatch := r.Header.Get("If-Match")
+
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		current, err := s.a.GetReference(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		applyReferencePatch(current, patch)
+		current.Modified = ifMatch
+		return tx.UpdateReference(*current)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+
+	fresh, err := s.a.GetReference(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if fresh.Modified != "" {
+		w.Header().Set("ETag", fresh.Modified)
+	}
+	writeJSON(w, http.StatusOK, referenceToAPI(fresh))
+}
+
 // handleParseName runs gnparser on a verbatim scientific name and returns
 // an apiName-shaped preview with atomized col__ fields + gn__* cache + a
 // code-scoped rank guess. Nothing is written — the response's `id` is
@@ -2067,8 +2114,14 @@ func (s *server) handleParseName(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "scientific_name is required")
 		return
 	}
-	preview := s.a.ParseNamePreview(body.Code, body.ScientificName)
-	writeJSON(w, http.StatusOK, nameToAPI(preview))
+	preview, tail := s.a.ParseNamePreview(body.Code, body.ScientificName)
+	resp := nameToAPI(preview)
+	// Tail is preview-only diagnostic data — never persisted on the name
+	// row, only surfaced through this endpoint so the create/edit form
+	// can render the "unparsed tail" banner. Empty when the parse was
+	// clean.
+	resp.Tail = tail
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *server) handleNameSearch(w http.ResponseWriter, r *http.Request) {
