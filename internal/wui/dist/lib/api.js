@@ -324,6 +324,17 @@ export const api = {
       j("GET", `/api/taxon/${encodeURIComponent(id)}/distributions`),
     createDistribution: (id, body) =>
       j("POST", `/api/taxon/${encodeURIComponent(id)}/distributions`, body),
+    // speciesInteractions returns the interactions where this taxon is
+    // the SUBJECT, ordered by type then related-taxon name. Each item
+    // is an apiSpeciesInteraction {id, taxon_id, related_taxon_id,
+    // related_taxon_label {text, html}, related_taxon_scientific_name,
+    // type, source_id, reference_id, remarks, modified, modified_by,
+    // issue_count}. Rows where this taxon is the OBJECT belong on the
+    // other taxon's page.
+    speciesInteractions: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/species-interactions`),
+    createSpeciesInteraction: (id, body) =>
+      j("POST", `/api/taxon/${encodeURIComponent(id)}/species-interactions`, body),
   },
 
   // Vernacular row lives under its own path once created — PATCH and
@@ -345,6 +356,17 @@ export const api = {
     patch: (id, patch) =>
       j("PATCH", `/api/distribution/${encodeURIComponent(id)}`, patch),
     delete: (id) => j("DELETE", `/api/distribution/${encodeURIComponent(id)}`),
+  },
+
+  // Same pattern as vernacular / distribution. Species interactions
+  // live at their own path once created (rowid handle since sfga's
+  // species_interaction has no col__id). Reparenting is not supported
+  // (delete + re-add on the new subject taxon).
+  speciesInteraction: {
+    patch: (id, patch) =>
+      j("PATCH", `/api/species-interaction/${encodeURIComponent(id)}`, patch),
+    delete: (id) =>
+      j("DELETE", `/api/species-interaction/${encodeURIComponent(id)}`),
   },
 
   name: {

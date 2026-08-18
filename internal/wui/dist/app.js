@@ -3356,6 +3356,11 @@ class SfgaDetail extends LitElement {
     // vernacular pair. Backend orders by gazetteer then area.
     _distributions: { state: true },
     _distributionForm: { state: true },
+    // Species interaction list + modal state — same pattern as the
+    // vernacular / distribution pair. Backend returns rows where this
+    // taxon is the SUBJECT, ordered by type then related-taxon name.
+    _speciesInteractions: { state: true },
+    _speciesInteractionForm: { state: true },
     // Modal state for the synonym-delete flow. Null when closed;
     // {phase, synonymId, nameId, label, deps, cascade, confirmText,
     // busy, error} while open. See _renderSynonymDeleteModal.
@@ -3885,6 +3890,96 @@ class SfgaDetail extends LitElement {
       max-width: var(--modal-lg);
     }
     .distribution-form .toolbar {
+      grid-column: 1 / -1;
+      justify-content: flex-end;
+    }
+    /* Species interactions table — same shape as distributions.
+       Type column narrower (enum ids are short); related-taxon column
+       gets the rest of the row. */
+    section.species-interactions {
+      margin-top: var(--sp-4);
+    }
+    section.species-interactions table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+    }
+    section.species-interactions th {
+      text-align: left;
+      color: var(--dim);
+      font-weight: normal;
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+    }
+    section.species-interactions td {
+      padding: var(--sp-1) var(--sp-2);
+      vertical-align: baseline;
+    }
+    section.species-interactions th.type,
+    section.species-interactions td.type {
+      width: 10em;
+    }
+    section.species-interactions th.actions,
+    section.species-interactions td.actions {
+      width: 4.5em;
+      text-align: right;
+    }
+    /* Divergent-cite annotation — shown when the source cited the
+       related taxon under a different name than what's stored. Dim +
+       body font so it reads as annotation rather than identity. */
+    section.species-interactions td.related .annotation {
+      color: var(--dim);
+      font-family: var(--font-body);
+      font-size: var(--fs-xs);
+      margin-left: var(--sp-1);
+    }
+    section.species-interactions td.actions .row-actions {
+      display: inline-flex;
+      gap: 0;
+      visibility: hidden;
+    }
+    section.species-interactions tr:hover td.actions .row-actions,
+    section.species-interactions tr:focus-within td.actions .row-actions {
+      visibility: visible;
+    }
+    section.species-interactions td.actions .row-actions .warn {
+      /* Same shared-badge pattern as vernaculars / distributions /
+         nomen-history. Default warn-amber with variant-sev-* overrides. */
+      visibility: visible;
+      color: var(--sev-warn);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-error {
+      color: var(--sev-error);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-warn {
+      color: var(--sev-warn);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-info {
+      color: var(--sev-info);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-debug {
+      color: var(--dim);
+    }
+    section.species-interactions td.actions .row-actions .warn:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-warn) 18%, transparent);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-error:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-error) 18%, transparent);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-info:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--sev-info) 18%, transparent);
+    }
+    section.species-interactions td.actions .row-actions .warn.variant-sev-debug:hover:not(:disabled) {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
+    /* Species-interaction modal form — same conventions as the
+       vernacular / distribution forms. */
+    .modal-backdrop .modal:has(> .species-interaction-form) {
+      min-width: var(--modal-md);
+      max-width: var(--modal-lg);
+    }
+    .species-interaction-form .toolbar {
       grid-column: 1 / -1;
       justify-content: flex-end;
     }
@@ -4545,6 +4640,8 @@ class SfgaDetail extends LitElement {
     this._vernacularForm = null;
     this._distributions = [];
     this._distributionForm = null;
+    this._speciesInteractions = [];
+    this._speciesInteractionForm = null;
     this._synonymDelete = null;
     this._standardizedAuthorship =
       localStorage.getItem("hive-standardized-authorship") === "true";
@@ -4651,6 +4748,7 @@ class SfgaDetail extends LitElement {
       this._nomenHistory = null;
       this._vernaculars = [];
       this._distributions = [];
+      this._speciesInteractions = [];
       this._classification = [];
       return;
     }
@@ -4682,20 +4780,22 @@ class SfgaDetail extends LitElement {
       this._nameEtag = nameEtag;
 
       // Fetch nomen-history + vernaculars + distributions +
-      // classification in parallel — none depend on the others and
-      // all are needed before the pane finishes rendering. Per-
-      // section failure drops that one section; the rest of the
-      // taxon still renders.
-      const [nomen, vern, dist, cls] = await Promise.all([
+      // species-interactions + classification in parallel — none depend
+      // on the others and all are needed before the pane finishes
+      // rendering. Per-section failure drops that one section; the rest
+      // of the taxon still renders.
+      const [nomen, vern, dist, sxi, cls] = await Promise.all([
         api.taxon.nomenHistory(requested).catch(() => ({ clusters: [] })),
         api.taxon.vernaculars(requested).catch(() => ({ items: [] })),
         api.taxon.distributions(requested).catch(() => ({ items: [] })),
+        api.taxon.speciesInteractions(requested).catch(() => ({ items: [] })),
         api.taxon.classification(requested).catch(() => ({ items: [] })),
       ]);
       if (this.taxonId !== requested) return;
       this._nomenHistory = nomen;
       this._vernaculars = vern.items || [];
       this._distributions = dist.items || [];
+      this._speciesInteractions = sxi.items || [];
       this._classification = cls.items || [];
     } catch (err) {
       if (this.taxonId !== requested) return;
@@ -6893,7 +6993,8 @@ class SfgaDetail extends LitElement {
     const nonName =
       this._addingReferenceFor === "section" ||
       this._addingReferenceFor === "vernacular" ||
-      this._addingReferenceFor === "distribution";
+      this._addingReferenceFor === "distribution" ||
+      this._addingReferenceFor === "species-interaction";
     return html`
       <sfga-add-reference-modal
         .contextCanonical=${canonical}
@@ -6927,6 +7028,8 @@ class SfgaDetail extends LitElement {
       this._vernacularFieldChange("reference_id", id);
     } else if (target === "distribution") {
       this._distributionFieldChange("reference_id", id);
+    } else if (target === "species-interaction") {
+      this._speciesInteractionFieldChange("reference_id", id);
     }
     this._addingReferenceFor = "";
   }
@@ -7126,14 +7229,17 @@ class SfgaDetail extends LitElement {
       ${this._renderNomenclaturalHistory()}
       ${this._renderVernaculars()}
       ${this._renderDistributions()}
+      ${this._renderSpeciesInteractions()}
       ${this._renderReferences()}
       ${this._renderViewFields()}
       ${this._vernacularForm ? this._renderVernacularModal() : ""}
       ${this._distributionForm ? this._renderDistributionModal() : ""}
+      ${this._speciesInteractionForm ? this._renderSpeciesInteractionModal() : ""}
       ${this._synonymDelete ? this._renderSynonymDeleteModal() : ""}
       ${this._addingReferenceFor === "section" ||
       this._addingReferenceFor === "vernacular" ||
-      this._addingReferenceFor === "distribution"
+      this._addingReferenceFor === "distribution" ||
+      this._addingReferenceFor === "species-interaction"
         ? this._renderAddReferenceModal()
         : ""}
     `;
@@ -8862,6 +8968,371 @@ class SfgaDetail extends LitElement {
               <button
                 type="button"
                 @click=${() => this._cancelDistributionForm()}
+              >
+                Cancel
+              </button>
+              <button type="submit" class="primary">
+                ${f.mode === "edit" ? "Save changes" : "Add"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Species interactions section ----------
+  // Same shape as vernaculars / distributions — table + row-actions +
+  // add/edit modal. Backend ships apiSpeciesInteraction with
+  // issue_count + max_severity baked in, so the shared warn-icon
+  // plumbing works out of the box. Related taxon renders from the
+  // server-resolved label so no per-row fetch is required.
+  //
+  // Sfga schema requires related_taxon_id (FK NOT NULL); the free-text
+  // related_taxon_scientific_name is preserved as an annotation
+  // alongside the FK but cannot stand alone. Direction: rows returned
+  // here have this taxon as the SUBJECT — the OBJECT-side view is a
+  // future enhancement (see pkg/species_interaction.go for the
+  // two-sided rendering design note).
+
+  _renderSpeciesInteractions() {
+    const items = this._speciesInteractions || [];
+    if (items.length === 0) return "";
+    return html`
+      <section class="species-interactions">
+        ${this._sectionHeader("Species interactions", {
+          handler: () => this._openSpeciesInteractionCreate(),
+          title: "add species interaction",
+        })}
+        <table>
+          <thead>
+            <tr>
+              <th class="type">Type</th>
+              <th class="related">Related taxon</th>
+              <th class="actions" aria-label="actions"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((si) => this._renderSpeciesInteractionRow(si))}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  _renderSpeciesInteractionRow(si) {
+    const cite = this._citeRef(si.reference_id, si.reference_label);
+    // Prefer the server-resolved label (canonical + authorship, HTML
+    // for italics). Fall back to the free-text scientific-name
+    // annotation when the resolved label is empty (shouldn't happen
+    // with the FK-required contract, but a defensive fallback).
+    const labelHTML =
+      (si.related_taxon_label && si.related_taxon_label.html) ||
+      (si.related_taxon_label && si.related_taxon_label.text) ||
+      si.related_taxon_scientific_name ||
+      si.related_taxon_id ||
+      "(unset)";
+    // If the source cited the taxon under a different name than what's
+    // stored, show that annotation dimmed after the resolved label —
+    // curators can see the divergence at a glance.
+    const showAnnotation =
+      si.related_taxon_scientific_name &&
+      si.related_taxon_label &&
+      si.related_taxon_label.text &&
+      si.related_taxon_scientific_name !== si.related_taxon_label.text;
+    return html`
+      <tr>
+        <td class="type">${si.type || ""}</td>
+        <td class="related">
+          <span .innerHTML=${labelHTML}></span>${cite}${showAnnotation
+            ? html` <span class="annotation"
+                >(as ${si.related_taxon_scientific_name})</span
+              >`
+            : ""}
+        </td>
+        <td class="actions">
+          <span class="row-actions">
+            ${(si.issue_count || 0) > 0
+              ? (() => {
+                  const badge = validationSeverityBadge(
+                    si.issue_count || 0,
+                    si.max_severity,
+                    "species-interaction-issue",
+                    { tooltip: "open editor at validation issues" },
+                  );
+                  return html`<button
+                    class=${"icon-btn subtle warn variant-" + badge.variant}
+                    @click=${() => this._openSpeciesInteractionEdit(si)}
+                    title=${badge.tooltip}
+                    aria-label="validation issues on this species interaction"
+                  >
+                    ${renderIcon(badge.icon, 14)}
+                  </button>`;
+                })()
+              : ""}
+            <button
+              class="icon-btn subtle"
+              @click=${() => this._openSpeciesInteractionEdit(si)}
+              title="edit species interaction"
+              aria-label="edit species interaction"
+            >
+              ${renderIcon("pencil", 14)}
+            </button>
+            <button
+              class="icon-btn subtle danger"
+              @click=${() => this._deleteSpeciesInteraction(si)}
+              title="delete species interaction"
+              aria-label="delete species interaction"
+            >
+              ${renderIcon("trash-2", 14)}
+            </button>
+          </span>
+        </td>
+      </tr>
+    `;
+  }
+
+  _openSpeciesInteractionCreate() {
+    this._speciesInteractionForm = {
+      mode: "create",
+      draft: {},
+      issues: [],
+      error: "",
+    };
+  }
+
+  _openSpeciesInteractionEdit(si) {
+    this._speciesInteractionForm = {
+      mode: "edit",
+      id: si.id,
+      draft: { ...si },
+      // Reuse the pattern from vernacular / distribution: pre-populate
+      // the resolved label so the taxon picker shows the current
+      // related taxon without a re-lookup.
+      relatedLabel: si.related_taxon_label?.text || "",
+      issues: [],
+      error: "",
+    };
+  }
+
+  _cancelSpeciesInteractionForm() {
+    this._speciesInteractionForm = null;
+  }
+
+  _speciesInteractionFieldChange(field, value) {
+    if (!this._speciesInteractionForm) return;
+    this._speciesInteractionForm = {
+      ...this._speciesInteractionForm,
+      draft: { ...this._speciesInteractionForm.draft, [field]: value },
+    };
+  }
+
+  async _submitSpeciesInteractionForm() {
+    const f = this._speciesInteractionForm;
+    if (!f) return;
+    const relatedID = (f.draft.related_taxon_id || "").trim();
+    if (!relatedID) {
+      this._speciesInteractionForm = {
+        ...f,
+        error: "related taxon is required",
+      };
+      return;
+    }
+    try {
+      if (f.mode === "create") {
+        await api.taxon.createSpeciesInteraction(this.taxonId, f.draft);
+      } else {
+        await api.speciesInteraction.patch(f.id, f.draft);
+      }
+      this._speciesInteractionForm = null;
+      await this._refreshSpeciesInteractions();
+    } catch (err) {
+      this._speciesInteractionForm = {
+        ...f,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  async _deleteSpeciesInteraction(si) {
+    const label =
+      (si.related_taxon_label && si.related_taxon_label.text) ||
+      si.related_taxon_scientific_name ||
+      si.related_taxon_id ||
+      si.id;
+    const ok = await confirmAction({
+      heading: "Delete species interaction?",
+      message: `The "${si.type || "interaction"}" link to "${label}" will be permanently deleted.`,
+      actionLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      await api.speciesInteraction.delete(si.id);
+      await this._refreshSpeciesInteractions();
+    } catch (err) {
+      this._error =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
+  }
+
+  async _refreshSpeciesInteractions() {
+    if (!this.taxonId) return;
+    try {
+      const resp = await api.taxon.speciesInteractions(this.taxonId);
+      this._speciesInteractions = resp.items || [];
+    } catch (_) {
+      // Silent — stale list beats a flashing error.
+    }
+  }
+
+  _renderSpeciesInteractionModal() {
+    const f = this._speciesInteractionForm;
+    if (!f) return "";
+    const d = f.draft;
+    const set = (field) => (e) =>
+      this._speciesInteractionFieldChange(field, e.target.value);
+    const heading =
+      f.mode === "edit"
+        ? "Edit species interaction"
+        : "Add species interaction";
+    const refActions = [
+      {
+        label: "Add new reference",
+        icon: "plus",
+        handler: () => (this._addingReferenceFor = "species-interaction"),
+      },
+    ];
+    return html`
+      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="species-interaction-modal-heading"
+          @keydown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this._cancelSpeciesInteractionForm();
+            }
+          }}
+        >
+          <div class="modal-header">
+            <h3 id="species-interaction-modal-heading">${heading}</h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._cancelSpeciesInteractionForm()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
+          ${f.issues && f.issues.length > 0
+            ? html`
+                <div class="warning-banner">
+                  <strong>
+                    ${f.issues.length} open
+                    issue${f.issues.length > 1 ? "s" : ""} on this
+                    species interaction:
+                  </strong>
+                  <ul>
+                    ${f.issues.map(
+                      (i) => html`<li>
+                        ${severityChip(i.severity)}
+                        <span>
+                          <span class="warning-rule"
+                            >${i.rule_name || i.rule_id}</span
+                          >:
+                          ${i.message}
+                          ${i.field_name
+                            ? html` <span class="warning-rule"
+                                >(${i.field_name})</span
+                              >`
+                            : ""}
+                        </span>
+                      </li>`,
+                    )}
+                  </ul>
+                </div>
+              `
+            : ""}
+          ${f.error
+            ? html`<div class="error" role="alert">${f.error}</div>`
+            : ""}
+          <form
+            class="species-interaction-form"
+            @submit=${(e) => {
+              e.preventDefault();
+              this._submitSpeciesInteractionForm();
+            }}
+          >
+            <label>Related taxon <span class="req">*</span></label>
+            <sfga-combobox
+              min-search-chars="2"
+              placeholder="Search taxa…"
+              .source=${taxonSource}
+              .resolver=${taxonResolver}
+              .value=${d.related_taxon_id || ""}
+              @pick=${(e) =>
+                this._speciesInteractionFieldChange(
+                  "related_taxon_id",
+                  e.detail.id,
+                )}
+            ></sfga-combobox>
+
+            <label>Interaction type</label>
+            <sfga-combobox
+              min-search-chars="0"
+              placeholder="Interaction type…"
+              .source=${vocabSource("species_interaction_type")}
+              .resolver=${vocabResolver("species_interaction_type")}
+              .value=${d.type || ""}
+              @pick=${(e) =>
+                this._speciesInteractionFieldChange("type", e.detail.id)}
+            ></sfga-combobox>
+
+            <label for="sxi-sci-name">Related taxon name (as cited)</label>
+            <input
+              id="sxi-sci-name"
+              type="text"
+              placeholder="Original spelling from the source, if different"
+              .value=${d.related_taxon_scientific_name || ""}
+              @input=${set("related_taxon_scientific_name")}
+            />
+
+            <label>Reference</label>
+            <sfga-combobox
+              min-search-chars="2"
+              placeholder="Search references…"
+              .source=${referenceSource}
+              .resolver=${referenceResolver}
+              .value=${d.reference_id || ""}
+              .actions=${refActions}
+              @pick=${(e) =>
+                this._speciesInteractionFieldChange(
+                  "reference_id",
+                  e.detail.id,
+                )}
+            ></sfga-combobox>
+
+            <label for="sxi-remarks">Remarks</label>
+            <textarea
+              id="sxi-remarks"
+              rows="2"
+              .value=${d.remarks || ""}
+              @input=${set("remarks")}
+            ></textarea>
+
+            <div class="toolbar">
+              <button
+                type="button"
+                @click=${() => this._cancelSpeciesInteractionForm()}
               >
                 Cancel
               </button>
