@@ -186,6 +186,63 @@ function writeAtomizedPref(v) {
   localStorage.setItem("hive-show-atomized", v ? "true" : "false");
 }
 
+// ---------- modal stack ----------
+// Shared registry of currently-open modals so nested modals can hide
+// their parents (visibility: hidden — DOM state preserved so draft
+// values survive the trip). Only the topmost modal renders visibly;
+// everything below is inert. Escape / close on the topmost pops it
+// and restores whatever was underneath.
+//
+// Every modal-owning component (SfgaAddReferenceModal / SfgaHelpModal
+// / SfgaAgentModal / SfgaConfirmModal — all dedicated components —
+// plus SfgaDetail for its inline modals) obtains an opaque id via
+// openModal() when its backdrop mounts, calls closeModal(id) when the
+// backdrop unmounts, and applies the `is-covered` CSS class to its
+// backdrop when isTopModal(id) is false. Stack changes fire
+// subscribeModalStack callbacks so open modals re-render.
+//
+// See feedback_unbounded_modal_nesting — depth is intentionally
+// unbounded; reload-window is the escape hatch.
+const _modalStack = [];
+const _modalStackListeners = new Set();
+
+function openModal() {
+  const id = Symbol("modal");
+  _modalStack.push(id);
+  _notifyModalStack();
+  return id;
+}
+
+function closeModal(id) {
+  const i = _modalStack.indexOf(id);
+  if (i < 0) return;
+  _modalStack.splice(i, 1);
+  _notifyModalStack();
+}
+
+function isTopModal(id) {
+  return (
+    id != null && _modalStack[_modalStack.length - 1] === id
+  );
+}
+
+function subscribeModalStack(fn) {
+  _modalStackListeners.add(fn);
+  return () => _modalStackListeners.delete(fn);
+}
+
+function _notifyModalStack() {
+  for (const fn of _modalStackListeners) {
+    try {
+      fn();
+    } catch (_) {
+      // A listener throwing shouldn't stop the rest from getting
+      // the notification — a stuck subscribed component would
+      // otherwise wedge the whole stack.
+    }
+  }
+}
+
 // matchesKey reports whether a DOM KeyboardEvent matches one of the
 // key strings from the shared keymap (pkg/ui.Shortcut.Keys["wui"]).
 // Format is either a bare KeyboardEvent.key value ("ArrowUp", "g",
@@ -4289,10 +4346,22 @@ class SfgaDetail extends LitElement {
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: color-mix(in oklab, var(--bg) 60%, transparent);
+      /* fg-tinted overlay so the underlying pane visibly dims in
+         light mode (fg is dark) and lightens in dark mode (fg is
+         light) without either mode getting too muddy. 18% keeps the
+         data below legible while signaling the modal is the active
+         surface. */
+      background: color-mix(in oklab, var(--fg) 18%, transparent);
       display: grid;
       place-items: center;
       z-index: 10;
+    }
+    /* Nested-modal hide: any backdrop that isn't currently the topmost
+       modal is hidden via visibility (DOM + Lit state preserved so
+       draft values survive the trip). See openModal / isTopModal in
+       the modal-stack helpers. */
+    .modal-backdrop.is-covered {
+      visibility: hidden;
     }
     .modal {
       background: var(--bg);
@@ -4775,6 +4844,68 @@ class SfgaDetail extends LitElement {
           composed: true,
         }),
       );
+    }
+    // Sync modal-stack registration for the inline modals SfgaDetail
+    // renders (vernacular / distribution / species-interaction /
+    // synonym-delete / delete-confirm). At most one inline modal is
+    // open at a time, so one stack entry suffices. See openModal /
+    // isTopModal helpers.
+    const inlineOpen = this._hasInlineModal();
+    if (inlineOpen && !this._inlineModalStackID) {
+      this._inlineModalStackID = openModal();
+      if (!this._unsubInlineModalStack) {
+        this._unsubInlineModalStack = subscribeModalStack(() =>
+          this.requestUpdate(),
+        );
+      }
+    } else if (!inlineOpen && this._inlineModalStackID) {
+      closeModal(this._inlineModalStackID);
+      this._inlineModalStackID = null;
+      if (this._unsubInlineModalStack) {
+        this._unsubInlineModalStack();
+        this._unsubInlineModalStack = null;
+      }
+    }
+  }
+
+  // _hasInlineModal reports whether any of SfgaDetail's own inline
+  // modal-backdrop divs is currently in the render tree. Dedicated
+  // modal components (sfga-add-reference-modal) register with the
+  // stack on their own via connectedCallback — this only covers the
+  // in-shadow-root inline modals.
+  _hasInlineModal() {
+    return !!(
+      this._vernacularForm ||
+      this._distributionForm ||
+      this._speciesInteractionForm ||
+      this._synonymDelete ||
+      this._confirmDelete
+    );
+  }
+
+  // _backdropClass returns the class string for SfgaDetail's inline
+  // modal backdrops. Adds `is-covered` when a dedicated modal (opened
+  // on top via openModal()) is now the topmost — so the inline
+  // backdrop hides via CSS while its Lit state stays intact for the
+  // return trip.
+  _backdropClass() {
+    const covered =
+      this._inlineModalStackID && !isTopModal(this._inlineModalStackID);
+    return "modal-backdrop" + (covered ? " is-covered" : "");
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Belt-and-braces: if the component is torn down with an open
+    // inline modal (e.g. selection reset mid-edit), release the stack
+    // entry so a subsequent modal doesn't inherit the "covered" state.
+    if (this._inlineModalStackID) {
+      closeModal(this._inlineModalStackID);
+      this._inlineModalStackID = null;
+    }
+    if (this._unsubInlineModalStack) {
+      this._unsubInlineModalStack();
+      this._unsubInlineModalStack = null;
     }
   }
 
@@ -7274,7 +7405,7 @@ class SfgaDetail extends LitElement {
         this._deleteMode === "cascade" &&
         this._deleteConfirmText === "DELETE");
     return html`
-      <div class="modal-backdrop" @click=${() => this._cancelDelete()}>
+      <div class=${this._backdropClass()} @click=${() => this._cancelDelete()}>
         <div
           class="modal delete-modal"
           role="alertdialog"
@@ -8332,7 +8463,7 @@ class SfgaDetail extends LitElement {
     if (!d) return "";
     if (d.phase === "loading") {
       return html`
-        <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+        <div class=${this._backdropClass()} @click=${(e) => e.stopPropagation()}>
           <div
             class="modal"
             role="dialog"
@@ -8360,7 +8491,7 @@ class SfgaDetail extends LitElement {
       d.cascade && (d.confirmText || "").trim() === "DELETE" && !d.busy;
     const deleteEnabled = d.cascade ? cascadeOK : !d.busy;
     return html`
-      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+      <div class=${this._backdropClass()} @click=${(e) => e.stopPropagation()}>
         <div
           class="modal synonym-delete"
           role="dialog"
@@ -8718,7 +8849,7 @@ class SfgaDetail extends LitElement {
     ];
     return html`
       <div
-        class="modal-backdrop"
+        class=${this._backdropClass()}
         @click=${(e) => {
           // Form modal — never dismiss on backdrop click (see DESIGN.md
           // § Modals). Curator uses Cancel or Escape.
@@ -9114,7 +9245,7 @@ class SfgaDetail extends LitElement {
       },
     ];
     return html`
-      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+      <div class=${this._backdropClass()} @click=${(e) => e.stopPropagation()}>
         <div
           class="modal"
           role="dialog"
@@ -9485,7 +9616,7 @@ class SfgaDetail extends LitElement {
       },
     ];
     return html`
-      <div class="modal-backdrop" @click=${(e) => e.stopPropagation()}>
+      <div class=${this._backdropClass()} @click=${(e) => e.stopPropagation()}>
         <div
           class="modal"
           role="dialog"
@@ -9733,10 +9864,14 @@ class SfgaAddReferenceModal extends LitElement {
       .backdrop {
         position: fixed;
         inset: 0;
-        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        background: color-mix(in oklab, var(--fg) 18%, transparent);
         display: grid;
         place-items: center;
         z-index: var(--z-modal-backdrop);
+      }
+      /* Nested-modal hide — see openModal / isTopModal helpers. */
+      .backdrop.is-covered {
+        visibility: hidden;
       }
       .modal {
         background: var(--bg);
@@ -10024,6 +10159,12 @@ class SfgaAddReferenceModal extends LitElement {
       }
     };
     document.addEventListener("keydown", this._onDocKey);
+    // Register with the shared modal stack so nested modals opened on
+    // top of us hide us via is-covered, and so we hide any modal
+    // opened underneath us. requestUpdate on stack changes so our
+    // render sees the updated topmost state.
+    this._modalStackID = openModal();
+    this._unsubModalStack = subscribeModalStack(() => this.requestUpdate());
   }
 
   disconnectedCallback() {
@@ -10035,6 +10176,14 @@ class SfgaAddReferenceModal extends LitElement {
     if (this._releaseFocus) {
       this._releaseFocus();
       this._releaseFocus = null;
+    }
+    if (this._unsubModalStack) {
+      this._unsubModalStack();
+      this._unsubModalStack = null;
+    }
+    if (this._modalStackID) {
+      closeModal(this._modalStackID);
+      this._modalStackID = null;
     }
   }
 
@@ -10089,8 +10238,12 @@ class SfgaAddReferenceModal extends LitElement {
   }
 
   render() {
+    const covered =
+      this._modalStackID && !isTopModal(this._modalStackID)
+        ? " is-covered"
+        : "";
     return html`
-      <div class="backdrop">
+      <div class=${"backdrop" + covered}>
         <div
           class="modal"
           role="dialog"
@@ -12588,10 +12741,14 @@ class SfgaHelpModal extends LitElement {
       .backdrop {
         position: fixed;
         inset: 0;
-        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        background: color-mix(in oklab, var(--fg) 18%, transparent);
         display: grid;
         place-items: center;
         z-index: var(--z-modal-backdrop);
+      }
+      /* Nested-modal hide — see openModal / isTopModal helpers. */
+      .backdrop.is-covered {
+        visibility: hidden;
       }
       .modal {
         background: var(--bg);
@@ -12657,9 +12814,13 @@ class SfgaHelpModal extends LitElement {
   ];
 
   render() {
+    const covered =
+      this._modalStackID && !isTopModal(this._modalStackID)
+        ? " is-covered"
+        : "";
     return html`
       <div
-        class="backdrop"
+        class=${"backdrop" + covered}
         @click=${(e) => {
           // Click on the backdrop (not the modal) closes.
           if (e.target === e.currentTarget) this._close();
@@ -12713,11 +12874,25 @@ class SfgaHelpModal extends LitElement {
     });
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this._modalStackID = openModal();
+    this._unsubModalStack = subscribeModalStack(() => this.requestUpdate());
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._releaseFocus) {
       this._releaseFocus();
       this._releaseFocus = null;
+    }
+    if (this._unsubModalStack) {
+      this._unsubModalStack();
+      this._unsubModalStack = null;
+    }
+    if (this._modalStackID) {
+      closeModal(this._modalStackID);
+      this._modalStackID = null;
     }
   }
 
@@ -13478,10 +13653,14 @@ class SfgaAgentModal extends LitElement {
       .backdrop {
         position: fixed;
         inset: 0;
-        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        background: color-mix(in oklab, var(--fg) 18%, transparent);
         display: grid;
         place-items: center;
         z-index: var(--z-modal-backdrop);
+      }
+      /* Nested-modal hide — see openModal / isTopModal helpers. */
+      .backdrop.is-covered {
+        visibility: hidden;
       }
       .modal {
         background: var(--bg);
@@ -13641,6 +13820,8 @@ class SfgaAgentModal extends LitElement {
         this._issues = [];
       }
     }
+    this._modalStackID = openModal();
+    this._unsubModalStack = subscribeModalStack(() => this.requestUpdate());
   }
 
   disconnectedCallback() {
@@ -13652,6 +13833,14 @@ class SfgaAgentModal extends LitElement {
     if (this._releaseFocus) {
       this._releaseFocus();
       this._releaseFocus = null;
+    }
+    if (this._unsubModalStack) {
+      this._unsubModalStack();
+      this._unsubModalStack = null;
+    }
+    if (this._modalStackID) {
+      closeModal(this._modalStackID);
+      this._modalStackID = null;
     }
   }
 
@@ -13891,8 +14080,12 @@ class SfgaAgentModal extends LitElement {
     const editing = this._isEdit();
     const isPublisher = this.role === "publisher";
     const isContact = this.role === "contact";
+    const covered =
+      this._modalStackID && !isTopModal(this._modalStackID)
+        ? " is-covered"
+        : "";
     return html`
-      <div class="backdrop">
+      <div class=${"backdrop" + covered}>
         <div
           class="modal"
           role="dialog"
@@ -14299,10 +14492,16 @@ class SfgaConfirmModal extends LitElement {
       .backdrop {
         position: fixed;
         inset: 0;
-        background: color-mix(in oklab, var(--bg) 60%, transparent);
+        background: color-mix(in oklab, var(--fg) 18%, transparent);
         display: grid;
         place-items: center;
+        /* Confirm modal sits above other modals (z-popover) so a
+           confirm prompt over an open form is unambiguously topmost.
+           Nested-hide still applies via the shared .is-covered rule. */
         z-index: var(--z-popover);
+      }
+      .backdrop.is-covered {
+        visibility: hidden;
       }
       .modal {
         background: var(--bg);
@@ -14358,6 +14557,8 @@ class SfgaConfirmModal extends LitElement {
       this._choose("cancel");
     };
     document.addEventListener("keydown", this._onDocKey, true);
+    this._modalStackID = openModal();
+    this._unsubModalStack = subscribeModalStack(() => this.requestUpdate());
   }
 
   disconnectedCallback() {
@@ -14369,6 +14570,14 @@ class SfgaConfirmModal extends LitElement {
     if (this._releaseFocus) {
       this._releaseFocus();
       this._releaseFocus = null;
+    }
+    if (this._unsubModalStack) {
+      this._unsubModalStack();
+      this._unsubModalStack = null;
+    }
+    if (this._modalStackID) {
+      closeModal(this._modalStackID);
+      this._modalStackID = null;
     }
   }
 
@@ -14407,8 +14616,12 @@ class SfgaConfirmModal extends LitElement {
         ${b.label}
       </button>
     `;
+    const covered =
+      this._modalStackID && !isTopModal(this._modalStackID)
+        ? " is-covered"
+        : "";
     return html`
-      <div class="backdrop">
+      <div class=${"backdrop" + covered}>
         <div
           class="modal"
           role="alertdialog"
