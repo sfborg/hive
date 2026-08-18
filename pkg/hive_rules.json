@@ -58,12 +58,14 @@
       "publisher.col__email": "text",
       "name_relation.col__name_id": "text",
       "name_relation.col__related_name_id": "text",
+      "name_relation.col__type_id": "text",
       "metadata.col__id": "integer"
     },
     "relations": [
       "taxon:owning-name",
       "taxon:parent-owning-name",
-      "name:reference"
+      "name:reference",
+      "name:original-combination"
     ]
   },
   "relations": {
@@ -104,6 +106,29 @@
         }
       ],
       "description": "From a name row, walk to its publication reference."
+    },
+    "name:original-combination": {
+      "target_table": "name",
+      "target_alias": "original_combination",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "BASIONYM"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "original_combination"
+        }
+      ],
+      "description": "From a subsequent-combination name row, walk through the BASIONYM name_relation to reach the original combination's name row."
     }
   },
   "rules": [
@@ -617,6 +642,25 @@
       "warning_message": "Combination authorship + year duplicate the basionym pair on this name.",
       "is_active": true,
       "priority": 20
+    },
+    {
+      "rule_id": "hive_subsequent_combination_shares_reference",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "Subsequent combination shares its reference with the original combination",
+      "validator_type": "related_field_not_equals",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "relation": "name:original-combination",
+        "field": "col__reference_id",
+        "related_field": "col__reference_id",
+        "skip_if_either_empty": true
+      },
+      "error_message": "",
+      "warning_message": "This subsequent combination cites the same reference as the original combination. Name.referenceID should cite the paper that established the recombination, not the original description.",
+      "is_active": true,
+      "priority": 30
     },
     {
       "rule_id": "hive_reference_missing_structured_metadata",
