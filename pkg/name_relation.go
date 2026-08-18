@@ -88,8 +88,12 @@ func (t *Tx) LinkNameRelation(n coldp.NameRelation) error {
 // The projection carries the counterpart name id (whichever side isn't
 // `id`) plus a `direction` marker so callers can render the relation
 // naturally: "→" when `id` is the subject, "←" when it's the object.
+// RowID is the addressable handle for update / delete calls — sfga's
+// name_relation has no col__id column, so hive uses SQLite's implicit
+// rowid (same pattern as vernacular / distribution).
 func (a *Archive) ListNameRelations(ctx context.Context, id string) ([]NameRelationHit, error) {
 	const q = `SELECT
+		rowid,
 		col__name_id, col__related_name_id, col__type_id,
 		COALESCE(col__reference_id, ''), col__page, col__remarks
 	FROM name_relation
@@ -104,12 +108,14 @@ func (a *Archive) ListNameRelations(ctx context.Context, id string) ([]NameRelat
 	var out []NameRelationHit
 	for rows.Next() {
 		var (
+			rowid                                           int64
 			nameID, relatedID, typeID, refID, page, remarks string
 		)
-		if err := rows.Scan(&nameID, &relatedID, &typeID, &refID, &page, &remarks); err != nil {
+		if err := rows.Scan(&rowid, &nameID, &relatedID, &typeID, &refID, &page, &remarks); err != nil {
 			return nil, fmt.Errorf("core: scan name_relation: %w", err)
 		}
 		hit := NameRelationHit{
+			RowID:       rowid,
 			Type:        typeID,
 			ReferenceID: refID,
 			Page:        page,
@@ -130,11 +136,36 @@ func (a *Archive) ListNameRelations(ctx context.Context, id string) ([]NameRelat
 	return out, nil
 }
 
+// UnlinkNameRelation removes the row at rowid. Unknown rowid →
+// ErrNotFound so the handler surfaces a 404 rather than silently
+// no-op'ing. Mirrors the vernacular / distribution delete shape;
+// callers wanting to "change the type of an existing relation" do
+// unlink + Link (the row's identity IS its type + endpoints, so
+// updating any of those is semantically a new row).
+func (t *Tx) UnlinkNameRelation(rowid int64) error {
+	res, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM name_relation WHERE rowid = ?`, rowid,
+	)
+	if err != nil {
+		return fmt.Errorf("core: unlink name_relation %d: %w", rowid, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("core: unlink name_relation %d rows affected: %w", rowid, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("core: unlink name_relation %d: %w", rowid, ErrNotFound)
+	}
+	return nil
+}
+
 // NameRelationHit is the projection returned by ListNameRelations. It
 // carries the counterpart name id (never `id` itself) plus a
 // direction marker so the caller can render "this name → basionym X"
-// vs. "this name ← recombined-into Y" without another query.
+// vs. "this name ← recombined-into Y" without another query. RowID is
+// the opaque handle for update / delete calls (see UnlinkNameRelation).
 type NameRelationHit struct {
+	RowID         int64
 	CounterpartID string
 	Type          string // nom_rel_type ID (BASIONYM, SPELLING_CORRECTION, …)
 	Direction     string // "outgoing" (id is subject) or "incoming" (id is object)

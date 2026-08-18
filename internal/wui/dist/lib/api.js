@@ -385,6 +385,24 @@ export const api = {
     // synonym-delete flow before offering the "delete name too" option.
     dependencies: (id) =>
       j("GET", `/api/name/${encodeURIComponent(id)}/dependencies`),
+    // relations returns every name_relation row where {id} is the
+    // subject or object. Each item is an apiNameRelation with a
+    // rowid-stringified handle in `id`, the counterpart's rendered
+    // label in `related_name`, and a `direction` marker so callers
+    // know which side of the relation the URL name is on.
+    relations: (id) =>
+      j("GET", `/api/name/${encodeURIComponent(id)}/relations`),
+    createRelation: (id, body) =>
+      j("POST", `/api/name/${encodeURIComponent(id)}/relations`, body),
+  },
+
+  // Name-relation rows live at their own path once created. Delete-
+  // only — the composite (name_id, related_name_id, type) is the row's
+  // identity, so "changing the type" is delete + create rather than
+  // an update.
+  nameRelation: {
+    delete: (id) =>
+      j("DELETE", `/api/name-relation/${encodeURIComponent(id)}`),
   },
 
   // Synonym row lives under its own path once created. Delete-only

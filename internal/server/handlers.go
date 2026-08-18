@@ -62,6 +62,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon/{id}/species-interactions", s.handleCreateSpeciesInteraction)
 	mux.HandleFunc("PATCH /api/species-interaction/{id}", s.handlePatchSpeciesInteraction)
 	mux.HandleFunc("DELETE /api/species-interaction/{id}", s.handleDeleteSpeciesInteraction)
+	mux.HandleFunc("GET /api/name/{id}/relations", s.handleListNameRelations)
+	mux.HandleFunc("POST /api/name/{id}/relations", s.handleCreateNameRelation)
+	mux.HandleFunc("DELETE /api/name-relation/{id}", s.handleDeleteNameRelation)
 	mux.HandleFunc("GET /api/taxon/{id}/ancestors", s.handleAncestors)
 	mux.HandleFunc("GET /api/taxon/{id}/classification", s.handleClassification)
 	mux.HandleFunc("POST /api/taxon/{id}/move", s.handleMoveTaxon)
@@ -1002,6 +1005,152 @@ func parseSpeciesInteractionRowID(w http.ResponseWriter, r *http.Request) (int64
 		return 0, false
 	}
 	return n, true
+}
+
+// handleListNameRelations returns every name_relation row where the
+// {id} name is either the subject or the object. Each row's
+// related_name is resolved to a full apiRef (id + rendered label) so
+// the caller renders the counterpart's canonical + authorship without
+// a per-row fetch. Reference label is populated when the row cites
+// one.
+func (s *server) handleListNameRelations(w http.ResponseWriter, r *http.Request) {
+	nameID := r.PathValue("id")
+	hits, err := s.a.ListNameRelations(r.Context(), nameID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiNameRelation, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, s.nameRelationHitToAPI(r.Context(), nameID, h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiNameRelation]{Items: items})
+}
+
+// handleCreateNameRelation writes a new name_relation row. The subject
+// name comes from the path ({id}); the body carries related_name_id +
+// type + optional reference / page / remarks. Returns the freshly
+// hydrated apiNameRelation so callers can splice into local state
+// without a follow-up list refresh.
+func (s *server) handleCreateNameRelation(w http.ResponseWriter, r *http.Request) {
+	nameID := r.PathValue("id")
+	var body apiNameRelationCreate
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.RelatedNameID) == "" {
+		writeBadRequest(w, r, "related_name_id is required")
+		return
+	}
+	if strings.TrimSpace(body.Type) == "" {
+		writeBadRequest(w, r, "type is required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.LinkNameRelation(coldp.NameRelation{
+			NameID:        nameID,
+			RelatedNameID: body.RelatedNameID,
+			Type:          coldp.NewNomRelType(body.Type),
+			ReferenceID:   body.ReferenceID,
+			Page:          body.Page,
+			Remarks:       body.Remarks,
+		})
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	// Re-list to find the row we just wrote (name_relation has no
+	// insert-time id to return). Match on the composite key —
+	// (name_id, related_name_id, type_id) is unique enough in practice
+	// that the first matching row is the freshly-added one.
+	hits, err := s.a.ListNameRelations(r.Context(), nameID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	for _, h := range hits {
+		if h.Direction == "outgoing" &&
+			h.CounterpartID == body.RelatedNameID &&
+			h.Type == body.Type {
+			writeJSON(w, http.StatusCreated, s.nameRelationHitToAPI(r.Context(), nameID, h))
+			return
+		}
+	}
+	// Row was written but the re-list didn't find it (should not
+	// happen). Return a minimal shape so the client can refresh.
+	writeJSON(w, http.StatusCreated, apiNameRelation{
+		NameID: nameID,
+		Type:   body.Type,
+		RelatedName: apiRef{
+			ID: body.RelatedNameID,
+		},
+		Direction:   "outgoing",
+		ReferenceID: body.ReferenceID,
+		Page:        body.Page,
+		Remarks:     body.Remarks,
+	})
+}
+
+// handleDeleteNameRelation removes the row at the given rowid.
+// Unknown row → 404 via ErrNotFound.
+func (s *server) handleDeleteNameRelation(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseNameRelationRowID(w, r)
+	if !ok {
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.UnlinkNameRelation(rowid)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseNameRelationRowID mirrors parseVernacularRowID.
+func parseNameRelationRowID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeBadRequest(w, r, "invalid name-relation id: "+raw)
+		return 0, false
+	}
+	return n, true
+}
+
+// nameRelationHitToAPI resolves a NameRelationHit into its wire
+// projection: stringifies the rowid handle, fetches the counterpart
+// name's label via NameRef, and populates reference_label when a
+// reference is cited.
+func (s *server) nameRelationHitToAPI(ctx context.Context, nameID string, h hive.NameRelationHit) apiNameRelation {
+	out := apiNameRelation{
+		ID:          strconv.FormatInt(h.RowID, 10),
+		NameID:      nameID,
+		Type:        h.Type,
+		Direction:   h.Direction,
+		ReferenceID: h.ReferenceID,
+		Page:        h.Page,
+		Remarks:     h.Remarks,
+	}
+	if h.ReferenceID != "" {
+		out.ReferenceLabel = s.referenceLabel(ctx, h.ReferenceID)
+	}
+	ref, err := s.a.NameRef(ctx, h.CounterpartID)
+	if err != nil || ref.ID == "" {
+		out.RelatedName = apiRef{ID: h.CounterpartID}
+	} else {
+		out.RelatedName = apiRef{
+			ID: ref.ID,
+			Label: apiLabel{
+				Text: ref.Label.Text,
+				HTML: ref.Label.HTML,
+			},
+		}
+	}
+	return out
 }
 
 // applySpeciesInteractionPatch layers the pointer-optional patch

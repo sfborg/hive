@@ -3516,6 +3516,15 @@ class SfgaDetail extends LitElement {
     _editingAcceptedTaxonID: { state: true },
     _editingAcceptedTaxonDraft: { state: true },
     _editingAcceptedTaxonDraftName: { state: true },
+    // Name relations state — the outgoing name_relation rows for the
+    // name currently being edited. Loaded on _openEditTaxon /
+    // _openEditSynonym, refreshed after add / delete. _nameRelations
+    // is the persisted set; _nameRelationDraft is the in-progress
+    // blank row (progressive disclosure — a new blank row appears
+    // once related_name_id + type are picked and the row commits).
+    _nameRelations: { state: true },
+    _nameRelationDraft: { state: true },
+    _nameRelationBusy: { state: true },
     // Reference-quick-fix modal state. Opens over the create/edit
     // taxon pane when a curator clicks the book/warning badge on a
     // reference picker. Scoped to the fields most likely to need
@@ -4598,18 +4607,44 @@ class SfgaDetail extends LitElement {
       border-radius: 2px;
       word-break: break-word;
     }
-    /* Read-only linked-basionym cell in edit mode — matches the input
-       styling so the pane's visual rhythm stays consistent. */
-    .create-pane .linked-basionym {
-      padding: 0.3rem 0.4rem;
-      min-width: 0;
+    /* Name relations fieldset — one row per relation with three
+       picker columns (related name / type / reference) + a small
+       action button. Persisted rows show the values with an unlink
+       X; the trailing draft row is three empty pickers + a plus
+       button. */
+    fieldset.name-relations .name-relation-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 2fr 1fr 2fr auto;
+      gap: 0.3rem;
+      align-items: center;
+      padding: 0.15rem 0;
     }
-    .create-pane .linked-basionym > a {
+    fieldset.name-relations .name-relation-row.persisted .rel-type {
+      color: var(--dim);
+      font-family: var(--font-mono);
+      font-size: var(--fs-xs);
+      padding: 0.3rem 0.4rem;
+    }
+    fieldset.name-relations .name-relation-row.persisted .rel-name {
       color: var(--accent);
       text-decoration: none;
+      padding: 0.3rem 0.4rem;
+      min-width: 0;
+      overflow-wrap: break-word;
     }
-    .create-pane .linked-basionym > a:hover {
+    fieldset.name-relations .name-relation-row.persisted .rel-name:hover {
       text-decoration: underline;
+    }
+    fieldset.name-relations .name-relation-row.persisted .rel-ref {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      padding: 0.3rem 0.4rem;
+      min-width: 0;
+      overflow-wrap: break-word;
+    }
+    fieldset.name-relations .name-relation-row.draft sfga-combobox {
+      min-width: 0;
     }
     /* Row wrapping a combobox + adjacent action button so the button
        shrinks and the picker gets the remaining width. */
@@ -4680,6 +4715,9 @@ class SfgaDetail extends LitElement {
     this._editingAcceptedTaxonID = "";
     this._editingAcceptedTaxonDraft = null;
     this._editingAcceptedTaxonDraftName = "";
+    this._nameRelations = [];
+    this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
+    this._nameRelationBusy = false;
     this._editRefID = "";
     this._confirmDelete = false;
     this._deleteError = "";
@@ -4875,6 +4913,9 @@ class SfgaDetail extends LitElement {
     this._editingAcceptedTaxonID = "";
     this._editingAcceptedTaxonDraft = null;
     this._editingAcceptedTaxonDraftName = "";
+    this._nameRelations = [];
+    this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
+    this._nameRelationBusy = false;
     this._editRefID = "";
     if (parentID) {
       try {
@@ -5022,6 +5063,9 @@ class SfgaDetail extends LitElement {
     this._editingAcceptedTaxonID = "";
     this._editingAcceptedTaxonDraft = null;
     this._editingAcceptedTaxonDraftName = "";
+    this._nameRelations = [];
+    this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
+    this._nameRelationBusy = false;
     this._editRefID = "";
     // Fire an async fetch of persisted issues on this name so any
     // parse-tail (or other soft) issue renders in the top-of-pane
@@ -5039,6 +5083,7 @@ class SfgaDetail extends LitElement {
         .catch(() => {
           /* leave issues empty; banner just won't render */
         });
+      this._loadNameRelations(nameID);
     }
     this._maybeBackfillOnOpen();
     await this.updateComplete;
@@ -5246,6 +5291,7 @@ class SfgaDetail extends LitElement {
       this._editingOriginalName = name;
       this._editingNameEtag = name.__etag || "";
       this._editingNameIssues = issueResp.items || [];
+      this._loadNameRelations(name.id);
     } catch (err) {
       this._createError =
         err instanceof Problem
@@ -5287,6 +5333,9 @@ class SfgaDetail extends LitElement {
     this._editingAcceptedTaxonID = "";
     this._editingAcceptedTaxonDraft = null;
     this._editingAcceptedTaxonDraftName = "";
+    this._nameRelations = [];
+    this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
+    this._nameRelationBusy = false;
     this._editRefID = "";
   }
 
@@ -6405,7 +6454,7 @@ class SfgaDetail extends LitElement {
         ${this._creatingBasionymFor
           ? ""
           : this._editingTaxonID || this._editingSynonymID
-            ? this._renderLinkedBasionymInfo()
+            ? this._renderNameRelationsFieldset()
             : this._renderOriginalCombinationSection(d, set)}
 
         <div class="toolbar">
@@ -6709,70 +6758,240 @@ class SfgaDetail extends LitElement {
     `;
   }
 
-  // _renderLinkedBasionymInfo is the edit-mode counterpart to
-  // _renderOriginalCombinationSection. Read-only for now: displays the
-  // linked basionym name (when present) or a hint pointing curators at
-  // the existing "add original combination" affordance (when absent).
+  // _renderNameRelationsFieldset is the edit-mode counterpart to
+  // _renderOriginalCombinationSection. Shows every outgoing
+  // name_relation on the edited name as an unlink-able row and
+  // offers a three-omnibox row (related name + type + optional
+  // reference) to add a new relation. Sfga's name_relation has a
+  // composite key (name_id + related_name_id + type_id), so
+  // "changing" a relation's type is delete-then-add — this fieldset
+  // enforces that via a bare unlink + fresh add rather than an
+  // in-place edit path.
   //
-  // Link/unlink actions are deferred — they require new backend
-  // endpoints (POST /api/name/{id}/basionym-link and DELETE .../link)
-  // that don't exist yet. In the meantime curators can:
-  //   * add a basionym via the pencil-header action on the current
-  //     taxon (routes through POST /api/taxon/{id}/basionym).
-  //   * edit or delete the linked basionym itself via the pencil on
-  //     its row in the Nomenclatural history section below.
-  // Both paths keep this edit-mode form scoped to name-fields only
-  // and defer the two-sided link-mutation surface until it's built.
-  _renderLinkedBasionymInfo() {
-    const n = this._editingOriginalName;
-    const basionym = n?.basionym;
-    if (basionym && basionym.id) {
-      return html`
-        <fieldset>
-          <legend>Original combination</legend>
-          <label>Linked</label>
-          <div class="linked-basionym">
-            <a
-              href="#/taxon/${this._editingTaxonID}?name=${basionym.id}"
-              @click=${(e) => this._onLinkedBasionymClick(e, basionym.id)}
-              title="scroll to this basionym in Nomenclatural history"
-              >${renderLabel(basionym.label, basionym.id)}</a
-            >
-          </div>
-          <p class="hint" style="grid-column: 1 / -1; margin: 0;">
-            Edit or unlink this original combination via its row in the
-            Nomenclatural history section (below the edit form).
-          </p>
-        </fieldset>
-      `;
-    }
+  // Only OUTGOING relations render editing affordances — an incoming
+  // relation is owned by the OTHER name's edit surface. The list
+  // filters accordingly; the incoming set surfaces in the Nomen
+  // History section instead.
+  _renderNameRelationsFieldset() {
+    const nameID = this._editingOriginalName?.id;
+    if (!nameID) return "";
+    const outgoing = (this._nameRelations || []).filter(
+      (r) => r.direction === "outgoing",
+    );
+    const draft = this._nameRelationDraft || {};
+    const canCommit =
+      !!draft.related_name_id && !!draft.type && !this._nameRelationBusy;
     return html`
-      <fieldset>
-        <legend>original combination</legend>
-        <p class="hint" style="grid-column: 1 / -1; margin: 0;">
-          No original combination linked. Use the "add original
-          combination" action to create or link one for this name.
-        </p>
+      <fieldset class="name-relations">
+        <legend>Name relations</legend>
+        ${outgoing.length === 0
+          ? html`<p
+              class="hint"
+              style="grid-column: 1 / -1; margin: 0 0 var(--sp-2) 0;"
+            >
+              No relations recorded. Use the row below to add an
+              original combination, replacement name, or other
+              name-to-name link.
+            </p>`
+          : ""}
+        ${outgoing.map((r) => this._renderNameRelationRow(r))}
+        ${this._renderNameRelationDraftRow(draft, canCommit)}
       </fieldset>
     `;
   }
 
-  // _onLinkedBasionymClick cancels the edit pane and defers to the
-  // usual navigation. In-page anchor for now — the Nomenclatural
-  // history section renders the basionym row with its own pencil, so
-  // dismissing edit mode drops the curator back on the taxon detail
-  // where they can find it. When we add a "focus this name in the
-  // history" behavior, this handler is where to wire it.
-  _onLinkedBasionymClick(e, nameID) {
+  // _renderNameRelationRow renders one persisted relation: type +
+  // related name + optional reference + unlink X. All three fields
+  // read-only (no in-place edit — see fieldset comment).
+  _renderNameRelationRow(r) {
+    const relatedID = r.related_name?.id || "";
+    const relatedText =
+      r.related_name?.label?.text || relatedID || "(missing name)";
+    return html`
+      <div class="name-relation-row persisted">
+        <span class="rel-type" title="relation type">${r.type || ""}</span>
+        <a
+          class="rel-name"
+          href="#/name/${relatedID}"
+          @click=${(e) => this._onNameRelationRelatedClick(e, relatedID)}
+          title="edit this name"
+          >${relatedText}</a
+        >
+        <span class="rel-ref" title="citation">
+          ${r.reference_label || (r.reference_id ? "(unresolved)" : "")}
+        </span>
+        <button
+          class="icon-btn subtle danger"
+          type="button"
+          @click=${() => this._deleteNameRelation(r)}
+          title="unlink this relation"
+          aria-label="unlink relation"
+        >
+          ${renderIcon("x", 14)}
+        </button>
+      </div>
+    `;
+  }
+
+  // _renderNameRelationDraftRow renders the three-omnibox row a
+  // curator uses to add a new relation. Related name and type are
+  // required; reference is optional. Progressive disclosure: the +
+  // button lights up once both required fields are picked. On
+  // commit, the row POSTs and a fresh blank draft replaces it —
+  // "load another omnibox if it is populated" per the shared editor
+  // pattern.
+  _renderNameRelationDraftRow(draft, canCommit) {
+    const refActions = [
+      {
+        label: "Add new reference",
+        icon: "plus",
+        handler: () => (this._addingReferenceFor = "name-relation"),
+      },
+    ];
+    return html`
+      <div class="name-relation-row draft">
+        <sfga-combobox
+          class="rel-name-picker"
+          min-search-chars="2"
+          placeholder="Related name…"
+          .source=${nameSource}
+          .resolver=${nameResolver}
+          .value=${draft.related_name_id || ""}
+          @pick=${(e) =>
+            this._nameRelationDraftFieldChange(
+              "related_name_id",
+              e.detail.id,
+            )}
+        ></sfga-combobox>
+        <sfga-combobox
+          class="rel-type-picker"
+          min-search-chars="0"
+          placeholder="Type…"
+          .source=${vocabSource("nom_rel_type")}
+          .resolver=${vocabResolver("nom_rel_type")}
+          .value=${draft.type || ""}
+          @pick=${(e) =>
+            this._nameRelationDraftFieldChange("type", e.detail.id)}
+        ></sfga-combobox>
+        <sfga-combobox
+          class="rel-ref-picker"
+          min-search-chars="2"
+          placeholder="Citation (optional)…"
+          .source=${referenceSource}
+          .resolver=${referenceResolver}
+          .value=${draft.reference_id || ""}
+          .actions=${refActions}
+          @pick=${(e) =>
+            this._nameRelationDraftFieldChange(
+              "reference_id",
+              e.detail.id,
+            )}
+        ></sfga-combobox>
+        <button
+          class="icon-btn subtle"
+          type="button"
+          ?disabled=${!canCommit}
+          @click=${() => this._commitNameRelationDraft()}
+          title=${canCommit
+            ? "add this relation"
+            : "pick a related name and type first"}
+          aria-label="add relation"
+        >
+          ${renderIcon("plus", 14)}
+        </button>
+      </div>
+    `;
+  }
+
+  // _onNameRelationRelatedClick jumps to editing the related name.
+  // Same behavior as the old _onLinkedBasionymClick — routes through
+  // _openEditSynonym so the combined form opens with the related
+  // name's fields hydrated.
+  _onNameRelationRelatedClick(e, nameID) {
     e.preventDefault();
     if (!nameID) return;
     this._cancelCreate();
-    // Basionyms are synonym-side names, so route through the same
-    // synonym-edit flow the Nomen History pencil uses. Empty synonym
-    // id (basionym isn't a synonym of the current taxon) still opens
-    // the form as a name-only edit — the accepted-taxon picker just
-    // renders empty in that case.
     this._openEditSynonym(nameID, "", this._taxon?.id || "");
+  }
+
+  // _loadNameRelations fetches the outgoing / incoming relation set
+  // for the edited name. Silent on failure — the fieldset just
+  // renders empty and the curator can retry by reopening the form.
+  async _loadNameRelations(nameID) {
+    if (!nameID) return;
+    try {
+      const resp = await api.name.relations(nameID);
+      // Guard against a stale reply (curator switched to editing a
+      // different name mid-flight).
+      if (this._editingOriginalName?.id === nameID) {
+        this._nameRelations = resp.items || [];
+      }
+    } catch (_) {
+      /* leave list empty; curator can reopen to retry */
+    }
+  }
+
+  _nameRelationDraftFieldChange(field, value) {
+    this._nameRelationDraft = {
+      ...(this._nameRelationDraft || {}),
+      [field]: value,
+    };
+  }
+
+  async _commitNameRelationDraft() {
+    const nameID = this._editingOriginalName?.id;
+    if (!nameID) return;
+    const draft = this._nameRelationDraft || {};
+    if (!draft.related_name_id || !draft.type) return;
+    if (draft.related_name_id === nameID) {
+      // Backend also rejects, but a client-side guard gives a
+      // faster + clearer message.
+      this._createError = "A name cannot have a relation to itself.";
+      return;
+    }
+    this._nameRelationBusy = true;
+    try {
+      await api.name.createRelation(nameID, {
+        related_name_id: draft.related_name_id,
+        type: draft.type,
+        reference_id: draft.reference_id || "",
+      });
+      this._nameRelationDraft = {
+        related_name_id: "",
+        type: "",
+        reference_id: "",
+      };
+      await this._loadNameRelations(nameID);
+    } catch (err) {
+      this._createError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._nameRelationBusy = false;
+    }
+  }
+
+  async _deleteNameRelation(r) {
+    const nameID = this._editingOriginalName?.id;
+    if (!nameID || !r?.id) return;
+    const label =
+      r.related_name?.label?.text || r.related_name?.id || "this relation";
+    const ok = await confirmAction({
+      heading: "Unlink relation?",
+      message: `The "${r.type || "relation"}" link to "${label}" will be removed.`,
+      actionLabel: "Unlink",
+    });
+    if (!ok) return;
+    try {
+      await api.nameRelation.delete(r.id);
+      await this._loadNameRelations(nameID);
+    } catch (err) {
+      this._createError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
   }
 
   // _openCreateBasionymInline expands the inline basionym subform,
@@ -6994,7 +7213,8 @@ class SfgaDetail extends LitElement {
       this._addingReferenceFor === "section" ||
       this._addingReferenceFor === "vernacular" ||
       this._addingReferenceFor === "distribution" ||
-      this._addingReferenceFor === "species-interaction";
+      this._addingReferenceFor === "species-interaction" ||
+      this._addingReferenceFor === "name-relation";
     return html`
       <sfga-add-reference-modal
         .contextCanonical=${canonical}
@@ -7030,6 +7250,8 @@ class SfgaDetail extends LitElement {
       this._distributionFieldChange("reference_id", id);
     } else if (target === "species-interaction") {
       this._speciesInteractionFieldChange("reference_id", id);
+    } else if (target === "name-relation") {
+      this._nameRelationDraftFieldChange("reference_id", id);
     }
     this._addingReferenceFor = "";
   }
@@ -7703,6 +7925,9 @@ class SfgaDetail extends LitElement {
     this._editingAcceptedTaxonID = "";
     this._editingAcceptedTaxonDraft = null;
     this._editingAcceptedTaxonDraftName = "";
+    this._nameRelations = [];
+    this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
+    this._nameRelationBusy = false;
     this._editRefID = "";
     this._creating = true;
     // Fire the on-open backfill so a pre-populated basionym_name_id

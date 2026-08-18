@@ -929,6 +929,44 @@ type apiPage[T any] struct {
 	Total      *int   `json:"total,omitempty"`
 }
 
+// apiNameRelation is the wire form of a name_relation row. Sfga's
+// name_relation has no col__id; hive uses SQLite's implicit rowid as
+// the opaque handle and ships it as `id` (string per the "all ids
+// are strings in JSON" rule). Curators DELETE against
+// /api/name-relation/{id}; add via POST /api/name/{id}/relations.
+//
+// RelatedName is a fully-resolved apiRef so front-ends render the
+// counterpart's label + rank without a per-row lookup. Direction
+// tells callers whether the URL name (from the path) is the
+// subject ("outgoing") or the object ("incoming") of the relation —
+// most editors present only the outgoing set on a name's own
+// editing form.
+type apiNameRelation struct {
+	ID             string   `json:"id"`
+	NameID         string   `json:"name_id"`
+	RelatedName    apiRef   `json:"related_name"`
+	Type           string   `json:"type"`
+	Direction      string   `json:"direction"`
+	ReferenceID    string   `json:"reference_id,omitempty"`
+	ReferenceLabel string   `json:"reference_label,omitempty"`
+	Page           string   `json:"page,omitempty"`
+	Remarks        string   `json:"remarks,omitempty"`
+}
+
+// apiNameRelationCreate is the POST body — related_name_id + type
+// are required, everything else optional. name_id comes from the
+// path (POST /api/name/{id}/relations). No patch type: sfga models
+// the relation by its composite key (name_id, related_name_id, type)
+// so "changing type" is semantically a different row — callers do
+// delete + create instead of update.
+type apiNameRelationCreate struct {
+	RelatedNameID string `json:"related_name_id"`
+	Type          string `json:"type"`
+	ReferenceID   string `json:"reference_id,omitempty"`
+	Page          string `json:"page,omitempty"`
+	Remarks       string `json:"remarks,omitempty"`
+}
+
 // ---------- patch types ----------
 //
 // PATCH request bodies use pointer-optional fields with these semantics:
