@@ -65,7 +65,9 @@
       "taxon:owning-name",
       "taxon:parent-owning-name",
       "name:reference",
-      "name:original-combination"
+      "name:original-combination",
+      "name:replaced-name",
+      "name:original-spelling"
     ]
   },
   "relations": {
@@ -129,6 +131,52 @@
         }
       ],
       "description": "From a subsequent-combination name row, walk through the BASIONYM name_relation to reach the original combination's name row."
+    },
+    "name:replaced-name": {
+      "target_table": "name",
+      "target_alias": "replaced_name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "REPLACEMENT_NAME"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "replaced_name"
+        }
+      ],
+      "description": "From a replacement name (nomen novum) row, walk through the REPLACEMENT_NAME name_relation to reach the replaced name's row."
+    },
+    "name:original-spelling": {
+      "target_table": "name",
+      "target_alias": "original_spelling",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "SPELLING_CORRECTION"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "original_spelling"
+        }
+      ],
+      "description": "From a corrected-spelling name row, walk through the SPELLING_CORRECTION name_relation to reach the original spelling's row."
     }
   },
   "rules": [
@@ -659,6 +707,44 @@
       },
       "error_message": "",
       "warning_message": "This subsequent combination cites the same reference as the original combination. Name.referenceID should cite the paper that established the recombination, not the original description.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "hive_replacement_name_shares_reference",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "Replacement name shares its reference with the replaced name",
+      "validator_type": "related_field_not_equals",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "relation": "name:replaced-name",
+        "field": "col__reference_id",
+        "related_field": "col__reference_id",
+        "skip_if_either_empty": true
+      },
+      "error_message": "",
+      "warning_message": "This replacement name cites the same reference as the name it replaces. Name.referenceID should cite the paper that established the replacement, not the replaced name's original publication.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "hive_spelling_correction_shares_reference",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "Corrected spelling shares its reference with the original spelling",
+      "validator_type": "related_field_not_equals",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {
+        "relation": "name:original-spelling",
+        "field": "col__reference_id",
+        "related_field": "col__reference_id",
+        "skip_if_either_empty": true
+      },
+      "error_message": "",
+      "warning_message": "This corrected spelling cites the same reference as the original spelling. Name.referenceID should cite the paper that published the correction, not the original spelling's publication.",
       "is_active": true,
       "priority": 30
     },
