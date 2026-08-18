@@ -141,7 +141,7 @@ func (a *Archive) TaxonRef(ctx context.Context, id string) (Ref, error) {
 		return Ref{}, nil
 	}
 	const q = `SELECT
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, ''),
+		COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, ''),
 		COALESCE(n.col__authorship, ''),
 		COALESCE(n.col__rank_id, ''),
 		t.col__extinct
@@ -180,7 +180,7 @@ func (a *Archive) NameRef(ctx context.Context, id string) (Ref, error) {
 		return Ref{}, nil
 	}
 	const q = `SELECT
-		COALESCE(NULLIF(gn__canonical_simple, ''), col__scientific_name, ''),
+		COALESCE(NULLIF(gn__canonical_full, ''), NULLIF(gn__canonical_simple, ''), col__scientific_name, ''),
 		COALESCE(col__authorship, ''),
 		COALESCE(col__rank_id, '')
 	FROM name WHERE col__id = ?`
@@ -511,7 +511,7 @@ func wrapSearchBody(body string) string {
 		picked.is_synonym,
 		picked.matched_name,
 		EXISTS(SELECT 1 FROM taxon c WHERE c.col__parent_id = picked.id) AS has_children,
-		COALESCE(NULLIF(pn.gn__canonical_simple, ''), pn.col__scientific_name, '') AS parent_name,
+		COALESCE(NULLIF(pn.gn__canonical_full, ''), NULLIF(pn.gn__canonical_simple, ''), pn.col__scientific_name, '') AS parent_name,
 		COALESCE(pn.col__authorship, '') AS parent_authorship,
 		COALESCE(pn.col__rank_id, '') AS parent_rank
 	FROM (
@@ -574,13 +574,13 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				t.col__id AS id,
 				COALESCE(t.col__parent_id, '') AS parent_id,
 				t.col__name_id AS name_id,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
 				COALESCE(n.col__authorship, '') AS authorship,
 				COALESCE(n.col__rank_id, '') AS rank_id,
 				COALESCE(t.col__status_id, '') AS status_id,
 				t.col__extinct AS extinct,
 				0 AS is_synonym,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
 				0.0 AS rank
 			FROM name n
 			JOIN taxon t ON t.col__name_id = n.col__id
@@ -593,7 +593,7 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				t.col__id,
 				COALESCE(t.col__parent_id, ''),
 				t.col__name_id,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, ''),
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, ''),
 				COALESCE(n.col__authorship, ''),
 				COALESCE(n.col__rank_id, ''),
 				COALESCE(t.col__status_id, ''),
@@ -613,13 +613,13 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				t.col__id,
 				COALESCE(t.col__parent_id, ''),
 				t.col__name_id,
-				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(NULLIF(acc.gn__canonical_full, ''), NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
 				COALESCE(acc.col__authorship, ''),
 				COALESCE(acc.col__rank_id, ''),
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				sname.gn__canonical_simple,
+				COALESCE(NULLIF(sname.gn__canonical_full, ''), sname.gn__canonical_simple),
 				0.0
 			FROM name sname
 			JOIN synonym s ON s.col__name_id = sname.col__id
@@ -634,7 +634,7 @@ func (a *Archive) searchArmsPrefix(q string, includeSynonyms bool, limit int) (s
 				t.col__id,
 				COALESCE(t.col__parent_id, ''),
 				t.col__name_id,
-				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(NULLIF(acc.gn__canonical_full, ''), NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
 				COALESCE(acc.col__authorship, ''),
 				COALESCE(acc.col__rank_id, ''),
 				COALESCE(t.col__status_id, ''),
@@ -694,13 +694,13 @@ func (a *Archive) searchArmsPartial(q string, includeSynonyms bool, limit int) (
 				t.col__id AS id,
 				COALESCE(t.col__parent_id, '') AS parent_id,
 				t.col__name_id AS name_id,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
 				COALESCE(n.col__authorship, '') AS authorship,
 				COALESCE(n.col__rank_id, '') AS rank_id,
 				COALESCE(t.col__status_id, '') AS status_id,
 				t.col__extinct AS extinct,
 				0 AS is_synonym,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
 				bm25(hive__name_fts) AS rank
 			FROM hive__name_fts fts
 			JOIN name n ON n.rowid = fts.rowid
@@ -716,13 +716,13 @@ func (a *Archive) searchArmsPartial(q string, includeSynonyms bool, limit int) (
 				t.col__id,
 				COALESCE(t.col__parent_id, ''),
 				t.col__name_id,
-				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(NULLIF(acc.gn__canonical_full, ''), NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
 				COALESCE(acc.col__authorship, ''),
 				COALESCE(acc.col__rank_id, ''),
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
+				COALESCE(NULLIF(sname.gn__canonical_full, ''), NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
 				bm25(hive__name_fts)
 			FROM hive__name_fts fts
 			JOIN name sname ON sname.rowid = fts.rowid
@@ -823,13 +823,13 @@ func (a *Archive) searchArmsFuzzy(q string, includeSynonyms bool, limit int) (st
 				t.col__id AS id,
 				COALESCE(t.col__parent_id, '') AS parent_id,
 				t.col__name_id AS name_id,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
 				COALESCE(n.col__authorship, '') AS authorship,
 				COALESCE(n.col__rank_id, '') AS rank_id,
 				COALESCE(t.col__status_id, '') AS status_id,
 				t.col__extinct AS extinct,
 				0 AS is_synonym,
-				COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
+				COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS matched_name,
 				bm25(hive__name_fts_tri) AS rank
 			FROM hive__name_fts_tri fts
 			JOIN name n ON n.rowid = fts.rowid
@@ -845,13 +845,13 @@ func (a *Archive) searchArmsFuzzy(q string, includeSynonyms bool, limit int) (st
 				t.col__id,
 				COALESCE(t.col__parent_id, ''),
 				t.col__name_id,
-				COALESCE(NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
+				COALESCE(NULLIF(acc.gn__canonical_full, ''), NULLIF(acc.gn__canonical_simple, ''), acc.col__scientific_name, ''),
 				COALESCE(acc.col__authorship, ''),
 				COALESCE(acc.col__rank_id, ''),
 				COALESCE(t.col__status_id, ''),
 				t.col__extinct,
 				1,
-				COALESCE(NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
+				COALESCE(NULLIF(sname.gn__canonical_full, ''), NULLIF(sname.gn__canonical_simple, ''), sname.col__scientific_name, ''),
 				bm25(hive__name_fts_tri)
 			FROM hive__name_fts_tri fts
 			JOIN name sname ON sname.rowid = fts.rowid
@@ -993,7 +993,7 @@ func (a *Archive) ListChildrenPage(ctx context.Context, parentID string, limit, 
 		t.col__id,
 		COALESCE(t.col__parent_id, ''),
 		t.col__name_id,
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+		COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
 		COALESCE(n.col__authorship, ''),
 		COALESCE(n.col__rank_id, ''),
 		COALESCE(t.col__status_id, ''),
@@ -1345,7 +1345,7 @@ func (a *Archive) Classification(ctx context.Context, id string) ([]TaxonHit, er
 			t.col__id,
 			COALESCE(t.col__parent_id, ''),
 			t.col__name_id,
-			COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
+			COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS display_name,
 			COALESCE(n.col__authorship, ''),
 			COALESCE(n.col__rank_id, ''),
 			COALESCE(t.col__status_id, ''),

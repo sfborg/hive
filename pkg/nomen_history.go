@@ -349,7 +349,7 @@ func (a *Archive) batchNomenNameRows(ctx context.Context, ids []string) (map[str
 	}
 	q := `SELECT
 		col__id,
-		COALESCE(NULLIF(gn__canonical_simple, ''), col__scientific_name, ''),
+		COALESCE(NULLIF(gn__canonical_full, ''), NULLIF(gn__canonical_simple, ''), col__scientific_name, ''),
 		COALESCE(col__authorship, ''),
 		COALESCE(col__rank_id, ''),
 		COALESCE(NULLIF(col__combination_authorship_year, ''),

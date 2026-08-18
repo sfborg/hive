@@ -55,7 +55,7 @@ func (a *Archive) ListSynonymHits(ctx context.Context, taxonID string) ([]Synony
 		COALESCE(s.col__id, ''),
 		s.col__taxon_id,
 		s.col__name_id,
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS canon,
+		COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS canon,
 		COALESCE(n.col__authorship, ''),
 		COALESCE(n.col__rank_id, ''),
 		s.col__name_phrase,

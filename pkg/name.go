@@ -315,7 +315,7 @@ func (a *Archive) SearchNames(ctx context.Context, q string, limit int) ([]NameH
 	// display column mirrors ListChildren's convention.
 	const sql = `SELECT
 		col__id,
-		COALESCE(NULLIF(gn__canonical_simple, ''), col__scientific_name, '') AS display_name,
+		COALESCE(NULLIF(gn__canonical_full, ''), NULLIF(gn__canonical_simple, ''), col__scientific_name, '') AS display_name,
 		col__scientific_name,
 		col__authorship,
 		COALESCE(col__rank_id, ''),

@@ -80,7 +80,7 @@ func (a *Archive) ListSpeciesInteractions(ctx context.Context, taxonID string) (
 		COALESCE(si.col__remarks, ''),
 		COALESCE(si.col__modified, ''),
 		COALESCE(si.col__modified_by, ''),
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS related_name,
+		COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS related_name,
 		COALESCE(n.col__authorship, '') AS related_authorship,
 		COALESCE(n.col__rank_id, '') AS related_rank,
 		t.col__extinct AS related_extinct
@@ -178,7 +178,7 @@ func (a *Archive) GetSpeciesInteraction(ctx context.Context, rowid int64) (*Spec
 		COALESCE(si.col__remarks, ''),
 		COALESCE(si.col__modified, ''),
 		COALESCE(si.col__modified_by, ''),
-		COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS related_name,
+		COALESCE(NULLIF(n.gn__canonical_full, ''), NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name, '') AS related_name,
 		COALESCE(n.col__authorship, '') AS related_authorship,
 		COALESCE(n.col__rank_id, '') AS related_rank,
 		t.col__extinct AS related_extinct
