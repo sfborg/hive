@@ -6886,6 +6886,8 @@ class SfgaDetail extends LitElement {
               "reference_id",
               e.detail.id,
             )}
+          @badge-click=${(e) =>
+            this._openEditReference(e.detail.id || draft.reference_id)}
         ></sfga-combobox>
         <button
           class="icon-btn subtle"
@@ -7441,29 +7443,42 @@ class SfgaDetail extends LitElement {
     // (later: distribution / vernacular / interaction sections) walks
     // rows in visual order; _renderReferences reads the finished map.
     this._refCites = new Map();
+    // Wrapping div carries the @reference-updated listener so a
+    // curator opening the reference-quick-fix modal from a per-row
+    // modal (vernacular / distribution / species-interaction / name
+    // relation) still gets picker-badge + backfill refresh on save.
+    // The event bubbles up from sfga-add-reference-modal through the
+    // per-row modal to this element; the wrapper catches it either
+    // way.
     return html`
-      <div class="detail-header">
-        <h2>${heading}</h2>
+      <div
+        class="detail-root"
+        @reference-updated=${(e) => this._onReferenceUpdated(e)}
+      >
+        <div class="detail-header">
+          <h2>${heading}</h2>
+        </div>
+        <hr />
+        ${this._renderBreadcrumbs()}
+        ${this._renderPendingWarnings()}
+        ${this._renderNomenclaturalHistory()}
+        ${this._renderVernaculars()}
+        ${this._renderDistributions()}
+        ${this._renderSpeciesInteractions()}
+        ${this._renderReferences()}
+        ${this._renderViewFields()}
+        ${this._vernacularForm ? this._renderVernacularModal() : ""}
+        ${this._distributionForm ? this._renderDistributionModal() : ""}
+        ${this._speciesInteractionForm ? this._renderSpeciesInteractionModal() : ""}
+        ${this._synonymDelete ? this._renderSynonymDeleteModal() : ""}
+        ${this._addingReferenceFor === "section" ||
+        this._addingReferenceFor === "vernacular" ||
+        this._addingReferenceFor === "distribution" ||
+        this._addingReferenceFor === "species-interaction"
+          ? this._renderAddReferenceModal()
+          : ""}
+        ${this._renderEditReferenceModal()}
       </div>
-      <hr />
-      ${this._renderBreadcrumbs()}
-      ${this._renderPendingWarnings()}
-      ${this._renderNomenclaturalHistory()}
-      ${this._renderVernaculars()}
-      ${this._renderDistributions()}
-      ${this._renderSpeciesInteractions()}
-      ${this._renderReferences()}
-      ${this._renderViewFields()}
-      ${this._vernacularForm ? this._renderVernacularModal() : ""}
-      ${this._distributionForm ? this._renderDistributionModal() : ""}
-      ${this._speciesInteractionForm ? this._renderSpeciesInteractionModal() : ""}
-      ${this._synonymDelete ? this._renderSynonymDeleteModal() : ""}
-      ${this._addingReferenceFor === "section" ||
-      this._addingReferenceFor === "vernacular" ||
-      this._addingReferenceFor === "distribution" ||
-      this._addingReferenceFor === "species-interaction"
-        ? this._renderAddReferenceModal()
-        : ""}
     `;
   }
 
@@ -7991,7 +8006,7 @@ class SfgaDetail extends LitElement {
       return html`<li class=${cls}>
         <span class="glyph" aria-hidden="true">${glyph}</span>
         <span>${nameCell}${cite}</span>
-        ${isAcceptedName ? "" : this._renderNomenRowActions(n)}
+        ${this._renderNomenRowActions(n, cluster, isAcceptedName)}
       </li>`;
     });
   }
@@ -8059,39 +8074,77 @@ class SfgaDetail extends LitElement {
     return html`${canonicalNode} ${suffix}`;
   }
 
-  // _renderNomenRowActions draws the hover-reveal action strip on a
-  // synonym / basionym row: warning icon (when the name has open
-  // validation issues), pencil (open name editor), delete (remove the
-  // synonym link). Accepted-name rows skip this — the accepted taxon
-  // has its own edit/delete in the app header. See DESIGN.md § List-row
-  // actions.
+  // _renderNomenRowActions draws the hover-reveal action strip on
+  // every Nomenclatural-history row. Buttons: + (add sibling
+  // recomb), warn (open issues), pencil (edit name), trash (delete).
   //
-  // Placeholder wiring for now: each button dispatches a bubbling event
-  // (edit-name / delete-synonym / open-name-issues) with the relevant
-  // ids in detail. No parent listens today — the actual behaviours
-  // require:
-  //   * name-editor UI (standalone edit form for a name row)
-  //   * DELETE /api/synonym/{id} endpoint
-  //   * per-name issue-count field on apiNomenName so the warning
-  //     icon knows when to render
-  // See DEFERRED.md when those follow-up slices land.
-  _renderNomenRowActions(n) {
+  // Routing changes per row kind:
+  //   * Accepted row → pencil opens the taxon-edit flow
+  //     (_openEditTaxon) and trash opens the taxon-delete flow
+  //     (_askDelete). The header's edit / delete affordances point
+  //     at the same handlers.
+  //   * Synonym / basionym / unlinked row → pencil opens the
+  //     synonym-edit form (_openEditSynonym) and trash opens the
+  //     synonym-delete modal.
+  //
+  // The + button surfaces on rows where hive can determine a
+  // basionym anchor to seed a new subsequent combination:
+  //   * Cluster-anchor rows (is_basionym: true) — uses this row's
+  //     own name_id as the basionym.
+  //   * The accepted row — uses the cluster's basionym anchor
+  //     (accepted's name_id when accepted IS the basionym; the
+  //     anchor row's name_id when accepted is itself a recomb).
+  //
+  // The warn icon uses the shared validationSeverityBadge so color
+  // + tooltip stay in sync with pickers.
+  _renderNomenRowActions(n, cluster, isAcceptedName) {
     const hasIssues = (n.issue_count || 0) > 0;
-    // The + button surfaces on cluster-anchor rows (is_basionym:
-    // true) as a shortcut for "add another subsequent combination
-    // sharing this original combination." Opens the standard
-    // create-synonym form with basionym_name_id pre-populated to
-    // this row's name_id, so the curator skips the picker step.
-    // Placed first because on a cluster anchor, "add another
-    // recomb" is often why the curator hovered the row in the first
-    // place.
     const isClusterAnchor = !!n.is_basionym;
+    // Basionym anchor id for the + button.
+    //   * Cluster anchors → this row.
+    //   * Accepted row → cluster's basionym anchor (may be this row
+    //     if accepted IS the basionym, otherwise a sibling).
+    //   * Everyone else → nothing (button hidden).
+    let addBasionymNameID = "";
+    if (isClusterAnchor) {
+      addBasionymNameID = n.name_id || "";
+    } else if (isAcceptedName) {
+      const anchor = (cluster?.names || []).find((r) => r.is_basionym);
+      addBasionymNameID = anchor?.name_id || n.name_id || "";
+    }
+    const showAdd = !!addBasionymNameID;
+
+    const onEdit = isAcceptedName
+      ? (e) => {
+          e.stopPropagation();
+          this._openEditTaxon();
+        }
+      : (e) => this._onNomenRowEdit(e, n);
+
+    // Delete: accepted row → taxon-delete flow (_askDelete opens the
+    // preview + confirm modal). Synonym rows → the existing synonym-
+    // delete flow. Rows with no synonym id AND no accepted marker
+    // (legacy / phantom entries) render a disabled trash button.
+    const canDelete = isAcceptedName || !!n.synonym_id;
+    const onDelete = isAcceptedName
+      ? (e) => {
+          e.stopPropagation();
+          this._askDelete();
+        }
+      : (e) => this._onNomenRowDelete(e, n);
+    const deleteTitle = isAcceptedName ? "delete taxon" : "delete synonym";
+
     return html`
       <span class="row-actions">
-        ${isClusterAnchor
+        ${showAdd
           ? html`<button
               class="icon-btn subtle"
-              @click=${(e) => this._onNomenRowAddRecomb(e, n)}
+              @click=${(e) => {
+                e.stopPropagation();
+                this._openCreateSynonym({
+                  basionymNameID: addBasionymNameID,
+                });
+              }}
               title="add subsequent combination of this original combination"
               aria-label="add subsequent combination"
             >
@@ -8100,11 +8153,6 @@ class SfgaDetail extends LitElement {
           : ""}
         ${hasIssues
           ? (() => {
-              // Use the shared validationSeverityBadge so the color
-              // + icon + tooltip match what pickers render for the
-              // same record. n.max_severity comes from the server's
-              // batched issue-summary query; falls back to "warn"
-              // in normalizeSeverity when absent.
               const badge = validationSeverityBadge(
                 n.issue_count || 0,
                 n.max_severity,
@@ -8122,7 +8170,7 @@ class SfgaDetail extends LitElement {
           : ""}
         <button
           class="icon-btn subtle"
-          @click=${(e) => this._onNomenRowEdit(e, n)}
+          @click=${onEdit}
           title="edit name"
           aria-label="edit name"
         >
@@ -8130,10 +8178,10 @@ class SfgaDetail extends LitElement {
         </button>
         <button
           class="icon-btn subtle danger"
-          @click=${(e) => this._onNomenRowDelete(e, n)}
-          title="delete synonym"
-          aria-label="delete synonym"
-          ?disabled=${!n.synonym_id}
+          @click=${onDelete}
+          title=${deleteTitle}
+          aria-label=${deleteTitle}
+          ?disabled=${!canDelete}
         >
           ${renderIcon("trash-2", 14)}
         </button>
@@ -8821,6 +8869,8 @@ class SfgaDetail extends LitElement {
               .actions=${refActions}
               @pick=${(e) =>
                 this._vernacularFieldChange("reference_id", e.detail.id)}
+              @badge-click=${(e) =>
+                this._openEditReference(e.detail.id || d.reference_id)}
             ></sfga-combobox>
 
             <label for="vern-remarks">Remarks</label>
@@ -9179,6 +9229,8 @@ class SfgaDetail extends LitElement {
               .actions=${refActions}
               @pick=${(e) =>
                 this._distributionFieldChange("reference_id", e.detail.id)}
+              @badge-click=${(e) =>
+                this._openEditReference(e.detail.id || d.reference_id)}
             ></sfga-combobox>
 
             <label for="dist-remarks">Remarks</label>
@@ -9544,6 +9596,8 @@ class SfgaDetail extends LitElement {
                   "reference_id",
                   e.detail.id,
                 )}
+              @badge-click=${(e) =>
+                this._openEditReference(e.detail.id || d.reference_id)}
             ></sfga-combobox>
 
             <label for="sxi-remarks">Remarks</label>
