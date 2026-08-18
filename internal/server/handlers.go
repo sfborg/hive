@@ -918,7 +918,7 @@ func (s *server) handleCreateSpeciesInteraction(w http.ResponseWriter, r *http.R
 			Type:                       coldp.NewSpInteractionType(body.Type),
 			ReferenceID:                body.ReferenceID,
 			Remarks:                    body.Remarks,
-		})
+		}, body.Type)
 		newID = id
 		return err
 	})
@@ -963,7 +963,16 @@ func (s *server) handlePatchSpeciesInteraction(w http.ResponseWriter, r *http.Re
 			Remarks:                    current.Remarks,
 		}
 		applySpeciesInteractionPatch(&merged, patch)
-		return tx.UpdateSpeciesInteraction(rowid, merged)
+		// Preserve the raw type string across the round-trip. When the
+		// patch touched Type, use its literal value (curator's choice —
+		// controlled or freeform). Otherwise carry forward the raw
+		// value from the current row so unknown-vocab types don't get
+		// silently zeroed by the enum coercion.
+		typeRaw := current.TypeRaw
+		if patch.Type != nil {
+			typeRaw = *patch.Type
+		}
+		return tx.UpdateSpeciesInteraction(rowid, merged, typeRaw)
 	})
 	if err != nil {
 		writeProblem(w, r, err)

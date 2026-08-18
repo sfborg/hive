@@ -46,7 +46,17 @@ type SpeciesInteractionHit struct {
 	RelatedTaxonScientificName string
 	RelatedTaxonLabel          Label
 	Type                       coldp.SpInteractionType
-	SourceID                   string
+	// TypeRaw is the col__type_id verbatim from the DB — preserved
+	// so freeform values (e.g. "eats" from datasets that don't
+	// follow the SCREAMING_SNAKE_CASE convention) survive the round
+	// trip. sflib's NewSpInteractionType maps unknown strings to
+	// UnknownSpIntT whose .ID() is "", which would otherwise both
+	// hide the value from the WUI display and silently zero-out the
+	// column on any PATCH that doesn't touch the type. Callers
+	// prefer Type.ID() (normalized enum) if non-empty, else fall
+	// back to TypeRaw so freeform values render as-authored.
+	TypeRaw    string
+	SourceID   string
 	ReferenceID                string
 	Remarks                    string
 	Modified                   string
@@ -115,6 +125,7 @@ func (a *Archive) ListSpeciesInteractions(ctx context.Context, taxonID string) (
 			return nil, fmt.Errorf("core: scan species interaction of %q: %w", taxonID, err)
 		}
 		h.Type = coldp.NewSpInteractionType(typeID)
+		h.TypeRaw = typeID
 		if relName != "" {
 			h.RelatedTaxonLabel = BuildLabel(
 				relName, relAuth, relRnk,
@@ -209,6 +220,7 @@ func (a *Archive) GetSpeciesInteraction(ctx context.Context, rowid int64) (*Spec
 		return nil, fmt.Errorf("core: get species interaction %d: %w", rowid, err)
 	}
 	h.Type = coldp.NewSpInteractionType(typeID)
+	h.TypeRaw = typeID
 	if relName != "" {
 		h.RelatedTaxonLabel = BuildLabel(
 			relName, relAuth, relRnk,
@@ -228,13 +240,22 @@ func (a *Archive) GetSpeciesInteraction(ctx context.Context, rowid int64) (*Spec
 //     check. The scientific-name field remains available as an
 //     annotation alongside the FK, matching sfga's shape.
 //   - Nullable FKs ("" → NULL): source_id, type_id, reference_id.
+//   - typeRaw takes precedence over s.Type when non-empty — lets
+//     callers preserve freeform vocab values (e.g. "eats" from
+//     datasets that don't follow the controlled-vocab SCREAMING_
+//     SNAKE_CASE convention) instead of coercing them to
+//     UnknownSpIntT.ID() = "". Pass "" to fall back to s.Type.ID().
 //   - col__modified / col__modified_by stamped from tx context.
-func (t *Tx) AddSpeciesInteraction(s coldp.SpeciesInteraction) (int64, error) {
+func (t *Tx) AddSpeciesInteraction(s coldp.SpeciesInteraction, typeRaw string) (int64, error) {
 	if s.TaxonID == "" {
 		return 0, fmt.Errorf("core: add species interaction: %w: taxon_id required", ErrValidation)
 	}
 	if s.RelatedTaxonID == "" {
 		return 0, fmt.Errorf("core: add species interaction: %w: related_taxon_id required", ErrValidation)
+	}
+	typeValue := typeRaw
+	if typeValue == "" {
+		typeValue = s.Type.ID()
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	const insert = `INSERT INTO species_interaction (
@@ -246,7 +267,7 @@ func (t *Tx) AddSpeciesInteraction(s coldp.SpeciesInteraction) (int64, error) {
 	res, err := t.tx.ExecContext(t.ctx, insert,
 		s.TaxonID, s.RelatedTaxonID, nullIfEmpty(s.SourceID),
 		s.RelatedTaxonScientificName,
-		nullIfEmpty(s.Type.ID()), nullIfEmpty(s.ReferenceID),
+		nullIfEmpty(typeValue), nullIfEmpty(s.ReferenceID),
 		s.Remarks, now, t.actor,
 	)
 	if err != nil {
@@ -264,7 +285,13 @@ func (t *Tx) AddSpeciesInteraction(s coldp.SpeciesInteraction) (int64, error) {
 // row at rowid. TaxonID is NOT editable — reparenting is
 // semantically a delete+add on a different taxon. Zero-row affected
 // (unknown rowid) surfaces as ErrNotFound so the handler maps to 404.
-func (t *Tx) UpdateSpeciesInteraction(rowid int64, s coldp.SpeciesInteraction) error {
+// typeRaw takes precedence over s.Type when non-empty (see
+// AddSpeciesInteraction for the rationale).
+func (t *Tx) UpdateSpeciesInteraction(rowid int64, s coldp.SpeciesInteraction, typeRaw string) error {
+	typeValue := typeRaw
+	if typeValue == "" {
+		typeValue = s.Type.ID()
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	const upd = `UPDATE species_interaction SET
 		col__related_taxon_id = ?, col__source_id = ?,
@@ -275,7 +302,7 @@ func (t *Tx) UpdateSpeciesInteraction(rowid int64, s coldp.SpeciesInteraction) e
 	res, err := t.tx.ExecContext(t.ctx, upd,
 		s.RelatedTaxonID, nullIfEmpty(s.SourceID),
 		s.RelatedTaxonScientificName,
-		nullIfEmpty(s.Type.ID()), nullIfEmpty(s.ReferenceID),
+		nullIfEmpty(typeValue), nullIfEmpty(s.ReferenceID),
 		s.Remarks, now, t.actor,
 		rowid,
 	)

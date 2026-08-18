@@ -1503,15 +1503,21 @@ func distributionHitToAPI(h hive.DistributionHit) apiDistribution {
 // nullBoolToPtr converts sql.NullBool → *bool. Invalid → nil (omitted from
 // JSON via omitempty). Valid → &bool.
 // speciesInteractionHitToAPI mirrors the vernacular / distribution
-// converters. Stringifies the rowid handle, projects the enum id,
-// and lifts the resolved RelatedTaxonLabel across to the wire.
+// converters. Stringifies the rowid handle, projects the enum id
+// (falling back to the raw column value so freeform types survive
+// display), and lifts the resolved RelatedTaxonLabel across to the
+// wire.
 func speciesInteractionHitToAPI(h hive.SpeciesInteractionHit) apiSpeciesInteraction {
+	typeStr := h.Type.ID()
+	if typeStr == "" {
+		typeStr = h.TypeRaw
+	}
 	out := apiSpeciesInteraction{
 		ID:                         strconv.FormatInt(h.RowID, 10),
 		TaxonID:                    h.TaxonID,
 		RelatedTaxonID:             h.RelatedTaxonID,
 		RelatedTaxonScientificName: h.RelatedTaxonScientificName,
-		Type:                       h.Type.ID(),
+		Type:                       typeStr,
 		SourceID:                   h.SourceID,
 		ReferenceID:                h.ReferenceID,
 		Remarks:                    h.Remarks,

@@ -48,7 +48,7 @@ func TestAddSpeciesInteractionBasic(t *testing.T) {
 			RelatedTaxonID: relatedID,
 			Type:           coldp.NewSpInteractionType("HOST_OF"),
 			Remarks:        "observed in field study",
-		})
+		}, "")
 		rowid = id
 		return err
 	})
@@ -80,13 +80,64 @@ func TestAddSpeciesInteractionBasic(t *testing.T) {
 	}
 }
 
+// TestSpeciesInteractionFreeformTypeSurvivesRead — sfga stores
+// col__type_id as TEXT with a soft FK to species_interaction_type;
+// imports that ran with foreign_keys OFF can plant values not in
+// the vocab (e.g. lowercase "eats" from 3i.db). The read path
+// must surface the raw string via TypeRaw so the WUI displays it
+// as-authored instead of blanking on the enum coercion (sflib's
+// NewSpInteractionType returns UnknownSpIntT whose .ID() is "").
+func TestSpeciesInteractionFreeformTypeSurvivesRead(t *testing.T) {
+	a, focusID, relatedID := siSetup(t)
+	ctx := WithActor(context.Background(), "tester")
+	// Plant a freeform type via direct SQL with FK checks off —
+	// mirrors how bulk imports produce rows the vocab doesn't cover.
+	if _, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("pragma off: %v", err)
+	}
+	res, err := a.db.ExecContext(ctx,
+		`INSERT INTO species_interaction (col__taxon_id, col__related_taxon_id, col__type_id) VALUES (?, ?, ?)`,
+		focusID, relatedID, "eats",
+	)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	rowid, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	if _, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("pragma on: %v", err)
+	}
+	got, err := a.GetSpeciesInteraction(ctx, rowid)
+	if err != nil {
+		t.Fatalf("GetSpeciesInteraction: %v", err)
+	}
+	if got.TypeRaw != "eats" {
+		t.Errorf("TypeRaw = %q, want %q", got.TypeRaw, "eats")
+	}
+	if got.Type.ID() != "" {
+		t.Errorf("Type.ID() = %q, want empty (unknown-vocab value)", got.Type.ID())
+	}
+	hits, err := a.ListSpeciesInteractions(ctx, focusID)
+	if err != nil {
+		t.Fatalf("ListSpeciesInteractions: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("expected 1 hit, got %d", len(hits))
+	}
+	if hits[0].TypeRaw != "eats" {
+		t.Errorf("list TypeRaw = %q, want %q", hits[0].TypeRaw, "eats")
+	}
+}
+
 func TestAddSpeciesInteractionRequiresTaxon(t *testing.T) {
 	a, _, _ := siSetup(t)
 	ctx := WithActor(context.Background(), "tester")
 	err := a.WithTx(ctx, func(tx *Tx) error {
 		_, err := tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
 			RelatedTaxonScientificName: "some free-text",
-		})
+		}, "")
 		return err
 	})
 	if !errors.Is(err, ErrValidation) {
@@ -108,7 +159,7 @@ func TestAddSpeciesInteractionRequiresRelatedTaxon(t *testing.T) {
 			TaxonID:                    focusID,
 			RelatedTaxonScientificName: "Trypanosoma brucei",
 			Type:                       coldp.NewSpInteractionType("PARASITE_OF"),
-		})
+		}, "")
 		return err
 	})
 	if !errors.Is(err, ErrValidation) {
@@ -131,7 +182,7 @@ func TestAddSpeciesInteractionKeepsScientificName(t *testing.T) {
 			RelatedTaxonID:             relatedID,
 			RelatedTaxonScientificName: "Ixodes dammini",
 			Type:                       coldp.NewSpInteractionType("HOST_OF"),
-		})
+		}, "")
 		rowid = id
 		return err
 	})
@@ -160,7 +211,7 @@ func TestUpdateSpeciesInteractionHappy(t *testing.T) {
 			TaxonID:        focusID,
 			RelatedTaxonID: relatedID,
 			Type:           coldp.NewSpInteractionType("HOST_OF"),
-		})
+		}, "")
 		rowid = id
 		return err
 	})
@@ -174,7 +225,7 @@ func TestUpdateSpeciesInteractionHappy(t *testing.T) {
 			RelatedTaxonID: relatedID,
 			Type:           coldp.NewSpInteractionType("PREYS_UPON"),
 			Remarks:        "revised interpretation",
-		})
+		}, "")
 	})
 	if err != nil {
 		t.Fatalf("UpdateSpeciesInteraction: %v", err)
@@ -197,7 +248,7 @@ func TestUpdateSpeciesInteractionNotFound(t *testing.T) {
 	err := a.WithTx(ctx, func(tx *Tx) error {
 		return tx.UpdateSpeciesInteraction(999999, coldp.SpeciesInteraction{
 			TaxonID: focusID,
-		})
+		}, "")
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
@@ -213,7 +264,7 @@ func TestDeleteSpeciesInteraction(t *testing.T) {
 		id, err := tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
 			TaxonID: focusID, RelatedTaxonID: relatedID,
 			Type: coldp.NewSpInteractionType("HOST_OF"),
-		})
+		}, "")
 		if err != nil {
 			return err
 		}
@@ -221,7 +272,7 @@ func TestDeleteSpeciesInteraction(t *testing.T) {
 		id, err = tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
 			TaxonID: focusID, RelatedTaxonID: relatedID,
 			Type: coldp.NewSpInteractionType("PREYS_UPON"),
-		})
+		}, "")
 		if err != nil {
 			return err
 		}
@@ -270,14 +321,14 @@ func TestListSpeciesInteractionsDirectional(t *testing.T) {
 		if _, err := tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
 			TaxonID: focusID, RelatedTaxonID: relatedID,
 			Type: coldp.NewSpInteractionType("HOST_OF"),
-		}); err != nil {
+		}, ""); err != nil {
 			return err
 		}
 		// Focus is object (not subject) in another row.
 		if _, err := tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
 			TaxonID: relatedID, RelatedTaxonID: focusID,
 			Type: coldp.NewSpInteractionType("PARASITE_OF"),
-		}); err != nil {
+		}, ""); err != nil {
 			return err
 		}
 		return nil
