@@ -153,6 +153,12 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// rank and for ICZN on variety/subvariety/form/subform ranks
 	// (historical rows in synonymy).
 	registry.Register(newInfraspecificMarkerValidator())
+	// Hive-native: hard-error when a species_interaction row has
+	// neither a related_taxon_id FK nor a free-text related-taxon
+	// scientific name. Backstops rows planted with foreign_keys=OFF
+	// during bulk imports (3i.db pattern) that leave both fields
+	// empty — the interaction identifies no counterpart at all.
+	registry.Register(newSpeciesInteractionNeedsRelatedValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)

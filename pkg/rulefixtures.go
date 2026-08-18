@@ -919,6 +919,98 @@ func miscFixtures() []RuleFixture {
 				}},
 			},
 		},
+		{
+			RuleID:      "hive_species_interaction_needs_related",
+			Description: "Species interaction row has neither related_taxon_id nor related-taxon scientific name",
+			Bad: []FixtureCase{
+				// Both fields empty — planted with FK off since sfga's
+				// col__related_taxon_id has an FK to taxon(col__id) that
+				// hive's write path would otherwise reject. Mirrors how
+				// 3i.db-style bulk imports produce these rows.
+				{Note: "both related_taxon_id and scientific_name empty", Setup: func(ctx context.Context, a *Archive) error {
+					var focusID string
+					if err := a.WithTx(ctx, func(tx *Tx) error {
+						nID, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						id, err := tx.CreateTaxon(coldp.Taxon{NameID: nID})
+						focusID = id
+						return err
+					}); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx,
+						`INSERT INTO species_interaction (col__taxon_id, col__related_taxon_id, col__related_taxon_scientific_name) VALUES (?, '', '')`,
+						focusID,
+					); err != nil {
+						return err
+					}
+					_, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+					return err
+				}},
+			},
+			Good: []FixtureCase{
+				// Related-taxon FK populated — normal case.
+				{Note: "related_taxon_id populated", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						focusN, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						focusT, err := tx.CreateTaxon(coldp.Taxon{NameID: focusN})
+						if err != nil {
+							return err
+						}
+						relN, err := tx.CreateName(coldp.Name{ScientificName: "Related taxon"})
+						if err != nil {
+							return err
+						}
+						relT, err := tx.CreateTaxon(coldp.Taxon{NameID: relN})
+						if err != nil {
+							return err
+						}
+						_, err = tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
+							TaxonID:        focusT,
+							RelatedTaxonID: relT,
+							Type:           coldp.NewSpInteractionType("HOST_OF"),
+						}, "")
+						return err
+					})
+				}},
+				// Freeform scientific name only (empty FK) — planted
+				// with FK off. The 3i.db pattern: the counterpart isn't
+				// in the archive so only the free-text name is set.
+				{Note: "scientific_name populated, FK empty (3i pattern)", Setup: func(ctx context.Context, a *Archive) error {
+					var focusID string
+					if err := a.WithTx(ctx, func(tx *Tx) error {
+						nID, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						id, err := tx.CreateTaxon(coldp.Taxon{NameID: nID})
+						focusID = id
+						return err
+					}); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx,
+						`INSERT INTO species_interaction (col__taxon_id, col__related_taxon_id, col__related_taxon_scientific_name) VALUES (?, '', ?)`,
+						focusID, "Ailanthus altissima",
+					); err != nil {
+						return err
+					}
+					_, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+					return err
+				}},
+			},
+		},
 	}
 }
 

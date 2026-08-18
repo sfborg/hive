@@ -775,6 +775,20 @@
       "warning_message": "Infraspecific name is missing its rank marker.",
       "is_active": true,
       "priority": 20
+    },
+    {
+      "rule_id": "hive_species_interaction_needs_related",
+      "table_name": "species_interaction",
+      "field_name": "col__related_taxon_id",
+      "rule_name": "Species interaction missing related taxon",
+      "validator_type": "hive.species_interaction_needs_related",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {},
+      "error_message": "Species interaction row has neither a related taxon id nor a related-taxon scientific name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 10
     }
   ]
 }

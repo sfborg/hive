@@ -58,10 +58,18 @@ func (m *SFGAMapper) GetFieldName(tableName, logicalName string) string {
 }
 
 // GetPrimaryKeyField returns the primary-key column name for a given
-// SFGA table. Every sfga table uses col__id as its primary key —
-// the value is table-independent for this mapper. Other consumers
-// (GrandSchema, custom mappers) may return different values.
+// SFGA table. Most sfga tables use col__id, but a handful of pure
+// link / annotation tables (vernacular, distribution,
+// species_interaction, name_relation) have no col__id column — sfga
+// identifies rows there by a composite of their FK / value tuple.
+// Hive uses SQLite's implicit rowid as the opaque handle for those
+// tables so gsvalidator's per-record lookup has an addressable
+// column to bind against.
 func (m *SFGAMapper) GetPrimaryKeyField(tableName string) string {
+	switch tableName {
+	case "vernacular", "distribution", "species_interaction", "name_relation":
+		return "rowid"
+	}
 	return m.columnPrefix + "id"
 }
 

@@ -518,6 +518,18 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 				return a.syncIssuesLocal(ctx, "publisher", id)
 			},
 		},
+		{
+			// species_interaction has no col__id — sfga's PK is composite
+			// (taxon_id + related_taxon_id + type_id). Reindex walks
+			// rowids stringified for uniformity with the __gsvalidator_
+			// results.record_id column (same convention as vernacular /
+			// distribution).
+			name:  "species_interaction",
+			listQ: `SELECT rowid FROM species_interaction ORDER BY rowid`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "species_interaction", id)
+			},
+		},
 	}
 	for _, t := range tables {
 		if err := ctx.Err(); err != nil {
