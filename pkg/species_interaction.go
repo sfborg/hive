@@ -257,6 +257,14 @@ func (t *Tx) AddSpeciesInteraction(s coldp.SpeciesInteraction, typeRaw string) (
 	if typeValue == "" {
 		typeValue = s.Type.ID()
 	}
+	// Type is required — an interaction without a type identifies no
+	// meaningful relationship. sfga's schema permits empty via a
+	// seeded "(unset)" vocab entry, but hive rejects it on write so
+	// bad data doesn't accumulate. Backstopped by
+	// hive_species_interaction_needs_type for existing rows.
+	if typeValue == "" {
+		return 0, fmt.Errorf("core: add species interaction: %w: type required", ErrValidation)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	const insert = `INSERT INTO species_interaction (
 		col__taxon_id, col__related_taxon_id, col__source_id,
@@ -291,6 +299,10 @@ func (t *Tx) UpdateSpeciesInteraction(rowid int64, s coldp.SpeciesInteraction, t
 	typeValue := typeRaw
 	if typeValue == "" {
 		typeValue = s.Type.ID()
+	}
+	// Type required — see AddSpeciesInteraction for the rationale.
+	if typeValue == "" {
+		return fmt.Errorf("core: update species interaction %d: %w: type required", rowid, ErrValidation)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	const upd = `UPDATE species_interaction SET

@@ -159,6 +159,12 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// during bulk imports (3i.db pattern) that leave both fields
 	// empty — the interaction identifies no counterpart at all.
 	registry.Register(newSpeciesInteractionNeedsRelatedValidator())
+	// Hive-native: hard-error when a species_interaction row has no
+	// interaction type set. Companion to needs_related — one
+	// enforces "who is the counterpart," this enforces "what is the
+	// relationship." Backstops bulk imports that plant type-less
+	// rows via foreign_keys=OFF.
+	registry.Register(newSpeciesInteractionNeedsTypeValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)

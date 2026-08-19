@@ -920,6 +920,80 @@ func miscFixtures() []RuleFixture {
 			},
 		},
 		{
+			RuleID:      "hive_species_interaction_needs_type",
+			Description: "Species interaction row has empty col__type_id",
+			Bad: []FixtureCase{
+				// Empty type — planted with FK off because hive's write
+				// path (Tx.AddSpeciesInteraction) now rejects empty type.
+				// Mirrors 3i.db-style imports pre-cleanup.
+				{Note: "empty type_id planted via direct SQL", Setup: func(ctx context.Context, a *Archive) error {
+					var focusID, relatedID string
+					if err := a.WithTx(ctx, func(tx *Tx) error {
+						fN, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						fT, err := tx.CreateTaxon(coldp.Taxon{NameID: fN})
+						if err != nil {
+							return err
+						}
+						focusID = fT
+						rN, err := tx.CreateName(coldp.Name{ScientificName: "Related taxon"})
+						if err != nil {
+							return err
+						}
+						rT, err := tx.CreateTaxon(coldp.Taxon{NameID: rN})
+						if err != nil {
+							return err
+						}
+						relatedID = rT
+						return nil
+					}); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+						return err
+					}
+					if _, err := a.db.ExecContext(ctx,
+						`INSERT INTO species_interaction (col__taxon_id, col__related_taxon_id, col__type_id) VALUES (?, ?, '')`,
+						focusID, relatedID,
+					); err != nil {
+						return err
+					}
+					_, err := a.db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+					return err
+				}},
+			},
+			Good: []FixtureCase{
+				{Note: "type populated", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						fN, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						fT, err := tx.CreateTaxon(coldp.Taxon{NameID: fN})
+						if err != nil {
+							return err
+						}
+						rN, err := tx.CreateName(coldp.Name{ScientificName: "Related taxon"})
+						if err != nil {
+							return err
+						}
+						rT, err := tx.CreateTaxon(coldp.Taxon{NameID: rN})
+						if err != nil {
+							return err
+						}
+						_, err = tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
+							TaxonID:        fT,
+							RelatedTaxonID: rT,
+							Type:           coldp.NewSpInteractionType("HOST_OF"),
+						}, "")
+						return err
+					})
+				}},
+			},
+		},
+		{
 			RuleID:      "hive_species_interaction_needs_related",
 			Description: "Species interaction row has neither related_taxon_id nor related-taxon scientific name",
 			Bad: []FixtureCase{

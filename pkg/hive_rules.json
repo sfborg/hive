@@ -789,6 +789,20 @@
       "warning_message": "",
       "is_active": true,
       "priority": 10
+    },
+    {
+      "rule_id": "hive_species_interaction_needs_type",
+      "table_name": "species_interaction",
+      "field_name": "col__type_id",
+      "rule_name": "Species interaction missing type",
+      "validator_type": "hive.species_interaction_needs_type",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {},
+      "error_message": "Species interaction row has no interaction type — the relationship is undefined.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 10
     }
   ]
 }

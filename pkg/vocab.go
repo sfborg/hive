@@ -352,7 +352,29 @@ func (a *Archive) loadVocabulary(ctx context.Context) (*Vocabulary, error) {
 	// only. Copy so the caller can't mutate the shared slice.
 	v.Licenses = append([]VocabTerm(nil), licenseSuggestions...)
 
+	// Hide the sfga-seeded empty-id ("(unset)") row from vocabs that
+	// hive treats as required. sfga's schema keeps the empty seed row
+	// so the NOT NULL FK column has a valid target when a curator
+	// hasn't picked yet — but the WUI/TUI pickers shouldn't offer
+	// "unset" as a legitimate choice for these vocabs. Filtering here
+	// covers both frontends via the shared /api/vocab bundle.
+	v.SpeciesInteractionType = stripUnsetVocabTerm(v.SpeciesInteractionType)
+
 	return v, nil
+}
+
+// stripUnsetVocabTerm drops the leading empty-id term from a vocab
+// slice. Used for vocabs hive treats as required (no "(unset)" in
+// the picker). Idempotent — safe to call on any slice.
+func stripUnsetVocabTerm(terms []VocabTerm) []VocabTerm {
+	out := terms[:0]
+	for _, t := range terms {
+		if t.ID == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // loadFlatVocab reads a table whose only column is col__id.

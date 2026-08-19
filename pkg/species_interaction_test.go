@@ -243,11 +243,13 @@ func TestUpdateSpeciesInteractionHappy(t *testing.T) {
 }
 
 func TestUpdateSpeciesInteractionNotFound(t *testing.T) {
-	a, focusID, _ := siSetup(t)
+	a, focusID, relatedID := siSetup(t)
 	ctx := WithActor(context.Background(), "tester")
 	err := a.WithTx(ctx, func(tx *Tx) error {
 		return tx.UpdateSpeciesInteraction(999999, coldp.SpeciesInteraction{
-			TaxonID: focusID,
+			TaxonID:        focusID,
+			RelatedTaxonID: relatedID,
+			Type:           coldp.NewSpInteractionType("HOST_OF"),
 		}, "")
 	})
 	if !errors.Is(err, ErrNotFound) {
