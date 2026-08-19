@@ -609,6 +609,48 @@ const formFieldStyles = css`
   }
 `;
 
+// warningBannerStyles renders the shared open-issues banner used at
+// the top of the taxon detail pane, per-row edit modals, and any
+// dedicated modal component that surfaces gsvalidator issues (e.g.
+// sfga-add-reference-modal's edit mode). Consumers apply via
+// `static styles = [warningBannerStyles, ...]`. Neutral chrome with
+// per-item severity chips so a mixed batch (warn + info + error)
+// still ranks visually. Kept as a shared module so every surface
+// shows the same visual language regardless of which shadow root
+// it renders in — matches curator recognition parity.
+const warningBannerStyles = css`
+  .warning-banner {
+    border: 1px solid var(--border);
+    background: color-mix(in oklab, var(--fg) 4%, var(--bg));
+    color: var(--fg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 3px;
+    margin: 0.5rem 0 0.75rem 0;
+    font-size: 0.95em;
+  }
+  .warning-banner ul {
+    list-style: none;
+    margin: 0.4rem 0 0 0;
+    padding: 0;
+  }
+  /* Fixed first-column width so the issue text lines up across rows
+     regardless of the severity chip's natural width. */
+  .warning-banner li {
+    margin: 0.25rem 0;
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+  .warning-banner li > .sev-chip {
+    justify-self: start;
+  }
+  .warning-banner .warning-rule {
+    font-weight: 600;
+    color: var(--fg);
+  }
+`;
+
 // trapFocus keeps keyboard focus inside a modal container. Call it in
 // connectedCallback with the root element to trap in (usually the
 // component's shadow root or the .modal child), and invoke the returned
@@ -9893,6 +9935,8 @@ class SfgaAddReferenceModal extends LitElement {
 
   static styles = [
     buttonStyles,
+    severityChipStyles,
+    warningBannerStyles,
     css`
       :host {
         display: block;
