@@ -1085,11 +1085,11 @@ func (t *Tx) CreateTaxon(taxon coldp.Taxon) (string, error) {
 		?, ?, ?, ?
 	)`
 
-	// Nullable FK columns get NULL when the field is empty. The sfga schema
-	// declares them with `DEFAULT ''`, but SQLite's FK enforcement (which
-	// hive enables via PRAGMA foreign_keys=ON) rejects '' unless the parent
-	// table has a '' seed row. Only enum tables have that seed; content
-	// tables (source, taxon, reference) do not. Translation: "" -> NULL.
+	// Nullable FK columns get NULL when the field is empty. Kept as a
+	// defensive practice even after hive moved to foreign_keys=OFF —
+	// NULL is the honest representation of "no value" and matches
+	// what hive's own hive_*_exists integrity validators expect
+	// (they treat NULL and "" identically as "unset").
 	_, err := t.tx.ExecContext(t.ctx, insert,
 		taxon.ID, taxon.AlternativeID, taxon.LocalID, taxon.GlobalID, taxon.OtuID,
 		nullIfEmpty(taxon.SourceID), nullIfEmpty(taxon.ParentID), taxon.Ordinal, taxon.BranchLength,
@@ -1127,9 +1127,9 @@ func (t *Tx) CreateTaxon(taxon coldp.Taxon) (string, error) {
 // This is called out again in CLAUDE.md § Deliberately deferred once the
 // explicit-status write API lands.
 // nullIfEmpty returns nil when s is empty, and s otherwise. Used for
-// nullable FK columns so hive's INSERTs satisfy PRAGMA foreign_keys=ON
-// against sfga's content tables (which don't seed a ” placeholder row
-// the way enum tables do).
+// nullable FK columns as the honest representation of "unset" —
+// hive's hive_*_exists integrity validators treat NULL and "" the
+// same way, so consistent NULL-on-empty keeps stored data uniform.
 func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil

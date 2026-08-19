@@ -108,9 +108,22 @@ func openReadOnly(path string) (*Archive, error) {
 	if err != nil {
 		return nil, fmt.Errorf("core: sql.Open: %w", err)
 	}
-	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
+	// FKs stay OFF at runtime. Hive treats sfga's FK declarations as
+	// documentation of intended relationships and enforces integrity
+	// via hive-native validators (see hive_*_exists rules) rather
+	// than SQLite's FK check. Rationale: (1) opening archives
+	// produced by upstream tools that left FKs unenforced (e.g.
+	// harvester bulk imports) would otherwise refuse edits on any
+	// broken row, blocking the curator from fixing the very issues
+	// they came to hive to diagnose; (2) SQLite forbids toggling FK
+	// inside a transaction, so a temporary flip-for-cascade pattern
+	// wouldn't work reliably for concurrent-writer scenarios (hive's
+	// web-service target). Cascade deletes are all in explicit Go
+	// (DeleteName / DeleteTaxon / DeleteReference); no schema
+	// declaration uses ON DELETE CASCADE.
+	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("core: enable foreign_keys: %w", err)
+		return nil, fmt.Errorf("core: disable foreign_keys: %w", err)
 	}
 	a := &Archive{db: db, path: path, readOnly: true}
 	var vErr error
@@ -129,11 +142,13 @@ func openReadWrite(path string) (*Archive, error) {
 	if err != nil {
 		return nil, fmt.Errorf("core: sflib connect %s: %w", path, err)
 	}
-	// sflib's Connect enables temp_store=MEMORY and journal_mode=WAL; add
-	// foreign_keys here since sflib doesn't set it session-wide.
-	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = ON"); err != nil {
+	// sflib's Connect enables temp_store=MEMORY and journal_mode=WAL.
+	// FKs stay OFF at runtime — hive uses its own hive_*_exists
+	// validators as the integrity layer (see openReadOnly for the
+	// full rationale).
+	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("core: enable foreign_keys: %w", err)
+		return nil, fmt.Errorf("core: disable foreign_keys: %w", err)
 	}
 	// Seed NOMEN URIs into the nom_status vocab so col__status_id can
 	// hold them without tripping the FK. Idempotent — no-op after the
