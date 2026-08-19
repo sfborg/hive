@@ -74,6 +74,10 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/taxon/{id}/species-interactions", s.handleCreateSpeciesInteraction)
 	mux.HandleFunc("PATCH /api/species-interaction/{id}", s.handlePatchSpeciesInteraction)
 	mux.HandleFunc("DELETE /api/species-interaction/{id}", s.handleDeleteSpeciesInteraction)
+	mux.HandleFunc("GET /api/name/{id}/type-materials", s.handleListTypeMaterials)
+	mux.HandleFunc("POST /api/name/{id}/type-materials", s.handleCreateTypeMaterial)
+	mux.HandleFunc("PATCH /api/type-material/{id}", s.handlePatchTypeMaterial)
+	mux.HandleFunc("DELETE /api/type-material/{id}", s.handleDeleteTypeMaterial)
 	mux.HandleFunc("GET /api/name/{id}/relations", s.handleListNameRelations)
 	mux.HandleFunc("POST /api/name/{id}/relations", s.handleCreateNameRelation)
 	mux.HandleFunc("DELETE /api/name-relation/{id}", s.handleDeleteNameRelation)
@@ -1140,6 +1144,243 @@ func parseSpeciesInteractionRowID(w http.ResponseWriter, r *http.Request) (int64
 		return 0, false
 	}
 	return n, true
+}
+
+// handleListTypeMaterials returns every type_material row attached
+// to the given name, ordered by status. The rowid handle is
+// stringified into `id` on the wire so front-ends address rows via
+// PATCH/DELETE /api/type-material/{id}.
+func (s *server) handleListTypeMaterials(w http.ResponseWriter, r *http.Request) {
+	nameID := r.PathValue("id")
+	hits, err := s.a.ListTypeMaterials(r.Context(), nameID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiTypeMaterial, 0, len(hits))
+	for _, h := range hits {
+		items = append(items, typeMaterialHitToAPI(h))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiTypeMaterial]{Items: items})
+}
+
+// handleCreateTypeMaterial writes a new type_material row attached
+// to the {id} name and returns the freshly-hydrated apiTypeMaterial
+// so the caller can splice it into local state without a follow-up
+// list refresh. NameID is taken from the path, not the body.
+func (s *server) handleCreateTypeMaterial(w http.ResponseWriter, r *http.Request) {
+	nameID := r.PathValue("id")
+	var body apiTypeMaterial
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.NameID = nameID // path wins over body
+	var newID int64
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		id, err := tx.AddTypeMaterial(coldp.TypeMaterial{
+			ID:                  body.SpecimenID,
+			NameID:              body.NameID,
+			SourceID:            body.SourceID,
+			Citation:            body.Citation,
+			Status:              coldp.NewTypeStatus(body.Status),
+			InstitutionCode:     body.InstitutionCode,
+			CatalogNumber:       body.CatalogNumber,
+			ReferenceID:         body.ReferenceID,
+			Locality:            body.Locality,
+			Country:             body.Country,
+			Latitude:            ptrFloat64ToNull(body.Latitude),
+			Longitude:           ptrFloat64ToNull(body.Longitude),
+			Altitude:            ptrIntToNull(body.Altitude),
+			Host:                body.Host,
+			Sex:                 coldp.NewSex(body.Sex),
+			Date:                body.Date,
+			Collector:           body.Collector,
+			AssociatedSequences: body.AssociatedSequences,
+			Link:                body.Link,
+			Remarks:             body.Remarks,
+		})
+		newID = id
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetTypeMaterial(r.Context(), newID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, typeMaterialHitToAPI(*fresh))
+}
+
+// handlePatchTypeMaterial applies a partial update. Nil fields on the
+// patch mean "leave alone"; a set pointer overwrites (including with
+// zero-value strings / coordinates). NameID isn't editable — reparent
+// a type_material row by delete+add on the new name.
+func (s *server) handlePatchTypeMaterial(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseTypeMaterialRowID(w, r)
+	if !ok {
+		return
+	}
+	var patch apiTypeMaterialPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		current, err := s.a.GetTypeMaterial(r.Context(), rowid)
+		if err != nil {
+			return err
+		}
+		merged := coldp.TypeMaterial{
+			ID:                  current.SpecimenID,
+			NameID:              current.NameID,
+			SourceID:            current.SourceID,
+			Citation:            current.Citation,
+			Status:              current.Status,
+			InstitutionCode:     current.InstitutionCode,
+			CatalogNumber:       current.CatalogNumber,
+			ReferenceID:         current.ReferenceID,
+			Locality:            current.Locality,
+			Country:             current.Country,
+			Latitude:            current.Latitude,
+			Longitude:           current.Longitude,
+			Altitude:            current.Altitude,
+			Host:                current.Host,
+			Sex:                 current.Sex,
+			Date:                current.Date,
+			Collector:           current.Collector,
+			AssociatedSequences: current.AssociatedSequences,
+			Link:                current.Link,
+			Remarks:             current.Remarks,
+		}
+		applyTypeMaterialPatch(&merged, patch)
+		return tx.UpdateTypeMaterial(rowid, merged)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetTypeMaterial(r.Context(), rowid)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, typeMaterialHitToAPI(*fresh))
+}
+
+// handleDeleteTypeMaterial removes the row at the given rowid.
+// Unknown row → 404 via ErrNotFound.
+func (s *server) handleDeleteTypeMaterial(w http.ResponseWriter, r *http.Request) {
+	rowid, ok := parseTypeMaterialRowID(w, r)
+	if !ok {
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteTypeMaterial(rowid)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// parseTypeMaterialRowID pulls the {id} path parameter and parses it
+// as an int64. Mirrors parseVernacularRowID.
+func parseTypeMaterialRowID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeBadRequest(w, r, "invalid type-material id: "+raw)
+		return 0, false
+	}
+	return n, true
+}
+
+// applyTypeMaterialPatch layers the pointer-optional patch onto the
+// merged coldp.TypeMaterial. Nil pointer → leave alone; set pointer
+// → overwrite. Coordinates use ptrFloat64ToNull / ptrIntToNull so
+// an explicit numeric round-trips as sql.NullFloat64{Valid:true}.
+func applyTypeMaterialPatch(m *coldp.TypeMaterial, p apiTypeMaterialPatch) {
+	if p.SpecimenID != nil {
+		m.ID = *p.SpecimenID
+	}
+	if p.Citation != nil {
+		m.Citation = *p.Citation
+	}
+	if p.Status != nil {
+		m.Status = coldp.NewTypeStatus(*p.Status)
+	}
+	if p.InstitutionCode != nil {
+		m.InstitutionCode = *p.InstitutionCode
+	}
+	if p.CatalogNumber != nil {
+		m.CatalogNumber = *p.CatalogNumber
+	}
+	if p.ReferenceID != nil {
+		m.ReferenceID = *p.ReferenceID
+	}
+	if p.Locality != nil {
+		m.Locality = *p.Locality
+	}
+	if p.Country != nil {
+		m.Country = *p.Country
+	}
+	if p.Latitude != nil {
+		m.Latitude = ptrFloat64ToNull(p.Latitude)
+	}
+	if p.Longitude != nil {
+		m.Longitude = ptrFloat64ToNull(p.Longitude)
+	}
+	if p.Altitude != nil {
+		m.Altitude = ptrIntToNull(p.Altitude)
+	}
+	if p.Host != nil {
+		m.Host = *p.Host
+	}
+	if p.Sex != nil {
+		m.Sex = coldp.NewSex(*p.Sex)
+	}
+	if p.Date != nil {
+		m.Date = *p.Date
+	}
+	if p.Collector != nil {
+		m.Collector = *p.Collector
+	}
+	if p.AssociatedSequences != nil {
+		m.AssociatedSequences = *p.AssociatedSequences
+	}
+	if p.Link != nil {
+		m.Link = *p.Link
+	}
+	if p.SourceID != nil {
+		m.SourceID = *p.SourceID
+	}
+	if p.Remarks != nil {
+		m.Remarks = *p.Remarks
+	}
+}
+
+// ptrFloat64ToNull converts a wire *float64 into sql.NullFloat64:
+// nil → invalid, set → valid with the given value. Mirror of
+// nullFloat64ToPtr used on the read side.
+func ptrFloat64ToNull(p *float64) sql.NullFloat64 {
+	if p == nil {
+		return sql.NullFloat64{}
+	}
+	return sql.NullFloat64{Float64: *p, Valid: true}
+}
+
+// ptrIntToNull converts a wire *int into sql.NullInt64: nil →
+// invalid, set → valid. Mirror of nullInt64ToPtr.
+func ptrIntToNull(p *int) sql.NullInt64 {
+	if p == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*p), Valid: true}
 }
 
 // handleListNameRelations returns every name_relation row where the

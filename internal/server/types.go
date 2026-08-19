@@ -594,6 +594,84 @@ type apiSpeciesInteractionPatch struct {
 	Remarks                    *string `json:"remarks,omitempty"`
 }
 
+// apiTypeMaterial is the wire form of a type_material row attached
+// to a name. Same rowid-as-string handle pattern as
+// vernacular / distribution / species_interaction; sfga's
+// type_material col__id is optional and non-unique and does not
+// serve as an addressable key. SpecimenID carries that col__id
+// value (usually a collection/catalogue identifier a curator
+// provides) so both fields round-trip.
+//
+// Latitude / Longitude / Altitude are pointer-optional so nil
+// distinguishes "unset" from an explicit 0 — a real coordinate
+// (0,0 is the Gulf of Guinea). Status and Sex are enum ids from
+// sfga's type_status / sex vocab tables (served by /api/vocab).
+type apiTypeMaterial struct {
+	ID                  string   `json:"id"`
+	NameID              string   `json:"name_id"`
+	SpecimenID          string   `json:"specimen_id,omitempty"`
+	Citation            string   `json:"citation,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	InstitutionCode     string   `json:"institution_code,omitempty"`
+	CatalogNumber       string   `json:"catalog_number,omitempty"`
+	ReferenceID         string   `json:"reference_id,omitempty"`
+	Locality            string   `json:"locality,omitempty"`
+	Country             string   `json:"country,omitempty"`
+	Latitude            *float64 `json:"latitude,omitempty"`
+	Longitude           *float64 `json:"longitude,omitempty"`
+	Altitude            *int     `json:"altitude,omitempty"`
+	Host                string   `json:"host,omitempty"`
+	Sex                 string   `json:"sex,omitempty"`
+	Date                string   `json:"date,omitempty"`
+	Collector           string   `json:"collector,omitempty"`
+	AssociatedSequences string   `json:"associated_sequences,omitempty"`
+	Link                string   `json:"link,omitempty"`
+	SourceID            string   `json:"source_id,omitempty"`
+	Remarks             string   `json:"remarks,omitempty"`
+	Modified            string   `json:"modified,omitempty"`
+	ModifiedBy          string   `json:"modified_by,omitempty"`
+	// IssueCount is the number of open validation issues currently
+	// filed against this type_material row. Zero → elided from JSON.
+	// Front-ends render a warn icon when > 0.
+	IssueCount int `json:"issue_count,omitempty"`
+	// MaxSeverity is the highest severity ("error" > "warn" > "info"
+	// > "debug") among the row's open issues. Empty → elided from
+	// JSON. Drives the badge color the WUI paints.
+	MaxSeverity string `json:"max_severity,omitempty"`
+}
+
+// apiTypeMaterialPatch mirrors apiTypeMaterial as pointer-optional
+// fields so a curator can send only what changed. Nil pointer means
+// "leave alone"; a set pointer overwrites the current value with
+// the given one (empty string / zero coordinate included). To clear
+// a coordinate back to NULL the row must be delete+re-added — JSON's
+// `null` and an absent key both decode to a nil pointer with this
+// shape, so there's no way to distinguish "clear" from "leave alone"
+// on the wire without switching to a heavier field envelope. NameID
+// isn't included — reparent a type_material row via delete+add on
+// the new name.
+type apiTypeMaterialPatch struct {
+	SpecimenID          *string  `json:"specimen_id,omitempty"`
+	Citation            *string  `json:"citation,omitempty"`
+	Status              *string  `json:"status,omitempty"`
+	InstitutionCode     *string  `json:"institution_code,omitempty"`
+	CatalogNumber       *string  `json:"catalog_number,omitempty"`
+	ReferenceID         *string  `json:"reference_id,omitempty"`
+	Locality            *string  `json:"locality,omitempty"`
+	Country             *string  `json:"country,omitempty"`
+	Latitude            *float64 `json:"latitude,omitempty"`
+	Longitude           *float64 `json:"longitude,omitempty"`
+	Altitude            *int     `json:"altitude,omitempty"`
+	Host                *string  `json:"host,omitempty"`
+	Sex                 *string  `json:"sex,omitempty"`
+	Date                *string  `json:"date,omitempty"`
+	Collector           *string  `json:"collector,omitempty"`
+	AssociatedSequences *string  `json:"associated_sequences,omitempty"`
+	Link                *string  `json:"link,omitempty"`
+	SourceID            *string  `json:"source_id,omitempty"`
+	Remarks             *string  `json:"remarks,omitempty"`
+}
+
 type apiSynonym struct {
 	ID         string   `json:"id,omitempty"`
 	TaxonID    string   `json:"taxon_id"`
@@ -1559,6 +1637,49 @@ func nullBoolToPtr(nb sql.NullBool) *bool {
 		return nil
 	}
 	v := nb.Bool
+	return &v
+}
+
+// typeMaterialHitToAPI mirrors the vernacular / distribution
+// converters. Stringifies the rowid handle, projects enum ids for
+// Status and Sex, and lifts the nullable coordinate triple through
+// pointer-optional fields so unset comes across as absent.
+func typeMaterialHitToAPI(h hive.TypeMaterialHit) apiTypeMaterial {
+	return apiTypeMaterial{
+		ID:                  strconv.FormatInt(h.RowID, 10),
+		NameID:              h.NameID,
+		SpecimenID:          h.SpecimenID,
+		Citation:            h.Citation,
+		Status:              h.Status.ID(),
+		InstitutionCode:     h.InstitutionCode,
+		CatalogNumber:       h.CatalogNumber,
+		ReferenceID:         h.ReferenceID,
+		Locality:            h.Locality,
+		Country:             h.Country,
+		Latitude:            nullFloat64ToPtr(h.Latitude),
+		Longitude:           nullFloat64ToPtr(h.Longitude),
+		Altitude:            nullInt64ToPtr(h.Altitude),
+		Host:                h.Host,
+		Sex:                 h.Sex.ID(),
+		Date:                h.Date,
+		Collector:           h.Collector,
+		AssociatedSequences: h.AssociatedSequences,
+		Link:                h.Link,
+		SourceID:            h.SourceID,
+		Remarks:             h.Remarks,
+		Modified:            h.Modified,
+		ModifiedBy:          h.ModifiedBy,
+		IssueCount:          h.IssueCount,
+		MaxSeverity:         h.MaxSeverity,
+	}
+}
+
+// nullFloat64ToPtr converts sql.NullFloat64 → *float64. Invalid → nil.
+func nullFloat64ToPtr(nf sql.NullFloat64) *float64 {
+	if !nf.Valid {
+		return nil
+	}
+	v := nf.Float64
 	return &v
 }
 
