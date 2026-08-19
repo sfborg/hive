@@ -165,6 +165,13 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// relationship." Backstops bulk imports that plant type-less
 	// rows via foreign_keys=OFF.
 	registry.Register(newSpeciesInteractionNeedsTypeValidator())
+	// Hive-native: info-severity when a reference row has no
+	// citations across any citation table. Not broken data — kept
+	// in the archive for future use — just surfaces the row so a
+	// curator can decide whether to delete it. See
+	// referenceCitationTables in pkg/reference.go for the
+	// authoritative list.
+	registry.Register(newReferenceUncitedValidator())
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)

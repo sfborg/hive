@@ -239,6 +239,12 @@ func (a *Archive) GetReference(ctx context.Context, id string) (*coldp.Reference
 var referenceCitationTables = []struct {
 	table, col string
 }{
+	// name.col__reference_id is the primary citation path (a name's
+	// publication reference). Missing it here meant DeleteReference
+	// could silently delete a reference still cited by a name — a
+	// latent bug hidden by SQLite's FK check while FKs were on, now
+	// exposed as FKs are off and hive owns integrity via validators.
+	{"name", "col__reference_id"},
 	{"taxon", "col__according_to_id"},
 	{"synonym", "col__according_to_id"},
 	{"vernacular", "col__reference_id"},

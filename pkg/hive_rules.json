@@ -177,6 +177,122 @@
         }
       ],
       "description": "From a corrected-spelling name row, walk through the SPELLING_CORRECTION name_relation to reach the original spelling's row."
+    },
+    "taxon:parent-taxon": {
+      "target_table": "taxon",
+      "target_alias": "parent_taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "taxon.col__parent_id",
+          "to": "taxon.col__id",
+          "alias": "parent_taxon"
+        }
+      ],
+      "description": "From a taxon row, walk to its parent taxon."
+    },
+    "synonym:taxon": {
+      "target_table": "taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "synonym.col__taxon_id",
+          "to": "taxon.col__id"
+        }
+      ],
+      "description": "From a synonym row, walk to the accepted taxon it points at."
+    },
+    "synonym:name": {
+      "target_table": "name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "synonym.col__name_id",
+          "to": "name.col__id"
+        }
+      ],
+      "description": "From a synonym row, walk to the name row it points at."
+    },
+    "name_relation:subject-name": {
+      "target_table": "name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name_relation.col__name_id",
+          "to": "name.col__id"
+        }
+      ],
+      "description": "From a name_relation row, walk to its subject name."
+    },
+    "name_relation:related-name": {
+      "target_table": "name",
+      "target_alias": "related_name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "related_name"
+        }
+      ],
+      "description": "From a name_relation row, walk to its related (object) name."
+    },
+    "species_interaction:taxon": {
+      "target_table": "taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "species_interaction.col__taxon_id",
+          "to": "taxon.col__id"
+        }
+      ],
+      "description": "From a species_interaction row, walk to its subject taxon."
+    },
+    "species_interaction:related-taxon": {
+      "target_table": "taxon",
+      "target_alias": "related_taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "species_interaction.col__related_taxon_id",
+          "to": "taxon.col__id",
+          "alias": "related_taxon"
+        }
+      ],
+      "description": "From a species_interaction row, walk to its related (object) taxon."
+    },
+    "species_interaction:type": {
+      "target_table": "species_interaction_type",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "species_interaction.col__type_id",
+          "to": "species_interaction_type.col__id"
+        }
+      ],
+      "description": "From a species_interaction row, walk to its type term."
+    },
+    "vernacular:taxon": {
+      "target_table": "taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "vernacular.col__taxon_id",
+          "to": "taxon.col__id"
+        }
+      ],
+      "description": "From a vernacular row, walk to its owning taxon."
+    },
+    "distribution:taxon": {
+      "target_table": "taxon",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "distribution.col__taxon_id",
+          "to": "taxon.col__id"
+        }
+      ],
+      "description": "From a distribution row, walk to its owning taxon."
     }
   },
   "rules": [
@@ -803,6 +919,174 @@
       "warning_message": "",
       "is_active": true,
       "priority": 10
+    },
+    {
+      "rule_id": "hive_taxon_parent_exists",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Parent taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__parent_id", "relation": "taxon:parent-taxon"},
+      "error_message": "Parent taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_taxon_name_exists",
+      "table_name": "taxon",
+      "field_name": "col__name_id",
+      "rule_name": "Taxon's owning name must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__name_id", "relation": "taxon:owning-name"},
+      "error_message": "Taxon's name id does not resolve to an existing name row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_synonym_taxon_exists",
+      "table_name": "synonym",
+      "field_name": "col__taxon_id",
+      "rule_name": "Synonym's accepted taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__taxon_id", "relation": "synonym:taxon"},
+      "error_message": "Synonym's accepted-taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_synonym_name_exists",
+      "table_name": "synonym",
+      "field_name": "col__name_id",
+      "rule_name": "Synonym's name must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__name_id", "relation": "synonym:name"},
+      "error_message": "Synonym's name id does not resolve to an existing name row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_name_relation_subject_exists",
+      "table_name": "name_relation",
+      "field_name": "col__name_id",
+      "rule_name": "Name relation subject must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__name_id", "relation": "name_relation:subject-name"},
+      "error_message": "Name-relation subject id does not resolve to an existing name row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_name_relation_related_exists",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Name relation related name must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__related_name_id", "relation": "name_relation:related-name"},
+      "error_message": "Name-relation related-name id does not resolve to an existing name row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_species_interaction_taxon_exists",
+      "table_name": "species_interaction",
+      "field_name": "col__taxon_id",
+      "rule_name": "Species interaction subject taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__taxon_id", "relation": "species_interaction:taxon"},
+      "error_message": "Species-interaction subject-taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_species_interaction_related_taxon_exists",
+      "table_name": "species_interaction",
+      "field_name": "col__related_taxon_id",
+      "rule_name": "Species interaction related taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__related_taxon_id", "relation": "species_interaction:related-taxon"},
+      "error_message": "Species-interaction related-taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_species_interaction_type_exists",
+      "table_name": "species_interaction",
+      "field_name": "col__type_id",
+      "rule_name": "Species interaction type must exist in vocab",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__type_id", "relation": "species_interaction:type"},
+      "error_message": "Species-interaction type id does not resolve to a species_interaction_type vocab entry.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_vernacular_taxon_exists",
+      "table_name": "vernacular",
+      "field_name": "col__taxon_id",
+      "rule_name": "Vernacular's taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__taxon_id", "relation": "vernacular:taxon"},
+      "error_message": "Vernacular's taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_distribution_taxon_exists",
+      "table_name": "distribution",
+      "field_name": "col__taxon_id",
+      "rule_name": "Distribution's taxon must exist",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"field": "col__taxon_id", "relation": "distribution:taxon"},
+      "error_message": "Distribution's taxon id does not resolve to an existing taxon row.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 5
+    },
+    {
+      "rule_id": "hive_reference_uncited",
+      "table_name": "reference",
+      "field_name": "col__id",
+      "rule_name": "Reference is uncited",
+      "validator_type": "hive.reference_uncited",
+      "enforcement": "soft",
+      "severity": "info",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This reference is not yet cited by any record. Kept in the archive — it may be useful for a future citation.",
+      "is_active": true,
+      "priority": 40
     }
   ]
 }

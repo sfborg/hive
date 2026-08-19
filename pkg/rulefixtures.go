@@ -897,6 +897,121 @@ func miscFixtures() []RuleFixture {
 			},
 		},
 		{
+			RuleID:      "hive_reference_uncited",
+			Description: "Reference row is not cited by any citing table",
+			Bad: []FixtureCase{
+				{Note: "reference with zero citations", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						_, err := tx.CreateReference(coldp.Reference{
+							Citation: "Uncited (2026). A paper nobody's cited yet.",
+						})
+						return err
+					})
+				}},
+			},
+			Good: []FixtureCase{
+				{Note: "reference cited by a name", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						refID, err := tx.CreateReference(coldp.Reference{
+							Citation: "Cited (2026). A paper that IS cited.",
+						})
+						if err != nil {
+							return err
+						}
+						_, err = tx.CreateName(coldp.Name{
+							ScientificName: "Cited species",
+							ReferenceID:    refID,
+						})
+						return err
+					})
+				}},
+			},
+		},
+		{
+			RuleID:      "hive_taxon_parent_exists",
+			Description: "Taxon's col__parent_id must resolve to an existing taxon",
+			Bad: []FixtureCase{
+				// Dangling parent pointer planted via direct SQL — the
+				// normal Tx.CreateTaxon path validates the parent exists.
+				{Note: "dangling parent id", Setup: func(ctx context.Context, a *Archive) error {
+					var nID string
+					if err := a.WithTx(ctx, func(tx *Tx) error {
+						n, err := tx.CreateName(coldp.Name{ScientificName: "Orphan taxon"})
+						nID = n
+						return err
+					}); err != nil {
+						return err
+					}
+					id := randomID()
+					_, err := a.db.ExecContext(ctx,
+						`INSERT INTO taxon (col__id, col__name_id, col__parent_id) VALUES (?, ?, 'does-not-exist')`,
+						id, nID,
+					)
+					return err
+				}},
+			},
+			Good: []FixtureCase{
+				{Note: "parent id resolves", Setup: buildFamilyGenusSpecies},
+			},
+		},
+		{
+			RuleID:      "hive_species_interaction_related_taxon_exists",
+			Description: "Species-interaction col__related_taxon_id must resolve to an existing taxon",
+			Bad: []FixtureCase{
+				// Plant a dangling related-taxon FK. Hive's own
+				// AddSpeciesInteraction path validates related_taxon_id
+				// exists, so direct SQL is required to manufacture the
+				// row.
+				{Note: "dangling related_taxon_id", Setup: func(ctx context.Context, a *Archive) error {
+					var focusID string
+					if err := a.WithTx(ctx, func(tx *Tx) error {
+						nID, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						id, err := tx.CreateTaxon(coldp.Taxon{NameID: nID})
+						focusID = id
+						return err
+					}); err != nil {
+						return err
+					}
+					_, err := a.db.ExecContext(ctx,
+						`INSERT INTO species_interaction (col__taxon_id, col__related_taxon_id, col__type_id) VALUES (?, 'does-not-exist', 'HOST_OF')`,
+						focusID,
+					)
+					return err
+				}},
+			},
+			Good: []FixtureCase{
+				{Note: "related_taxon_id resolves", Setup: func(ctx context.Context, a *Archive) error {
+					return a.WithTx(ctx, func(tx *Tx) error {
+						fN, err := tx.CreateName(coldp.Name{ScientificName: "Focus taxon"})
+						if err != nil {
+							return err
+						}
+						fT, err := tx.CreateTaxon(coldp.Taxon{NameID: fN})
+						if err != nil {
+							return err
+						}
+						rN, err := tx.CreateName(coldp.Name{ScientificName: "Related taxon"})
+						if err != nil {
+							return err
+						}
+						rT, err := tx.CreateTaxon(coldp.Taxon{NameID: rN})
+						if err != nil {
+							return err
+						}
+						_, err = tx.AddSpeciesInteraction(coldp.SpeciesInteraction{
+							TaxonID:        fT,
+							RelatedTaxonID: rT,
+							Type:           coldp.NewSpInteractionType("HOST_OF"),
+						}, "")
+						return err
+					})
+				}},
+			},
+		},
+		{
 			RuleID:      "clb_duplicate_name",
 			Description: "Two name records share the same canonical form",
 			Bad: []FixtureCase{
