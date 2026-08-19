@@ -10116,7 +10116,17 @@ class SfgaAddReferenceModal extends LitElement {
       if (this.editID !== id) return;
       this._manualOriginal = ref;
       this._manual = manualFromReference(ref);
-      this._issues = issueResp.items || [];
+      const persisted = issueResp.items || [];
+      // Mirror the picker's inline missing-structured-metadata check
+      // so the banner agrees with the badge. The picker's
+      // referenceIssueCount fires when citation is set but author or
+      // issued is missing, even before the server-side
+      // hive_reference_missing_structured_metadata rule has been
+      // persisted via reindex. Without this parity, curators who
+      // open the modal via the badge would see a clean-looking
+      // modal despite the badge indicating an issue.
+      const inline = this._syntheticMetadataIssue(ref, persisted);
+      this._issues = inline ? [inline, ...persisted] : persisted;
     } catch (err) {
       if (this.editID !== id) return;
       this._manualError =
@@ -10126,6 +10136,40 @@ class SfgaAddReferenceModal extends LitElement {
     } finally {
       this._manualBusy = false;
     }
+  }
+
+  // _syntheticMetadataIssue returns a synthetic issue matching the
+  // hive_reference_missing_structured_metadata rule when the loaded
+  // reference has a citation string but is missing author or issued.
+  // Returns null when the check doesn't apply, or when the same rule
+  // is already in the persisted list (avoids double-listing).
+  _syntheticMetadataIssue(ref, persisted) {
+    const citation = (ref.citation || "").trim();
+    const author = (ref.author || "").trim();
+    const issued = (ref.issued || "").trim();
+    if (!citation) return null;
+    if (author && issued) return null;
+    // Already surfaced by the persisted rule row — don't double-list.
+    if (
+      persisted.some(
+        (i) => i.rule_id === "hive_reference_missing_structured_metadata",
+      )
+    ) {
+      return null;
+    }
+    const missing = !author && !issued
+      ? "author + issued"
+      : !author
+        ? "author"
+        : "issued (year)";
+    return {
+      id: "synthetic-metadata-gap",
+      rule_id: "hive_reference_missing_structured_metadata",
+      rule_name: "Reference missing structured metadata",
+      field_name: "col__citation",
+      severity: "warn",
+      message: `Reference has a citation but is missing structured ${missing}.`,
+    };
   }
 
   static _tabIndex(name) {
