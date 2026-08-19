@@ -3582,6 +3582,10 @@ class SfgaDetail extends LitElement {
     _nameRelations: { state: true },
     _nameRelationDraft: { state: true },
     _nameRelationBusy: { state: true },
+    // Vocab editor state. When non-empty, holds the vocab name being
+    // edited; sfga-vocab-editor mounts as a nested modal over
+    // whatever else is open. See VOCAB_EDITOR_ADAPTERS.
+    _vocabEditor: { state: true },
     // Reference-quick-fix modal state. Opens over the create/edit
     // taxon pane when a curator clicks the book/warning badge on a
     // reference picker. Scoped to the fields most likely to need
@@ -4787,6 +4791,7 @@ class SfgaDetail extends LitElement {
     this._nameRelations = [];
     this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
     this._nameRelationBusy = false;
+    this._vocabEditor = "";
     this._editRefID = "";
     this._confirmDelete = false;
     this._deleteError = "";
@@ -4892,6 +4897,19 @@ class SfgaDetail extends LitElement {
     const covered =
       this._inlineModalStackID && !isTopModal(this._inlineModalStackID);
     return "modal-backdrop" + (covered ? " is-covered" : "");
+  }
+
+  // _openVocabEditor mounts sfga-vocab-editor for the named vocab.
+  // Vocabs without an entry in VOCAB_EDITOR_ADAPTERS silently do
+  // nothing (the picker's action is gated on the same adapter, so
+  // this should only fire for editable vocabs).
+  _openVocabEditor(name) {
+    if (!vocabEditorAdapter(name)) return;
+    this._vocabEditor = name;
+  }
+
+  _closeVocabEditor() {
+    this._vocabEditor = "";
   }
 
   disconnectedCallback() {
@@ -5047,6 +5065,7 @@ class SfgaDetail extends LitElement {
     this._nameRelations = [];
     this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
     this._nameRelationBusy = false;
+    this._vocabEditor = "";
     this._editRefID = "";
     if (parentID) {
       try {
@@ -5197,6 +5216,7 @@ class SfgaDetail extends LitElement {
     this._nameRelations = [];
     this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
     this._nameRelationBusy = false;
+    this._vocabEditor = "";
     this._editRefID = "";
     // Fire an async fetch of persisted issues on this name so any
     // parse-tail (or other soft) issue renders in the top-of-pane
@@ -5467,6 +5487,7 @@ class SfgaDetail extends LitElement {
     this._nameRelations = [];
     this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
     this._nameRelationBusy = false;
+    this._vocabEditor = "";
     this._editRefID = "";
   }
 
@@ -7609,6 +7630,12 @@ class SfgaDetail extends LitElement {
           ? this._renderAddReferenceModal()
           : ""}
         ${this._renderEditReferenceModal()}
+        ${this._vocabEditor
+          ? html`<sfga-vocab-editor
+              .vocab=${this._vocabEditor}
+              @close=${() => this._closeVocabEditor()}
+            ></sfga-vocab-editor>`
+          : ""}
       </div>
     `;
   }
@@ -8074,6 +8101,7 @@ class SfgaDetail extends LitElement {
     this._nameRelations = [];
     this._nameRelationDraft = { related_name_id: "", type: "", reference_id: "" };
     this._nameRelationBusy = false;
+    this._vocabEditor = "";
     this._editRefID = "";
     this._creating = true;
     // Fire the on-open backfill so a pre-populated basionym_name_id
@@ -9701,6 +9729,14 @@ class SfgaDetail extends LitElement {
               .source=${vocabSource("species_interaction_type")}
               .resolver=${vocabResolver("species_interaction_type")}
               .value=${d.type || ""}
+              .actions=${[
+                {
+                  label: "Edit interaction types…",
+                  icon: "pencil",
+                  handler: () =>
+                    this._openVocabEditor("species_interaction_type"),
+                },
+              ]}
               @pick=${(e) =>
                 this._speciesInteractionFieldChange("type", e.detail.id)}
             ></sfga-combobox>
@@ -14467,6 +14503,610 @@ class SfgaAgentSection extends LitElement {
   }
 }
 
+// ---------- vocab-editor adapters ----------
+// Per-vocab config for the vocab editor. Vocabs with no entry here
+// aren't editable — the picker's "Edit vocabulary…" action stays
+// disabled. Add an entry when a vocab is safe to let curators
+// extend (background: for the core taxonomic-model vocabs like
+// taxonomic_status, rank, nom_code we deliberately don't let
+// curators customize because that hurts interoperability with CLB
+// and other researchers; see conversation history / DEFERRED).
+const VOCAB_EDITOR_ADAPTERS = {
+  species_interaction_type: {
+    label: "species interaction types",
+    // Adapter surfaces the rich columns sfga already models for this
+    // vocab: description, obo (ontology URI, typically RO), inverse
+    // (which is itself a term in this vocab), symmetrical bool,
+    // superTypes (parent-term ids).
+    editable: true,
+    hasDescription: true,
+    hasObo: true,
+    hasInverse: true,
+    hasSymmetrical: true,
+    hasSuperTypes: true,
+    // Documentation hint for the OBO field — nudges curators to use
+    // canonical RO PURLs (the shipped vocab is 100% RO-covered).
+    oboHint:
+      "Ontology URI (recommended: Relations Ontology PURL, e.g. http://purl.obolibrary.org/obo/RO_0002442)",
+  },
+};
+
+// vocabEditorAdapter returns the adapter for a vocab name, or null
+// if the vocab isn't editable. Callers use the null return to gate
+// the picker's "Edit vocabulary…" affordance.
+function vocabEditorAdapter(name) {
+  return VOCAB_EDITOR_ADAPTERS[name] || null;
+}
+
+// ---------- <sfga-vocab-editor> ----------
+//
+// Modal editor for controlled vocabularies. Renders a table of the
+// vocab's current terms with edit + delete row actions, plus an
+// "add term" flow. Rich fields (description, obo, inverse,
+// symmetrical, super_types) are gated by the per-vocab adapter so
+// the same component covers every editable vocab as more get schema
+// support.
+//
+// Wiring: SfgaDetail owns a `_vocabEditor` state. Setting it to a
+// vocab name mounts sfga-vocab-editor; a close event unmounts.
+// Registers with the shared modal stack so nested modals hide it
+// via .is-covered (see openModal / isTopModal helpers).
+class SfgaVocabEditor extends LitElement {
+  static properties = {
+    // vocab is the sfga table name (e.g. "species_interaction_type").
+    vocab: { type: String },
+    _terms: { state: true },
+    // _editingTerm is null when the list view is showing, an object
+    // {mode: "create"|"edit", draft: {...}} when the term form is
+    // open. Sub-view inside the same modal — no second nested modal.
+    _editingTerm: { state: true },
+    _loading: { state: true },
+    _error: { state: true },
+  };
+
+  static styles = [
+    buttonStyles,
+    css`
+      :host {
+        display: block;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--fg) 18%, transparent);
+        display: grid;
+        place-items: center;
+        z-index: var(--z-modal-backdrop);
+      }
+      .backdrop.is-covered {
+        visibility: hidden;
+      }
+      .modal {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4) var(--sp-5);
+        width: min(var(--modal-lg), 95vw);
+        max-height: var(--modal-max-h);
+        overflow: auto;
+        display: grid;
+        gap: var(--sp-2);
+        color: var(--fg);
+      }
+      .modal-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: var(--sp-2);
+      }
+      .modal-header h3 {
+        margin: 0;
+        font-family: var(--font-body);
+        font-size: var(--fs-lg);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+      }
+      th {
+        text-align: left;
+        color: var(--dim);
+        font-weight: normal;
+        padding: var(--sp-1) var(--sp-2);
+        border-bottom: 1px solid var(--border);
+      }
+      td {
+        padding: var(--sp-1) var(--sp-2);
+        vertical-align: baseline;
+      }
+      td.desc,
+      td.obo {
+        color: var(--dim);
+        font-size: var(--fs-xs);
+        overflow-wrap: break-word;
+        max-width: 20em;
+      }
+      td.actions {
+        text-align: right;
+        white-space: nowrap;
+      }
+      /* Standard row-actions pattern (hide-until-hover) — matches
+         section.vernaculars / section.distributions rows. */
+      td.actions .row-actions {
+        display: inline-flex;
+        gap: 0;
+        visibility: hidden;
+      }
+      tr:hover td.actions .row-actions,
+      tr:focus-within td.actions .row-actions {
+        visibility: visible;
+      }
+      .toolbar {
+        display: flex;
+        gap: var(--sp-2);
+        justify-content: space-between;
+        align-items: center;
+        margin-top: var(--sp-2);
+      }
+      .toolbar .right {
+        display: flex;
+        gap: var(--sp-2);
+      }
+      .term-form {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: var(--sp-2);
+        align-items: baseline;
+      }
+      .term-form label {
+        color: var(--dim);
+        text-align: right;
+      }
+      .term-form .toolbar {
+        grid-column: 1 / -1;
+        justify-content: flex-end;
+      }
+      .term-form input[type="text"],
+      .term-form textarea {
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+        padding: 0.3rem 0.4rem;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+      }
+      .term-form textarea {
+        min-height: 3rem;
+      }
+      .term-form .req {
+        color: var(--error);
+      }
+      .term-form .hint {
+        color: var(--dim);
+        font-size: var(--fs-xs);
+        grid-column: 2;
+        margin-top: -0.3rem;
+      }
+      .error {
+        color: var(--error);
+        font-family: var(--font-mono);
+        font-size: var(--fs-sm);
+      }
+      .empty {
+        color: var(--dim);
+        font-style: italic;
+        padding: var(--sp-3);
+        text-align: center;
+      }
+    `,
+  ];
+
+  constructor() {
+    super();
+    this.vocab = "";
+    this._terms = [];
+    this._editingTerm = null;
+    this._loading = false;
+    this._error = "";
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._modalStackID = openModal();
+    this._unsubModalStack = subscribeModalStack(() => this.requestUpdate());
+    this._onDocKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (this._editingTerm) {
+        this._cancelTermForm();
+      } else {
+        this._close();
+      }
+    };
+    document.addEventListener("keydown", this._onDocKey);
+    this._reload();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._onDocKey) {
+      document.removeEventListener("keydown", this._onDocKey);
+      this._onDocKey = null;
+    }
+    if (this._unsubModalStack) {
+      this._unsubModalStack();
+      this._unsubModalStack = null;
+    }
+    if (this._modalStackID) {
+      closeModal(this._modalStackID);
+      this._modalStackID = null;
+    }
+  }
+
+  async _reload() {
+    if (!this.vocab) return;
+    this._loading = true;
+    this._error = "";
+    try {
+      const resp = await api.vocab.listFull(this.vocab);
+      this._terms = resp.items || [];
+    } catch (err) {
+      this._error =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  _close() {
+    // Reload the shared vocab bundle so pickers get fresh data on
+    // next open; parent components can also listen for
+    // vocab-changed to re-render if a picker is already mounted.
+    api.vocab.reload().catch(() => {});
+    this.dispatchEvent(
+      new CustomEvent("close", { bubbles: true, composed: true }),
+    );
+  }
+
+  _openAddTerm() {
+    this._editingTerm = {
+      mode: "create",
+      draft: {
+        id: "",
+        name: "",
+        description: "",
+        obo: "",
+        inverse: "",
+        symmetrical: false,
+        super_types: "",
+      },
+      error: "",
+    };
+  }
+
+  _openEditTerm(t) {
+    this._editingTerm = {
+      mode: "edit",
+      draft: { ...t },
+      error: "",
+    };
+  }
+
+  _cancelTermForm() {
+    this._editingTerm = null;
+  }
+
+  _termDraftChange(field, value) {
+    if (!this._editingTerm) return;
+    this._editingTerm = {
+      ...this._editingTerm,
+      draft: { ...this._editingTerm.draft, [field]: value },
+    };
+  }
+
+  async _submitTermForm() {
+    const f = this._editingTerm;
+    if (!f) return;
+    const id = (f.draft.id || "").trim();
+    const name = (f.draft.name || "").trim();
+    if (f.mode === "create" && !id) {
+      this._editingTerm = { ...f, error: "id is required" };
+      return;
+    }
+    if (!name) {
+      this._editingTerm = { ...f, error: "name is required" };
+      return;
+    }
+    try {
+      if (f.mode === "create") {
+        await api.vocab.add(this.vocab, f.draft);
+      } else {
+        await api.vocab.patch(this.vocab, f.draft.id, f.draft);
+      }
+      this._editingTerm = null;
+      await this._reload();
+    } catch (err) {
+      this._editingTerm = {
+        ...f,
+        error:
+          err instanceof Problem
+            ? `${err.title}: ${err.detail || err.message}`
+            : String(err),
+      };
+    }
+  }
+
+  async _deleteTerm(t) {
+    const ok = await confirmAction({
+      heading: "Delete vocabulary term?",
+      message: `"${t.name || t.id}" will be permanently deleted. Existing records using this term must first be updated to a different value — the delete will fail if any row still references it.`,
+      actionLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      await api.vocab.delete(this.vocab, t.id);
+      await this._reload();
+    } catch (err) {
+      this._error =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    }
+  }
+
+  render() {
+    const adapter = vocabEditorAdapter(this.vocab);
+    if (!adapter) return "";
+    const covered =
+      this._modalStackID && !isTopModal(this._modalStackID)
+        ? " is-covered"
+        : "";
+    return html`
+      <div class=${"backdrop" + covered}>
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="vocab-editor-title"
+          @keydown=${(e) => e.stopPropagation()}
+        >
+          <div class="modal-header">
+            <h3 id="vocab-editor-title">
+              Edit ${adapter.label}
+            </h3>
+            <button
+              class="close-x"
+              type="button"
+              @click=${() => this._close()}
+              title="close"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
+          ${this._error
+            ? html`<div class="error" role="alert">${this._error}</div>`
+            : ""}
+          ${this._editingTerm
+            ? this._renderTermForm(adapter)
+            : this._renderTermList(adapter)}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderTermList(adapter) {
+    const items = this._terms || [];
+    return html`
+      ${this._loading
+        ? html`<div class="empty">loading…</div>`
+        : items.length === 0
+          ? html`<div class="empty">No terms yet.</div>`
+          : html`
+              <table>
+                <thead>
+                  <tr>
+                    <th>id</th>
+                    <th>name</th>
+                    ${adapter.hasDescription
+                      ? html`<th>description</th>`
+                      : ""}
+                    ${adapter.hasObo ? html`<th>uri</th>` : ""}
+                    <th aria-label="actions"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${items.map(
+                    (t) => html`
+                      <tr>
+                        <td>${t.id}</td>
+                        <td>${t.name || ""}</td>
+                        ${adapter.hasDescription
+                          ? html`<td class="desc">${t.description || ""}</td>`
+                          : ""}
+                        ${adapter.hasObo
+                          ? html`<td class="obo">
+                              ${t.obo
+                                ? html`<a
+                                    href=${t.obo}
+                                    target="_blank"
+                                    rel="noopener"
+                                    >${t.obo}</a
+                                  >`
+                                : ""}
+                            </td>`
+                          : ""}
+                        <td class="actions">
+                          <span class="row-actions">
+                            <button
+                              class="icon-btn subtle"
+                              type="button"
+                              @click=${() => this._openEditTerm(t)}
+                              title="edit term"
+                              aria-label="edit term"
+                            >
+                              ${renderIcon("pencil", 14)}
+                            </button>
+                            <button
+                              class="icon-btn subtle danger"
+                              type="button"
+                              @click=${() => this._deleteTerm(t)}
+                              title="delete term"
+                              aria-label="delete term"
+                            >
+                              ${renderIcon("trash-2", 14)}
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    `,
+                  )}
+                </tbody>
+              </table>
+            `}
+      <div class="toolbar">
+        <button type="button" @click=${() => this._openAddTerm()}>
+          ${renderIcon("plus", 14)} Add term
+        </button>
+        <div class="right">
+          <button type="button" class="primary" @click=${() => this._close()}>
+            Done
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderTermForm(adapter) {
+    const f = this._editingTerm;
+    const d = f.draft;
+    const set = (field) => (e) =>
+      this._termDraftChange(field, e.target.value);
+    const setCheck = (field) => (e) =>
+      this._termDraftChange(field, e.target.checked);
+    return html`
+      ${f.error
+        ? html`<div class="error" role="alert">${f.error}</div>`
+        : ""}
+      <form
+        class="term-form"
+        @submit=${(e) => {
+          e.preventDefault();
+          this._submitTermForm();
+        }}
+      >
+        <label for="vt-id">id <span class="req">*</span></label>
+        <input
+          id="vt-id"
+          type="text"
+          .value=${d.id || ""}
+          @input=${set("id")}
+          ?disabled=${f.mode === "edit"}
+          placeholder="SCREAMING_SNAKE_CASE"
+        />
+        ${f.mode === "edit"
+          ? html`<span class="hint"
+              >The id is the primary key and can't be edited in place.
+              Delete + re-add to rename.</span
+            >`
+          : ""}
+
+        <label for="vt-name">name <span class="req">*</span></label>
+        <input
+          id="vt-name"
+          type="text"
+          .value=${d.name || ""}
+          @input=${set("name")}
+          placeholder="human-readable name"
+        />
+
+        ${adapter.hasDescription
+          ? html`
+              <label for="vt-desc">description</label>
+              <textarea
+                id="vt-desc"
+                .value=${d.description || ""}
+                @input=${set("description")}
+                placeholder="what this term means; when to use it"
+              ></textarea>
+            `
+          : ""}
+
+        ${adapter.hasObo
+          ? html`
+              <label for="vt-obo">uri</label>
+              <input
+                id="vt-obo"
+                type="text"
+                .value=${d.obo || ""}
+                @input=${set("obo")}
+                placeholder="http://purl.obolibrary.org/obo/…"
+              />
+              ${adapter.oboHint
+                ? html`<span class="hint">${adapter.oboHint}</span>`
+                : ""}
+            `
+          : ""}
+
+        ${adapter.hasInverse
+          ? html`
+              <label for="vt-inv">inverse</label>
+              <input
+                id="vt-inv"
+                type="text"
+                .value=${d.inverse || ""}
+                @input=${set("inverse")}
+                placeholder="id of the inverse term (e.g. EATEN_BY)"
+              />
+            `
+          : ""}
+
+        ${adapter.hasSymmetrical
+          ? html`
+              <label for="vt-sym">symmetrical</label>
+              <label class="checkbox-row">
+                <input
+                  id="vt-sym"
+                  type="checkbox"
+                  .checked=${!!d.symmetrical}
+                  @change=${setCheck("symmetrical")}
+                />
+                The relation is its own inverse (A ↔ B).
+              </label>
+            `
+          : ""}
+
+        ${adapter.hasSuperTypes
+          ? html`
+              <label for="vt-super">super types</label>
+              <input
+                id="vt-super"
+                type="text"
+                .value=${d.super_types || ""}
+                @input=${set("super_types")}
+                placeholder="comma-separated parent term ids"
+              />
+            `
+          : ""}
+
+        <div class="toolbar">
+          <button type="button" @click=${() => this._cancelTermForm()}>
+            Cancel
+          </button>
+          <button type="submit" class="primary">
+            ${f.mode === "edit" ? "Save changes" : "Add term"}
+          </button>
+        </div>
+      </form>
+    `;
+  }
+}
+
 // ---------- <sfga-confirm-modal> ----------
 //
 // Generic imperatively-mounted confirmation modal. Renders a heading, a
@@ -14714,3 +15354,4 @@ customElements.define("sfga-agent-card", SfgaAgentCard);
 customElements.define("sfga-agent-modal", SfgaAgentModal);
 customElements.define("sfga-agent-section", SfgaAgentSection);
 customElements.define("sfga-confirm-modal", SfgaConfirmModal);
+customElements.define("sfga-vocab-editor", SfgaVocabEditor);

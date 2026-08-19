@@ -77,13 +77,205 @@ var licenseSuggestions = []VocabTerm{
 
 // Vocabulary returns the cached vocabulary, loading it on the first call.
 // Subsequent callers share the same *Vocabulary — safe because the tables
-// don't change during a session. Errors from the initial load are cached
-// too; callers seeing an error should treat it as terminal for the process.
+// don't change during a session unless the vocab editor mutates them.
+// Editor writes call invalidateVocab() so the next Vocabulary() call
+// reloads from disk.
+//
+// Errors from the load are cached too; callers seeing an error should
+// treat it as terminal for the process (only the initial-load path can
+// error; subsequent loads only happen after successful writes).
 func (a *Archive) Vocabulary(ctx context.Context) (*Vocabulary, error) {
-	a.vocabOnce.Do(func() {
+	a.vocabMu.Lock()
+	defer a.vocabMu.Unlock()
+	if a.vocab == nil && a.vocabErr == nil {
 		a.vocab, a.vocabErr = a.loadVocabulary(ctx)
-	})
+	}
 	return a.vocab, a.vocabErr
+}
+
+// invalidateVocab drops the cached Vocabulary so the next Vocabulary()
+// call reloads from disk. Called by vocab-editor mutation methods.
+func (a *Archive) invalidateVocab() {
+	a.vocabMu.Lock()
+	a.vocab = nil
+	a.vocabErr = nil
+	a.vocabMu.Unlock()
+}
+
+// VocabTermDetail is the full-fidelity term shape for the vocab
+// editor — the picker bundle at /api/vocab ships only id + name so
+// the round trip stays small; the editor's list + form need the
+// remaining columns (description, ontology URI via obo, inverse,
+// symmetrical, superTypes) to display and edit rich vocabs like
+// species_interaction_type.
+//
+// Not every rich vocab populates every field. Callers should treat
+// empty strings and false as "unset" — the display path elides them.
+type VocabTermDetail struct {
+	ID          string
+	Name        string
+	Description string
+	// Obo is an ontology URI (e.g. Relations Ontology PURL
+	// "http://purl.obolibrary.org/obo/RO_0002442"). Named for sfga's
+	// col__obo column even though the value is any URI, not
+	// necessarily an OBO one — sfga's column naming is legacy.
+	Obo         string
+	Inverse     string
+	Symmetrical bool
+	// SuperTypes is a comma-separated list of parent term ids from
+	// sfga's col__superTypes. Kept as a raw string on the wire; the
+	// UI splits / rejoins.
+	SuperTypes string
+}
+
+// ListSpeciesInteractionTypes returns every row in the
+// species_interaction_type vocab with full detail — the editor's
+// list source. Ordered by name for scannability (43-ish entries;
+// a two-page scroll at most).
+func (a *Archive) ListSpeciesInteractionTypes(ctx context.Context) ([]VocabTermDetail, error) {
+	const q = `SELECT
+		col__id,
+		COALESCE(col__name, ''),
+		COALESCE(col__description, ''),
+		COALESCE(col__obo, ''),
+		COALESCE(col__inverse, ''),
+		COALESCE(col__symmetrical, 0),
+		COALESCE(col__superTypes, '')
+	FROM species_interaction_type
+	WHERE col__id != ''
+	ORDER BY col__name, col__id`
+	rows, err := a.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("core: list species_interaction_type: %w", err)
+	}
+	defer rows.Close()
+	var out []VocabTermDetail
+	for rows.Next() {
+		var t VocabTermDetail
+		var sym int
+		if err := rows.Scan(
+			&t.ID, &t.Name, &t.Description, &t.Obo,
+			&t.Inverse, &sym, &t.SuperTypes,
+		); err != nil {
+			return nil, fmt.Errorf("core: scan species_interaction_type: %w", err)
+		}
+		t.Symmetrical = sym != 0
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// AddSpeciesInteractionType writes a new vocab term. ID and Name are
+// required; the rest are optional. Uniqueness is enforced by sfga's
+// PRIMARY KEY on col__id — a duplicate returns ErrConflict.
+// Invalidates the cached vocab bundle so /api/vocab reflects the new
+// term on next read.
+func (t *Tx) AddSpeciesInteractionType(term VocabTermDetail) error {
+	if term.ID == "" {
+		return fmt.Errorf("core: add species_interaction_type: %w: id required", ErrValidation)
+	}
+	if term.Name == "" {
+		return fmt.Errorf("core: add species_interaction_type: %w: name required", ErrValidation)
+	}
+	sym := 0
+	if term.Symmetrical {
+		sym = 1
+	}
+	const insert = `INSERT INTO species_interaction_type (
+		col__id, col__name, col__description,
+		col__obo, col__inverse, col__symmetrical,
+		col__superTypes
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	if _, err := t.tx.ExecContext(t.ctx, insert,
+		term.ID, term.Name, term.Description,
+		term.Obo, nullIfEmpty(term.Inverse), sym,
+		term.SuperTypes,
+	); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") ||
+			strings.Contains(err.Error(), "PRIMARY KEY") {
+			return fmt.Errorf("core: add species_interaction_type %q: %w",
+				term.ID, ErrConflict)
+		}
+		return fmt.Errorf("core: add species_interaction_type %q: %w",
+			term.ID, err)
+	}
+	t.archive.invalidateVocab()
+	return nil
+}
+
+// UpdateSpeciesInteractionType rewrites every editable column of the
+// term at term.ID. ID itself is not editable — deleting + re-adding
+// is the way to rename an id (also rare — the id is what other rows
+// reference by FK).
+func (t *Tx) UpdateSpeciesInteractionType(term VocabTermDetail) error {
+	if term.ID == "" {
+		return fmt.Errorf("core: update species_interaction_type: %w: id required", ErrValidation)
+	}
+	if term.Name == "" {
+		return fmt.Errorf("core: update species_interaction_type: %w: name required", ErrValidation)
+	}
+	sym := 0
+	if term.Symmetrical {
+		sym = 1
+	}
+	const upd = `UPDATE species_interaction_type SET
+		col__name = ?, col__description = ?,
+		col__obo = ?, col__inverse = ?, col__symmetrical = ?,
+		col__superTypes = ?
+	WHERE col__id = ?`
+	res, err := t.tx.ExecContext(t.ctx, upd,
+		term.Name, term.Description,
+		term.Obo, nullIfEmpty(term.Inverse), sym,
+		term.SuperTypes,
+		term.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("core: update species_interaction_type %q: %w",
+			term.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("core: update species_interaction_type %q rows: %w",
+			term.ID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("core: update species_interaction_type %q: %w",
+			term.ID, ErrNotFound)
+	}
+	t.archive.invalidateVocab()
+	return nil
+}
+
+// DeleteSpeciesInteractionType removes a term. sfga's FK from
+// species_interaction.col__type_id to species_interaction_type.col__id
+// rejects the delete if any species_interaction row still cites the
+// term — returns ErrConflict in that case so the caller can prompt
+// the curator to reassign the affected rows first.
+func (t *Tx) DeleteSpeciesInteractionType(id string) error {
+	if id == "" {
+		return fmt.Errorf("core: delete species_interaction_type: %w: id required", ErrValidation)
+	}
+	res, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM species_interaction_type WHERE col__id = ?`, id,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			return fmt.Errorf("core: delete species_interaction_type %q: %w: term is still referenced by one or more species_interaction rows",
+				id, ErrConflict)
+		}
+		return fmt.Errorf("core: delete species_interaction_type %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("core: delete species_interaction_type %q rows: %w",
+			id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("core: delete species_interaction_type %q: %w",
+			id, ErrNotFound)
+	}
+	t.archive.invalidateVocab()
+	return nil
 }
 
 // vocab-related fields on Archive live in archive.go; declared there so

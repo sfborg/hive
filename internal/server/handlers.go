@@ -36,6 +36,18 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/vocab/countries", s.handleCountriesVocab)
 	mux.HandleFunc("GET /api/vocab/languages", s.handleLanguagesVocab)
 	mux.HandleFunc("GET /api/vocab/sex", s.handleSexVocab)
+	// Rich per-vocab CRUD for the vocab editor. Currently scoped to
+	// species_interaction_type; grows to other editable vocabs as
+	// they get schema support for description / URI (see
+	// DEFERRED.md § Rich vocab detail columns for flat vocabs).
+	mux.HandleFunc("GET /api/vocab/species_interaction_type/full",
+		s.handleListSpeciesInteractionTypes)
+	mux.HandleFunc("POST /api/vocab/species_interaction_type",
+		s.handleAddSpeciesInteractionType)
+	mux.HandleFunc("PATCH /api/vocab/species_interaction_type/{id}",
+		s.handlePatchSpeciesInteractionType)
+	mux.HandleFunc("DELETE /api/vocab/species_interaction_type/{id}",
+		s.handleDeleteSpeciesInteractionType)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 
 	mux.HandleFunc("GET /api/metadata", s.handleGetMetadata)
@@ -142,6 +154,120 @@ func (s *server) handleVocab(w http.ResponseWriter, r *http.Request) {
 	// browser still revalidates cross-session in case of a hive upgrade.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	writeJSON(w, http.StatusOK, v)
+}
+
+// handleListSpeciesInteractionTypes returns every row in the
+// species_interaction_type vocab with the rich fields the editor
+// needs (description / obo / inverse / symmetrical / superTypes).
+// The picker's /api/vocab bundle continues to ship the slim
+// (id, name) shape.
+func (s *server) handleListSpeciesInteractionTypes(w http.ResponseWriter, r *http.Request) {
+	terms, err := s.a.ListSpeciesInteractionTypes(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiVocabTermDetail, 0, len(terms))
+	for _, t := range terms {
+		items = append(items, speciesInteractionTypeToAPI(t))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiVocabTermDetail]{Items: items})
+}
+
+// handleAddSpeciesInteractionType writes a new term. Path is
+// /api/vocab/species_interaction_type; body is apiVocabTermDetail
+// (id required). Uniqueness on the id column is enforced by sfga's
+// PK — a duplicate returns 409 via ErrConflict.
+func (s *server) handleAddSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
+	var body apiVocabTermDetail
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.ID) == "" {
+		writeBadRequest(w, r, "id is required")
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeBadRequest(w, r, "name is required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.AddSpeciesInteractionType(apiVocabTermDetailToCore(body))
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, body)
+}
+
+// handlePatchSpeciesInteractionType updates every editable column of
+// the term at {id}. The id itself isn't editable — renaming an id
+// is delete + re-add on a new id (also rare — other rows reference
+// it via FK).
+func (s *server) handlePatchSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body apiVocabTermDetail
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.ID = id // path wins over body
+	if strings.TrimSpace(body.Name) == "" {
+		writeBadRequest(w, r, "name is required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.UpdateSpeciesInteractionType(apiVocabTermDetailToCore(body))
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// handleDeleteSpeciesInteractionType removes a term. sfga's FK from
+// species_interaction.col__type_id blocks the delete when any row
+// still cites the term — returns 409 (ErrConflict) so the caller
+// can prompt the curator to reassign the affected rows first.
+func (s *server) handleDeleteSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteSpeciesInteractionType(id)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// speciesInteractionTypeToAPI / apiVocabTermDetailToCore ship the
+// core VocabTermDetail across the wire boundary.
+func speciesInteractionTypeToAPI(t hive.VocabTermDetail) apiVocabTermDetail {
+	return apiVocabTermDetail{
+		ID:          t.ID,
+		Name:        t.Name,
+		Description: t.Description,
+		Obo:         t.Obo,
+		Inverse:     t.Inverse,
+		Symmetrical: t.Symmetrical,
+		SuperTypes:  t.SuperTypes,
+	}
+}
+
+func apiVocabTermDetailToCore(a apiVocabTermDetail) hive.VocabTermDetail {
+	return hive.VocabTermDetail{
+		ID:          a.ID,
+		Name:        a.Name,
+		Description: a.Description,
+		Obo:         a.Obo,
+		Inverse:     a.Inverse,
+		Symmetrical: a.Symmetrical,
+		SuperTypes:  a.SuperTypes,
+	}
 }
 
 // handleNomenVocab returns the NOMEN ontology's class list — the

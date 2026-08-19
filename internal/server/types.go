@@ -929,6 +929,26 @@ type apiPage[T any] struct {
 	Total      *int   `json:"total,omitempty"`
 }
 
+// apiVocabTermDetail is the full-fidelity wire form for editable
+// rich vocabs — the vocab editor's list + form need columns the
+// picker bundle at /api/vocab doesn't ship (description, obo /
+// ontology URI, inverse, symmetrical, superTypes). Rich vocabs
+// that don't populate every field elide via omitempty.
+type apiVocabTermDetail struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Obo carries an ontology URI (e.g. RO PURL). Column name
+	// preserved from sfga's col__obo for lossless round-trip even
+	// when the value isn't OBO-namespaced.
+	Obo         string `json:"obo,omitempty"`
+	Inverse     string `json:"inverse,omitempty"`
+	Symmetrical bool   `json:"symmetrical,omitempty"`
+	// SuperTypes is a comma-separated list of parent term ids —
+	// sfga's col__superTypes shape.
+	SuperTypes string `json:"super_types,omitempty"`
+}
+
 // apiNameRelation is the wire form of a name_relation row. Sfga's
 // name_relation has no col__id; hive uses SQLite's implicit rowid as
 // the opaque handle and ships it as `id` (string per the "all ids

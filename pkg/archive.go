@@ -50,9 +50,13 @@ type Archive struct {
 	// taxonomic_status, …) on first call. Cached for the archive lifetime —
 	// the tables don't change during a session. Set/read via sync.Once so
 	// concurrent HTTP requests share the same load.
-	vocab     *Vocabulary
-	vocabErr  error
-	vocabOnce sync.Once
+	// vocab / vocabErr guarded by vocabMu. First call loads; mutations
+	// call invalidateVocab() to force reload on next read. Was
+	// sync.Once but the editor path needs invalidation on
+	// Add/Update/Delete vocab-term writes.
+	vocab    *Vocabulary
+	vocabErr error
+	vocabMu  sync.Mutex
 
 	// validator is hive's gsvalidator use case, wired at Open with the
 	// embedded rule set + sfga schema mapper + built-in and sfga-custom

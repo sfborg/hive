@@ -131,6 +131,34 @@ export const api = {
     // isLoaded lets components skip rendering pickers until the bundle
     // arrives. Rarely needed since load() runs before mount.
     isLoaded: () => vocabCache !== null,
+    // reload drops the cached bundle so the next load() re-fetches. Called
+    // after vocab-editor writes so pickers reflect the new / edited /
+    // deleted terms without a browser refresh.
+    reload: async () => {
+      vocabCache = null;
+      return await api.vocab.load();
+    },
+    // listFull fetches the rich-field per-term list for editable vocabs.
+    // Only vocabs with schema support for description / obo / etc. respond;
+    // currently: species_interaction_type.
+    listFull: (name) =>
+      j("GET", `/api/vocab/${encodeURIComponent(name)}/full`),
+    // add / patch / delete round-trip a single term via the vocab editor.
+    // Post-write, callers should api.vocab.reload() to refresh cached
+    // picker data.
+    add: (name, body) =>
+      j("POST", `/api/vocab/${encodeURIComponent(name)}`, body),
+    patch: (name, id, body) =>
+      j(
+        "PATCH",
+        `/api/vocab/${encodeURIComponent(name)}/${encodeURIComponent(id)}`,
+        body,
+      ),
+    delete: (name, id) =>
+      j(
+        "DELETE",
+        `/api/vocab/${encodeURIComponent(name)}/${encodeURIComponent(id)}`,
+      ),
   },
 
   // ISO vocab bundles served on-demand — countries + languages are
