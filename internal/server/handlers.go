@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -113,6 +115,14 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference/parse-bibtex", s.handleParseBibTeX)
 	mux.HandleFunc("GET /api/reference/{id}", s.handleGetReference)
 	mux.HandleFunc("PATCH /api/reference/{id}", s.handlePatchReference)
+	// POST /api/reference/upload accepts a multipart file
+	// (PDF / EPUB / HTML / JATS), stores it in the archive's
+	// sidecar directory content-addressed on sha512, and returns
+	// the metadata (sha, ext, size, already_existed). Downstream
+	// processing (GROBID → TEI → JATS, DOI extraction) happens in
+	// follow-up handlers so a curator can upload without paying
+	// the full pipeline cost synchronously.
+	mux.HandleFunc("POST /api/reference/upload", s.handleReferenceUpload)
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
@@ -2613,6 +2623,68 @@ func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", fresh.Modified)
 	}
 	writeJSON(w, http.StatusOK, referenceToAPI(fresh))
+}
+
+// handleReferenceUpload accepts a multipart file upload (PDF /
+// EPUB / HTML / JATS) and stores it in the archive's sidecar
+// directory content-addressed on sha512. Idempotent per hash —
+// uploading the same bytes twice returns the same sha with
+// already_existed=true.
+//
+// Downstream steps (GROBID → TEI → JATS, DOI extraction, GNfinder,
+// etc.) run in follow-up handlers so this upload path stays fast
+// and doesn't block on the pipeline. A curator dragging a PDF
+// into the reference modal gets an immediate "stored" signal;
+// conversion happens asynchronously and the UI polls or waits on
+// its own.
+//
+// Max upload size is limited to 100 MB. Scientific PDFs are
+// almost always under that; the cap protects against a curator
+// accidentally uploading a book scan or a huge sequencing dataset.
+func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
+	const maxUploadBytes = 100 << 20 // 100 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeBadRequest(w, r, "invalid multipart body: "+err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeBadRequest(w, r, "missing 'file' field in multipart body")
+		return
+	}
+	defer file.Close()
+
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(header.Filename)), ".")
+	if ext == "" {
+		writeBadRequest(w, r, "upload filename has no extension — hive needs it to know how to process the file")
+		return
+	}
+	// Whitelist known formats. Unknown extensions land in the
+	// sidecar but the pipeline won't know how to convert them —
+	// better to reject up front with a clear message.
+	switch ext {
+	case "pdf", "epub", "html", "htm", "xml", "jats":
+		// OK — supported input formats. xml + jats treated as JATS.
+	default:
+		writeBadRequest(w, r,
+			"unsupported file type '"+ext+"' — hive accepts pdf, epub, html, jats/xml")
+		return
+	}
+	mime := header.Header.Get("Content-Type")
+	sourceURL := r.FormValue("source_url")
+
+	res, err := sidecar.Ingest(s.archivePath, file, ext, mime, sourceURL)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, apiReferenceUpload{
+		SHA512:         res.SHA512,
+		Ext:            res.Ext,
+		Size:           res.Size,
+		AlreadyExisted: res.AlreadyExisted,
+	})
 }
 
 // handleParseName runs gnparser on a verbatim scientific name and returns

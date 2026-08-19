@@ -1007,6 +1007,17 @@ type apiPage[T any] struct {
 	Total      *int   `json:"total,omitempty"`
 }
 
+// apiReferenceUpload is the response for POST /api/reference/upload.
+// Reports where the uploaded file landed in the sidecar so the WUI
+// can associate it with a reference row and trigger downstream
+// pipeline steps (GROBID conversion, DOI extraction, etc.).
+type apiReferenceUpload struct {
+	SHA512         string `json:"sha512"`
+	Ext            string `json:"ext"`
+	Size           int64  `json:"size"`
+	AlreadyExisted bool   `json:"already_existed"`
+}
+
 // apiVocabTermDetail is the full-fidelity wire form for editable
 // rich vocabs — the vocab editor's list + form need columns the
 // picker bundle at /api/vocab doesn't ship (description, obo /
