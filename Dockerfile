@@ -48,7 +48,9 @@ COPY --from=build /out/hive /usr/local/bin/hive
 # port is needed; the container port then has to match.
 EXPOSE 2365
 
-# Default command runs `hive serve /data/archive.db` — operators
-# override with a real archive name via docker-compose or `docker run`.
+# Default command runs `hive serve --create /data/archive.db` — the
+# --create flag makes a fresh install work without the operator
+# pre-populating an archive. Curators bring-your-own by mounting a
+# real .db over /data/archive.db in the compose file / docker run.
 ENTRYPOINT ["/usr/local/bin/hive"]
-CMD ["serve", "--bind", "0.0.0.0:2365", "/data/archive.db"]
+CMD ["serve", "--create", "--bind", "0.0.0.0:2365", "/data/archive.db"]

@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+
+	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/internal/server"
 	"github.com/sfborg/hive/pkg/config"
 	"github.com/spf13/cobra"
@@ -18,6 +22,26 @@ var serveCmd = &cobra.Command{
 		orcidFlag, _ := cmd.Flags().GetString("orcid")
 		emailFlag, _ := cmd.Flags().GetString("openalex-email")
 		allowUnauth, _ := cmd.Flags().GetBool("allow-unauthenticated")
+		create, _ := cmd.Flags().GetBool("create")
+
+		archivePath := args[0]
+		if create {
+			// Create the archive if it doesn't exist yet. Opt-in
+			// (curators typoing a path shouldn't silently create a
+			// blank archive) but the default in container/deployed
+			// setups where a missing archive is the fresh-install
+			// case. Existing archives are left alone.
+			if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr,
+					"hive: no archive at %s — creating empty one (--create)\n",
+					archivePath)
+				a, err := hive.Create(archivePath)
+				if err != nil {
+					return fmt.Errorf("create archive: %w", err)
+				}
+				a.Close()
+			}
+		}
 
 		id, err := resolveIdentity(orcidFlag, emailFlag)
 		if err != nil {
@@ -25,7 +49,7 @@ var serveCmd = &cobra.Command{
 		}
 		config.SetIdentity(id)
 
-		return server.Run(args[0], server.Options{
+		return server.Run(archivePath, server.Options{
 			Bind:                 bind,
 			AllowUnauthenticated: allowUnauth,
 			ReadOnly:             readOnly,
@@ -45,5 +69,7 @@ func init() {
 		"email sent to OpenAlex's polite request pool (overrides HIVE_OPENALEX_EMAIL / config)")
 	serveCmd.Flags().Bool("allow-unauthenticated", false,
 		"permit a non-loopback bind without auth (unsafe)")
+	serveCmd.Flags().Bool("create", false,
+		"create an empty archive if the path doesn't exist yet (default off; on in the Docker CMD so first-run just works)")
 	rootCmd.AddCommand(serveCmd)
 }
