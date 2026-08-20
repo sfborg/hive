@@ -124,4 +124,57 @@ clean:
     rm -rf bin
     rm -f demo.db demo.db-wal demo.db-shm
 
+# ---------- docker / compose ----------
+#
+# The reference-ingest pipeline runs a PDF through GROBID (ML-based
+# TEI extraction) before hive derives JATS and downstream data. GROBID
+# is Java + trained models — heavy for a curator's laptop. docker
+# compose spins it up alongside hive so operators don't have to run
+# GROBID by hand. See docker-compose.yml + REFERENCE_PDF_PLAN.md.
+
+# Build the hive Docker image (multi-stage, static binary, distroless
+# runtime). Passes the current git short-sha as HIVE_VERSION.
+docker-build:
+    docker build \
+        --build-arg HIVE_VERSION="$(git rev-parse --short HEAD)" \
+        -t hive:local \
+        .
+
+# Bring up hive + GROBID via docker compose. First run pulls GROBID's
+# ~2 GB image and takes ~60s to warm up the ML models; watch
+# `just docker-logs` for the "ready" line before hitting the WUI.
+# Data directory (./data) is created if missing so `docker compose up`
+# works from a clean checkout.
+docker-up:
+    @mkdir -p data
+    docker compose up -d
+    @echo ""
+    @echo "  hive:   http://localhost:2365"
+    @echo "  grobid: http://localhost:8070"
+    @echo ""
+    @echo "  logs:   just docker-logs"
+    @echo "  stop:   just docker-down"
+
+# Tail logs from both services (Ctrl-C to detach — services keep
+# running).
+docker-logs:
+    docker compose logs -f
+
+# Stop and remove the compose stack. Preserves volumes (./data
+# stays; the mounted archive is safe).
+docker-down:
+    docker compose down
+
+# Bring up JUST the GROBID service — useful during hive development
+# when you want `just serve` running your local binary against a
+# compose-managed GROBID. Point your local hive at it with
+# HIVE_GROBID_URL=http://localhost:8070.
+docker-grobid:
+    docker compose up -d grobid
+    @echo ""
+    @echo "  grobid: http://localhost:8070"
+    @echo ""
+    @echo "  run local hive against it with:"
+    @echo "    HIVE_GROBID_URL=http://localhost:8070 just serve"
+
 
