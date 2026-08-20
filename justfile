@@ -150,24 +150,32 @@ docker-build:
 # Data directory (./data) is created if missing so `docker compose up`
 # works from a clean checkout. Depends on docker-build so the vendor
 # step runs before compose's internal `build: .` fires.
-docker-up: docker-build
+# archive is a filename relative to ./data/ (bind-mounted into the
+# container at /data). Defaults to archive.db; pass any name if
+# your database is called something else:
+#   just docker-up               → serves ./data/archive.db
+#   just docker-up col_26-07.db  → serves ./data/col_26-07.db
+# --create in the container CMD makes a missing archive land as a
+# fresh empty file rather than restart-looping.
+docker-up archive='archive.db': docker-build
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p data
-    # Pass the host UID/GID to compose so the hive container runs as
-    # the same user that owns files in ./data — otherwise the
-    # container can't write to the bind-mounted archive and
-    # restart-loops. Compose reads HIVE_UID / HIVE_GID from the env.
-    # (Named with HIVE_ prefix to avoid bash's readonly UID / GID.)
+    # Pass host UID/GID + archive path to compose. HIVE_UID/HIVE_GID
+    # avoid bash's readonly UID / GID. HIVE_ARCHIVE is the container
+    # path (always under /data, since that's the bind-mount target);
+    # {{archive}} is the filename under ./data on the host.
     export HIVE_UID=$(id -u)
     export HIVE_GID=$(id -g)
+    export HIVE_ARCHIVE=/data/{{archive}}
     docker compose up -d
     echo ""
-    echo "  hive:   http://localhost:2365"
-    echo "  grobid: http://localhost:8070"
+    echo "  hive:    http://localhost:2365"
+    echo "  archive: ./data/{{archive}}"
+    echo "  grobid:  http://localhost:8070"
     echo ""
-    echo "  logs:   just docker-logs"
-    echo "  stop:   just docker-down"
+    echo "  logs:    just docker-logs"
+    echo "  stop:    just docker-down"
 
 # Tail logs from both services (Ctrl-C to detach — services keep
 # running).

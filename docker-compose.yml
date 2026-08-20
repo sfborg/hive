@@ -43,6 +43,20 @@ services:
     # HIVE_ prefix because bash treats UID / GID as readonly and
     # `export UID=...` fails.
     user: "${HIVE_UID:-1000}:${HIVE_GID:-1000}"
+    # Command overrides the Dockerfile CMD so the archive path can be
+    # parameterized without rebuilding the image. HIVE_ARCHIVE lets
+    # the operator point at any .db file under /data (which is
+    # bind-mounted from ./data); defaults to /data/archive.db.
+    #
+    #   HIVE_ARCHIVE=/data/col_26-07.db just docker-up
+    #   just docker-up col_26-07.db          (via the justfile recipe)
+    command:
+      - "serve"
+      - "--create"
+      - "--allow-unauthenticated"
+      - "--bind"
+      - "0.0.0.0:2365"
+      - "${HIVE_ARCHIVE:-/data/archive.db}"
     ports:
       - "127.0.0.1:2365:2365"
     volumes:
