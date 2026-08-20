@@ -9971,6 +9971,15 @@ class SfgaAddReferenceModal extends LitElement {
     // OpenAlex fetch (BHLnames, BibTeX paths).
     _preview: { state: true },
     _previewOpenAlex: { state: true },
+    // OpenAlex DOI-recovery candidates. Populated after an upload
+    // where GROBID extracted usable header metadata but no DOI —
+    // the search fires with title + first-author surname + year and
+    // surfaces up to 5 matches. Publisher backfile programs and
+    // DataCite (BHL) both assign DOIs retroactively to old papers,
+    // so a PDF with no printed DOI often has one findable this way.
+    _openalexCandidates: { state: true },
+    _openalexCandidatesBusy: { state: true },
+    _openalexCandidatesError: { state: true },
     // Tab 4 (File). Drag-and-drop / picker uploads a PDF (or
     // EPUB / HTML / JATS) into the archive's sidecar library and,
     // when GROBID is configured, converts to TEI. On success with
@@ -10251,6 +10260,52 @@ class SfgaAddReferenceModal extends LitElement {
         color: var(--fg);
         border-color: var(--fg);
       }
+      /* OpenAlex DOI-recovery suggestions panel above the Manual
+         form. Only appears after an upload where GROBID pulled
+         header metadata but no DOI resolved from the PDF text. Each
+         candidate is a compact card; the "likely" match (normalized-
+         title equality with GROBID's extracted title) gets an accent
+         border to draw the eye. */
+      .oa-candidates {
+        display: grid;
+        gap: var(--sp-2);
+        padding: var(--sp-2);
+        margin-bottom: var(--sp-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: color-mix(in oklab, var(--fg) 3%, transparent);
+      }
+      .oa-candidates .hint {
+        margin: 0;
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .oa-candidate {
+        display: grid;
+        gap: var(--sp-1);
+        padding: var(--sp-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg);
+      }
+      .oa-candidate.likely {
+        border-color: var(--accent);
+      }
+      .oa-candidate .title {
+        font-weight: 500;
+      }
+      .oa-candidate .meta {
+        color: var(--dim);
+        font-size: var(--fs-sm);
+      }
+      .oa-candidate .meta code {
+        font-family: var(--font-mono);
+        font-size: var(--fs-xs);
+      }
+      .oa-candidate .actions {
+        display: flex;
+        justify-content: flex-end;
+      }
       /* Conflict picker for GROBID-vs-OpenAlex disagreements in the
          resolved-DOI preview. Two labeled radio options stacked
          inside the dd cell; the picked side gets an accent border
@@ -10340,6 +10395,9 @@ class SfgaAddReferenceModal extends LitElement {
     this._bibtexInput = "";
     this._preview = null;
     this._previewOpenAlex = null;
+    this._openalexCandidates = [];
+    this._openalexCandidatesBusy = false;
+    this._openalexCandidatesError = "";
     this._uploadBusy = false;
     this._uploadError = "";
     this._uploadResult = null;
@@ -11339,6 +11397,12 @@ class SfgaAddReferenceModal extends LitElement {
       } else if (result.metadata) {
         this._manual = manualFromMetadata(result.metadata);
         this._tab = SfgaAddReferenceModal._tabIndex("manual");
+        // Fire OpenAlex search in the background — the paper may
+        // have had a DOI retroactively assigned by a publisher
+        // backfile program or DataCite (BHL) that isn't printed on
+        // the copy the curator has. Candidates surface as a
+        // suggestions panel above the Manual form when they arrive.
+        this._lookupOpenAlexByMetadata(result.metadata);
       }
     } catch (err) {
       this._uploadError =
@@ -11348,6 +11412,112 @@ class SfgaAddReferenceModal extends LitElement {
     } finally {
       this._uploadBusy = false;
     }
+  }
+
+  // _lookupOpenAlexByMetadata searches OpenAlex using GROBID's
+  // extracted title (required), first-author surname (parsed from
+  // GROBID's "Given Surname; Given Surname; …" author field), and
+  // publication year. Populates _openalexCandidates for the Manual
+  // pane's suggestions panel to render. Errors are non-fatal — the
+  // Manual pre-fill flow still works without OpenAlex.
+  async _lookupOpenAlexByMetadata(meta) {
+    if (!meta || !meta.title) return;
+    this._openalexCandidatesBusy = true;
+    this._openalexCandidatesError = "";
+    this._openalexCandidates = [];
+    try {
+      let author = "";
+      if (meta.author) {
+        // "Given Surname; Given Surname; …" — take the first
+        // author's last whitespace-separated token as the surname.
+        const first = meta.author.split(";")[0].trim();
+        const parts = first.split(/\s+/);
+        author = parts[parts.length - 1] || "";
+      }
+      const res = await api.reference.lookupOpenAlex({
+        title: meta.title,
+        author,
+        year: meta.issued || "",
+      });
+      this._openalexCandidates = (res && res.items) || [];
+    } catch (err) {
+      this._openalexCandidatesError =
+        err instanceof Problem
+          ? err.detail || err.message
+          : String(err);
+    } finally {
+      this._openalexCandidatesBusy = false;
+    }
+  }
+
+  // _useOpenAlexCandidate accepts a candidate the curator picked from
+  // the DOI-recovery panel. Populates the preview state so the
+  // standard conflict picker fires (GROBID metadata is still in
+  // _uploadResult.metadata), hops to the DOI tab where the preview
+  // renders, and clears the candidate list.
+  _useOpenAlexCandidate(candidate) {
+    if (!candidate || !candidate.doi) return;
+    this._doiInput = candidate.doi;
+    this._preview = { ...candidate };
+    this._previewOpenAlex = candidate;
+    this._tab = SfgaAddReferenceModal._tabIndex("doi");
+    this._openalexCandidates = [];
+  }
+
+  // _renderOpenAlexCandidates renders the DOI-recovery suggestions
+  // above the Manual form. Only shows candidates that have a DOI —
+  // a match without a DOI isn't useful for recovery (and we already
+  // have the metadata from GROBID). The one with a normalized-title
+  // match against GROBID's extracted title is highlighted as the
+  // likely match; others sit alongside as alternatives.
+  _renderOpenAlexCandidates() {
+    if (this._openalexCandidatesBusy) {
+      return html`<p class="empty" role="status">
+        Searching OpenAlex for a DOI that matches this PDF…
+      </p>`;
+    }
+    if (this._openalexCandidatesError) {
+      return html`<div class="error" role="alert">
+        OpenAlex search: ${this._openalexCandidatesError}
+      </div>`;
+    }
+    const withDOI = (this._openalexCandidates || []).filter((c) => c.doi);
+    if (!withDOI.length) return "";
+    const grobidTitle =
+      this._uploadResult && this._uploadResult.metadata
+        ? this._normalizeForCompare(this._uploadResult.metadata.title || "")
+        : "";
+    return html`
+      <div class="oa-candidates">
+        <p class="hint">
+          OpenAlex found ${withDOI.length}
+          possible match${withDOI.length === 1 ? "" : "es"} for this PDF.
+          Pick one to use its DOI (and compare against GROBID
+          field-by-field), or keep filling out the Manual form.
+        </p>
+        ${withDOI.map((c) => {
+          const likely =
+            grobidTitle &&
+            this._normalizeForCompare(c.title || "") === grobidTitle;
+          return html`
+            <div class=${"oa-candidate" + (likely ? " likely" : "")}>
+              <div class="title">${c.title || html`<em>(no title)</em>`}</div>
+              <div class="meta">
+                ${c.author || "—"} ·
+                ${c.issued ? String(c.issued).slice(0, 4) : "—"} ·
+                ${c.container_title || "—"}
+              </div>
+              <div class="meta"><code>${c.doi}</code></div>
+              <div class="actions">
+                <button @click=${() => this._useOpenAlexCandidate(c)}>
+                  ${likely ? "Use this DOI (likely match)" : "Use this DOI"}
+                </button>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
+    `;
   }
 
   // ---------- Tab 5: Manual ----------
@@ -11374,6 +11544,7 @@ class SfgaAddReferenceModal extends LitElement {
       ${this._manualError
         ? html`<div class="error" role="alert">${this._manualError}</div>`
         : ""}
+      ${this._renderOpenAlexCandidates()}
       <form
         class="manual-ref-form"
         @submit=${(e) => {

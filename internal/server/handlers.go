@@ -120,6 +120,7 @@ func (s *server) routes() *http.ServeMux {
 	// — the modal shows a form the curator confirms, then POSTs to
 	// /api/reference to actually write.
 	mux.HandleFunc("GET /api/reference/resolve-doi", s.handleResolveDOI)
+	mux.HandleFunc("GET /api/reference/lookup-openalex", s.handleLookupOpenAlex)
 	mux.HandleFunc("POST /api/reference/lookup-bhlnames", s.handleLookupBHLnames)
 	mux.HandleFunc("POST /api/reference/parse-bibtex", s.handleParseBibTeX)
 	mux.HandleFunc("GET /api/reference/{id}", s.handleGetReference)
@@ -2489,6 +2490,53 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 	// misleading (the curator might think it's already saved).
 	ref.ID = ""
 	writeJSON(w, http.StatusOK, referenceToAPI(ref))
+}
+
+// handleLookupOpenAlex searches OpenAlex for references matching the
+// supplied metadata, useful when a PDF has no DOI printed on it but
+// might have had one retroactively assigned by a publisher backfile
+// digitization program (Taylor & Francis, Wiley, Springer, etc.) or
+// indexed by DataCite (BHL scans). Returns up to 5 candidates; the
+// frontend renders them as suggestions the curator can pick from —
+// picking triggers the standard DOI-resolve + conflict-picker flow.
+//
+// Query params: title (required), author (optional first-author
+// surname, sharpens the OpenAlex ranking), year (optional
+// publication year for the same reason).
+func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
+	title := strings.TrimSpace(r.URL.Query().Get("title"))
+	if title == "" {
+		writeBadRequest(w, r, "title required")
+		return
+	}
+	author := strings.TrimSpace(r.URL.Query().Get("author"))
+	year := strings.TrimSpace(r.URL.Query().Get("year"))
+	// Compose the search query. OpenAlex's cross-field ranker weights
+	// title matches strongly; appending author + year narrows without
+	// requiring the caller to know OpenAlex filter syntax and without
+	// over-filtering (a typo in the extracted author surname would
+	// otherwise wipe out real matches).
+	q := title
+	if author != "" {
+		q += " " + author
+	}
+	if year != "" {
+		q += " " + year
+	}
+	hits, err := hive.OpenAlex().Search(r.Context(), q, 5)
+	if err != nil {
+		writeProblemDetail(w, r, http.StatusBadGateway,
+			"urn:hive:error:openalex", "openalex lookup failed", err.Error())
+		return
+	}
+	items := make([]apiReference, 0, len(hits))
+	for i := range hits {
+		// Clear the generated UUID — these are preview candidates,
+		// not saved rows (mirrors handleResolveDOI).
+		hits[i].ID = ""
+		items = append(items, referenceToAPI(&hits[i]))
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiReference]{Items: items})
 }
 
 // handleLookupBHLnames runs a BHLnames match for the given scientific

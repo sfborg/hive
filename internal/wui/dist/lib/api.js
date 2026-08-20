@@ -521,6 +521,13 @@ export const api = {
         ifMatch ? { "If-Match": ifMatch } : {},
       ),
     resolveDOI: (doi) => j("GET", `/api/reference/resolve-doi${qs({ doi })}`),
+    // lookupOpenAlex searches OpenAlex by extracted metadata (title +
+    // optional author surname + optional year) for a paper that has
+    // no DOI printed on it. Used to surface publisher-backfill and
+    // BHL-DataCite DOIs that got assigned after the copy the curator
+    // has was printed.
+    lookupOpenAlex: (opts) =>
+      j("GET", `/api/reference/lookup-openalex${qs(opts)}`),
     lookupBHLnames: (body) => j("POST", `/api/reference/lookup-bhlnames`, body),
     // parseBibTeX sends the raw entry with the vendor MIME type — the
     // handler accepts either form, and the raw path avoids a JSON escape
