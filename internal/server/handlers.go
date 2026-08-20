@@ -133,6 +133,12 @@ func (s *server) routes() *http.ServeMux {
 	// follow-up handlers so a curator can upload without paying
 	// the full pipeline cost synchronously.
 	mux.HandleFunc("POST /api/reference/upload", s.handleReferenceUpload)
+	// GET /api/reference/library/{sha}/source streams a sidecar file
+	// back to the browser so the WUI can render the PDF (or other
+	// format) inline via an <iframe> next to the reference-edit
+	// form. Content-Type is derived from the extension recorded in
+	// the sidecar's meta.json.
+	mux.HandleFunc("GET /api/reference/library/{sha}/source", s.handleReferenceLibrarySource)
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
@@ -2780,6 +2786,71 @@ func parseHeaderToAPI(tei []byte) *apiUploadBibHeader {
 		Page:           h.Page,
 		Publisher:      h.Publisher,
 	}
+}
+
+// handleReferenceLibrarySource streams the sidecar source file
+// (PDF / EPUB / HTML / JATS) so the WUI's iframe-based PDF viewer
+// can render it side-by-side with the reference-edit form. The
+// sha comes from the path; the extension is read from the
+// sidecar's meta.json so the URL doesn't need to carry it and the
+// same URL works for every format.
+//
+// Content-Type is set per extension so browsers render PDFs inline
+// (application/pdf) rather than triggering a download. Unknown
+// extensions fall back to a generic type — safer than guessing
+// wrong and mis-labeling a JATS XML as HTML.
+func (s *server) handleReferenceLibrarySource(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha")
+	if sha == "" {
+		writeBadRequest(w, r, "sha required")
+		return
+	}
+	meta, err := sidecar.ReadMeta(s.archivePath, sha)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if meta == nil {
+		http.NotFound(w, r)
+		return
+	}
+	path := sidecar.Path(s.archivePath, sha, meta.Ext)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		writeProblem(w, r, err)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	// Explicit Content-Type keeps browsers from sniffing and
+	// (worse) offering a download for a PDF. Extension → MIME
+	// mapping matches what's accepted at upload time.
+	switch strings.ToLower(meta.Ext) {
+	case "pdf":
+		w.Header().Set("Content-Type", "application/pdf")
+	case "epub":
+		w.Header().Set("Content-Type", "application/epub+zip")
+	case "html", "htm":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case "xml", "jats":
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	// Content-Disposition inline so the browser renders instead of
+	// downloading. filename uses the sha so a curator hitting
+	// "download" gets a stable name.
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`inline; filename="%s.%s"`, sha, meta.Ext))
+	http.ServeContent(w, r, info.Name(), meta.UploadedAt, f)
 }
 
 // doiRegex matches the DOI syntax as codified by the DOI Handbook:

@@ -9973,6 +9973,12 @@ class SfgaAddReferenceModal extends LitElement {
     _uploadError: { state: true },
     _uploadResult: { state: true },
     _dragActive: { state: true },
+    // Side-by-side PDF viewer mode. Auto-enables when an upload
+    // lands with a sha (a PDF is available to display); the
+    // curator can collapse via the "Hide PDF" toggle if they want
+    // a narrower Manual form. Persists across tab switches so
+    // hopping from Manual to DOI and back keeps the layout.
+    _showPDF: { state: true },
     // Tab 5 (Manual). _manual holds the form draft object shaped like
     // apiReference; edit mode hydrates it from the loaded reference,
     // add mode starts empty. _manualOriginal is the loaded reference
@@ -10022,6 +10028,52 @@ class SfgaAddReferenceModal extends LitElement {
         gap: var(--sp-2);
         font-family: var(--font-body);
       }
+      /* Wide-mode expands the modal to give the PDF viewer room
+         alongside the metadata form. Anchored at 95vw / 90vh (matches
+         --modal-max-h already used for non-full modals), so we stay
+         within the existing size tiers rather than jumping to a new
+         --modal-full token that DESIGN.md reserves for the eventual
+         workspace-shaped full-screen shell.
+         Switches from grid to flex column so the .pane row can flex-
+         grow to fill remaining space regardless of how many optional
+         siblings (issues banner) are present. */
+      .modal.wide {
+        width: 95vw;
+        height: var(--modal-max-h);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .modal.wide > .pane {
+        flex: 1;
+        min-height: 0;
+      }
+      /* Side-by-side pane layout: PDF viewer on the left, tab body
+         (metadata form) on the right. Two equal columns keep both
+         panes readable; min-height: 0 lets the flex parent shrink us
+         instead of overflowing. */
+      .pane.side-by-side {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        min-height: 0;
+        overflow: hidden;
+      }
+      .pane.side-by-side > .pane-body {
+        overflow: auto;
+        min-width: 0;
+      }
+      .pdf-viewer {
+        display: grid;
+        min-height: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        background: color-mix(in oklab, var(--fg) 3%, transparent);
+      }
+      .pdf-viewer iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
       /* Manual-tab form: two-column label+input grid, similar shape
          to the taxon edit form. Grid-column: 1 / -1 on textareas +
          the toolbar so they span the full width. */
@@ -10062,6 +10114,11 @@ class SfgaAddReferenceModal extends LitElement {
         justify-content: space-between;
         align-items: center;
         gap: var(--sp-2);
+      }
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-1);
       }
       .tabs {
         display: flex;
@@ -10243,6 +10300,7 @@ class SfgaAddReferenceModal extends LitElement {
     this._uploadError = "";
     this._uploadResult = null;
     this._dragActive = false;
+    this._showPDF = true;
     this._manual = null;
     this._manualOriginal = null;
     this._manualBusy = false;
@@ -10472,10 +10530,19 @@ class SfgaAddReferenceModal extends LitElement {
       this._modalStackID && !isTopModal(this._modalStackID)
         ? " is-covered"
         : "";
+    // Wide-mode modal when a PDF upload is available AND the
+    // curator hasn't collapsed the viewer. Takes over most of the
+    // viewport so the side-by-side PDF + form layout has room.
+    const wide =
+      this._uploadResult && this._uploadResult.sha512 && this._showPDF
+        ? " wide"
+        : "";
     return html`
       <div class=${"backdrop" + covered}>
         <div
-          class=${"modal" + (this._dragActive ? " drag-active" : "")}
+          class=${"modal" +
+          (this._dragActive ? " drag-active" : "") +
+          wide}
           role="dialog"
           aria-modal="true"
           aria-labelledby="add-ref-title"
@@ -10488,15 +10555,26 @@ class SfgaAddReferenceModal extends LitElement {
             <h3 id="add-ref-title">
               ${this.editID ? "Edit reference" : "Add reference"}
             </h3>
-            <button
-              class="close-x"
-              type="button"
-              @click=${() => this._requestClose()}
-              title="close"
-              aria-label="close"
-            >
-              ×
-            </button>
+            <div class="header-actions">
+              ${this._uploadResult && this._uploadResult.sha512
+                ? html`<button
+                    type="button"
+                    @click=${() => this._togglePDF()}
+                    title=${this._showPDF ? "hide PDF viewer" : "show PDF viewer"}
+                  >
+                    ${this._showPDF ? "Hide PDF" : "Show PDF"}
+                  </button>`
+                : ""}
+              <button
+                class="close-x"
+                type="button"
+                @click=${() => this._requestClose()}
+                title="close"
+                aria-label="close"
+              >
+                ×
+              </button>
+            </div>
           </div>
           ${this._renderIssuesBanner()}
           <div class="tabs" role="tablist">
@@ -10519,13 +10597,16 @@ class SfgaAddReferenceModal extends LitElement {
               Manual
             </button>
           </div>
-          <div class="pane">
-            ${this._tab === 0 ? this._renderProjectPane() : ""}
-            ${this._tab === 1 ? this._renderBHLnamesPane() : ""}
-            ${this._tab === 2 ? this._renderDOIPane() : ""}
-            ${this._tab === 3 ? this._renderBibTeXPane() : ""}
-            ${this._tab === 4 ? this._renderFilePane() : ""}
-            ${this._tab === 5 ? this._renderManualPane() : ""}
+          <div class=${"pane" + (wide ? " side-by-side" : "")}>
+            ${wide ? this._renderPDFViewer() : ""}
+            <div class="pane-body">
+              ${this._tab === 0 ? this._renderProjectPane() : ""}
+              ${this._tab === 1 ? this._renderBHLnamesPane() : ""}
+              ${this._tab === 2 ? this._renderDOIPane() : ""}
+              ${this._tab === 3 ? this._renderBibTeXPane() : ""}
+              ${this._tab === 4 ? this._renderFilePane() : ""}
+              ${this._tab === 5 ? this._renderManualPane() : ""}
+            </div>
           </div>
           <div class="toolbar">
             ${this._tab === 5
@@ -10899,6 +10980,33 @@ class SfgaAddReferenceModal extends LitElement {
   //
   // Modal-wide dragover/drop handlers let a curator drop a file on
   // any tab; the drop always routes here.
+  // _renderPDFViewer renders the left pane of the wide-mode layout:
+  // an iframe pointing at the sidecar's source-stream endpoint. Only
+  // called when this._uploadResult.sha512 is set (a file has been
+  // ingested this session) and this._showPDF is true. Non-PDF formats
+  // (EPUB, HTML, JATS) also render — the browser handles PDF and HTML
+  // natively; other types download instead of previewing, which is
+  // an acceptable degradation until per-format viewers land.
+  _renderPDFViewer() {
+    const sha = this._uploadResult && this._uploadResult.sha512;
+    if (!sha) return "";
+    // #page=1 is a hint to the browser's PDF viewer for the initial
+    // page. Non-PDF viewers ignore the fragment.
+    const src = `/api/reference/library/${sha}/source#page=1`;
+    return html`
+      <div class="pdf-viewer">
+        <iframe
+          src=${src}
+          title="Uploaded source document"
+        ></iframe>
+      </div>
+    `;
+  }
+
+  _togglePDF() {
+    this._showPDF = !this._showPDF;
+  }
+
   _renderFilePane() {
     const busy = this._uploadBusy;
     const err = this._uploadError;
