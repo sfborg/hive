@@ -1,0 +1,28 @@
+# Keep the build context small — anything not needed to compile
+# stays out so `docker build` doesn't stream gigabytes.
+
+# Local archive files (curator databases).
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+data/
+
+# Sidecar library directories.
+*.library/
+*.pdfs/
+
+# Test/temp files.
+*.out
+*.log
+tmp/
+
+# Version control / editor.
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+
+# Docs — not needed at build time.
+*.md

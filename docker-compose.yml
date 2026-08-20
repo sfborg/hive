@@ -1,0 +1,67 @@
+# hive + GROBID stack.
+#
+# Two services:
+#   * hive   — this repo's editor + WUI + HTTP API (port 2365)
+#   * grobid — official image, PDF → TEI conversion (port 8070)
+#
+# The hive service auto-detects GROBID via HIVE_GROBID_URL. When
+# both are up, uploading a PDF through the reference-modal file
+# tab runs GROBID and stores the TEI in the archive's sidecar
+# (<archive>.library/<sha>.tei.xml). When GROBID is down or
+# unreachable, hive still accepts uploads and stores the raw
+# source; the response's tei_status field reports the outcome.
+#
+# ---------- quickstart ----------
+#
+#   # First: put an archive named `archive.db` in ./data/, then:
+#   docker compose up
+#
+#   # Open http://localhost:2365 in a browser.
+#
+# The `data/` directory is bind-mounted; the sidecar library
+# (<archive>.library/) lands alongside the .db file so a curator
+# can rsync/tar the whole thing to move to another machine.
+#
+# GROBID's image is ~2 GB (bundles pre-trained ML models). First
+# pull takes a minute; subsequent starts are near-instant.
+# ----------------------------------------
+
+services:
+  hive:
+    build: .
+    image: sfborg/hive:local
+    ports:
+      - "127.0.0.1:2365:2365"
+    volumes:
+      - ./data:/data
+    environment:
+      # Points at the sibling grobid service by Docker DNS name.
+      # Unset this to disable GROBID processing entirely.
+      HIVE_GROBID_URL: http://grobid:8070
+      # Attribution for edits. Real deployments set this to the
+      # operator's ORCID iD or use --orcid on the command line.
+      HIVE_ORCID: "0000-0000-0000-0000"
+    depends_on:
+      grobid:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grobid:
+    # Pinned to a specific 0.8.x tag so future image changes don't
+    # silently alter parsing behavior. Bump deliberately after
+    # testing against a known-good corpus.
+    image: grobid/grobid:0.8.2
+    # The "lite" variant is CRF-only (no deep-learning models,
+    # ~500 MB image, faster startup). Swap to grobid/grobid:0.8.2
+    # (full, ~2 GB) for the higher-quality passes when the extra
+    # RAM budget is available.
+    ports:
+      - "127.0.0.1:8070:8070"
+    healthcheck:
+      # /api/isalive returns literal "true" on a happy service.
+      test: ["CMD", "curl", "-f", "http://localhost:8070/api/isalive"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
