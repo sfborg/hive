@@ -1024,14 +1024,19 @@ type apiPage[T any] struct {
 //	"skipped"        — ext isn't a PDF (EPUB / HTML / JATS have
 //	                   different conversion paths, out of MVP scope)
 //
-// The WUI uses TEIStatus to decide whether downstream DOI-lookup
-// steps can proceed or should surface a "GROBID unavailable" hint.
+// DOI is the first DOI extracted from the TEI (via GROBID's
+// idno[@type="DOI"] element or a first-page regex fallback).
+// Empty when TEIStatus != "stored" or when no DOI appears in the
+// paper's first pages. The WUI auto-hops to the DOI tab and
+// pre-populates the field when this is set, saving the curator a
+// copy-paste step.
 type apiReferenceUpload struct {
 	SHA512         string `json:"sha512"`
 	Ext            string `json:"ext"`
 	Size           int64  `json:"size"`
 	AlreadyExisted bool   `json:"already_existed"`
 	TEIStatus      string `json:"tei_status"`
+	DOI            string `json:"doi,omitempty"`
 }
 
 // apiVocabTermDetail is the full-fidelity wire form for editable

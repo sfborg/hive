@@ -356,6 +356,26 @@ function renderLabel(label, fallback = "") {
 // combination" read correctly to curators from either code, and the
 // label itself is self-explanatory enough that we don't add a hint
 // paragraph beneath the input.
+// formatBytes turns a byte count into a short human-readable
+// string ("42 B", "3.4 KB", "1.2 MB"). Used by the file-tab
+// upload result to give curators a size hint on the file that
+// just landed in the library. Base-1024 math with a compact
+// two-digit precision — scientific PDFs mostly land in the
+// 1-10 MB range where "3.4 MB" reads better than "3423.6 KB".
+function formatBytes(n) {
+  if (typeof n !== "number" || n < 0) return "";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  for (let i = 0; i < units.length; i++) {
+    if (v < 1024 || i === units.length - 1) {
+      return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+    }
+    v = v / 1024;
+  }
+  return `${n} B`;
+}
+
 function nomActFieldLabel(draft) {
   const auth = (draft?.authorship || "").trim();
   const basA = (draft?.basionym_authorship || "").trim();
@@ -9916,7 +9936,17 @@ class SfgaAddReferenceModal extends LitElement {
     _bibtexInput: { state: true },
     // Preview (shared by tabs 1/2/3 once a candidate resolves).
     _preview: { state: true },
-    // Tab 4 (Manual). _manual holds the form draft object shaped like
+    // Tab 4 (File). Drag-and-drop / picker uploads a PDF (or
+    // EPUB / HTML / JATS) into the archive's sidecar library and,
+    // when GROBID is configured, converts to TEI. On success with
+    // a DOI extracted from the TEI, auto-hops to the DOI tab and
+    // fires the OpenAlex resolve so curators see the bibliographic
+    // preview without a copy-paste step.
+    _uploadBusy: { state: true },
+    _uploadError: { state: true },
+    _uploadResult: { state: true },
+    _dragActive: { state: true },
+    // Tab 5 (Manual). _manual holds the form draft object shaped like
     // apiReference; edit mode hydrates it from the loaded reference,
     // add mode starts empty. _manualOriginal is the loaded reference
     // in edit mode (used for If-Match etag). _manualBusy/_manualError
@@ -10032,6 +10062,49 @@ class SfgaAddReferenceModal extends LitElement {
         display: grid;
         gap: var(--sp-2);
       }
+      /* File-tab drop zone. Dashed outline signals "you can drop
+         here"; hover / drag-active adds an accent tint to make the
+         current target obvious. The modal's outer .drag-active
+         mirror-class also highlights the whole modal when a file
+         is being dragged in from outside, so a curator dropping on
+         any tab sees a consistent "yes, I'm accepting this" cue. */
+      .file-drop {
+        border: 2px dashed var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-4);
+        display: grid;
+        gap: var(--sp-1);
+        justify-items: center;
+        color: var(--dim);
+        cursor: pointer;
+        transition: border-color 0.1s, background 0.1s;
+      }
+      .file-drop:hover,
+      .file-drop.active,
+      .modal.drag-active .file-drop {
+        border-color: var(--accent);
+        background: color-mix(in oklab, var(--accent) 8%, transparent);
+        color: var(--fg);
+      }
+      .file-drop .hint {
+        font-size: var(--fs-xs);
+        color: var(--dim);
+      }
+      .upload-result {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--sp-2) var(--sp-3);
+        display: grid;
+        gap: var(--sp-1);
+        font-size: var(--fs-sm);
+      }
+      .upload-result code {
+        font-family: var(--font-mono);
+        font-size: var(--fs-xs);
+        background: color-mix(in oklab, var(--fg) 5%, transparent);
+        padding: 0.05rem 0.3rem;
+        border-radius: 3px;
+      }
       /* Local input styles cover the picker text fields and BibTeX
          textarea. Not composed from formFieldStyles because the
          textarea here wants a monospaced payload font at fs-sm and
@@ -10139,6 +10212,10 @@ class SfgaAddReferenceModal extends LitElement {
     this._doiInput = "";
     this._bibtexInput = "";
     this._preview = null;
+    this._uploadBusy = false;
+    this._uploadError = "";
+    this._uploadResult = null;
+    this._dragActive = false;
     this._manual = null;
     this._manualOriginal = null;
     this._manualBusy = false;
@@ -10224,8 +10301,10 @@ class SfgaAddReferenceModal extends LitElement {
         return 2;
       case "bibtex":
         return 3;
-      case "manual":
+      case "file":
         return 4;
+      case "manual":
+        return 5;
       default:
         return 0;
     }
@@ -10369,10 +10448,14 @@ class SfgaAddReferenceModal extends LitElement {
     return html`
       <div class=${"backdrop" + covered}>
         <div
-          class="modal"
+          class=${"modal" + (this._dragActive ? " drag-active" : "")}
           role="dialog"
           aria-modal="true"
           aria-labelledby="add-ref-title"
+          @dragenter=${(e) => this._onModalDragEnter(e)}
+          @dragover=${(e) => this._onModalDragOver(e)}
+          @dragleave=${(e) => this._onModalDragLeave(e)}
+          @drop=${(e) => this._onModalDrop(e)}
         >
           <div class="modal-header">
             <h3 id="add-ref-title">
@@ -10403,6 +10486,9 @@ class SfgaAddReferenceModal extends LitElement {
               BibTeX
             </button>
             <button role="tab" aria-selected=${this._tab === 4} @click=${() => this._selectTab(4)}>
+              File
+            </button>
+            <button role="tab" aria-selected=${this._tab === 5} @click=${() => this._selectTab(5)}>
               Manual
             </button>
           </div>
@@ -10411,10 +10497,11 @@ class SfgaAddReferenceModal extends LitElement {
             ${this._tab === 1 ? this._renderBHLnamesPane() : ""}
             ${this._tab === 2 ? this._renderDOIPane() : ""}
             ${this._tab === 3 ? this._renderBibTeXPane() : ""}
-            ${this._tab === 4 ? this._renderManualPane() : ""}
+            ${this._tab === 4 ? this._renderFilePane() : ""}
+            ${this._tab === 5 ? this._renderManualPane() : ""}
           </div>
           <div class="toolbar">
-            ${this._tab === 4
+            ${this._tab === 5
               ? html`<button
                     type="button"
                     class="primary"
@@ -10771,7 +10858,183 @@ class SfgaAddReferenceModal extends LitElement {
     }
   }
 
-  // ---------- Tab 4: Manual ----------
+  // ---------- Tab 4: File ----------
+  //
+  // Drag-and-drop or click-to-pick a source document (PDF / EPUB /
+  // HTML / JATS) into the archive's sidecar library. When GROBID
+  // is configured on the server side, PDFs are converted to TEI
+  // XML alongside the source. The server extracts the first DOI
+  // it finds in the TEI and returns it in the upload response;
+  // hive auto-hops to the DOI tab and fires the OpenAlex resolve
+  // so the curator lands on a bibliographic preview without any
+  // copy-paste. If no DOI surfaces, the tab stays put and shows a
+  // "no DOI detected — try another tab" hint.
+  //
+  // Modal-wide dragover/drop handlers let a curator drop a file on
+  // any tab; the drop always routes here.
+  _renderFilePane() {
+    const busy = this._uploadBusy;
+    const err = this._uploadError;
+    const res = this._uploadResult;
+    return html`
+      <p class="empty">
+        Drop a PDF (or EPUB / HTML / JATS) anywhere on this modal,
+        or click below to pick one. Hive stores it in the archive's
+        library and, when GROBID is running, extracts bibliographic
+        metadata + a DOI. If a DOI is found, you'll auto-hop to the
+        DOI tab with the reference pre-populated.
+      </p>
+      <div
+        class=${"file-drop" + (this._dragActive ? " active" : "")}
+        @click=${() => this._openFilePicker()}
+      >
+        ${busy
+          ? html`<span>Uploading${res && res.tei_status === "stored" ? " + processing with GROBID" : ""}…</span>`
+          : html`
+              <span>${renderIcon("plus", 16)} Drop a file here or click to pick</span>
+              <span class="hint">pdf · epub · html · jats · xml</span>
+            `}
+      </div>
+      <input
+        type="file"
+        id="file-picker"
+        accept=".pdf,.epub,.html,.htm,.xml,.jats,application/pdf,application/epub+zip,text/html,application/xml"
+        style="display: none"
+        @change=${(e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f) this._uploadFile(f);
+          e.target.value = "";
+        }}
+      />
+      ${err
+        ? html`<div class="error" role="alert">${err}</div>`
+        : ""}
+      ${res
+        ? html`
+            <div class="upload-result">
+              <div><strong>${res.ext.toUpperCase()}</strong> stored (${formatBytes(res.size)})</div>
+              <div class="hint">
+                ${res.already_existed
+                  ? "identical file already in the library — deduplicated on hash"
+                  : "added to the library"}
+              </div>
+              ${this._renderTEIStatusHint(res)}
+            </div>
+          `
+        : ""}
+    `;
+  }
+
+  // _renderTEIStatusHint explains what happened on the TEI /
+  // GROBID pass in curator-facing language. Only shown after an
+  // upload lands (res != null). The DOI-found case has already
+  // triggered an auto-hop before render, so if we're still on the
+  // file tab and status is "stored", the paper had no extractable
+  // DOI.
+  _renderTEIStatusHint(res) {
+    switch (res.tei_status) {
+      case "stored":
+        if (res.doi) {
+          return html`<div class="hint">
+            DOI <code>${res.doi}</code> extracted — switching to the DOI tab.
+          </div>`;
+        }
+        return html`<div class="hint">
+          TEI stored, but no DOI detected in the paper. Try the
+          Project / BibTeX / Manual tabs.
+        </div>`;
+      case "not_configured":
+        return html`<div class="hint">
+          GROBID isn't configured, so hive stored the raw file
+          without extracting metadata. Set
+          <code>HIVE_GROBID_URL</code> or start the docker-compose
+          stack (<code>just docker-up</code>) to enable automatic
+          DOI extraction.
+        </div>`;
+      case "unavailable":
+        return html`<div class="hint">
+          GROBID is configured but didn't respond. The file is
+          safely stored — the pipeline can retry later. See
+          <code>docker compose logs grobid</code>.
+        </div>`;
+      case "skipped":
+        return html`<div class="hint">
+          ${res.ext.toUpperCase()} conversion isn't wired yet — file
+          is stored, downstream steps (DOI extraction, taxonomic
+          mining) don't run for this format in the current version.
+        </div>`;
+    }
+    return "";
+  }
+
+  _openFilePicker() {
+    const input = this.renderRoot.querySelector("#file-picker");
+    if (input) input.click();
+  }
+
+  _onModalDragEnter(e) {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    this._dragActive = true;
+  }
+  _onModalDragOver(e) {
+    if (!e.dataTransfer || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+  _onModalDragLeave(e) {
+    // Fires when the pointer moves between children — check
+    // relatedTarget to skip the intra-modal transitions and only
+    // clear when actually leaving the modal.
+    if (
+      e.relatedTarget &&
+      e.currentTarget.contains &&
+      e.currentTarget.contains(e.relatedTarget)
+    ) {
+      return;
+    }
+    this._dragActive = false;
+  }
+  _onModalDrop(e) {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) {
+      return;
+    }
+    e.preventDefault();
+    this._dragActive = false;
+    const file = e.dataTransfer.files[0];
+    // Route to the file tab so the progress + result render there,
+    // then upload.
+    this._tab = SfgaAddReferenceModal._tabIndex("file");
+    this._uploadFile(file);
+  }
+
+  async _uploadFile(file) {
+    if (!file || this._uploadBusy) return;
+    this._uploadBusy = true;
+    this._uploadError = "";
+    this._uploadResult = null;
+    try {
+      const result = await api.reference.upload(file);
+      this._uploadResult = result;
+      // Auto-hop to DOI tab when GROBID surfaced a DOI. Same
+      // shape as pasting a DOI manually — pre-fill the input,
+      // switch tabs, fire the resolve.
+      if (result.doi) {
+        this._doiInput = result.doi;
+        this._tab = SfgaAddReferenceModal._tabIndex("doi");
+        await this._resolveDOI();
+      }
+    } catch (err) {
+      this._uploadError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._uploadBusy = false;
+    }
+  }
+
+  // ---------- Tab 5: Manual ----------
   //
   // Full-fidelity apiReference form grouped by section. Type picker
   // at top drives per-type field emphasis (advisory only — nothing

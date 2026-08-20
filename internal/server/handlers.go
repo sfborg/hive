@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -2693,8 +2694,9 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// GROBID; other formats (EPUB / HTML / JATS) have their own
 	// conversion paths that aren't wired yet. Skip re-processing
 	// when the file was a dedup hit AND a TEI already exists on
-	// disk from a prior upload.
-	teiStatus := s.tryGrobidConvert(r.Context(), res, ext)
+	// disk from a prior upload. When TEI lands, extract the DOI so
+	// the WUI can auto-hop to the DOI tab.
+	teiStatus, doi := s.tryGrobidConvert(r.Context(), res, ext)
 
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
 		SHA512:         res.SHA512,
@@ -2702,6 +2704,7 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		Size:           res.Size,
 		AlreadyExisted: res.AlreadyExisted,
 		TEIStatus:      teiStatus,
+		DOI:            doi,
 	})
 }
 
@@ -2709,37 +2712,102 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 // and stores the TEI response alongside the source. Returns the
 // TEIStatus value that goes on the upload response — one of
 // "stored" / "not_configured" / "unavailable" / "skipped" (see
-// apiReferenceUpload for meaning). Non-PDF formats are "skipped"
-// for now (their conversion paths aren't wired).
+// apiReferenceUpload for meaning) plus the first DOI extracted
+// from the TEI (empty when GROBID didn't run or no DOI appears).
+// Non-PDF formats are "skipped" for now (their conversion paths
+// aren't wired).
 //
 // Deliberately doesn't propagate errors up — the upload itself
 // succeeded, the TEI pass is a best-effort follow-on. Errors are
 // captured in the status string and surface to the WUI.
-func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult, ext string) string {
+func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult, ext string) (string, string) {
 	if ext != "pdf" {
-		return "skipped"
+		return "skipped", ""
 	}
 	if s.grobid == nil {
-		return "not_configured"
+		return "not_configured", ""
 	}
 	// If TEI already exists on disk (dedup case + prior conversion),
 	// don't re-run — deterministic pipeline, same input same output.
 	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml"); err == nil && existing != nil {
-		return "stored"
+		return "stored", extractDOIFromTEI(existing)
 	}
 	pdf, err := os.Open(res.Path)
 	if err != nil {
-		return "unavailable"
+		return "unavailable", ""
 	}
 	defer pdf.Close()
 	tei, err := s.grobid.ProcessFulltextDocument(ctx, pdf, res.SHA512+".pdf")
 	if err != nil {
-		return "unavailable"
+		return "unavailable", ""
 	}
 	if err := sidecar.Store(s.archivePath, res.SHA512, "tei.xml", tei); err != nil {
-		return "unavailable"
+		return "unavailable", ""
 	}
-	return "stored"
+	return "stored", extractDOIFromTEI(tei)
+}
+
+// doiRegex matches the DOI syntax as codified by the DOI Handbook:
+// `10.<registrant-code>/<suffix>` where the registrant code is 4-9
+// digits and the suffix is any run of non-whitespace characters. A
+// trailing punctuation trim happens in extractDOIFromTEI — the
+// regex itself is greedy so it captures the whole suffix.
+var doiRegex = regexp.MustCompile(`10\.\d{4,9}/[^\s<>"']+`)
+
+// extractDOIFromTEI pulls the first DOI mentioned in a TEI XML
+// document. Tries the canonical location first (GROBID emits
+// `<idno type="DOI">10.xxx/yyy</idno>` in the header when it
+// finds one), then falls back to a plain-text regex on the whole
+// TEI — covers cases where GROBID didn't tag the DOI as an idno
+// but it appears in the extracted text (footer, header, references
+// section).
+//
+// Returns empty when no DOI matches. Trailing punctuation
+// (`.`, `,`, `;`, `)`, `]`) is stripped since the regex greedily
+// captures anything non-whitespace.
+func extractDOIFromTEI(tei []byte) string {
+	// Canonical location first: `<idno type="DOI">...</idno>`.
+	// Simple string scan is fine — the tag is short + rare enough
+	// that a proper XML parser would be overkill.
+	needle := []byte(`<idno type="DOI">`)
+	if i := bytesIndex(tei, needle); i >= 0 {
+		rest := tei[i+len(needle):]
+		if end := bytesIndex(rest, []byte("</idno>")); end > 0 {
+			candidate := strings.TrimSpace(string(rest[:end]))
+			if doiRegex.MatchString(candidate) {
+				return trimDOIPunct(candidate)
+			}
+		}
+	}
+	// Fallback: plain-text regex over the TEI body.
+	if m := doiRegex.Find(tei); m != nil {
+		return trimDOIPunct(string(m))
+	}
+	return ""
+}
+
+// trimDOIPunct strips trailing punctuation the DOI regex captures
+// greedily but that isn't part of the identifier (`.`, `,`, `;`,
+// `)`, `]`, `>`). Punctuation-terminated DOIs at end of sentence
+// / parenthesis are common in bibliographic references.
+func trimDOIPunct(s string) string {
+	for len(s) > 0 {
+		last := s[len(s)-1]
+		if last == '.' || last == ',' || last == ';' ||
+			last == ')' || last == ']' || last == '>' {
+			s = s[:len(s)-1]
+			continue
+		}
+		break
+	}
+	return s
+}
+
+// bytesIndex wraps strings.Index for the []byte-first idiom. Keeps
+// the extractDOIFromTEI body readable without repeated string()
+// conversions.
+func bytesIndex(haystack, needle []byte) int {
+	return strings.Index(string(haystack), string(needle))
 }
 
 // handleParseName runs gnparser on a verbatim scientific name and returns

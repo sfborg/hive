@@ -546,5 +546,31 @@ export const api = {
       }
       return res.json();
     },
+    // upload streams a File object (from a drag-drop event or
+    // <input type="file">) to /api/reference/upload as multipart
+    // form data. Response shape: apiReferenceUpload
+    // {sha512, ext, size, already_existed, tei_status, doi}.
+    // Bypasses the shared j() helper because it constructs a JSON
+    // body; multipart uploads need FormData without a
+    // Content-Type override (the browser sets the boundary).
+    upload: async (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/reference/upload", {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) {
+        const mime = res.headers.get("content-type") || "";
+        if (mime.includes(problemMime)) {
+          throw new Problem(await res.json(), res.status);
+        }
+        throw new Problem(
+          { title: res.statusText || "http error", status: res.status },
+          res.status,
+        );
+      }
+      return res.json();
+    },
   },
 };
