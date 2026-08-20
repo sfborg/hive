@@ -7,3 +7,9 @@
 
 # Local-only survey notes
 /docs/
+
+# `go mod vendor` output — generated fresh for `just docker-build`
+# (gsvalidator is currently a local `replace` in go.mod, so vendoring
+# is how the Docker build gets the code into its build context).
+# Not committed — regenerated whenever docker-build runs.
+/vendor/

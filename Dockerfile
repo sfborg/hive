@@ -11,16 +11,21 @@ ARG HIVE_VERSION=dev
 
 WORKDIR /src
 
-# Cache deps in a separate layer. Only re-downloads on go.mod/sum change.
-COPY go.mod go.sum ./
-RUN go mod download
-
+# Copy the full source tree in one shot. Deps come from the vendor/
+# directory (populated on the host by `go mod vendor` — see the
+# docker-build recipe in justfile). Vendor mode avoids the network
+# entirely at build time and — importantly — resolves the local
+# `replace` for gsvalidator that Docker's build context can't see
+# on its own.
 COPY . .
 
 # CGO off for a static binary (modernc.org/sqlite is pure-Go, no CGO needed).
 # -trimpath strips build-machine paths from stack traces.
+# -mod=vendor uses the staged vendor/ directory instead of the
+# module cache (no `go mod download` needed inside the container).
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
+    -mod=vendor \
     -ldflags="-s -w -X main.version=${HIVE_VERSION}" \
     -o /out/hive \
     .

@@ -133,8 +133,12 @@ clean:
 # GROBID by hand. See docker-compose.yml + REFERENCE_PDF_PLAN.md.
 
 # Build the hive Docker image (multi-stage, static binary, distroless
-# runtime). Passes the current git short-sha as HIVE_VERSION.
+# runtime). Vendors deps first so gsvalidator's local `replace`
+# resolves inside the container (Docker's build context can't see
+# host paths outside the repo). Passes the current git short-sha as
+# HIVE_VERSION.
 docker-build:
+    go mod vendor
     docker build \
         --build-arg HIVE_VERSION="$(git rev-parse --short HEAD)" \
         -t hive:local \
@@ -144,8 +148,9 @@ docker-build:
 # ~2 GB image and takes ~60s to warm up the ML models; watch
 # `just docker-logs` for the "ready" line before hitting the WUI.
 # Data directory (./data) is created if missing so `docker compose up`
-# works from a clean checkout.
-docker-up:
+# works from a clean checkout. Depends on docker-build so the vendor
+# step runs before compose's internal `build: .` fires.
+docker-up: docker-build
     @mkdir -p data
     docker compose up -d
     @echo ""
