@@ -2694,9 +2694,10 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// GROBID; other formats (EPUB / HTML / JATS) have their own
 	// conversion paths that aren't wired yet. Skip re-processing
 	// when the file was a dedup hit AND a TEI already exists on
-	// disk from a prior upload. When TEI lands, extract the DOI so
-	// the WUI can auto-hop to the DOI tab.
-	teiStatus, doi := s.tryGrobidConvert(r.Context(), res, ext)
+	// disk from a prior upload. When TEI lands, extract both the
+	// DOI (for auto-hop to the DOI tab) and the full header
+	// metadata (for the Manual-tab fallback).
+	teiStatus, doi, meta := s.tryGrobidConvert(r.Context(), res, ext)
 
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
 		SHA512:         res.SHA512,
@@ -2705,6 +2706,7 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		AlreadyExisted: res.AlreadyExisted,
 		TEIStatus:      teiStatus,
 		DOI:            doi,
+		Metadata:       meta,
 	})
 }
 
@@ -2720,31 +2722,64 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 // Deliberately doesn't propagate errors up — the upload itself
 // succeeded, the TEI pass is a best-effort follow-on. Errors are
 // captured in the status string and surface to the WUI.
-func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult, ext string) (string, string) {
+func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult, ext string) (string, string, *apiUploadBibHeader) {
 	if ext != "pdf" {
-		return "skipped", ""
+		return "skipped", "", nil
 	}
 	if s.grobid == nil {
-		return "not_configured", ""
+		return "not_configured", "", nil
 	}
 	// If TEI already exists on disk (dedup case + prior conversion),
 	// don't re-run — deterministic pipeline, same input same output.
 	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml"); err == nil && existing != nil {
-		return "stored", extractDOIFromTEI(existing)
+		return "stored", extractDOIFromTEI(existing), parseHeaderToAPI(existing)
 	}
 	pdf, err := os.Open(res.Path)
 	if err != nil {
-		return "unavailable", ""
+		return "unavailable", "", nil
 	}
 	defer pdf.Close()
 	tei, err := s.grobid.ProcessFulltextDocument(ctx, pdf, res.SHA512+".pdf")
 	if err != nil {
-		return "unavailable", ""
+		return "unavailable", "", nil
 	}
 	if err := sidecar.Store(s.archivePath, res.SHA512, "tei.xml", tei); err != nil {
-		return "unavailable", ""
+		return "unavailable", "", nil
 	}
-	return "stored", extractDOIFromTEI(tei)
+	return "stored", extractDOIFromTEI(tei), parseHeaderToAPI(tei)
+}
+
+// parseHeaderToAPI runs grobid.ParseHeader over the TEI bytes and
+// projects the result onto the wire type. Returns nil when parsing
+// fails or the extracted header is entirely empty — the WUI treats
+// a nil metadata field as "GROBID didn't get useful data" and
+// stays on the file tab rather than hopping to Manual with a blank
+// form. TEI errors are swallowed here (best-effort — the upload
+// still succeeded); the tei_status field already indicates whether
+// GROBID ran at all.
+func parseHeaderToAPI(tei []byte) *apiUploadBibHeader {
+	h, err := grobid.ParseHeader(tei)
+	if err != nil || h == nil {
+		return nil
+	}
+	// Skip entirely-empty headers so the WUI doesn't hop to
+	// Manual with nothing to review.
+	if h.Title == "" && h.Authors == "" && h.DOI == "" &&
+		h.ContainerTitle == "" && h.Issued == "" &&
+		h.Volume == "" && h.Issue == "" && h.Page == "" &&
+		h.Publisher == "" {
+		return nil
+	}
+	return &apiUploadBibHeader{
+		Title:          h.Title,
+		Author:         h.Authors,
+		Issued:         h.Issued,
+		ContainerTitle: h.ContainerTitle,
+		Volume:         h.Volume,
+		Issue:          h.Issue,
+		Page:           h.Page,
+		Publisher:      h.Publisher,
+	}
 }
 
 // doiRegex matches the DOI syntax as codified by the DOI Handbook:

@@ -1301,6 +1301,33 @@ function manualFromReference(r) {
   };
 }
 
+// manualFromMetadata hydrates the Manual tab's draft from GROBID's
+// extracted header (shape: apiUploadBibHeader). The subset of
+// fields GROBID reliably extracts (title / author / issued /
+// container_title / volume / issue / page / publisher / doi) maps
+// directly onto apiReference. Every apiReference field not covered
+// by GROBID (editor, container_author, isbn, issn, link, etc.)
+// stays at the empty-string default from emptyManualReference so
+// the curator sees a complete form ready for review.
+//
+// Called from _uploadFile as the Manual-tab fallback when the DOI
+// hop isn't available (no DOI in the paper, or OpenAlex miss).
+function manualFromMetadata(m) {
+  const base = emptyManualReference();
+  if (!m) return base;
+  return {
+    ...base,
+    title: m.title || "",
+    author: m.author || "",
+    issued: m.issued || "",
+    container_title: m.container_title || "",
+    volume: m.volume || "",
+    issue: m.issue || "",
+    page: m.page || "",
+    publisher: m.publisher || "",
+  };
+}
+
 // refFirstAuthor extracts a single surname-ish token from a
 // reference's author string, for the citation-pick backfill of
 // combination_authorship. CoLDP references store the author field in
@@ -10939,9 +10966,16 @@ class SfgaAddReferenceModal extends LitElement {
             DOI <code>${res.doi}</code> extracted — switching to the DOI tab.
           </div>`;
         }
+        if (res.metadata) {
+          return html`<div class="hint">
+            No DOI detected, but GROBID extracted header metadata
+            (title, authors, journal). Switching to the Manual tab
+            with fields pre-filled — please review before saving.
+          </div>`;
+        }
         return html`<div class="hint">
-          TEI stored, but no DOI detected in the paper. Try the
-          Project / BibTeX / Manual tabs.
+          TEI stored, but neither a DOI nor usable header metadata
+          surfaced. Try the Project / BibTeX / Manual tabs.
         </div>`;
       case "not_configured":
         return html`<div class="hint">
@@ -11016,13 +11050,20 @@ class SfgaAddReferenceModal extends LitElement {
     try {
       const result = await api.reference.upload(file);
       this._uploadResult = result;
-      // Auto-hop to DOI tab when GROBID surfaced a DOI. Same
-      // shape as pasting a DOI manually — pre-fill the input,
-      // switch tabs, fire the resolve.
+      // Post-upload routing:
+      //   1. DOI extracted → DOI tab + fire OpenAlex resolve
+      //      (OpenAlex is authoritative when it can resolve).
+      //   2. No DOI but GROBID pulled header metadata → Manual
+      //      tab with fields pre-populated; curator reviews and
+      //      saves. No copy-paste from the PDF needed.
+      //   3. Nothing useful → stay on file tab with a hint.
       if (result.doi) {
         this._doiInput = result.doi;
         this._tab = SfgaAddReferenceModal._tabIndex("doi");
         await this._resolveDOI();
+      } else if (result.metadata) {
+        this._manual = manualFromMetadata(result.metadata);
+        this._tab = SfgaAddReferenceModal._tabIndex("manual");
       }
     } catch (err) {
       this._uploadError =

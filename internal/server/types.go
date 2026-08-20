@@ -1030,13 +1030,36 @@ type apiPage[T any] struct {
 // paper's first pages. The WUI auto-hops to the DOI tab and
 // pre-populates the field when this is set, saving the curator a
 // copy-paste step.
+//
+// Metadata is the pre-parsed bibliographic record GROBID extracted
+// from the paper's header. Populated only when TEIStatus ==
+// "stored"; individual fields may still be empty per paper. The
+// WUI uses it as the Manual-tab fallback: when the DOI-hop path
+// isn't available (no DOI, OpenAlex failure), curators land on
+// Manual with GROBID's fields already filled in for review.
 type apiReferenceUpload struct {
-	SHA512         string `json:"sha512"`
-	Ext            string `json:"ext"`
-	Size           int64  `json:"size"`
-	AlreadyExisted bool   `json:"already_existed"`
-	TEIStatus      string `json:"tei_status"`
-	DOI            string `json:"doi,omitempty"`
+	SHA512         string              `json:"sha512"`
+	Ext            string              `json:"ext"`
+	Size           int64               `json:"size"`
+	AlreadyExisted bool                `json:"already_existed"`
+	TEIStatus      string              `json:"tei_status"`
+	DOI            string              `json:"doi,omitempty"`
+	Metadata       *apiUploadBibHeader `json:"metadata,omitempty"`
+}
+
+// apiUploadBibHeader mirrors grobid.BibHeader on the wire — the
+// pre-parsed fields hive extracted from GROBID's TEI header. The
+// naming matches apiReference where feasible so the WUI can shallow-
+// copy fields directly into a manual-reference draft.
+type apiUploadBibHeader struct {
+	Title          string `json:"title,omitempty"`
+	Author         string `json:"author,omitempty"`
+	Issued         string `json:"issued,omitempty"`
+	ContainerTitle string `json:"container_title,omitempty"`
+	Volume         string `json:"volume,omitempty"`
+	Issue          string `json:"issue,omitempty"`
+	Page           string `json:"page,omitempty"`
+	Publisher      string `json:"publisher,omitempty"`
 }
 
 // apiVocabTermDetail is the full-fidelity wire form for editable
