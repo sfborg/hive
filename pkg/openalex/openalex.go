@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -207,11 +208,44 @@ type biblio struct {
 	LastPage  string `json:"last_page"`
 }
 
+// italicTagBoundaryAfter / italicTagBoundaryBefore match the tag-
+// boundary positions where JATS-to-string conversion at some
+// publishers drops the surrounding space. Only italic tags are
+// targeted — <sup>/<sub> legitimately attach to adjacent characters
+// (chemistry, math) and would be wrong to space out.
+//
+// \p{L}\p{N} covers non-ASCII letters common in older natural-history
+// titles (umlauts, diacritics).
+var (
+	italicTagBoundaryAfter  = regexp.MustCompile(`(</(?:i|italic|em)>)([\p{L}\p{N}])`)
+	italicTagBoundaryBefore = regexp.MustCompile(`([\p{L}\p{N}])(<(?:i|italic|em)>)`)
+)
+
+// repairTagBoundarySpacing inserts a single space between an italic
+// tag boundary and an adjacent word character in either direction.
+// Fixes a common JATS-to-string bug where publisher-supplied metadata
+// arrives as "</i>Coleoptera<i>" instead of "</i> Coleoptera <i>".
+// Idempotent: running on already-clean input is a no-op.
+//
+// Applied to title-like fields at the OpenAlex boundary so the tag-
+// stripped display and the tag-preserving stored value both read
+// correctly. Semantic markup (roman-inverted taxa in italicized
+// titles) is preserved.
+func repairTagBoundarySpacing(s string) string {
+	if !strings.ContainsAny(s, "<>") {
+		return s
+	}
+	s = italicTagBoundaryAfter.ReplaceAllString(s, "$1 $2")
+	s = italicTagBoundaryBefore.ReplaceAllString(s, "$1 $2")
+	return s
+}
+
 func (w work) toReference() *coldp.Reference {
 	title := w.Title
 	if title == "" {
 		title = w.DisplayName
 	}
+	title = repairTagBoundarySpacing(title)
 	var authors []string
 	for _, a := range w.Authorships {
 		name := a.RawAuthorName
@@ -228,7 +262,7 @@ func (w work) toReference() *coldp.Reference {
 		issns                               []string
 	)
 	if w.PrimaryLocation != nil && w.PrimaryLocation.Source != nil {
-		container = w.PrimaryLocation.Source.DisplayName
+		container = repairTagBoundarySpacing(w.PrimaryLocation.Source.DisplayName)
 		containerType = w.PrimaryLocation.Source.Type
 		publisher = w.PrimaryLocation.Source.Publisher
 		issns = w.PrimaryLocation.Source.ISSN

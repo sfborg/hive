@@ -97,6 +97,51 @@ func TestMapType(t *testing.T) {
 }
 
 // TestUserAgent covers the polite-pool signal shape.
+// TestRepairTagBoundarySpacing covers the JATS-to-string conversion
+// bug seen at Taylor & Francis (and other publishers of digitized
+// backfile content) where spaces around italic tag boundaries get
+// eaten. The exact malformed title in the first case comes from
+// OpenAlex/CrossRef for DOI 10.1080/00222935709487884.
+func TestRepairTagBoundarySpacing(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{
+			`X.—<i>List of</i>Coleoptera<i>received from Old Calabar, on the West Coast of Africa</i>`,
+			`X.—<i>List of</i> Coleoptera <i>received from Old Calabar, on the West Coast of Africa</i>`,
+		},
+		// Already-clean input is a no-op.
+		{
+			`<i>List of</i> Coleoptera <i>received from</i>`,
+			`<i>List of</i> Coleoptera <i>received from</i>`,
+		},
+		// Tag-free input is a no-op.
+		{
+			`A plain title with no markup`,
+			`A plain title with no markup`,
+		},
+		// Non-italic tags (sub / sup) legitimately attach — leave alone.
+		{
+			`CO<sub>2</sub> flux`,
+			`CO<sub>2</sub> flux`,
+		},
+		// Diacritics on either side of the boundary.
+		{
+			`<i>Über</i>Käfer<i>aus</i>`,
+			`<i>Über</i> Käfer <i>aus</i>`,
+		},
+		// Multiple runs, idempotent.
+		{
+			`<i>A</i>B<i>C</i>D<em>E</em>`,
+			`<i>A</i> B <i>C</i> D <em>E</em>`,
+		},
+	}
+	for _, c := range cases {
+		got := repairTagBoundarySpacing(c.in)
+		if got != c.want {
+			t.Errorf("repairTagBoundarySpacing(%q)\n  got  %q\n  want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestUserAgent(t *testing.T) {
 	withEmail := New("curator@example.org").userAgent()
 	if withEmail != "hive/0.1 (mailto:curator@example.org)" {
