@@ -11571,12 +11571,26 @@ class SfgaAddReferenceModal extends LitElement {
         OpenAlex search: ${this._openalexCandidatesError}
       </div>`;
     }
-    const withDOI = (this._openalexCandidates || []).filter((c) => c.doi);
-    if (!withDOI.length) return "";
-    const grobidTitle =
+    const grobidTitleRaw =
       this._uploadResult && this._uploadResult.metadata
-        ? this._normalizeForCompare(this._uploadResult.metadata.title || "")
+        ? this._uploadResult.metadata.title || ""
         : "";
+    const grobidTitle = this._normalizeForCompare(grobidTitleRaw);
+    // Filter noisy hits: OpenAlex ranks by relevance regardless of
+    // whether anything actually matches, so grey-literature papers
+    // that Crossref doesn't index still return top-N by shared
+    // stopwords or a single author-community token. Require a
+    // meaningful title-overlap floor (~0.25 Jaccard on tokens);
+    // below that the "match" is coincidence and showing it just
+    // invites curators to pick the wrong DOI.
+    const RELEVANT_JACCARD = 0.25;
+    const withDOI = (this._openalexCandidates || [])
+      .filter((c) => c.doi)
+      .filter((c) => {
+        if (!grobidTitleRaw) return true;
+        return this._titleMatchScore(grobidTitleRaw, c.title || "") >= RELEVANT_JACCARD;
+      });
+    if (!withDOI.length) return "";
     return html`
       <div class="oa-candidates">
         <p class="hint">
