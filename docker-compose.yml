@@ -35,6 +35,14 @@ services:
     # docker-compose auto-generate a name.
     build: .
     image: hive:local
+    # Run the container as the host user so the bind-mounted archive
+    # in ./data/ opens read-write from inside the container
+    # regardless of who owns the file on disk. HIVE_UID / HIVE_GID
+    # come from the shell (justfile exports them); fall back to 1000
+    # which matches the default Linux desktop user. Named with the
+    # HIVE_ prefix because bash treats UID / GID as readonly and
+    # `export UID=...` fails.
+    user: "${HIVE_UID:-1000}:${HIVE_GID:-1000}"
     ports:
       - "127.0.0.1:2365:2365"
     volumes:

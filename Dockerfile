@@ -48,9 +48,22 @@ COPY --from=build /out/hive /usr/local/bin/hive
 # port is needed; the container port then has to match.
 EXPOSE 2365
 
-# Default command runs `hive serve --create /data/archive.db` — the
-# --create flag makes a fresh install work without the operator
-# pre-populating an archive. Curators bring-your-own by mounting a
-# real .db over /data/archive.db in the compose file / docker run.
+# Default command runs `hive serve --create /data/archive.db`:
+#   --create               makes fresh installs work without
+#                          pre-populating an archive.
+#   --bind 0.0.0.0:2365    listens on all container interfaces so
+#                          host → container traffic reaches it
+#                          (docker-compose maps the host port to
+#                          127.0.0.1 so effective exposure stays
+#                          loopback).
+#   --allow-unauthenticated
+#                          bypasses hive's non-loopback-bind safety
+#                          guard. Necessary because 0.0.0.0 inside
+#                          the container LOOKS like a public bind
+#                          but is behind Docker's network isolation
+#                          + the compose file's loopback-only port
+#                          mapping. Operators exposing hive to a
+#                          real public network need to run their
+#                          own reverse-proxy + auth layer.
 ENTRYPOINT ["/usr/local/bin/hive"]
-CMD ["serve", "--create", "--bind", "0.0.0.0:2365", "/data/archive.db"]
+CMD ["serve", "--create", "--allow-unauthenticated", "--bind", "0.0.0.0:2365", "/data/archive.db"]
