@@ -153,6 +153,74 @@ func TestParseHeaderEmptyReturnsEmptyStruct(t *testing.T) {
 	}
 }
 
+// TestParseHeaderNoTypeAttribute covers GROBID output where the
+// header biblStruct is emitted without a type="header" attribute
+// (the common case in real 0.8.x GROBID output). ParseHeader must
+// still recognize it as the paper's own metadata via its position
+// inside <teiHeader>, not by requiring the attribute — otherwise
+// title / authors / DOI all silently return empty and downstream
+// title-mismatch checks against the extracted DOI can't fire.
+func TestParseHeaderNoTypeAttribute(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <sourceDesc>
+        <biblStruct>
+          <analytic>
+            <author><persName>
+              <forename type="first">Jane</forename>
+              <surname>Doe</surname>
+            </persName></author>
+            <title level="a" type="main">A paper about beetles</title>
+          </analytic>
+          <idno type="DOI">10.1234/beetles</idno>
+        </biblStruct>
+      </sourceDesc>
+    </fileDesc>
+  </teiHeader>
+</TEI>`)
+	h, err := ParseHeader(tei)
+	if err != nil {
+		t.Fatalf("ParseHeader: %v", err)
+	}
+	if h.Title != "A paper about beetles" {
+		t.Errorf("Title = %q", h.Title)
+	}
+	if h.Authors != "Jane Doe" {
+		t.Errorf("Authors = %q", h.Authors)
+	}
+	if h.DOI != "10.1234/beetles" {
+		t.Errorf("DOI = %q", h.DOI)
+	}
+}
+
+// TestParseHeaderMultipleForenames covers GROBID's multi-<forename>
+// output (typically type="first" + type="middle"). Regression case
+// from a real PDF where GROBID misfiled an author-separator
+// character ("Douglass ; Miller") into the middle-name slot; the
+// parser should keep only the given name, not overwrite it.
+func TestParseHeaderMultipleForenames(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader><fileDesc><sourceDesc>
+    <biblStruct>
+      <analytic>
+        <author><persName>
+          <forename type="first">Douglass</forename>
+          <forename type="middle">;</forename>
+          <surname>Miller</surname>
+        </persName></author>
+      </analytic>
+    </biblStruct>
+  </sourceDesc></fileDesc></teiHeader>
+</TEI>`)
+	h, _ := ParseHeader(tei)
+	if h.Authors != "Douglass Miller" {
+		t.Errorf("Authors = %q, want 'Douglass Miller'", h.Authors)
+	}
+}
+
 // TestExtractDOIIgnoresReferenceSection is the whole point of
 // bounding the DOI scan to <teiHeader>: a paper that itself has no
 // DOI but whose References section cites papers-with-DOIs should

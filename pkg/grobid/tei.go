@@ -85,19 +85,35 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 
 			switch local {
 			case "biblStruct":
-				for _, a := range t.Attr {
-					if a.Name.Local == "type" && a.Value == "header" {
-						inHeaderBiblStruct = true
-					}
+				// Any <biblStruct> reached from inside <teiHeader> is
+				// the paper's own metadata by TEI convention (there's
+				// only one per header). GROBID sometimes emits
+				// <biblStruct type="header"> and sometimes just
+				// <biblStruct>, so relying on the attribute misses
+				// many real papers; the structural check via the
+				// stack works either way. Reference biblStructs live
+				// under <text>/<back>/<listBibl>, never inside
+				// <teiHeader>.
+				if stackContains(stack, "teiHeader") {
+					inHeaderBiblStruct = true
 				}
 			case "author":
 				if inHeaderBiblStruct {
 					currentAuthor = &person{}
 				}
 			case "forename":
+				// TEI persName can contain multiple <forename>
+				// elements (e.g. first + middle). Keep only the
+				// first one so a middle-name slot GROBID misfilled
+				// with punctuation ("Douglass ; Miller" for author
+				// separator artifacts) doesn't overwrite the given
+				// name. Middle initials are omitted deliberately —
+				// display uses given + surname.
 				if currentAuthor != nil {
 					if text, ok := readCharData(dec); ok {
-						currentAuthor.Forename = strings.TrimSpace(text)
+						if currentAuthor.Forename == "" {
+							currentAuthor.Forename = strings.TrimSpace(text)
+						}
 					}
 				}
 			case "surname":
@@ -339,6 +355,20 @@ func readCharData(dec *xml.Decoder) (string, bool) {
 		return "", false
 	}
 	return string(cd), true
+}
+
+// stackContains reports whether the tag stack has an ancestor with
+// the given local name. Used to detect header context structurally
+// (any <biblStruct> reached from inside <teiHeader> is the paper's
+// own metadata) instead of relying on an attribute GROBID doesn't
+// always emit.
+func stackContains(stack []string, name string) bool {
+	for _, s := range stack {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // parentOf returns the local name n levels above the current top

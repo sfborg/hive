@@ -9989,6 +9989,13 @@ class SfgaAddReferenceModal extends LitElement {
     _uploadBusy: { state: true },
     _uploadError: { state: true },
     _uploadResult: { state: true },
+    // _rejectedDOI holds a DOI GROBID pulled from the TEI header
+    // that resolved to an OpenAlex paper with a very different
+    // title — typically a citation in the paper text (a database
+    // credit, a "see also" reference) that GROBID misclassified as
+    // this paper's own DOI. Surfaced as a hint on the File tab so
+    // the curator sees why we didn't auto-hop to the DOI tab.
+    _rejectedDOI: { state: true },
     _dragActive: { state: true },
     // Side-by-side PDF viewer mode. Auto-enables when an upload
     // lands with a sha (a PDF is available to display); the
@@ -10401,6 +10408,7 @@ class SfgaAddReferenceModal extends LitElement {
     this._uploadBusy = false;
     this._uploadError = "";
     this._uploadResult = null;
+    this._rejectedDOI = "";
     this._dragActive = false;
     this._showPDF = true;
     this._manual = null;
@@ -11294,9 +11302,20 @@ class SfgaAddReferenceModal extends LitElement {
   _renderTEIStatusHint(res) {
     switch (res.tei_status) {
       case "stored":
-        if (res.doi) {
+        if (res.doi && !this._rejectedDOI) {
           return html`<div class="hint">
             DOI <code>${res.doi}</code> extracted — switching to the DOI tab.
+          </div>`;
+        }
+        if (this._rejectedDOI) {
+          return html`<div class="hint">
+            GROBID extracted DOI <code>${this._rejectedDOI}</code>,
+            but it resolved to a paper whose title doesn't match
+            this PDF — likely a citation in the paper text (e.g. a
+            database credit) misclassified as this paper's own DOI.
+            ${res.metadata
+              ? "Falling back to the Manual tab with GROBID's header metadata; searching OpenAlex for a matching DOI."
+              : "Please continue via the Project / BibTeX / Manual tabs."}
           </div>`;
         }
         if (res.metadata) {
@@ -11380,20 +11399,34 @@ class SfgaAddReferenceModal extends LitElement {
     this._uploadBusy = true;
     this._uploadError = "";
     this._uploadResult = null;
+    this._rejectedDOI = "";
     try {
       const result = await api.reference.upload(file);
       this._uploadResult = result;
       // Post-upload routing:
-      //   1. DOI extracted → DOI tab + fire OpenAlex resolve
-      //      (OpenAlex is authoritative when it can resolve).
-      //   2. No DOI but GROBID pulled header metadata → Manual
-      //      tab with fields pre-populated; curator reviews and
-      //      saves. No copy-paste from the PDF needed.
-      //   3. Nothing useful → stay on file tab with a hint.
+      //   1. DOI extracted → resolve via OpenAlex, cross-check
+      //      against GROBID's extracted title. If titles agree,
+      //      hop to the DOI tab with the preview + conflict picker.
+      //      If they disagree, GROBID likely grabbed a citation
+      //      DOI (not the paper's own) — discard the DOI and fall
+      //      through to case 2.
+      //   2. No trusted DOI but GROBID pulled header metadata →
+      //      Manual tab with fields pre-populated; fire the
+      //      OpenAlex-by-metadata search in the background for
+      //      DOI-recovery candidates.
+      //   3. Nothing useful → stay on File tab with a hint.
       if (result.doi) {
-        this._doiInput = result.doi;
-        this._tab = SfgaAddReferenceModal._tabIndex("doi");
-        await this._resolveDOI();
+        const accepted = await this._tryAcceptExtractedDOI(
+          result.doi,
+          result.metadata,
+        );
+        if (accepted) {
+          this._tab = SfgaAddReferenceModal._tabIndex("doi");
+        } else if (result.metadata) {
+          this._manual = manualFromMetadata(result.metadata);
+          this._tab = SfgaAddReferenceModal._tabIndex("manual");
+          this._lookupOpenAlexByMetadata(result.metadata);
+        }
       } else if (result.metadata) {
         this._manual = manualFromMetadata(result.metadata);
         this._tab = SfgaAddReferenceModal._tabIndex("manual");
@@ -11412,6 +11445,63 @@ class SfgaAddReferenceModal extends LitElement {
     } finally {
       this._uploadBusy = false;
     }
+  }
+
+  // _tryAcceptExtractedDOI resolves the DOI GROBID pulled out of
+  // the TEI header and validates it against GROBID's own title
+  // extraction. GROBID sometimes assigns a DOI it found in the
+  // paper text (a citation, a database credit) to the paper's own
+  // metadata slot — the smoking gun is that the resolved paper's
+  // title has no meaningful overlap with the extracted title. When
+  // that happens, discard the DOI, remember it for the status hint,
+  // and let the caller fall through to the DOI-recovery flow.
+  //
+  // Returns true when the DOI was accepted (preview populated,
+  // ready to hop to DOI tab); false when rejected.
+  async _tryAcceptExtractedDOI(doi, metadata) {
+    this._doiInput = doi;
+    try {
+      const ref = await api.reference.resolveDOI(doi);
+      const grobidTitle = metadata && metadata.title ? metadata.title : "";
+      const score = this._titleMatchScore(grobidTitle, ref.title || "");
+      // 0.4 threshold: allows for ~40% token overlap. In practice
+      // right-DOI matches score >0.7 (title differs only in casing
+      // / punctuation / markup); wrong-DOI matches — where GROBID
+      // grabbed a citation — score <0.1.
+      if (grobidTitle && score < 0.4) {
+        this._rejectedDOI = doi;
+        this._doiInput = "";
+        this._preview = null;
+        this._previewOpenAlex = null;
+        return false;
+      }
+      this._preview = { ...ref };
+      this._previewOpenAlex = ref;
+      return true;
+    } catch (err) {
+      // Resolve failed (network, 404, whatever). Treat as rejection
+      // so the flow falls through to the metadata-driven path.
+      this._rejectedDOI = doi;
+      this._doiInput = "";
+      return false;
+    }
+  }
+
+  // Token-set Jaccard on normalized titles. Word-order invariant;
+  // tolerant of stopword mismatches because both titles usually
+  // share most of the content-carrying tokens.
+  _titleMatchScore(a, b) {
+    const ta = new Set(
+      this._normalizeForCompare(a).split(/\s+/).filter(Boolean),
+    );
+    const tb = new Set(
+      this._normalizeForCompare(b).split(/\s+/).filter(Boolean),
+    );
+    if (!ta.size || !tb.size) return 0;
+    let inter = 0;
+    for (const t of ta) if (tb.has(t)) inter++;
+    const union = ta.size + tb.size - inter;
+    return inter / union;
   }
 
   // _lookupOpenAlexByMetadata searches OpenAlex using GROBID's
@@ -11543,6 +11633,14 @@ class SfgaAddReferenceModal extends LitElement {
     return html`
       ${this._manualError
         ? html`<div class="error" role="alert">${this._manualError}</div>`
+        : ""}
+      ${this._rejectedDOI
+        ? html`<p class="empty" style="margin: 0 0 var(--sp-2) 0">
+            GROBID guessed DOI <code>${this._rejectedDOI}</code>,
+            but it points to a different paper — probably a
+            citation in the PDF text, not this paper's own DOI. It
+            has been ignored; searching OpenAlex for other matches.
+          </p>`
         : ""}
       ${this._renderOpenAlexCandidates()}
       <form
