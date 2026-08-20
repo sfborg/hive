@@ -9962,7 +9962,15 @@ class SfgaAddReferenceModal extends LitElement {
     // Tab 3 (BibTeX)
     _bibtexInput: { state: true },
     // Preview (shared by tabs 1/2/3 once a candidate resolves).
+    // _preview is the working copy — a curator's field picks in the
+    // GROBID-vs-OpenAlex conflict UI mutate it in place. The saved
+    // reference is built from _preview. _previewOpenAlex holds the
+    // untouched OpenAlex response so the conflict picker can always
+    // offer the OpenAlex value regardless of which side is currently
+    // picked. Nil when the current preview didn't originate from an
+    // OpenAlex fetch (BHLnames, BibTeX paths).
     _preview: { state: true },
+    _previewOpenAlex: { state: true },
     // Tab 4 (File). Drag-and-drop / picker uploads a PDF (or
     // EPUB / HTML / JATS) into the archive's sidecar library and,
     // when GROBID is configured, converts to TEI. On success with
@@ -10243,6 +10251,41 @@ class SfgaAddReferenceModal extends LitElement {
         color: var(--fg);
         border-color: var(--fg);
       }
+      /* Conflict picker for GROBID-vs-OpenAlex disagreements in the
+         resolved-DOI preview. Two labeled radio options stacked
+         inside the dd cell; the picked side gets an accent border
+         so the current choice reads at a glance. */
+      .conflict-picker {
+        display: grid;
+        gap: var(--sp-1);
+      }
+      .conflict-picker .pick {
+        display: grid;
+        grid-template-columns: max-content max-content 1fr;
+        gap: var(--sp-1) var(--sp-2);
+        align-items: baseline;
+        padding: var(--sp-1) var(--sp-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+      }
+      .conflict-picker .pick.picked {
+        border-color: var(--accent);
+        background: color-mix(in oklab, var(--accent) 6%, transparent);
+      }
+      .conflict-picker .source {
+        color: var(--dim);
+        font-size: var(--fs-xs);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .conflict-picker .value {
+        overflow-wrap: anywhere;
+      }
+      .conflict-picker em {
+        color: var(--dim);
+        font-style: italic;
+      }
       .preview dl {
         margin: 0;
         display: grid;
@@ -10296,6 +10339,7 @@ class SfgaAddReferenceModal extends LitElement {
     this._doiInput = "";
     this._bibtexInput = "";
     this._preview = null;
+    this._previewOpenAlex = null;
     this._uploadBusy = false;
     this._uploadError = "";
     this._uploadResult = null;
@@ -10416,6 +10460,7 @@ class SfgaAddReferenceModal extends LitElement {
     // Preview is per-tab — leaving the tab clears any half-completed
     // resolve/parse work so switching back is a clean slate.
     this._preview = null;
+    this._previewOpenAlex = null;
   }
 
   connectedCallback() {
@@ -10811,7 +10856,7 @@ class SfgaAddReferenceModal extends LitElement {
                 </div>`
               : ""}
             <div class="actions">
-              <button @click=${() => (this._preview = h.reference)}>Preview</button>
+              <button @click=${() => { this._preview = h.reference; this._previewOpenAlex = null; }}>Preview</button>
               <button class="primary" @click=${() => this._createAndPick(h.reference)}>
                 add & pick
               </button>
@@ -10874,9 +10919,11 @@ class SfgaAddReferenceModal extends LitElement {
     this._busy = true;
     this._error = "";
     this._preview = null;
+    this._previewOpenAlex = null;
     try {
       const ref = await api.reference.resolveDOI(doi);
-      this._preview = ref;
+      this._preview = { ...ref };
+      this._previewOpenAlex = ref;
     } catch (err) {
       this._error = err.detail || err.message || String(err);
     } finally {
@@ -10913,6 +10960,7 @@ class SfgaAddReferenceModal extends LitElement {
     this._busy = true;
     this._error = "";
     this._preview = null;
+    this._previewOpenAlex = null;
     try {
       const ref = await api.reference.parseBibTeX(text);
       this._preview = ref;
@@ -10924,31 +10972,150 @@ class SfgaAddReferenceModal extends LitElement {
   }
 
   // ---------- Shared preview panel ----------
+  //
+  // When both an OpenAlex-resolved reference and GROBID-extracted
+  // header metadata are present (PDF upload → DOI extracted →
+  // OpenAlex resolve), the preview shows a per-field conflict picker
+  // wherever the two sources disagree. Curator picks per field; the
+  // saved reference reflects the picks. Fields where only one source
+  // has a value, or where both agree, render as plain rows.
   _renderPreview() {
     const r = this._preview;
-    const rows = [
-      ["Author", r.author],
-      ["Year", r.issued ? r.issued.slice(0, 4) : ""],
-      ["Title", r.title],
-      ["Container", r.container_title],
-      ["Volume/Issue", r.volume ? `${r.volume}${r.issue ? "(" + r.issue + ")" : ""}` : ""],
-      ["Page", r.page],
-      ["DOI", r.doi],
-      ["Type", r.type],
-    ].filter(([, v]) => v);
+    const grobid = this._uploadResult && this._uploadResult.metadata;
+    const openalex = this._previewOpenAlex;
+    // Field descriptors — [label, previewKey, projector].
+    // projector maps a source object (openalex reference or GROBID
+    // apiUploadBibHeader) to the display string for that field.
+    const fields = [
+      ["Author", "author", (s) => s.author || ""],
+      ["Year", "issued", (s) => (s.issued ? String(s.issued).slice(0, 4) : "")],
+      ["Title", "title", (s) => s.title || ""],
+      ["Container", "container_title", (s) => s.container_title || ""],
+      [
+        "Volume/Issue",
+        "__volume_issue",
+        (s) => (s.volume ? `${s.volume}${s.issue ? "(" + s.issue + ")" : ""}` : ""),
+      ],
+      ["Page", "page", (s) => s.page || ""],
+      ["DOI", "doi", (s) => s.doi || ""],
+      ["Type", "type", (s) => s.type || ""],
+    ];
+    const rows = fields
+      .map(([label, key, project]) => {
+        const current = project(r);
+        const oaValue = openalex ? project(openalex) : "";
+        // GROBID's shape is apiUploadBibHeader — same keys except
+        // container_title comes through, no doi (already handled
+        // upstream) and no type. Project against it defensively.
+        const grobidValue = grobid ? project(grobid) : "";
+        return { label, key, current, oaValue, grobidValue };
+      })
+      .filter((row) => row.current || row.oaValue || row.grobidValue);
+    const anyConflict = rows.some(
+      (row) => this._isFieldConflict(row.oaValue, row.grobidValue),
+    );
     return html`
       <div class="preview" style="border-top: 1px solid var(--border); padding-top: 0.5rem">
+        ${anyConflict
+          ? html`<p class="empty" style="margin: 0 0 var(--sp-1) 0">
+              GROBID (from the PDF) and OpenAlex disagree on the
+              highlighted fields. Pick the correct value per field;
+              save when done.
+            </p>`
+          : ""}
         <dl>
-          ${rows.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}
+          ${rows.map((row) => this._renderPreviewRow(row))}
         </dl>
         <div class="toolbar">
-          <button @click=${() => (this._preview = null)}>Discard</button>
-          <button class="primary" @click=${() => this._createAndPick(r)}>
+          <button @click=${() => this._discardPreview()}>Discard</button>
+          <button class="primary" @click=${() => this._createAndPick(this._preview)}>
             ${this._busy ? "Saving…" : "Add & pick"}
           </button>
         </div>
       </div>
     `;
+  }
+
+  _renderPreviewRow(row) {
+    const conflict = this._isFieldConflict(row.oaValue, row.grobidValue);
+    if (!conflict) {
+      return html`<dt>${row.label}</dt><dd>${row.current}</dd>`;
+    }
+    const pickedOA =
+      this._normalizeForCompare(row.current) ===
+      this._normalizeForCompare(row.oaValue);
+    return html`
+      <dt>${row.label}</dt>
+      <dd>
+        <div class="conflict-picker">
+          <label class=${"pick" + (pickedOA ? " picked" : "")}>
+            <input
+              type="radio"
+              name=${"pick-" + row.key}
+              ?checked=${pickedOA}
+              @change=${() => this._pickFieldValue(row.key, row.oaValue)}
+            />
+            <span class="source">OpenAlex</span>
+            <span class="value">${row.oaValue || html`<em>(empty)</em>`}</span>
+          </label>
+          <label class=${"pick" + (!pickedOA ? " picked" : "")}>
+            <input
+              type="radio"
+              name=${"pick-" + row.key}
+              ?checked=${!pickedOA}
+              @change=${() => this._pickFieldValue(row.key, row.grobidValue)}
+            />
+            <span class="source">GROBID (PDF)</span>
+            <span class="value">${row.grobidValue || html`<em>(empty)</em>`}</span>
+          </label>
+        </div>
+      </dd>
+    `;
+  }
+
+  // _pickFieldValue mutates _preview to reflect the curator's choice
+  // for a conflict field. The composite Volume/Issue key needs a
+  // split back into vol + issue so the saved reference carries them
+  // as separate columns; all other keys map 1:1.
+  _pickFieldValue(key, value) {
+    const next = { ...this._preview };
+    if (key === "__volume_issue") {
+      const m = /^([^(]*)(?:\(([^)]*)\))?$/.exec(value || "");
+      next.volume = m ? m[1].trim() : "";
+      next.issue = m && m[2] ? m[2].trim() : "";
+    } else if (key === "issued") {
+      // GROBID gives year only; OpenAlex may give full date. Preserve
+      // whatever the source had rather than truncating.
+      next.issued = value || "";
+    } else {
+      next[key] = value || "";
+    }
+    this._preview = next;
+  }
+
+  _discardPreview() {
+    this._preview = null;
+    this._previewOpenAlex = null;
+  }
+
+  // Field-conflict predicate. Both sides must have non-empty values;
+  // if either is empty, treat as "one source missing" (not a conflict).
+  // Normalization strips HTML tags, collapses whitespace, and
+  // lower-cases so cosmetic differences (an italicized taxon name,
+  // an en-dash vs a hyphen in a page range) don't trigger the picker.
+  _isFieldConflict(a, b) {
+    if (!a || !b) return false;
+    return this._normalizeForCompare(a) !== this._normalizeForCompare(b);
+  }
+
+  _normalizeForCompare(s) {
+    if (!s) return "";
+    return String(s)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/[–—]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
   }
 
   async _createAndPick(ref) {
