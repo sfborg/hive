@@ -153,6 +153,125 @@ func TestParseHeaderEmptyReturnsEmptyStruct(t *testing.T) {
 	}
 }
 
+// TestExtractDOIIgnoresReferenceSection is the whole point of
+// bounding the DOI scan to <teiHeader>: a paper that itself has no
+// DOI but whose References section cites papers-with-DOIs should
+// return empty, not a random citation DOI (which would trigger an
+// OpenAlex fetch of the wrong paper).
+func TestExtractDOIIgnoresReferenceSection(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <sourceDesc>
+        <biblStruct type="header">
+          <analytic>
+            <title>Paper with no DOI</title>
+          </analytic>
+        </biblStruct>
+      </sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text>
+    <back>
+      <div type="references">
+        <listBibl>
+          <biblStruct>
+            <analytic>
+              <idno type="DOI">10.1234/cited.reference.one</idno>
+            </analytic>
+          </biblStruct>
+          <biblStruct>
+            <analytic>
+              <idno type="DOI">10.5678/cited.reference.two</idno>
+            </analytic>
+          </biblStruct>
+        </listBibl>
+      </div>
+    </back>
+  </text>
+</TEI>`)
+	if got := ExtractDOI(tei); got != "" {
+		t.Errorf("ExtractDOI = %q, want empty (cited reference DOI leaked past header boundary)", got)
+	}
+}
+
+func TestExtractDOIHeaderIdno(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <sourceDesc>
+        <biblStruct type="header">
+          <analytic>
+            <idno type="DOI">10.1080/00222935709487884</idno>
+          </analytic>
+        </biblStruct>
+      </sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text><back>
+    <div type="references">
+      <biblStruct><analytic>
+        <idno type="DOI">10.9999/should.not.win</idno>
+      </analytic></biblStruct>
+    </div>
+  </back></text>
+</TEI>`)
+	if got := ExtractDOI(tei); got != "10.1080/00222935709487884" {
+		t.Errorf("ExtractDOI = %q, want header DOI", got)
+	}
+}
+
+// TestExtractDOIHeaderFreeText covers GROBID output where the DOI
+// appears in the header as free text (e.g. inside <note> or an
+// author affiliation) without a typed <idno> wrapper. The regex
+// fallback should still find it — but only within the header slice.
+func TestExtractDOIHeaderFreeText(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc><sourceDesc><biblStruct type="header">
+      <note>doi: 10.1234/paper.own.doi retrieved 2026-01-01.</note>
+    </biblStruct></sourceDesc></fileDesc>
+  </teiHeader>
+  <text><back><biblStruct><analytic>
+    <idno type="DOI">10.9999/reference.should.not.win</idno>
+  </analytic></biblStruct></back></text>
+</TEI>`)
+	if got := ExtractDOI(tei); got != "10.1234/paper.own.doi" {
+		t.Errorf("ExtractDOI = %q, want header free-text DOI", got)
+	}
+}
+
+func TestExtractDOITrailingPunct(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader><fileDesc><sourceDesc><biblStruct type="header">
+    <note>See 10.1234/foo.bar).</note>
+  </biblStruct></sourceDesc></fileDesc></teiHeader>
+</TEI>`)
+	if got := ExtractDOI(tei); got != "10.1234/foo.bar" {
+		t.Errorf("ExtractDOI = %q, want trailing-punct stripped", got)
+	}
+}
+
+func TestExtractDOIEmptyOnNoHeader(t *testing.T) {
+	// No <teiHeader> anchor → refuse rather than scan the whole
+	// document (which would leak reference DOIs).
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text><back>
+    <biblStruct><analytic>
+      <idno type="DOI">10.9999/leaked</idno>
+    </analytic></biblStruct>
+  </back></text>
+</TEI>`)
+	if got := ExtractDOI(tei); got != "" {
+		t.Errorf("ExtractDOI = %q, want empty on missing header", got)
+	}
+}
+
 func TestCollapseSpaces(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"simple", "simple"},

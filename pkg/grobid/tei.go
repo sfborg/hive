@@ -3,6 +3,7 @@ package grobid
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -236,6 +237,91 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 		out.Authors = strings.Join(parts, "; ")
 	}
 	return out, nil
+}
+
+// doiRegex matches the DOI syntax per the DOI Handbook:
+// `10.<registrant-code>/<suffix>` where the registrant is 4-9 digits
+// and the suffix is any run of non-whitespace. Trailing punctuation
+// (`.`, `,`, `;`, `)`, `]`, `>`) is stripped by trimDOIPunct because
+// the regex captures greedily.
+var doiRegex = regexp.MustCompile(`10\.\d{4,9}/[^\s<>"']+`)
+
+// ExtractDOI pulls the paper's own DOI from GROBID's TEI, restricted
+// to the <teiHeader> section so cited-reference DOIs (which live
+// under <text>/<back>/<div type="references">) can't be picked up
+// by mistake. Returns empty when no DOI resolves in the header —
+// callers should prefer "no DOI" over "wrong DOI", since a wrong
+// DOI triggers an OpenAlex fetch of an unrelated paper.
+//
+// Strategy inside the header slice:
+//  1. Canonical location: `<idno type="DOI">10.xxx/yyy</idno>`.
+//  2. Fallback: plain-text regex over the header slice — covers
+//     cases where GROBID emitted the DOI as free text (front-matter
+//     footer, header note) without a typed idno wrapper.
+func ExtractDOI(tei []byte) string {
+	// Bound the scan to the header. If the document has no
+	// closing </teiHeader> for any reason, scan up to <text>
+	// (references live inside <text>/<back>). If neither anchor
+	// is present, treat the whole document as suspect and return
+	// empty — safer than an unbounded scan that could hit a
+	// reference DOI.
+	header := teiHeaderSlice(tei)
+	if len(header) == 0 {
+		return ""
+	}
+	// Canonical idno first.
+	needle := []byte(`<idno type="DOI">`)
+	if i := bytesIndex(header, needle); i >= 0 {
+		rest := header[i+len(needle):]
+		if end := bytesIndex(rest, []byte("</idno>")); end > 0 {
+			candidate := strings.TrimSpace(string(rest[:end]))
+			if doiRegex.MatchString(candidate) {
+				return trimDOIPunct(candidate)
+			}
+		}
+	}
+	// Free-text fallback inside the header slice only.
+	if m := doiRegex.Find(header); m != nil {
+		return trimDOIPunct(string(m))
+	}
+	return ""
+}
+
+// teiHeaderSlice returns the bytes between <teiHeader> and </teiHeader>
+// (inclusive of open, exclusive of close), or an empty slice when the
+// anchors aren't present. Empty triggers ExtractDOI's safe-refusal
+// path — better than falling through to an unbounded scan.
+func teiHeaderSlice(tei []byte) []byte {
+	open := bytesIndex(tei, []byte(`<teiHeader`))
+	if open < 0 {
+		return nil
+	}
+	close := bytesIndex(tei[open:], []byte(`</teiHeader>`))
+	if close < 0 {
+		return nil
+	}
+	return tei[open : open+close]
+}
+
+// trimDOIPunct strips trailing punctuation the DOI regex captured
+// greedily but that isn't part of the identifier. Common when a DOI
+// appears at end of sentence or inside parentheses in reference text.
+func trimDOIPunct(s string) string {
+	for len(s) > 0 {
+		last := s[len(s)-1]
+		if last == '.' || last == ',' || last == ';' ||
+			last == ')' || last == ']' || last == '>' {
+			s = s[:len(s)-1]
+			continue
+		}
+		break
+	}
+	return s
+}
+
+// bytesIndex wraps strings.Index for the []byte-first idiom.
+func bytesIndex(haystack, needle []byte) int {
+	return strings.Index(string(haystack), string(needle))
 }
 
 // readCharData consumes the next CharData token from the decoder
