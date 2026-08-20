@@ -21,6 +21,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/grobid"
 	"github.com/sfborg/hive/internal/wui"
 )
 
@@ -79,6 +80,13 @@ func Run(archivePath string, opts Options) error {
 	}
 
 	s := &server{a: a, archivePath: archivePath}
+	// GROBID client for the reference-ingest pipeline. Env var
+	// HIVE_GROBID_URL activates it; unset means the upload handler
+	// stores raw sources and skips the TEI conversion pass. Set to
+	// e.g. http://grobid:8070 when running the docker-compose stack.
+	if url := os.Getenv("HIVE_GROBID_URL"); url != "" {
+		s.grobid = grobid.NewClient(url)
+	}
 	mux := s.routes()
 
 	// Static WUI served from internal/wui/dist embed. The API routes above

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/grobid"
 	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
@@ -26,6 +28,13 @@ import (
 type server struct {
 	a           *hive.Archive
 	archivePath string
+	// grobid is the client for the optional GROBID service (PDF →
+	// TEI conversion). nil when HIVE_GROBID_URL is unset — the
+	// upload handler skips the conversion pass and stores only the
+	// raw source; a curator can run GROBID later by bringing the
+	// service up and re-triggering the pipeline. See
+	// pkg/grobid/grobid.go and REFERENCE_PDF_PLAN.md.
+	grobid *grobid.Client
 }
 
 func (s *server) routes() *http.ServeMux {
@@ -2627,9 +2636,9 @@ func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
 
 // handleReferenceUpload accepts a multipart file upload (PDF /
 // EPUB / HTML / JATS) and stores it in the archive's sidecar
-// directory content-addressed on sha512. Idempotent per hash —
-// uploading the same bytes twice returns the same sha with
-// already_existed=true.
+// library (<archive>.library/) content-addressed on sha512.
+// Idempotent per hash — uploading the same bytes twice returns
+// the same sha with already_existed=true.
 //
 // Downstream steps (GROBID → TEI → JATS, DOI extraction, GNfinder,
 // etc.) run in follow-up handlers so this upload path stays fast
@@ -2679,12 +2688,58 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, err)
 		return
 	}
+
+	// Downstream TEI conversion via GROBID. Only PDFs go through
+	// GROBID; other formats (EPUB / HTML / JATS) have their own
+	// conversion paths that aren't wired yet. Skip re-processing
+	// when the file was a dedup hit AND a TEI already exists on
+	// disk from a prior upload.
+	teiStatus := s.tryGrobidConvert(r.Context(), res, ext)
+
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
 		SHA512:         res.SHA512,
 		Ext:            res.Ext,
 		Size:           res.Size,
 		AlreadyExisted: res.AlreadyExisted,
+		TEIStatus:      teiStatus,
 	})
+}
+
+// tryGrobidConvert runs the freshly-uploaded PDF through GROBID
+// and stores the TEI response alongside the source. Returns the
+// TEIStatus value that goes on the upload response — one of
+// "stored" / "not_configured" / "unavailable" / "skipped" (see
+// apiReferenceUpload for meaning). Non-PDF formats are "skipped"
+// for now (their conversion paths aren't wired).
+//
+// Deliberately doesn't propagate errors up — the upload itself
+// succeeded, the TEI pass is a best-effort follow-on. Errors are
+// captured in the status string and surface to the WUI.
+func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult, ext string) string {
+	if ext != "pdf" {
+		return "skipped"
+	}
+	if s.grobid == nil {
+		return "not_configured"
+	}
+	// If TEI already exists on disk (dedup case + prior conversion),
+	// don't re-run — deterministic pipeline, same input same output.
+	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml"); err == nil && existing != nil {
+		return "stored"
+	}
+	pdf, err := os.Open(res.Path)
+	if err != nil {
+		return "unavailable"
+	}
+	defer pdf.Close()
+	tei, err := s.grobid.ProcessFulltextDocument(ctx, pdf, res.SHA512+".pdf")
+	if err != nil {
+		return "unavailable"
+	}
+	if err := sidecar.Store(s.archivePath, res.SHA512, "tei.xml", tei); err != nil {
+		return "unavailable"
+	}
+	return "stored"
 }
 
 // handleParseName runs gnparser on a verbatim scientific name and returns

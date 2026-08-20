@@ -4,7 +4,7 @@
 // conversions, curator annotations, and provenance metadata.
 //
 // For an archive at `path/to/archive.db`, the sidecar lives at
-// `path/to/archive.pdfs/` and files inside are content-addressed
+// `path/to/archive.library/` and files inside are content-addressed
 // on `sha512(source)`. Same document uploaded twice deduplicates.
 // See REFERENCE_PDF_PLAN.md § Sidecar directory layout for the
 // full layout contract.
@@ -30,7 +30,10 @@ import (
 // DirSuffix is the suffix appended to the archive path (with .db
 // stripped) to form the sidecar directory. Kept as a var so tests
 // or future flavors could rename without hunting hardcoded strings.
-var DirSuffix = ".pdfs"
+// Named "library" rather than the format of any one member (pdfs /
+// jats / …) — the directory holds every source-document format
+// hive supports (pdf, epub, html, jats/xml) plus their derivations.
+var DirSuffix = ".library"
 
 // Meta is the JSON shape written to <sha>.meta.json alongside every
 // ingested file. Provenance data — where the file came from, when

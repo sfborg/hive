@@ -1010,12 +1010,28 @@ type apiPage[T any] struct {
 // apiReferenceUpload is the response for POST /api/reference/upload.
 // Reports where the uploaded file landed in the sidecar so the WUI
 // can associate it with a reference row and trigger downstream
-// pipeline steps (GROBID conversion, DOI extraction, etc.).
+// pipeline steps (JATS conversion, DOI extraction, etc.).
+//
+// TEIStatus signals whether GROBID processing ran and how it went:
+//
+//	"stored"        — TEI XML successfully generated and stored
+//	                  alongside the source at <sha>.tei.xml
+//	"not_configured" — HIVE_GROBID_URL isn't set; hive stored the
+//	                   raw source only. Curator can install GROBID
+//	                   and re-run the pipeline later
+//	"unavailable"    — GROBID URL is set but the service didn't
+//	                   respond; upload succeeded but TEI is empty
+//	"skipped"        — ext isn't a PDF (EPUB / HTML / JATS have
+//	                   different conversion paths, out of MVP scope)
+//
+// The WUI uses TEIStatus to decide whether downstream DOI-lookup
+// steps can proceed or should surface a "GROBID unavailable" hint.
 type apiReferenceUpload struct {
 	SHA512         string `json:"sha512"`
 	Ext            string `json:"ext"`
 	Size           int64  `json:"size"`
 	AlreadyExisted bool   `json:"already_existed"`
+	TEIStatus      string `json:"tei_status"`
 }
 
 // apiVocabTermDetail is the full-fidelity wire form for editable

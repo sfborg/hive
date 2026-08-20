@@ -13,10 +13,10 @@ func TestDir(t *testing.T) {
 	cases := []struct {
 		archive, want string
 	}{
-		{"/tmp/foo.db", "/tmp/foo.pdfs"},
-		{"/tmp/foo.DB", "/tmp/foo.pdfs"},
-		{"/tmp/foo", "/tmp/foo.pdfs"},
-		{"relative/path.db", "relative/path.pdfs"},
+		{"/tmp/foo.db", "/tmp/foo.library"},
+		{"/tmp/foo.DB", "/tmp/foo.library"},
+		{"/tmp/foo", "/tmp/foo.library"},
+		{"relative/path.db", "relative/path.library"},
 	}
 	for _, c := range cases {
 		got := Dir(c.archive)
