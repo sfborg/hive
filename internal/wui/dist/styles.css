@@ -166,6 +166,17 @@ html[data-severity-palette="cvd"] {
   box-sizing: border-box;
 }
 
+/* Placeholder text sits between --dim and --bg so a hint reads as
+   clearly unfilled, distinguishing empty inputs from pre-populated
+   ones at a glance. Applies to all form inputs — Lit shadow-root
+   inputs still inherit via the browser's default ::placeholder
+   propagation. Derived from existing tokens via color-mix; no new
+   palette values. */
+::placeholder {
+  color: color-mix(in oklab, var(--dim) 55%, var(--bg));
+  opacity: 1; /* Firefox defaults to 0.54 — override so our color wins. */
+}
+
 html,
 body {
   margin: 0;

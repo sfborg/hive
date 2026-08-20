@@ -615,6 +615,16 @@ const formFieldStyles = css`
     outline: none;
     border-color: var(--accent);
   }
+  /* Placeholder sits between --dim and --bg so a hint reads as
+     clearly unfilled — distinguishes empty inputs from pre-
+     populated ones at a glance. Derived from existing tokens via
+     color-mix; no new palette values. Opacity override handles
+     Firefox's 0.54 default. */
+  input::placeholder,
+  textarea::placeholder {
+    color: color-mix(in oklab, var(--dim) 55%, var(--bg));
+    opacity: 1;
+  }
   label {
     color: var(--dim);
     font-family: var(--font-mono);
@@ -10010,6 +10020,12 @@ class SfgaAddReferenceModal extends LitElement {
     // track the save round-trip.
     _manual: { state: true },
     _manualOriginal: { state: true },
+    // Progressive disclosure for the Manual form. Add-mode with an
+    // auto-fetched pre-fill (DOI resolve, BibTeX parse, upload) only
+    // shows the essential fields + fields that have values; the
+    // curator toggles the rest via "Show all fields". Edit mode
+    // shows everything so existing values aren't hidden.
+    _showAllFields: { state: true },
     _manualBusy: { state: true },
     _manualError: { state: true },
     // Persisted validation issues on the reference being edited.
@@ -10128,6 +10144,61 @@ class SfgaAddReferenceModal extends LitElement {
       }
       .manual-ref-form textarea {
         min-height: 3rem;
+      }
+      /* Baseline align so rows with conflict chips (which take an
+         extra text line) don't push their label off-center. */
+      .manual-ref-form {
+        align-items: baseline;
+      }
+      /* Column-2 cell that wraps input + inline conflict chips.
+         Keeps the input at column width while allowing the chip
+         to sit on its own line below without breaking the grid. */
+      .manual-ref-form .input-cell {
+        display: grid;
+        gap: var(--sp-1);
+        min-width: 0;
+      }
+      .manual-ref-form .field-conflict {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--sp-1);
+      }
+      /* Conflict chip: small, unobtrusive button below the input
+         labelled with the source (GROBID / OpenAlex) and the
+         alternative value. Clicking swaps the input's value. */
+      .manual-ref-form .conflict-chip {
+        display: inline-flex;
+        align-items: baseline;
+        gap: var(--sp-1);
+        padding: 0.1rem var(--sp-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: color-mix(in oklab, var(--fg) 3%, transparent);
+        color: var(--fg);
+        cursor: pointer;
+        font: inherit;
+        font-size: var(--fs-xs);
+        max-width: 100%;
+        overflow: hidden;
+      }
+      .manual-ref-form .conflict-chip:hover {
+        border-color: var(--accent);
+      }
+      .manual-ref-form .conflict-chip .source {
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .manual-ref-form .conflict-chip .value {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 32ch;
+      }
+      .show-all-toggle {
+        margin-top: var(--sp-2);
+        display: flex;
+        justify-content: flex-start;
       }
       h3 {
         margin: 0;
@@ -10413,6 +10484,9 @@ class SfgaAddReferenceModal extends LitElement {
     this._showPDF = true;
     this._manual = null;
     this._manualOriginal = null;
+    // Default to essentials-only in add mode; edit mode flips it on
+    // in connectedCallback so existing values are always visible.
+    this._showAllFields = false;
     this._manualBusy = false;
     this._manualError = "";
     this._issues = [];
@@ -10543,6 +10617,10 @@ class SfgaAddReferenceModal extends LitElement {
     // when the fetch lands.
     this._manual = emptyManualReference();
     if (this.editID) {
+      // Edit mode: reveal all fields so existing values are always
+      // visible (progressive disclosure applies only to add-mode
+      // pre-fills where hiding empty inputs reduces noise).
+      this._showAllFields = true;
       this._tab = SfgaAddReferenceModal._tabIndex("manual");
       this._loadForEdit(this.editID);
     } else {
@@ -10922,7 +11000,7 @@ class SfgaAddReferenceModal extends LitElement {
                 </div>`
               : ""}
             <div class="actions">
-              <button @click=${() => { this._preview = h.reference; this._previewOpenAlex = null; }}>Preview</button>
+              <button @click=${() => { this._manual = manualFromReference(h.reference); this._previewOpenAlex = null; this._tab = SfgaAddReferenceModal._tabIndex("manual"); }}>Review & edit</button>
               <button class="primary" @click=${() => this._createAndPick(h.reference)}>
                 add & pick
               </button>
@@ -10988,8 +11066,14 @@ class SfgaAddReferenceModal extends LitElement {
     this._previewOpenAlex = null;
     try {
       const ref = await api.reference.resolveDOI(doi);
-      this._preview = { ...ref };
+      // Land on the Manual tab with the resolved reference pre-
+      // filled — the curator edits + saves from one place instead
+      // of hopping between a read-only preview and the form. Keep
+      // _previewOpenAlex around so the inline conflict picker can
+      // still compare against GROBID metadata (when present).
       this._previewOpenAlex = ref;
+      this._manual = manualFromReference(ref);
+      this._tab = SfgaAddReferenceModal._tabIndex("manual");
     } catch (err) {
       this._error = err.detail || err.message || String(err);
     } finally {
@@ -11029,7 +11113,8 @@ class SfgaAddReferenceModal extends LitElement {
     this._previewOpenAlex = null;
     try {
       const ref = await api.reference.parseBibTeX(text);
-      this._preview = ref;
+      this._manual = manualFromReference(ref);
+      this._tab = SfgaAddReferenceModal._tabIndex("manual");
     } catch (err) {
       this._error = err.detail || err.message || String(err);
     } finally {
@@ -11421,7 +11506,12 @@ class SfgaAddReferenceModal extends LitElement {
           result.metadata,
         );
         if (accepted) {
-          this._tab = SfgaAddReferenceModal._tabIndex("doi");
+          // Land on Manual with the OpenAlex-resolved reference
+          // pre-filled — GROBID's metadata is still in state, so
+          // the inline conflict picker per input surfaces any
+          // per-field disagreements between the two sources.
+          this._manual = manualFromReference(this._previewOpenAlex);
+          this._tab = SfgaAddReferenceModal._tabIndex("manual");
         } else if (result.metadata) {
           this._manual = manualFromMetadata(result.metadata);
           this._tab = SfgaAddReferenceModal._tabIndex("manual");
@@ -11548,9 +11638,9 @@ class SfgaAddReferenceModal extends LitElement {
   _useOpenAlexCandidate(candidate) {
     if (!candidate || !candidate.doi) return;
     this._doiInput = candidate.doi;
-    this._preview = { ...candidate };
     this._previewOpenAlex = candidate;
-    this._tab = SfgaAddReferenceModal._tabIndex("doi");
+    this._manual = manualFromReference(candidate);
+    this._tab = SfgaAddReferenceModal._tabIndex("manual");
     this._openalexCandidates = [];
   }
 
@@ -11665,125 +11755,80 @@ class SfgaAddReferenceModal extends LitElement {
         }}
       >
         <!--
-          Free-text citation goes first — most badge-click open flows
-          land on this tab with a citation already recorded (from a
-          legacy CoL import, say). Putting it up top gives the
-          curator a legible summary of what the record currently
-          says before they start filling in structured fields below.
-          The structured fields (Type / Author / Issued / …) follow;
-          those are the fields the citation-pick backfill and
-          validation rules actually read.
+          Field order: essentials first (Citation / Type / Author /
+          Issued / Title / DOI — always shown), then descriptive
+          + publication + identifier + free-form. Progressive
+          disclosure hides non-essential rows that are empty and
+          have no source-disagreement to surface, keeping the form
+          short after an auto-fetch. Toggle at the bottom reveals
+          the rest.
         -->
-        <label>Citation</label>
-        <input
-          type="text"
-          placeholder="Free-text citation (auto-composed when empty)"
-          .value=${d.citation}
-          @input=${set("citation")}
-        />
+        ${this._renderManualTextField("citation", "Citation", {
+          placeholder: "Free-text citation (auto-composed when empty)",
+          essential: true,
+        })}
 
-        <label>Type</label>
-        <sfga-combobox
-          min-search-chars="0"
-          placeholder="Reference type…"
-          .source=${vocabSource("reference_type")}
-          .resolver=${vocabResolver("reference_type")}
-          .value=${d.type || ""}
-          @pick=${(e) => this._manualFieldChange("type", e.detail.id)}
-        ></sfga-combobox>
+        ${this._shouldShowManualField("type", true)
+          ? html`
+              <label>Type</label>
+              <div class="input-cell">
+                <sfga-combobox
+                  min-search-chars="0"
+                  placeholder="Reference type…"
+                  .source=${vocabSource("reference_type")}
+                  .resolver=${vocabResolver("reference_type")}
+                  .value=${d.type || ""}
+                  @pick=${(e) => this._manualFieldChange("type", e.detail.id)}
+                ></sfga-combobox>
+              </div>
+            `
+          : ""}
 
-        <label>Author</label>
-        <input
-          type="text"
-          placeholder="Surname, Initials; Surname, Initials"
-          .value=${d.author}
-          @input=${set("author")}
-        />
+        ${this._renderManualTextField("author", "Author", {
+          placeholder: "Surname, Initials; Surname, Initials",
+          essential: true,
+        })}
+        ${this._renderManualTextField("issued", "Issued", {
+          placeholder: "YYYY or YYYY-MM-DD",
+          essential: true,
+        })}
+        ${this._renderManualTextField("title", "Title", { essential: true })}
+        ${this._renderManualTextField("doi", "DOI", {
+          placeholder: "10.xxxx/xxxxx",
+          essential: true,
+        })}
+        ${this._renderManualTextField("container_title", "Container title", {
+          placeholder: "Journal / book / series title",
+        })}
+        ${this._renderManualTextField("container_author", "Container author", {
+          placeholder: "Book editor when this is a chapter",
+        })}
+        ${this._renderManualTextField("volume", "Volume")}
+        ${this._renderManualTextField("issue", "Issue")}
+        ${this._renderManualTextField("edition", "Edition")}
+        ${this._renderManualTextField("page", "Page", {
+          placeholder: "17-42 or e12345",
+        })}
+        ${this._renderManualTextField("publisher", "Publisher")}
+        ${this._renderManualTextField("publisher_place", "Publisher place")}
+        ${this._renderManualTextField("editor", "Editor")}
+        ${this._renderManualTextField("isbn", "ISBN")}
+        ${this._renderManualTextField("issn", "ISSN")}
+        ${this._renderManualTextField("link", "Link", {
+          placeholder: "https://…",
+        })}
 
-        <label>Editor</label>
-        <input type="text" .value=${d.editor} @input=${set("editor")} />
-
-        <label>Issued</label>
-        <input
-          type="text"
-          placeholder="YYYY or YYYY-MM-DD"
-          .value=${d.issued}
-          @input=${set("issued")}
-        />
-
-        <label>Title</label>
-        <input type="text" .value=${d.title} @input=${set("title")} />
-
-        <label>Container title</label>
-        <input
-          type="text"
-          placeholder="Journal / book / series title"
-          .value=${d.container_title}
-          @input=${set("container_title")}
-        />
-
-        <label>Container author</label>
-        <input
-          type="text"
-          placeholder="Book editor when this is a chapter"
-          .value=${d.container_author}
-          @input=${set("container_author")}
-        />
-
-        <label>Volume</label>
-        <input type="text" .value=${d.volume} @input=${set("volume")} />
-
-        <label>Issue</label>
-        <input type="text" .value=${d.issue} @input=${set("issue")} />
-
-        <label>Edition</label>
-        <input type="text" .value=${d.edition} @input=${set("edition")} />
-
-        <label>Page</label>
-        <input
-          type="text"
-          placeholder="17-42 or e12345"
-          .value=${d.page}
-          @input=${set("page")}
-        />
-
-        <label>Publisher</label>
-        <input type="text" .value=${d.publisher} @input=${set("publisher")} />
-
-        <label>Publisher place</label>
-        <input
-          type="text"
-          .value=${d.publisher_place}
-          @input=${set("publisher_place")}
-        />
-
-        <label>DOI</label>
-        <input
-          type="text"
-          placeholder="10.xxxx/xxxxx"
-          .value=${d.doi}
-          @input=${set("doi")}
-        />
-
-        <label>ISBN</label>
-        <input type="text" .value=${d.isbn} @input=${set("isbn")} />
-
-        <label>ISSN</label>
-        <input type="text" .value=${d.issn} @input=${set("issn")} />
-
-        <label>Link</label>
-        <input
-          type="text"
-          placeholder="https://…"
-          .value=${d.link}
-          @input=${set("link")}
-        />
-
-        <label>Remarks</label>
-        <textarea
-          .value=${d.remarks}
-          @input=${set("remarks")}
-        ></textarea>
+        ${this._shouldShowManualField("remarks", false)
+          ? html`
+              <label>Remarks</label>
+              <div class="input-cell">
+                <textarea
+                  .value=${d.remarks || ""}
+                  @input=${set("remarks")}
+                ></textarea>
+              </div>
+            `
+          : ""}
 
         <!--
           Hidden submit button so Enter in any field submits the
@@ -11793,6 +11838,108 @@ class SfgaAddReferenceModal extends LitElement {
         -->
         <button type="submit" hidden></button>
       </form>
+      ${!this._showAllFields
+        ? html`<div class="show-all-toggle">
+            <button
+              type="button"
+              @click=${() => (this._showAllFields = true)}
+              title="Reveal every apiReference field, including empty ones"
+            >
+              Show all fields
+            </button>
+          </div>`
+        : ""}
+    `;
+  }
+
+  // Manual-form progressive-disclosure gate. Essentials always
+  // render; other fields render only when they have a value or
+  // when the curator toggled "Show all fields", or when the two
+  // sources (GROBID / OpenAlex) disagree on the field (so the
+  // conflict chip has a place to live).
+  _shouldShowManualField(key, essential) {
+    if (this._showAllFields) return true;
+    if (essential) return true;
+    const v =
+      this._manual && this._manual[key] != null ? this._manual[key] : "";
+    if (v !== "") return true;
+    return this._manualFieldHasConflict(key);
+  }
+
+  _manualFieldHasConflict(key) {
+    const g =
+      this._uploadResult && this._uploadResult.metadata
+        ? this._uploadResult.metadata
+        : null;
+    const oa = this._previewOpenAlex;
+    if (!g || !oa) return false;
+    const gv = g[key] || "";
+    const ov = oa[key] || "";
+    if (!gv || !ov) return false;
+    return this._normalizeForCompare(gv) !== this._normalizeForCompare(ov);
+  }
+
+  // _renderManualConflictChip shows a small "Use GROBID: <value>"
+  // or "Use OpenAlex: <value>" button below the input when the two
+  // sources disagree on this field AND the current value doesn't
+  // already match that source. Clicking swaps the input's value.
+  // No chip when sources agree or one is missing.
+  _renderManualConflictChip(key) {
+    if (!this._manualFieldHasConflict(key)) return "";
+    const g = this._uploadResult.metadata[key] || "";
+    const oa = this._previewOpenAlex[key] || "";
+    const current =
+      this._manual && this._manual[key] != null ? this._manual[key] : "";
+    const cn = this._normalizeForCompare(current);
+    const showG = cn !== this._normalizeForCompare(g);
+    const showOA = cn !== this._normalizeForCompare(oa);
+    if (!showG && !showOA) return "";
+    return html`
+      <div class="field-conflict">
+        ${showG
+          ? html`<button
+              type="button"
+              class="conflict-chip"
+              title="Replace with GROBID's extracted value"
+              @click=${() => this._manualFieldChange(key, g)}
+            >
+              <span class="source">GROBID</span>
+              <span class="value">${g}</span>
+            </button>`
+          : ""}
+        ${showOA
+          ? html`<button
+              type="button"
+              class="conflict-chip"
+              title="Replace with OpenAlex's value"
+              @click=${() => this._manualFieldChange(key, oa)}
+            >
+              <span class="source">OpenAlex</span>
+              <span class="value">${oa}</span>
+            </button>`
+          : ""}
+      </div>
+    `;
+  }
+
+  // _renderManualTextField renders one label + input + conflict-chip
+  // triple inside the Manual form's grid. Progressive disclosure
+  // hides the whole row when the field is empty, non-essential, and
+  // has no conflict to surface.
+  _renderManualTextField(key, label, opts = {}) {
+    if (!this._shouldShowManualField(key, opts.essential)) return "";
+    const d = this._manual || emptyManualReference();
+    return html`
+      <label>${label}</label>
+      <div class="input-cell">
+        <input
+          type="text"
+          placeholder=${opts.placeholder || ""}
+          .value=${d[key] || ""}
+          @input=${(e) => this._manualFieldChange(key, e.target.value)}
+        />
+        ${this._renderManualConflictChip(key)}
+      </div>
     `;
   }
 
