@@ -28,8 +28,13 @@
 
 services:
   hive:
+    # Built locally from the Dockerfile in this repo. No Docker Hub
+    # image published yet — the tag is just a stable name for the
+    # locally-built image so `docker compose up` doesn't rebuild
+    # unnecessarily. Drop this line entirely if you'd rather
+    # docker-compose auto-generate a name.
     build: .
-    image: sfborg/hive:local
+    image: hive:local
     ports:
       - "127.0.0.1:2365:2365"
     volumes:
