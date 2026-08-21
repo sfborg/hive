@@ -122,6 +122,76 @@ class SfgaReader extends LitElement {
       font-size: var(--fs-md);
       line-height: 1.6;
     }
+    /* Paper header — title / authors / abstract / citation card.
+       Sits at the top of the article so the paper's identity and
+       a copy-pasteable citation are always visible on load,
+       without having to hunt around the reader for them. */
+    .paper-header {
+      margin-bottom: var(--sp-4);
+      padding-bottom: var(--sp-4);
+      border-bottom: 1px solid var(--border);
+    }
+    .paper-title {
+      font-size: 1.5rem;
+      line-height: 1.3;
+      margin: 0 0 var(--sp-2);
+      font-weight: 600;
+    }
+    .paper-authors {
+      margin: 0 0 var(--sp-3);
+      color: var(--dim);
+    }
+    .paper-abstract {
+      margin: 0 0 var(--sp-3);
+    }
+    .paper-abstract summary {
+      cursor: pointer;
+      font-weight: 500;
+      padding: var(--sp-1) 0;
+    }
+    .paper-abstract p {
+      margin: var(--sp-1) 0;
+      color: var(--fg);
+    }
+    /* Citation card: monospace citation text with copy buttons
+       below. Slight background tint separates it visually from
+       the body prose without introducing a new palette value. */
+    .citation-card {
+      background: color-mix(in oklab, var(--fg) 4%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-2) var(--sp-3);
+    }
+    .citation-text {
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-bottom: var(--sp-2);
+    }
+    .citation-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1);
+    }
+    .citation-buttons button {
+      font: inherit;
+      font-size: var(--fs-sm);
+      padding: var(--sp-1) var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .citation-buttons button:hover {
+      border-color: var(--accent);
+    }
+    /* "Copied" feedback: accent border + accent text for ~1.5s. */
+    .citation-buttons button.copied {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
     article h2 {
       font-size: var(--fs-lg);
       margin-top: var(--sp-6);
@@ -358,13 +428,242 @@ class SfgaReader extends LitElement {
       }
       return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
     }
+    // Paper header (title, authors, abstract, citation block)
+    // comes from <teiHeader>. Renders before the body so the
+    // reader lands with the paper's identity visible up top and
+    // the citation-copy affordances one click away.
+    const teiHeader = this._doc.getElementsByTagNameNS(teiNS, "teiHeader")[0];
     // Render <body> and <back> contents in document order — the
     // reader shows the whole paper (introduction through
     // references + acknowledgements). The DOI-from-references
     // guard against picking a cited-work DOI as the paper's own
     // DOI lives elsewhere (pkg/grobid.ExtractDOI, scoped to
     // <teiHeader>) so it doesn't need a filter here.
-    return html`<article>${this._renderNodes(text.childNodes)}</article>`;
+    return html`
+      <article>
+        ${teiHeader ? this._renderPaperHeader(teiHeader) : nothing}
+        ${this._renderNodes(text.childNodes)}
+      </article>
+    `;
+  }
+
+  // _renderPaperHeader emits the top-of-paper block: title,
+  // author byline, collapsible abstract, and a citation card with
+  // copy buttons for plain-text / BibTeX / DOI URL. All fields
+  // pulled from <teiHeader>; missing pieces elide gracefully.
+  //
+  // The citation lives at the top because publishers famously
+  // don't standardize placement of a copy-pasteable citation in
+  // the PDF itself — this makes the reader itself the reliable
+  // source of a citation for any paper hive processes.
+  _renderPaperHeader(teiHeader) {
+    const biblStruct = this._findDescendant(teiHeader, "biblStruct");
+    const data = biblStruct ? this._biblStructToData(biblStruct) : null;
+    const title = this._paperTitle(teiHeader, data);
+    const authors = data ? data.authors : [];
+    const abstractParas = this._extractAbstract(teiHeader);
+    const plain = data ? this._formatPlainCitation(title, data) : "";
+    const bibtex = data ? this._formatBibTeX(title, data) : "";
+    const doiURL = data && data.doi ? `https://doi.org/${data.doi}` : "";
+    return html`
+      <header class="paper-header">
+        ${title ? html`<h1 class="paper-title">${title}</h1>` : nothing}
+        ${authors.length
+          ? html`<p class="paper-authors">${authors.join(", ")}</p>`
+          : nothing}
+        ${abstractParas.length
+          ? html`
+              <details class="paper-abstract" open>
+                <summary>Abstract</summary>
+                ${abstractParas.map((p) => html`<p>${p}</p>`)}
+              </details>
+            `
+          : nothing}
+        ${plain
+          ? html`
+              <div class="citation-card">
+                <div class="citation-text">${plain}</div>
+                <div class="citation-buttons">
+                  <button @click=${(e) => this._copy(plain, e)}>Copy citation</button>
+                  <button @click=${(e) => this._copy(bibtex, e)}>Copy BibTeX</button>
+                  ${doiURL
+                    ? html`<button @click=${(e) => this._copy(doiURL, e)}>Copy DOI URL</button>`
+                    : nothing}
+                </div>
+              </div>
+            `
+          : nothing}
+      </header>
+    `;
+  }
+
+  _paperTitle(teiHeader, biblData) {
+    // Prefer titleStmt/title (canonical GROBID location); fall
+    // back to the analytic title in the biblStruct.
+    const ts = this._findDescendant(teiHeader, "titleStmt");
+    if (ts) {
+      const t = this._directChild(ts, "title");
+      if (t) return (t.textContent || "").trim();
+    }
+    if (biblData && biblData.analyticTitleText) return biblData.analyticTitleText;
+    return "";
+  }
+
+  _extractAbstract(teiHeader) {
+    const abs = this._findDescendant(teiHeader, "abstract");
+    if (!abs) return [];
+    const paras = [];
+    for (const child of abs.children) {
+      if (child.localName === "p") {
+        const t = (child.textContent || "").trim();
+        if (t) paras.push(t);
+      }
+    }
+    // Fallback: some GROBID output puts abstract text directly
+    // inside <abstract> without a <p> wrapper.
+    if (paras.length === 0) {
+      const t = (abs.textContent || "").trim();
+      if (t) paras.push(t);
+    }
+    return paras;
+  }
+
+  async _copy(text, event) {
+    try {
+      await navigator.clipboard.writeText(text);
+      const btn = event.currentTarget;
+      const orig = btn.textContent;
+      btn.textContent = "Copied";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1500);
+    } catch (e) {
+      alert("Copy failed: " + e.message);
+    }
+  }
+
+  // _formatPlainCitation composes a human-readable citation string
+  // from the biblStruct data. Same shape as the reference-list
+  // items but flattened to text — no HTML, so it copies cleanly
+  // into a chat / email.
+  _formatPlainCitation(title, data) {
+    const parts = [];
+    if (data.authors.length) parts.push(data.authors.join(", "));
+    if (data.year) parts.push(` (${data.year}).`);
+    else if (data.authors.length) parts.push(".");
+    if (title) parts.push(` ${title}.`);
+    if (data.monogrTitleText) parts.push(` ${data.monogrTitleText}`);
+    if (data.volume) {
+      let v = ` ${data.volume}`;
+      if (data.issue) v += `(${data.issue})`;
+      parts.push(v);
+    }
+    if (data.page) parts.push(`: ${data.page}`);
+    parts.push(".");
+    if (data.publisher) {
+      parts.push(` ${data.publisher}`);
+      if (data.pubPlace) parts.push(`, ${data.pubPlace}`);
+      parts.push(".");
+    }
+    if (data.doi) parts.push(` https://doi.org/${data.doi}`);
+    return parts.join("").trim();
+  }
+
+  // _formatBibTeX emits a BibTeX @article (or @book) entry from
+  // the biblStruct data. Values wrap in double braces to preserve
+  // scientific-name capitalization (BibTeX lowercases title-cased
+  // words by default in most bibliography styles). Author list
+  // joined with " and " per BibTeX convention.
+  _formatBibTeX(title, data) {
+    const kind = data.monogrTitleText ? "article" : "misc";
+    const firstAuthor = data.authors[0] || "unknown";
+    const firstAuthorKey = firstAuthor
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 20);
+    const key = `${firstAuthorKey}${data.year || ""}`;
+    const bibAuthors = data.authors
+      .map((a) => {
+        // "Smith AB" → "Smith, AB" for BibTeX's canonical form.
+        const parts = a.split(" ");
+        if (parts.length >= 2) {
+          const surname = parts.slice(0, -1).join(" ");
+          const initials = parts[parts.length - 1];
+          return `${surname}, ${initials}`;
+        }
+        return a;
+      })
+      .join(" and ");
+    const lines = [`@${kind}{${key},`];
+    if (bibAuthors) lines.push(`  author = {${bibAuthors}},`);
+    if (title) lines.push(`  title = {{${bibTexEscape(title)}}},`);
+    if (data.monogrTitleText)
+      lines.push(`  journal = {${bibTexEscape(data.monogrTitleText)}},`);
+    if (data.year) lines.push(`  year = {${data.year}},`);
+    if (data.volume) lines.push(`  volume = {${data.volume}},`);
+    if (data.issue) lines.push(`  number = {${data.issue}},`);
+    if (data.page) lines.push(`  pages = {${data.page.replace(/-/g, "--")}},`);
+    if (data.publisher)
+      lines.push(`  publisher = {${bibTexEscape(data.publisher)}},`);
+    if (data.pubPlace)
+      lines.push(`  address = {${bibTexEscape(data.pubPlace)}},`);
+    if (data.doi) lines.push(`  doi = {${data.doi}},`);
+    // Trim trailing comma on the last field for a slightly tidier
+    // entry, then close.
+    if (lines.length > 1) lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, "");
+    lines.push("}");
+    return lines.join("\n");
+  }
+
+  // _biblStructToData extracts the fields hive cares about from a
+  // GROBID biblStruct into a plain object. Shared by the header
+  // citation block and the reference-list formatter — the input
+  // shape is identical for the paper's own biblStruct in
+  // <teiHeader> and each cited reference in <back>.
+  _biblStructToData(el) {
+    const analytic = this._directChild(el, "analytic");
+    const monogr = this._directChild(el, "monogr");
+    const authorsFrom = analytic || monogr;
+    const authors = authorsFrom ? this._collectAuthors(authorsFrom) : [];
+    const year = monogr ? this._extractYear(monogr) : "";
+    const analyticTitle = analytic ? this._directChild(analytic, "title") : null;
+    const monogrTitle = monogr ? this._directChild(monogr, "title") : null;
+    const imprint = monogr ? this._directChild(monogr, "imprint") : null;
+    return {
+      analytic,
+      monogr,
+      analyticTitle,
+      analyticTitleText: analyticTitle ? (analyticTitle.textContent || "").trim() : "",
+      monogrTitle,
+      monogrTitleText: monogrTitle ? (monogrTitle.textContent || "").trim() : "",
+      authors,
+      year,
+      volume: this._extractBiblScope(imprint, "volume"),
+      issue: this._extractBiblScope(imprint, "issue"),
+      page: this._extractPage(imprint),
+      publisher: imprint ? this._directChildText(imprint, "publisher") : "",
+      pubPlace: imprint ? this._directChildText(imprint, "pubPlace") : "",
+      doi: this._extractIdno(el, "DOI"),
+    };
+  }
+
+  // _findDescendant walks a subtree looking for the first element
+  // with the given local name. Namespace-agnostic. Used to locate
+  // teiHeader-nested elements (titleStmt, biblStruct, abstract)
+  // without needing to hard-code the intermediate wrappers.
+  _findDescendant(root, localName) {
+    if (!root) return null;
+    const stack = [root];
+    while (stack.length) {
+      const el = stack.shift();
+      for (const child of el.children) {
+        if (child.localName === localName) return child;
+        stack.push(child);
+      }
+    }
+    return null;
   }
 
   // _renderNodes converts a NodeList into Lit-html templates,
@@ -519,56 +818,35 @@ class SfgaReader extends LitElement {
   // elide gracefully. Nested <tp:taxon-name> chips in titles are
   // preserved because titles render via _renderNodes recursion.
   _renderBiblStruct(el) {
-    const analytic = this._directChild(el, "analytic");
-    const monogr = this._directChild(el, "monogr");
-    // Authors: prefer analytic (article-level); fall back to
-    // monogr (book-level with no analytic wrapper).
-    const authorsFrom = analytic || monogr;
-    const authors = authorsFrom
-      ? this._collectAuthors(authorsFrom)
-      : [];
-    const year = monogr ? this._extractYear(monogr) : "";
-    const analyticTitle =
-      analytic ? this._directChild(analytic, "title") : null;
-    const monogrTitle =
-      monogr ? this._directChild(monogr, "title") : null;
-    const imprint = monogr ? this._directChild(monogr, "imprint") : null;
-    const volume = this._extractBiblScope(imprint, "volume");
-    const issue = this._extractBiblScope(imprint, "issue");
-    const page = this._extractPage(imprint);
-    const publisher = imprint ? this._directChildText(imprint, "publisher") : "";
-    const pubPlace = imprint ? this._directChildText(imprint, "pubPlace") : "";
-    const doi = this._extractIdno(el, "DOI");
+    const d = this._biblStructToData(el);
     // Compose. Each segment renders only when it has content;
     // punctuation between segments joins conditionally so
     // omitted fields don't leave stranded commas or periods.
     const parts = [];
-    if (authors.length) parts.push(html`${authors.join(", ")}`);
-    if (year) parts.push(html` (${year}).`);
-    else if (authors.length) parts.push(html`.`);
-    if (analyticTitle) {
-      parts.push(html` ${this._renderNodes(analyticTitle.childNodes)}.`);
+    if (d.authors.length) parts.push(html`${d.authors.join(", ")}`);
+    if (d.year) parts.push(html` (${d.year}).`);
+    else if (d.authors.length) parts.push(html`.`);
+    if (d.analyticTitle) {
+      parts.push(html` ${this._renderNodes(d.analyticTitle.childNodes)}.`);
     }
-    if (monogrTitle) {
-      // Journal titles italicize; book titles also italicize (both
-      // use the same visual convention in most scientific styles).
-      parts.push(html` <i>${this._renderNodes(monogrTitle.childNodes)}</i>`);
+    if (d.monogrTitle) {
+      parts.push(html` <i>${this._renderNodes(d.monogrTitle.childNodes)}</i>`);
     }
-    if (volume) {
-      let volPart = ` ${volume}`;
-      if (issue) volPart += `(${issue})`;
+    if (d.volume) {
+      let volPart = ` ${d.volume}`;
+      if (d.issue) volPart += `(${d.issue})`;
       parts.push(volPart);
     }
-    if (page) parts.push(`: ${page}`);
+    if (d.page) parts.push(`: ${d.page}`);
     parts.push(".");
-    if (publisher) {
-      parts.push(` ${publisher}`);
-      if (pubPlace) parts.push(`, ${pubPlace}`);
+    if (d.publisher) {
+      parts.push(` ${d.publisher}`);
+      if (d.pubPlace) parts.push(`, ${d.pubPlace}`);
       parts.push(".");
     }
-    if (doi) {
-      const doiURL = `https://doi.org/${doi}`;
-      parts.push(html` <a href=${doiURL} target="_blank" rel="noopener">doi:${doi}</a>`);
+    if (d.doi) {
+      const doiURL = `https://doi.org/${d.doi}`;
+      parts.push(html` <a href=${doiURL} target="_blank" rel="noopener">doi:${d.doi}</a>`);
     }
     return html`${parts}`;
   }
@@ -665,6 +943,20 @@ class SfgaReader extends LitElement {
     }
     return "";
   }
+}
+
+// bibTexEscape escapes BibTeX value special characters so
+// pasted-into-.bib output doesn't parse-fail. Curly braces would
+// close the value's outer brace early; backslash / percent /
+// ampersand / hash / underscore / tilde are BibTeX-reserved and
+// need escaping via backslash. Scientific-name titles rarely
+// trigger any of these, but a defensive escape keeps output
+// robust across GROBID's variety.
+function bibTexEscape(s) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/[{}]/g, "\\$&")
+    .replace(/[&%#_~$]/g, "\\$&");
 }
 
 customElements.define("sfga-reader", SfgaReader);
