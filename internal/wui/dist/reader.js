@@ -399,6 +399,12 @@ class SfgaReader extends LitElement {
         out.push(html`<h2>${this._renderNodes(node.childNodes)}</h2>`);
         continue;
       }
+      // GROBID emits <label>N</label> next to <head>Figure N .</head>
+      // and <head>Table N .</head> — the number in the label just
+      // duplicates the number already in the head text. Suppress.
+      if (local === "label") {
+        continue;
+      }
       if (local === "p") {
         out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
         continue;
