@@ -1045,6 +1045,24 @@ type apiReferenceUpload struct {
 	TEIStatus      string              `json:"tei_status"`
 	DOI            string              `json:"doi,omitempty"`
 	Metadata       *apiUploadBibHeader `json:"metadata,omitempty"`
+	// AnnotationStatus reports what happened during the follow-on
+	// GNfinder + GNverifier pass that produces augmented TaxPub XML
+	// stored at <sha>.taxpub.xml. Values:
+	//
+	//	"annotated"      — augmented XML generated and stored
+	//	"skipped"        — no TEI was available (upstream GROBID
+	//	                   failed or was skipped for a non-PDF)
+	//	"already_exists" — dedup hit and augmented XML was already on
+	//	                   disk from a prior upload
+	//	"failed"         — annotation pass errored; upload still
+	//	                   succeeded, curator can retry later
+	//
+	// AnnotationNameCount is the number of <tp:taxon-name> elements
+	// in the augmented XML (raw hit count from GNfinder; not de-
+	// duplicated). Present when status == "annotated" or
+	// "already_exists".
+	AnnotationStatus    string `json:"annotation_status,omitempty"`
+	AnnotationNameCount int    `json:"annotation_name_count,omitempty"`
 }
 
 // apiUploadBibHeader mirrors grobid.BibHeader on the wire — the

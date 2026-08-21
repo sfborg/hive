@@ -21,6 +21,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/annotator"
 	"github.com/sfborg/hive/pkg/grobid"
 	"github.com/sfborg/hive/internal/wui"
 )
@@ -87,6 +88,11 @@ func Run(archivePath string, opts Options) error {
 	if url := os.Getenv("HIVE_GROBID_URL"); url != "" {
 		s.grobid = grobid.NewClient(url)
 	}
+	// Annotator (GNfinder + GNverifier). Cheap to construct; the
+	// expensive dictionary + Bayes-weight load happens on the first
+	// annotation call so a hive process that never receives a PDF
+	// upload doesn't pay the cost.
+	s.annotator = annotator.New()
 	mux := s.routes()
 
 	// Static WUI served from internal/wui/dist embed. The API routes above

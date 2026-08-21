@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/annotator"
 	"github.com/sfborg/hive/pkg/grobid"
 	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
@@ -35,6 +38,11 @@ type server struct {
 	// service up and re-triggering the pipeline. See
 	// pkg/grobid/grobid.go and REFERENCE_PDF_PLAN.md.
 	grobid *grobid.Client
+	// annotator wraps GNfinder + GNverifier. Loaded lazily on the
+	// first upload so a hive process that never sees a PDF doesn't
+	// pay the several-MB dictionary + Bayes-weight load cost. One
+	// instance per server (thread-safe under the sync.Once inside).
+	annotator *annotator.Annotator
 }
 
 func (s *server) routes() *http.ServeMux {
@@ -139,6 +147,7 @@ func (s *server) routes() *http.ServeMux {
 	// form. Content-Type is derived from the extension recorded in
 	// the sidecar's meta.json.
 	mux.HandleFunc("GET /api/reference/library/{sha}/source", s.handleReferenceLibrarySource)
+	mux.HandleFunc("GET /api/reference/library/{sha}/taxpub", s.handleReferenceLibraryTaxpub)
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
@@ -2751,16 +2760,75 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// DOI (for auto-hop to the DOI tab) and the full header
 	// metadata (for the Manual-tab fallback).
 	teiStatus, doi, meta := s.tryGrobidConvert(r.Context(), res, ext)
+	annotStatus, annotCount := s.tryAnnotate(r.Context(), res, teiStatus)
 
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
-		SHA512:         res.SHA512,
-		Ext:            res.Ext,
-		Size:           res.Size,
-		AlreadyExisted: res.AlreadyExisted,
-		TEIStatus:      teiStatus,
-		DOI:            doi,
-		Metadata:       meta,
+		SHA512:              res.SHA512,
+		Ext:                 res.Ext,
+		Size:                res.Size,
+		AlreadyExisted:      res.AlreadyExisted,
+		TEIStatus:           teiStatus,
+		DOI:                 doi,
+		Metadata:            meta,
+		AnnotationStatus:    annotStatus,
+		AnnotationNameCount: annotCount,
 	})
+}
+
+// tryAnnotate runs the GNfinder + GNverifier pass over the just-
+// generated (or previously-cached) TEI and stores the resulting
+// TaxPub-augmented XML at <sha>.taxpub.xml. Runs synchronously
+// after tryGrobidConvert; while it adds a few seconds to upload
+// latency, the GROBID pass upstream already dominates that time
+// and having the augmented XML on disk unblocks every downstream
+// reader / feedback / corpus-query path without on-demand work.
+//
+// Skips when there's no TEI (non-PDF upload, GROBID unavailable),
+// dedups when the augmented XML already exists on disk. Errors
+// don't propagate to the upload response — the raw source and TEI
+// are still stored, and the curator can retry the annotation pass
+// separately.
+func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, teiStatus string) (string, int) {
+	if teiStatus != "stored" {
+		return "skipped", 0
+	}
+	if s.annotator == nil {
+		return "skipped", 0
+	}
+	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "taxpub.xml"); err == nil && existing != nil {
+		return "already_exists", countTaxonNameElements(existing)
+	}
+	tei, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml")
+	if err != nil || tei == nil {
+		return "failed", 0
+	}
+	augmented, err := s.annotator.Annotate(ctx, tei)
+	if err != nil {
+		return "failed", 0
+	}
+	if err := sidecar.Store(s.archivePath, res.SHA512, "taxpub.xml", augmented); err != nil {
+		return "failed", 0
+	}
+	return "annotated", countTaxonNameElements(augmented)
+}
+
+// countTaxonNameElements returns the number of <tp:taxon-name>
+// StartElement tokens in the augmented XML. Cheap — a single-pass
+// token scan, no full DOM. Reported to the WUI so the upload
+// response can hint at how much augmentation happened without the
+// WUI having to fetch and parse the augmented XML.
+func countTaxonNameElements(augmented []byte) int {
+	dec := xml.NewDecoder(bytes.NewReader(augmented))
+	n := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return n
+		}
+		if se, ok := tok.(xml.StartElement); ok && se.Name.Local == "taxon-name" {
+			n++
+		}
+	}
 }
 
 // tryGrobidConvert runs the freshly-uploaded PDF through GROBID
@@ -2898,6 +2966,31 @@ func (s *server) handleReferenceLibrarySource(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`inline; filename="%s.%s"`, sha, meta.Ext))
 	http.ServeContent(w, r, info.Name(), meta.UploadedAt, f)
+}
+
+// handleReferenceLibraryTaxpub streams the TaxPub-augmented XML
+// produced by the annotator (GNfinder + GNverifier) and stored
+// alongside the raw source at <sha>.taxpub.xml. Consumers: the
+// future reader UI, corpus-scale analysis, curator eyeballing via
+// curl. Returns 404 when no augmented XML exists (upload happened
+// but annotation was skipped or failed).
+func (s *server) handleReferenceLibraryTaxpub(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha")
+	if sha == "" {
+		writeBadRequest(w, r, "sha required")
+		return
+	}
+	data, err := sidecar.Read(s.archivePath, sha, "taxpub.xml")
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if data == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Write(data)
 }
 
 // handleParseName runs gnparser on a verbatim scientific name and returns
