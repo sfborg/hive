@@ -41,6 +41,12 @@ class SfgaReader extends LitElement {
     _doc: { state: true },
     _sha: { state: true },
     _showExpanded: { state: true },
+    // Side-by-side PDF pane: when enabled, the PDF loads on the
+    // left half of the viewport and the reader text on the right,
+    // so a curator can eyeball the source next to the augmented
+    // text (verify a chip's expansion, check for content GROBID
+    // dropped, spot-check the reading order).
+    _showPDF: { state: true },
   };
 
   static styles = css`
@@ -82,6 +88,32 @@ class SfgaReader extends LitElement {
       cursor: pointer;
       font-size: var(--fs-sm);
       color: var(--dim);
+    }
+    /* Layout modes: single-column reader by default (article max-
+       width centered); split when the PDF pane is visible (two
+       equal columns filling the viewport height below the sticky
+       header). The article in split mode drops its centered max-
+       width so the text can breathe in the narrower column. */
+    .layout {
+      display: block;
+    }
+    .layout.split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      height: calc(100vh - 3rem);
+      gap: 0;
+    }
+    .layout.split article {
+      max-width: none;
+      overflow: auto;
+      padding: var(--sp-4);
+      margin: 0;
+    }
+    .layout.split .pdf {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-right: 1px solid var(--border);
     }
     article {
       max-width: 44rem;
@@ -199,6 +231,7 @@ class SfgaReader extends LitElement {
     this._error = "";
     this._doc = null;
     this._showExpanded = false;
+    this._showPDF = false;
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -262,13 +295,34 @@ class SfgaReader extends LitElement {
             />
             Expand abbreviations
           </label>
+          <label>
+            <input
+              type="checkbox"
+              .checked=${this._showPDF}
+              @change=${(e) => (this._showPDF = e.target.checked)}
+            />
+            Show PDF
+          </label>
         </div>
       </header>
       ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}
       ${this._error
         ? html`<p class="error" role="alert">${this._error}</p>`
         : nothing}
-      ${this._doc ? this._renderBody() : nothing}
+      ${this._doc
+        ? html`
+            <div class=${"layout" + (this._showPDF ? " split" : "")}>
+              ${this._showPDF
+                ? html`<iframe
+                    class="pdf"
+                    src=${`/api/reference/library/${encodeURIComponent(this._sha)}/source#page=1`}
+                    title="Source PDF"
+                  ></iframe>`
+                : nothing}
+              ${this._renderBody()}
+            </div>
+          `
+        : nothing}
     `;
   }
 

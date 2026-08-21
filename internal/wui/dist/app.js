@@ -10747,7 +10747,7 @@ class SfgaAddReferenceModal extends LitElement {
             <div class="header-actions">
               ${this._uploadResult &&
               this._uploadResult.sha512 &&
-              this._uploadResult.annotation_status === "annotated"
+              this._uploadResult.annotation_name_count > 0
                 ? html`<button
                     type="button"
                     @click=${() =>
