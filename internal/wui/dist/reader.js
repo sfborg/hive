@@ -334,22 +334,27 @@ class SfgaReader extends LitElement {
   // are also skipped for the same reason (references have their
   // own curator UI).
   _renderBody() {
-    const bodies = this._doc.getElementsByTagNameNS(
-      "http://www.tei-c.org/ns/1.0",
-      "body",
-    );
-    if (bodies.length === 0) {
-      // Fall back to any <body> in any namespace — GROBID output
-      // sometimes lands in an unexpected namespace after our
-      // encoding/xml round-trip. Any body will do; we just skip
-      // the <back> reference-list under it.
-      const anyBodies = this._doc.getElementsByTagName("body");
-      if (anyBodies.length === 0) {
+    const teiNS = "http://www.tei-c.org/ns/1.0";
+    const text =
+      this._doc.getElementsByTagNameNS(teiNS, "text")[0] ||
+      this._doc.getElementsByTagName("text")[0];
+    if (!text) {
+      // No <text> wrapper — fall back to <body> alone.
+      const bodies =
+        this._doc.getElementsByTagNameNS(teiNS, "body").length > 0
+          ? this._doc.getElementsByTagNameNS(teiNS, "body")
+          : this._doc.getElementsByTagName("body");
+      if (bodies.length === 0) {
         return html`<p class="empty">document has no &lt;body&gt; content</p>`;
       }
-      return html`<article>${this._renderNodes(anyBodies[0].childNodes)}</article>`;
+      return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
     }
-    return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
+    // Render <body> and <back>'s non-reference contents in document
+    // order. <back> in TEI/GROBID holds acknowledgements, funding,
+    // author contributions, annexes AND the reference list — only
+    // the references div gets filtered because references have
+    // their own curator UI.
+    return html`<article>${this._renderNodes(text.childNodes)}</article>`;
   }
 
   // _renderNodes converts a NodeList into Lit-html templates,
@@ -365,8 +370,17 @@ class SfgaReader extends LitElement {
       }
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
       const local = node.localName;
-      // Reference-list under <back>: skip. Not part of reading flow.
-      if (local === "back") continue;
+      // <back> in TEI/GROBID holds acknowledgements, funding
+      // statements, author contributions, annexes AND the
+      // reference list. Recurse into it, but skip the references
+      // div specifically — those have their own curator UI.
+      if (local === "back") {
+        out.push(this._renderNodes(node.childNodes));
+        continue;
+      }
+      if (local === "div" && node.getAttribute("type") === "references") {
+        continue;
+      }
       // <tp:taxon-name> — the annotated chip.
       if (
         (node.namespaceURI === TAXPUB_NS || node.prefix === "tp") &&
