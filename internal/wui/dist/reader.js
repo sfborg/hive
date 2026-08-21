@@ -349,11 +349,12 @@ class SfgaReader extends LitElement {
       }
       return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
     }
-    // Render <body> and <back>'s non-reference contents in document
-    // order. <back> in TEI/GROBID holds acknowledgements, funding,
-    // author contributions, annexes AND the reference list — only
-    // the references div gets filtered because references have
-    // their own curator UI.
+    // Render <body> and <back> contents in document order — the
+    // reader shows the whole paper (introduction through
+    // references + acknowledgements). The DOI-from-references
+    // guard against picking a cited-work DOI as the paper's own
+    // DOI lives elsewhere (pkg/grobid.ExtractDOI, scoped to
+    // <teiHeader>) so it doesn't need a filter here.
     return html`<article>${this._renderNodes(text.childNodes)}</article>`;
   }
 
@@ -371,14 +372,10 @@ class SfgaReader extends LitElement {
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
       const local = node.localName;
       // <back> in TEI/GROBID holds acknowledgements, funding
-      // statements, author contributions, annexes AND the
-      // reference list. Recurse into it, but skip the references
-      // div specifically — those have their own curator UI.
+      // statements, author contributions, annexes, and the
+      // reference list. Recurse — all of it belongs in the reader.
       if (local === "back") {
         out.push(this._renderNodes(node.childNodes));
-        continue;
-      }
-      if (local === "div" && node.getAttribute("type") === "references") {
         continue;
       }
       // <tp:taxon-name> — the annotated chip.
