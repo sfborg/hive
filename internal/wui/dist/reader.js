@@ -486,8 +486,8 @@ class SfgaReader extends LitElement {
                 <div class="citation-text">${plain}</div>
                 <div class="citation-buttons">
                   <button @click=${(e) => this._copy(plain, e)}>Copy citation</button>
-                  <button @click=${(e) => this._copy(bibtex, e)}>Copy BibTeX</button>
                   <button @click=${(e) => this._copy(cslJSON, e)}>Copy CSL-JSON</button>
+                  <button @click=${(e) => this._copy(bibtex, e)}>Copy BibTeX</button>
                   ${doiURL
                     ? html`<button @click=${(e) => this._copy(doiURL, e)}>Copy DOI URL</button>`
                     : nothing}
