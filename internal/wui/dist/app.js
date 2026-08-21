@@ -10745,6 +10745,21 @@ class SfgaAddReferenceModal extends LitElement {
               ${this.editID ? "Edit reference" : "Add reference"}
             </h3>
             <div class="header-actions">
+              ${this._uploadResult &&
+              this._uploadResult.sha512 &&
+              this._uploadResult.annotation_status === "annotated"
+                ? html`<button
+                    type="button"
+                    @click=${() =>
+                      window.open(
+                        `/read.html?sha=${encodeURIComponent(this._uploadResult.sha512)}`,
+                        "_blank",
+                      )}
+                    title="Open the annotated reader in a new window (${this._uploadResult.annotation_name_count} names detected)"
+                  >
+                    Reader ↗
+                  </button>`
+                : ""}
               ${this._uploadResult && this._uploadResult.sha512
                 ? html`<button
                     type="button"

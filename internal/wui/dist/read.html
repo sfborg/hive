@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hive · reader</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/hive-brain.svg" />
+    <link rel="stylesheet" href="/styles.css" />
+    <!--
+      Standalone reader page — no sfga-app, no sidebar, no route
+      hooks. Loaded either via the top-level route (curator navigates
+      to it directly) or via window.open() from a reference detail
+      view as a popout. Reads ?sha=... from the query string.
+    -->
+  </head>
+  <body>
+    <sfga-reader></sfga-reader>
+    <script type="module" src="/reader.js"></script>
+  </body>
+</html>

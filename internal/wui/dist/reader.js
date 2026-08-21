@@ -1,0 +1,362 @@
+/**
+ * hive WUI — augmented-JATS reader.
+ *
+ * Standalone page that renders the TaxPub-augmented XML produced by
+ * pkg/annotator for a given PDF upload. Curator opens the reader
+ * either by navigating to /read.html?sha=... directly or via a
+ * popout from a reference detail view. Popout is the multi-monitor
+ * use case — a separate browser window lets curators park the
+ * reader on one screen and their curation UI on another.
+ *
+ * Rendering: parses the augmented XML into a DOM, walks the
+ * <text><body> subtree, and emits readable HTML with each
+ * <tp:taxon-name> element rendered as a styled chip. Chip color
+ * (green / amber / orange / red) reflects the gn:source attribute
+ * from the annotator's abbreviation-expansion pass — verified,
+ * ambiguous, unverified, unresolved.
+ *
+ * Interactions:
+ *   - "Expand abbreviations" toggle swaps abbreviated chip text
+ *     for the resolved full-name attribute across the whole
+ *     document. Reader-side only; underlying XML unchanged.
+ *   - Chip tooltip shows the resolved full-name plus a status hint.
+ *
+ * No sfga-app dependency — this page is intentionally decoupled so
+ * a curator can pop it out into another window / monitor without
+ * dragging the main SPA along.
+ */
+
+import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
+
+// TaxPub + GN namespaces from pkg/annotator. Kept in sync manually
+// since Go and JS can't share constants — if these ever change,
+// update both places (pkg/annotator/annotator.go and here).
+const TAXPUB_NS = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0";
+const GN_NS = "https://hive.sfborg.org/ns/gn/1.0";
+
+class SfgaReader extends LitElement {
+  static properties = {
+    _busy: { state: true },
+    _error: { state: true },
+    _doc: { state: true },
+    _sha: { state: true },
+    _showExpanded: { state: true },
+  };
+
+  static styles = css`
+    :host {
+      display: block;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+    }
+    header {
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: var(--sp-2) var(--sp-4);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--sp-2);
+      z-index: 1;
+    }
+    header h1 {
+      margin: 0;
+      font-size: var(--fs-md);
+      color: var(--dim);
+      font-weight: 400;
+      font-family: var(--font-mono);
+    }
+    .controls {
+      display: flex;
+      gap: var(--sp-2);
+      align-items: center;
+    }
+    .controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      cursor: pointer;
+      font-size: var(--fs-sm);
+      color: var(--dim);
+    }
+    article {
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: var(--sp-4) var(--sp-6) var(--sp-8);
+      font-size: var(--fs-md);
+      line-height: 1.6;
+    }
+    article h2 {
+      font-size: var(--fs-lg);
+      margin-top: var(--sp-6);
+      margin-bottom: var(--sp-2);
+      color: var(--fg);
+    }
+    article p {
+      margin: var(--sp-2) 0;
+    }
+    /* Chip styling per gn:source. Verified is the confident state
+       (accent-tinted); ambiguous / unverified sit in the middle
+       (amber / orange); unresolved is red. Untagged chips (plain
+       full-form names GNfinder detected) get a subtle underline —
+       "we found this" without a color claim about the resolution. */
+    .taxon-name {
+      display: inline;
+      padding: 0.05rem 0.3rem;
+      border-radius: 3px;
+      border: 1px solid transparent;
+      cursor: help;
+      font-style: italic;
+    }
+    .taxon-name.plain {
+      border-bottom-color: var(--dim);
+      border-bottom-style: dashed;
+    }
+    .taxon-name.verified {
+      background: color-mix(in oklab, var(--sev-info) 15%, transparent);
+      border-color: color-mix(in oklab, var(--sev-info) 40%, transparent);
+    }
+    .taxon-name.ambiguous {
+      background: color-mix(in oklab, var(--sev-warn) 15%, transparent);
+      border-color: color-mix(in oklab, var(--sev-warn) 40%, transparent);
+    }
+    .taxon-name.unverified {
+      background: color-mix(in oklab, var(--sev-warn) 15%, transparent);
+      border-color: color-mix(in oklab, var(--sev-warn) 40%, transparent);
+    }
+    .taxon-name.unresolved {
+      background: color-mix(in oklab, var(--sev-error) 15%, transparent);
+      border-color: color-mix(in oklab, var(--sev-error) 40%, transparent);
+    }
+    .empty,
+    .error {
+      color: var(--dim);
+      font-style: italic;
+      padding: var(--sp-4);
+      text-align: center;
+    }
+    .error {
+      color: var(--error);
+      font-style: normal;
+      font-family: var(--font-mono);
+    }
+    .legend {
+      display: flex;
+      gap: var(--sp-2);
+      font-size: var(--fs-xs);
+      color: var(--dim);
+      flex-wrap: wrap;
+    }
+    .legend .swatch {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+    }
+    .legend .dot {
+      display: inline-block;
+      width: 0.7rem;
+      height: 0.7rem;
+      border-radius: 2px;
+    }
+    .legend .dot.verified {
+      background: color-mix(in oklab, var(--sev-info) 40%, transparent);
+    }
+    .legend .dot.ambiguous {
+      background: color-mix(in oklab, var(--sev-warn) 40%, transparent);
+    }
+    .legend .dot.unresolved {
+      background: color-mix(in oklab, var(--sev-error) 40%, transparent);
+    }
+  `;
+
+  constructor() {
+    super();
+    this._busy = false;
+    this._error = "";
+    this._doc = null;
+    this._showExpanded = false;
+    const params = new URLSearchParams(location.search);
+    this._sha = params.get("sha") || "";
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this._sha) {
+      this._error = "no ?sha= parameter — nothing to read";
+      return;
+    }
+    this._load();
+  }
+
+  async _load() {
+    this._busy = true;
+    this._error = "";
+    try {
+      const res = await fetch(
+        `/api/reference/library/${encodeURIComponent(this._sha)}/taxpub`,
+      );
+      if (res.status === 404) {
+        this._error = "no augmented XML for this reference — either the upload predated the annotator or the annotation pass failed";
+        return;
+      }
+      if (!res.ok) {
+        this._error = `fetch failed: HTTP ${res.status}`;
+        return;
+      }
+      const xmlText = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, "application/xml");
+      const err = doc.querySelector("parsererror");
+      if (err) {
+        this._error = "XML parse error: " + err.textContent;
+        return;
+      }
+      this._doc = doc;
+      document.title = `hive · reader · ${this._sha.slice(0, 12)}`;
+    } catch (e) {
+      this._error = String(e);
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  render() {
+    return html`
+      <header>
+        <h1>${this._sha ? this._sha.slice(0, 16) + "…" : "(no sha)"}</h1>
+        <div class="controls">
+          <div class="legend" aria-label="chip legend">
+            <span class="swatch"><span class="dot verified"></span> verified</span>
+            <span class="swatch"><span class="dot ambiguous"></span> ambiguous / unverified</span>
+            <span class="swatch"><span class="dot unresolved"></span> unresolved</span>
+          </div>
+          <label>
+            <input
+              type="checkbox"
+              .checked=${this._showExpanded}
+              @change=${(e) => (this._showExpanded = e.target.checked)}
+            />
+            Expand abbreviations
+          </label>
+        </div>
+      </header>
+      ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}
+      ${this._error
+        ? html`<p class="error" role="alert">${this._error}</p>`
+        : nothing}
+      ${this._doc ? this._renderBody() : nothing}
+    `;
+  }
+
+  // _renderBody walks the TEI <text><body> subtree of the augmented
+  // document, converting known elements to their HTML equivalents.
+  // Anything outside <text> (the header, sourceDesc, encoding
+  // metadata) is skipped — the reader is for paper text, not
+  // machine-readable metadata. Reference-list divs inside <back>
+  // are also skipped for the same reason (references have their
+  // own curator UI).
+  _renderBody() {
+    const bodies = this._doc.getElementsByTagNameNS(
+      "http://www.tei-c.org/ns/1.0",
+      "body",
+    );
+    if (bodies.length === 0) {
+      // Fall back to any <body> in any namespace — GROBID output
+      // sometimes lands in an unexpected namespace after our
+      // encoding/xml round-trip. Any body will do; we just skip
+      // the <back> reference-list under it.
+      const anyBodies = this._doc.getElementsByTagName("body");
+      if (anyBodies.length === 0) {
+        return html`<p class="empty">document has no &lt;body&gt; content</p>`;
+      }
+      return html`<article>${this._renderNodes(anyBodies[0].childNodes)}</article>`;
+    }
+    return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
+  }
+
+  // _renderNodes converts a NodeList into Lit-html templates,
+  // dispatching per element/text kind. Recursive: element children
+  // render via the same function so nested content (div > p > span)
+  // survives.
+  _renderNodes(nodes) {
+    const out = [];
+    for (const node of nodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out.push(node.textContent);
+        continue;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      const local = node.localName;
+      // Reference-list under <back>: skip. Not part of reading flow.
+      if (local === "back") continue;
+      // <tp:taxon-name> — the annotated chip.
+      if (
+        (node.namespaceURI === TAXPUB_NS || node.prefix === "tp") &&
+        local === "taxon-name"
+      ) {
+        out.push(this._renderTaxonName(node));
+        continue;
+      }
+      if (local === "head") {
+        out.push(html`<h2>${this._renderNodes(node.childNodes)}</h2>`);
+        continue;
+      }
+      if (local === "p") {
+        out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
+        continue;
+      }
+      if (local === "div") {
+        out.push(html`<section>${this._renderNodes(node.childNodes)}</section>`);
+        continue;
+      }
+      // Unknown element — pass through its children so we don't
+      // silently drop content. Loses semantic wrapping but preserves
+      // text; better than a blank spot in the reader.
+      out.push(this._renderNodes(node.childNodes));
+    }
+    return out;
+  }
+
+  _renderTaxonName(el) {
+    const original = el.textContent || "";
+    const fullName = el.getAttribute("full-name") || "";
+    // gn:source lives in the GN namespace; access via getAttributeNS
+    // so a re-encoded document with different prefix still resolves.
+    const source =
+      el.getAttributeNS(GN_NS, "source") ||
+      el.getAttribute("gn:source") ||
+      el.getAttribute("source") ||
+      "";
+    const score =
+      el.getAttributeNS(GN_NS, "score") ||
+      el.getAttribute("gn:score") ||
+      el.getAttribute("score") ||
+      "";
+    const candidates =
+      el.getAttributeNS(GN_NS, "candidates") ||
+      el.getAttribute("gn:candidates") ||
+      el.getAttribute("candidates") ||
+      "";
+    const cls = source || "plain";
+    const isAbbrev = /^[A-Za-z]{1,3}\.\s/.test(original);
+    const display =
+      this._showExpanded && isAbbrev && fullName ? fullName : original;
+    let title = fullName || original;
+    if (source === "verified" && score) title += ` (verified · score ${score})`;
+    else if (source === "ambiguous") title += ` (ambiguous · candidates: ${candidates})`;
+    else if (source === "unverified") title += ` (unverified)`;
+    else if (source === "unresolved") title += ` (unresolved abbreviation)`;
+    return html`<span
+      class="taxon-name ${cls}"
+      title=${title}
+      data-full-name=${fullName}
+      >${display}</span
+    >`;
+  }
+}
+
+customElements.define("sfga-reader", SfgaReader);
