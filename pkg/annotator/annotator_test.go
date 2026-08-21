@@ -244,6 +244,39 @@ func TestExpandAbbreviationsUnverified(t *testing.T) {
 	}
 }
 
+// TestExpandAbbreviationsFromUninomial — a paper introduces the
+// genus as a standalone uninomial ("the genus Coccus") and then
+// switches to abbreviated binomials. The uninomial should be a
+// valid candidate source for the expansion.
+func TestExpandAbbreviationsFromUninomial(t *testing.T) {
+	augmented := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0" xmlns:tp="` + TaxPubNamespace + `">
+  <text><body>
+    <p>The genus <tp:taxon-name full-name="Coccus">Coccus</tp:taxon-name>
+       contains <tp:taxon-name full-name="C. bus">C. bus</tp:taxon-name>
+       and <tp:taxon-name full-name="C. dus">C. dus</tp:taxon-name>.</p>
+  </body></text>
+</TEI>`)
+	a := New()
+	a.SetVerifier(&stubVerifier{
+		verified: map[string]bool{
+			"Coccus bus": true,
+			"Coccus dus": true,
+		},
+	})
+	out, err := a.ExpandAbbreviations(context.Background(), augmented)
+	if err != nil {
+		t.Fatalf("ExpandAbbreviations: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `full-name="Coccus bus"`) {
+		t.Errorf("expected C. bus expanded to Coccus bus:\n%s", s)
+	}
+	if !strings.Contains(s, `full-name="Coccus dus"`) {
+		t.Errorf("expected C. dus expanded to Coccus dus:\n%s", s)
+	}
+}
+
 func TestExpansionCandidates(t *testing.T) {
 	full := map[string]bool{"Culex": true, "Culicoides": true, "Chionaspis": true}
 	got := expansionCandidates("C. pipiens", full)

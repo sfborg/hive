@@ -374,10 +374,18 @@ func (a *Annotator) ExpandAbbreviations(ctx context.Context, augmented []byte) (
 }
 
 // collectNames does a single pass over the augmented XML gathering
-// two things: the set of full-form genera (first tokens of any
-// binomial+ whose first token isn't itself abbreviated) and the set
-// of abbreviated full-name attribute values that need expansion.
-// Uninomial full-name values are ignored — they're already resolved.
+// two things: the set of candidate full-form genera and the set of
+// abbreviated full-name attribute values that need expansion.
+//
+// Candidate genera come from any full-form (non-abbreviated) name
+// GNfinder detected — binomials contribute their first token, and
+// uninomials contribute themselves as-is. Including uninomials
+// matters for papers that introduce a genus without an accompanying
+// species ("the genus Coccus") before switching to abbreviated
+// binomials ("C. bus", "C. dus"). GNverifier filters out non-genera
+// (family / suborder / higher-taxon uninomials) at candidate-
+// verification time by simply not resolving "Coccidae bus" as a
+// valid binomial, so false positives cost nothing.
 func collectNames(augmented []byte) (fullGenera map[string]bool, abbrevs map[string]bool, err error) {
 	fullGenera = make(map[string]bool)
 	abbrevs = make(map[string]bool)
@@ -417,6 +425,13 @@ func collectNames(augmented []byte) (fullGenera map[string]bool, abbrevs map[str
 		}
 		if len(parts) >= 2 {
 			// Binomial+: first token is a full-form genus.
+			fullGenera[firstToken] = true
+		} else if firstToken != "" {
+			// Uninomial: use as-is. Might be a genus, family, or
+			// higher taxon — GNverifier's candidate-verification
+			// pass filters out non-genera because family+ names
+			// don't combine with a specific epithet to make a
+			// valid binomial.
 			fullGenera[firstToken] = true
 		}
 	}
