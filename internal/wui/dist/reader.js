@@ -99,6 +99,26 @@ class SfgaReader extends LitElement {
     article p {
       margin: var(--sp-2) 0;
     }
+    /* Fallback wrapper for GROBID elements without a specific
+       renderer (figure, table, unknown). Gives content basic block
+       layout so it doesn't collapse into an inline run beside
+       siblings. Kept visually neutral — no borders or shading — so
+       misclassified prose reads as prose. */
+    article .passthrough {
+      margin: var(--sp-2) 0;
+    }
+    article ul {
+      margin: var(--sp-2) 0;
+      padding-left: var(--sp-4);
+    }
+    article li {
+      margin: var(--sp-1) 0;
+    }
+    /* Inline reference citations ("(Doe 2020)"). Dimmer than body
+       text so they read as parenthetical. */
+    article .cite {
+      color: var(--dim);
+    }
     /* Chip styling per gn:source. Verified is the confident state
        (accent-tinted); ambiguous / unverified sit in the middle
        (amber / orange); unresolved is red. Untagged chips (plain
@@ -313,10 +333,34 @@ class SfgaReader extends LitElement {
         out.push(html`<section>${this._renderNodes(node.childNodes)}</section>`);
         continue;
       }
-      // Unknown element — pass through its children so we don't
-      // silently drop content. Loses semantic wrapping but preserves
-      // text; better than a blank spot in the reader.
-      out.push(this._renderNodes(node.childNodes));
+      // GROBID often misclassifies dense passages (species lists,
+      // synonymy sections, taxonomic keys) as <figure>. Render them
+      // as blocks so the text stays visible instead of collapsing
+      // into an inline run alongside siblings.
+      if (local === "figure" || local === "figDesc" || local === "table") {
+        out.push(html`<div class="passthrough">${this._renderNodes(node.childNodes)}</div>`);
+        continue;
+      }
+      if (local === "list") {
+        out.push(html`<ul>${this._renderNodes(node.childNodes)}</ul>`);
+        continue;
+      }
+      if (local === "item") {
+        out.push(html`<li>${this._renderNodes(node.childNodes)}</li>`);
+        continue;
+      }
+      // Cited-reference marker inside body text. Render inline —
+      // "as seen in (Doe 2020)" — so it flows with surrounding
+      // sentence text. Passthrough of children preserves any nested
+      // <tp:taxon-name> chips.
+      if (local === "ref") {
+        out.push(html`<span class="cite">${this._renderNodes(node.childNodes)}</span>`);
+        continue;
+      }
+      // Unknown element — wrap in a passthrough block so the text
+      // gets visible layout instead of collapsing into an inline
+      // run. Better than a blank spot in the reader.
+      out.push(html`<div class="passthrough">${this._renderNodes(node.childNodes)}</div>`);
     }
     return out;
   }
