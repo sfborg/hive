@@ -464,6 +464,7 @@ class SfgaReader extends LitElement {
     const abstractParas = this._extractAbstract(teiHeader);
     const plain = data ? this._formatPlainCitation(title, data) : "";
     const bibtex = data ? this._formatBibTeX(title, data) : "";
+    const cslJSON = data ? this._formatCSLJSON(title, data) : "";
     const doiURL = data && data.doi ? `https://doi.org/${data.doi}` : "";
     return html`
       <header class="paper-header">
@@ -486,6 +487,7 @@ class SfgaReader extends LitElement {
                 <div class="citation-buttons">
                   <button @click=${(e) => this._copy(plain, e)}>Copy citation</button>
                   <button @click=${(e) => this._copy(bibtex, e)}>Copy BibTeX</button>
+                  <button @click=${(e) => this._copy(cslJSON, e)}>Copy CSL-JSON</button>
                   ${doiURL
                     ? html`<button @click=${(e) => this._copy(doiURL, e)}>Copy DOI URL</button>`
                     : nothing}
@@ -615,6 +617,57 @@ class SfgaReader extends LitElement {
     if (lines.length > 1) lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, "");
     lines.push("}");
     return lines.join("\n");
+  }
+
+  // _formatCSLJSON emits a CSL-JSON record (the format Zotero /
+  // Pandoc / citation.js and any CSL processor consume). Once a
+  // curator has this in the clipboard, they can paste into Zotero
+  // or run it through citeproc-js to format in any of the
+  // ~10,000 published citation styles. No BibTeX escaping /
+  // name-parsing quirks and Unicode round-trips cleanly.
+  //
+  // Type inference is minimal: monogr title present → article-
+  // journal; monogr title absent but publisher present → book;
+  // otherwise misc. Book chapters need a future refinement (need
+  // to detect "analytic AND monogr AND publisher" as the chapter
+  // signal).
+  _formatCSLJSON(title, data) {
+    let type = "article-journal";
+    if (!data.monogrTitleText && data.publisher) type = "book";
+    else if (!data.monogrTitleText && !data.publisher) type = "article";
+    const firstAuthor = data.authors[0] || "unknown";
+    const firstAuthorKey = firstAuthor
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 20);
+    const record = {
+      id: `${firstAuthorKey}${data.year || ""}`,
+      type,
+    };
+    if (title) record.title = title;
+    if (data.authors.length) {
+      record.author = data.authors.map((a) => {
+        const parts = a.split(" ");
+        if (parts.length >= 2) {
+          return {
+            family: parts.slice(0, -1).join(" "),
+            given: parts[parts.length - 1],
+          };
+        }
+        return { family: a };
+      });
+    }
+    if (data.year) {
+      record.issued = { "date-parts": [[parseInt(data.year, 10)]] };
+    }
+    if (data.monogrTitleText) record["container-title"] = data.monogrTitleText;
+    if (data.volume) record.volume = data.volume;
+    if (data.issue) record.issue = data.issue;
+    if (data.page) record.page = data.page;
+    if (data.publisher) record.publisher = data.publisher;
+    if (data.pubPlace) record["publisher-place"] = data.pubPlace;
+    if (data.doi) record.DOI = data.doi;
+    return JSON.stringify(record, null, 2);
   }
 
   // _biblStructToData extracts the fields hive cares about from a
