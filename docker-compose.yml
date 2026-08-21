@@ -1,8 +1,9 @@
-# hive + GROBID stack.
+# hive + GROBID + OCR stack.
 #
-# Two services:
+# Three services:
 #   * hive   — this repo's editor + WUI + HTTP API (port 2365)
 #   * grobid — official image, PDF → TEI conversion (port 8070)
+#   * ocr    — ocrmypdf wrapper for image-only scanned PDFs (port 8081)
 #
 # The hive service auto-detects GROBID via HIVE_GROBID_URL. When
 # both are up, uploading a PDF through the reference-modal file
@@ -65,11 +66,18 @@ services:
       # Points at the sibling grobid service by Docker DNS name.
       # Unset this to disable GROBID processing entirely.
       HIVE_GROBID_URL: http://grobid:8070
+      # Points at the sibling OCR service. When set, hive detects
+      # image-only PDFs (GROBID returned near-empty body text) and
+      # runs ocrmypdf to add a text layer before re-processing.
+      # Unset to disable the OCR fallback path entirely.
+      HIVE_OCR_URL: http://ocr:8080
       # Attribution for edits. Real deployments set this to the
       # operator's ORCID iD or use --orcid on the command line.
       HIVE_ORCID: "0000-0000-0000-0000"
     depends_on:
       grobid:
+        condition: service_healthy
+      ocr:
         condition: service_healthy
     restart: unless-stopped
 
@@ -91,4 +99,22 @@ services:
       timeout: 5s
       retries: 6
       start_period: 60s
+    restart: unless-stopped
+
+  ocr:
+    # ocrmypdf wrapped in a tiny FastAPI HTTP shim. See
+    # docker/ocr/{Dockerfile,server.py}. Only used as a fallback
+    # when a PDF's GROBID pass produces empty body content
+    # (indicating an image-only scan); PDFs with an existing text
+    # layer bypass this service entirely.
+    build: ./docker/ocr
+    image: hive-ocr:local
+    ports:
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/isalive"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped

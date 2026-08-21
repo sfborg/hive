@@ -19,6 +19,7 @@ import (
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
 	"github.com/sfborg/hive/pkg/grobid"
+	"github.com/sfborg/hive/pkg/ocr"
 	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
@@ -38,6 +39,12 @@ type server struct {
 	// service up and re-triggering the pipeline. See
 	// pkg/grobid/grobid.go and REFERENCE_PDF_PLAN.md.
 	grobid *grobid.Client
+	// ocr is the client for the optional OCR sidecar service. nil
+	// when HIVE_OCR_URL is unset — image-only PDFs then land in the
+	// library but GROBID returns empty output. When set, the
+	// upload handler retries GROBID after an OCR pass to give
+	// scanned papers a text layer.
+	ocr *ocr.Client
 	// annotator wraps GNfinder + GNverifier. Loaded lazily on the
 	// first upload so a hive process that never sees a PDF doesn't
 	// pay the several-MB dictionary + Bayes-weight load cost. One
@@ -2859,15 +2866,86 @@ func (s *server) tryGrobidConvert(ctx context.Context, res *sidecar.IngestResult
 	if err != nil {
 		return "unavailable", "", nil
 	}
-	defer pdf.Close()
 	tei, err := s.grobid.ProcessFulltextDocument(ctx, pdf, res.SHA512+".pdf")
+	pdf.Close()
 	if err != nil {
 		return "unavailable", "", nil
+	}
+	// Image-only scans yield a TEI with an empty body. When the
+	// OCR service is configured, retry: ocrmypdf the PDF, store
+	// the OCR'd variant as a sidecar artifact, and re-run GROBID
+	// on it. Skips the retry when OCR isn't wired up or when the
+	// body already has substantive text.
+	if s.ocr != nil && teiBodyIsEmpty(tei) {
+		if ocrTEI, ok := s.retryWithOCR(ctx, res); ok {
+			tei = ocrTEI
+		}
 	}
 	if err := sidecar.Store(s.archivePath, res.SHA512, "tei.xml", tei); err != nil {
 		return "unavailable", "", nil
 	}
 	return "stored", grobid.ExtractDOI(tei), parseHeaderToAPI(tei)
+}
+
+// retryWithOCR runs the raw PDF through ocrmypdf, stores the
+// text-layered result as a sidecar artifact (<sha>.ocr.pdf), and
+// re-runs GROBID on it. Returns the TEI and true on full success;
+// on any failure returns (nil, false) so the caller falls back to
+// the empty-body TEI.
+func (s *server) retryWithOCR(ctx context.Context, res *sidecar.IngestResult) ([]byte, bool) {
+	pdf, err := os.Open(res.Path)
+	if err != nil {
+		return nil, false
+	}
+	defer pdf.Close()
+	ocrPDF, err := s.ocr.ProcessPDF(ctx, pdf, res.SHA512+".pdf")
+	if err != nil {
+		return nil, false
+	}
+	if err := sidecar.Store(s.archivePath, res.SHA512, "ocr.pdf", ocrPDF); err != nil {
+		return nil, false
+	}
+	tei, err := s.grobid.ProcessFulltextDocument(ctx, bytes.NewReader(ocrPDF), res.SHA512+".ocr.pdf")
+	if err != nil {
+		return nil, false
+	}
+	return tei, true
+}
+
+// teiBodyIsEmpty reports whether GROBID's TEI body content is
+// too sparse to be a real paper — the "image-only PDF" signal.
+// Uses a 200-character threshold: even the shortest genuine
+// letters-to-the-editor beat it, and empty-body output typically
+// contains <100 chars of boilerplate. Cheap: streams the body
+// text via an xml.Decoder rather than parsing the whole document.
+func teiBodyIsEmpty(tei []byte) bool {
+	dec := xml.NewDecoder(bytes.NewReader(tei))
+	inBody := false
+	total := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "body" {
+				inBody = true
+			}
+		case xml.EndElement:
+			if t.Name.Local == "body" {
+				return total < 200
+			}
+		case xml.CharData:
+			if inBody {
+				total += len(bytes.TrimSpace(t))
+				if total >= 200 {
+					return false
+				}
+			}
+		}
+	}
+	return total < 200
 }
 
 // parseHeaderToAPI runs grobid.ParseHeader over the TEI bytes and

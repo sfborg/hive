@@ -23,6 +23,7 @@ import (
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
 	"github.com/sfborg/hive/pkg/grobid"
+	"github.com/sfborg/hive/pkg/ocr"
 	"github.com/sfborg/hive/internal/wui"
 )
 
@@ -87,6 +88,13 @@ func Run(archivePath string, opts Options) error {
 	// e.g. http://grobid:8070 when running the docker-compose stack.
 	if url := os.Getenv("HIVE_GROBID_URL"); url != "" {
 		s.grobid = grobid.NewClient(url)
+	}
+	// OCR fallback for image-only PDFs. Optional — when unset,
+	// scanned papers land in the sidecar library but GROBID
+	// extraction produces empty text. When set, image-only PDFs
+	// get an ocrmypdf pass and a re-run through GROBID.
+	if url := os.Getenv("HIVE_OCR_URL"); url != "" {
+		s.ocr = ocr.NewClient(url)
 	}
 	// Annotator (GNfinder + GNverifier). Cheap to construct; the
 	// expensive dictionary + Bayes-weight load happens on the first
