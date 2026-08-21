@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -129,16 +130,31 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 	if err := a.ensureReady(); err != nil {
 		return nil, err
 	}
+	// Byte-offset-based rewrite. We don't want to re-encode the
+	// input via xml.Encoder — Go's encoding/xml mangles namespace
+	// declarations when the input carries prefixed attrs, producing
+	// duplicate xmlns= attributes and stray _xmlns:X aliasing that
+	// browsers reject as malformed XML. Instead: walk the input to
+	// identify text-node byte ranges, run GNfinder on each, and
+	// splice in <tp:taxon-name> wrappers as raw bytes at the exact
+	// insertion positions. Everything outside the insertions is
+	// byte-identical to the input.
+	var edits []insertion
+	// Insert xmlns:tp on the root open tag.
+	rootAttrPos, err := rootOpenTagAttrPos(tei)
+	if err != nil {
+		return nil, err
+	}
+	edits = append(edits, insertion{
+		pos:  rootAttrPos,
+		text: ` xmlns:` + TaxPubPrefix + `="` + TaxPubNamespace + `"`,
+	})
+
 	dec := xml.NewDecoder(bytes.NewReader(tei))
-	var out bytes.Buffer
-	enc := xml.NewEncoder(&out)
-
-	// depth inside <text>. Only body-text content should be scanned
-	// for names — header content is separately parsed by pkg/grobid.
 	textDepth := 0
-	rootSeen := false
-
+	var beforeOffset int64
 	for {
+		beforeOffset = dec.InputOffset()
 		tok, err := dec.Token()
 		if err != nil {
 			if err.Error() == "EOF" {
@@ -146,109 +162,133 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 			}
 			return nil, fmt.Errorf("annotator: parse TEI: %w", err)
 		}
+		afterOffset := dec.InputOffset()
 		switch t := tok.(type) {
 		case xml.StartElement:
-			// On the root element, add the TaxPub namespace
-			// declaration so downstream <tp:taxon-name> elements
-			// resolve. If the caller's TEI already declared it,
-			// the duplicate is harmless — xml.Encoder emits it once.
-			if !rootSeen {
-				t.Attr = append(t.Attr, xml.Attr{
-					Name:  xml.Name{Local: "xmlns:" + TaxPubPrefix},
-					Value: TaxPubNamespace,
-				})
-				rootSeen = true
-			}
 			if t.Name.Local == "text" {
 				textDepth++
-			} else if textDepth > 0 {
-				// nothing special — still inside text subtree
-			}
-			if err := enc.EncodeToken(t); err != nil {
-				return nil, fmt.Errorf("annotator: encode start: %w", err)
 			}
 		case xml.EndElement:
 			if t.Name.Local == "text" && textDepth > 0 {
 				textDepth--
 			}
-			if err := enc.EncodeToken(t); err != nil {
-				return nil, fmt.Errorf("annotator: encode end: %w", err)
-			}
 		case xml.CharData:
-			if textDepth > 0 && hasWordContent(t) {
-				if err := a.emitAnnotated(enc, t); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := enc.EncodeToken(t); err != nil {
-					return nil, fmt.Errorf("annotator: encode chardata: %w", err)
-				}
+			if textDepth <= 0 || !hasWordContent(t) {
+				continue
 			}
-		default:
-			if err := enc.EncodeToken(t); err != nil {
-				return nil, fmt.Errorf("annotator: encode token: %w", err)
+			raw := tei[beforeOffset:afterOffset]
+			decoded := string(t)
+			// Skip chunks where decoding differs from the raw
+			// bytes — entities (&amp; etc.) make GNfinder's
+			// plaintext offsets non-mappable to raw positions.
+			// Scientific names rarely contain XML-special chars,
+			// so the loss is negligible; safety wins.
+			if string(raw) != decoded {
+				continue
+			}
+			res := a.gnf.Find("", decoded)
+			for _, n := range res.Names {
+				if n.OffsetStart < 0 || n.OffsetEnd > len(decoded) ||
+					n.OffsetStart >= n.OffsetEnd {
+					continue
+				}
+				startPos := beforeOffset + int64(n.OffsetStart)
+				endPos := beforeOffset + int64(n.OffsetEnd)
+				edits = append(edits, insertion{
+					pos: startPos,
+					text: `<` + TaxPubPrefix + `:taxon-name full-name="` +
+						escapeAttrValue(n.Name) + `">`,
+				})
+				edits = append(edits, insertion{
+					pos:  endPos,
+					text: `</` + TaxPubPrefix + `:taxon-name>`,
+				})
 			}
 		}
 	}
-	if err := enc.Flush(); err != nil {
-		return nil, fmt.Errorf("annotator: flush: %w", err)
-	}
-	return out.Bytes(), nil
+	return applyInsertions(tei, edits), nil
 }
 
-// emitAnnotated runs GNfinder over the char-data chunk and emits a
-// sequence of tokens: text-before-name / <tp:taxon-name>name</tp:taxon-name> /
-// text-between-names / ... / text-after-last-name. Names are emitted
-// in offset order (GNfinder returns them that way).
-//
-// When GNfinder returns no names, the chunk is passed through as-is
-// — no attribute-free wrapping so the output stays byte-identical
-// where possible.
-func (a *Annotator) emitAnnotated(enc *xml.Encoder, chunk xml.CharData) error {
-	text := string(chunk)
-	res := a.gnf.Find("", text)
-	if len(res.Names) == 0 {
-		return enc.EncodeToken(chunk)
+// insertion is one atomic "insert this text at this byte position"
+// operation. applyInsertions sorts by position so end-of-name
+// closing tags land after the opening ones even when GNfinder
+// returns tightly-packed hits.
+type insertion struct {
+	pos  int64
+	text string
+}
+
+// applyInsertions builds a new byte slice by walking the source
+// once and interleaving the edits at their positions. Uses
+// sort.SliceStable so edits at the same position stay in input
+// order (matters for wrapping — the opening and closing tags for
+// two adjacent names must interleave correctly).
+func applyInsertions(src []byte, edits []insertion) []byte {
+	if len(edits) == 0 {
+		return src
 	}
-	pos := 0
-	tpName := xml.Name{Space: TaxPubNamespace, Local: "taxon-name"}
-	for _, n := range res.Names {
-		if n.OffsetStart < pos || n.OffsetEnd > len(text) {
-			// Defensive: skip a finding whose offsets are outside
-			// what we can express. Shouldn't happen with
-			// WithPositionInBytes, but let it fall through as
-			// plain text rather than corrupt the output.
+	all := make([]insertion, len(edits))
+	copy(all, edits)
+	sort.SliceStable(all, func(i, j int) bool {
+		return all[i].pos < all[j].pos
+	})
+	var buf bytes.Buffer
+	buf.Grow(len(src) + 64*len(all))
+	var srcPos int64
+	for _, e := range all {
+		if e.pos > srcPos {
+			buf.Write(src[srcPos:e.pos])
+			srcPos = e.pos
+		}
+		buf.WriteString(e.text)
+	}
+	if srcPos < int64(len(src)) {
+		buf.Write(src[srcPos:])
+	}
+	return buf.Bytes()
+}
+
+// rootOpenTagAttrPos returns the byte position inside the root
+// element's opening tag where new attributes can be inserted —
+// specifically, immediately before the closing `>`. Skips the XML
+// declaration and any doctype prologue. Errors when the input has
+// no root element open tag.
+func rootOpenTagAttrPos(src []byte) (int64, error) {
+	dec := xml.NewDecoder(bytes.NewReader(src))
+	for {
+		beforeOffset := dec.InputOffset()
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, fmt.Errorf("annotator: locate root open tag: %w", err)
+		}
+		if _, ok := tok.(xml.StartElement); !ok {
 			continue
 		}
-		if n.OffsetStart > pos {
-			if err := enc.EncodeToken(xml.CharData(text[pos:n.OffsetStart])); err != nil {
-				return fmt.Errorf("annotator: encode pre-name text: %w", err)
-			}
+		afterOffset := dec.InputOffset()
+		tagBytes := src[beforeOffset:afterOffset]
+		// Insert just before the terminating '>' — accounting for
+		// '/>' self-closing forms (unusual on a root open tag but
+		// safe to handle).
+		end := len(tagBytes) - 1
+		if end > 0 && tagBytes[end-1] == '/' {
+			end--
 		}
-		start := xml.StartElement{
-			Name: tpName,
-			Attr: []xml.Attr{{
-				Name:  xml.Name{Local: "full-name"},
-				Value: n.Name,
-			}},
-		}
-		if err := enc.EncodeToken(start); err != nil {
-			return fmt.Errorf("annotator: encode taxon-name start: %w", err)
-		}
-		if err := enc.EncodeToken(xml.CharData(text[n.OffsetStart:n.OffsetEnd])); err != nil {
-			return fmt.Errorf("annotator: encode taxon-name text: %w", err)
-		}
-		if err := enc.EncodeToken(xml.EndElement{Name: tpName}); err != nil {
-			return fmt.Errorf("annotator: encode taxon-name end: %w", err)
-		}
-		pos = n.OffsetEnd
+		return beforeOffset + int64(end), nil
 	}
-	if pos < len(text) {
-		if err := enc.EncodeToken(xml.CharData(text[pos:])); err != nil {
-			return fmt.Errorf("annotator: encode post-name text: %w", err)
-		}
-	}
-	return nil
+}
+
+// escapeAttrValue XML-escapes a value for insertion into a double-
+// quoted attribute. Scientific names don't normally contain
+// quotable characters, but a defensive escape keeps output
+// well-formed if GNfinder ever emits one.
+func escapeAttrValue(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+	)
+	return replacer.Replace(s)
 }
 
 // SetVerifier lets tests inject a stub GNverifier so
@@ -408,135 +448,254 @@ func expansionCandidates(abbrev string, fullGenera map[string]bool) []string {
 	return out
 }
 
-// rewriteAbbreviations walks the augmented XML a second time,
-// updating <tp:taxon-name> elements whose full-name is an
-// abbreviation. Non-abbreviated elements and everything outside
-// <tp:taxon-name> is copied through unchanged. Attribute additions
-// use the gn: prefix declared on the root by ensureGNNamespace.
+// rewriteAbbreviations walks the augmented XML, records the byte
+// ranges of each <tp:taxon-name> opening tag, and rewrites those
+// tags in place with expanded full-name + gn:source/score/candidates
+// attributes. Byte-based (not xml.Encoder-based) for the same
+// reason FindNames is: encoding/xml re-serialization mangles
+// namespace declarations on complex inputs. Everything outside the
+// rewritten tags is preserved byte-perfectly.
 func rewriteAbbreviations(
 	augmented []byte,
 	candidates map[string][]string,
 	verifyResults map[string]*vlib.Name,
 ) ([]byte, error) {
+	// Insert xmlns:gn on the root open tag so gn:source and friends
+	// resolve.
+	rootAttrPos, err := rootOpenTagAttrPos(augmented)
+	if err != nil {
+		return nil, err
+	}
+	edits := []insertion{{
+		pos:  rootAttrPos,
+		text: ` xmlns:` + GNPrefix + `="` + GNNamespace + `"`,
+	}}
+	// Replacements: for each <tp:taxon-name ...> opening tag we
+	// need to modify, we record the byte range of the whole opening
+	// tag plus the replacement text. Applied as a delete + insert
+	// via the same insertion machinery (an edit at pos deletes
+	// [pos, pos+delLen) and inserts the replacement text).
+	var reps []replacement
 	dec := xml.NewDecoder(bytes.NewReader(augmented))
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	gnAdded := false
+	var beforeOffset int64
 	for {
+		beforeOffset = dec.InputOffset()
 		tok, err := dec.Token()
 		if err != nil {
 			if err.Error() == "EOF" {
 				break
 			}
-			return nil, fmt.Errorf("annotator: parse augmented XML for rewrite: %w", err)
+			return nil, fmt.Errorf("annotator: parse augmented XML: %w", err)
 		}
-		if se, ok := tok.(xml.StartElement); ok {
-			if !gnAdded {
-				se.Attr = append(se.Attr, xml.Attr{
-					Name:  xml.Name{Local: "xmlns:" + GNPrefix},
-					Value: GNNamespace,
-				})
-				gnAdded = true
-			}
-			if se.Name.Local == "taxon-name" {
-				se = decorateAbbrev(se, candidates, verifyResults)
-			}
-			if err := enc.EncodeToken(se); err != nil {
-				return nil, fmt.Errorf("annotator: encode start: %w", err)
-			}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
 			continue
 		}
-		if err := enc.EncodeToken(tok); err != nil {
-			return nil, fmt.Errorf("annotator: encode token: %w", err)
+		if se.Name.Local != "taxon-name" {
+			continue
 		}
+		afterOffset := dec.InputOffset()
+		newTag, changed := rewriteTaxonNameTag(se, candidates, verifyResults)
+		if !changed {
+			continue
+		}
+		reps = append(reps, replacement{
+			start:   beforeOffset,
+			end:     afterOffset,
+			replace: newTag,
+		})
 	}
-	if err := enc.Flush(); err != nil {
-		return nil, fmt.Errorf("annotator: flush: %w", err)
-	}
-	return buf.Bytes(), nil
+	return applyReplacementsAndInsertions(augmented, edits, reps), nil
 }
 
-// decorateAbbrev updates the attributes of a <tp:taxon-name>
-// StartElement in place when the full-name is an abbreviation
-// covered by the verification results. Returns the possibly-modified
-// element. Not-an-abbreviation elements are returned unchanged.
-func decorateAbbrev(
+// replacement is a [start, end) byte range that should be replaced
+// with the given text. Used by ExpandAbbreviations to rewrite
+// <tp:taxon-name> opening tags whose attributes we've resolved.
+type replacement struct {
+	start, end int64
+	replace    string
+}
+
+// applyReplacementsAndInsertions combines both edit types into a
+// single byte-slice reconstruction pass. Replacements and insertions
+// are ordered by position; conflicts (an insertion inside a
+// replacement range) resolve by dropping the insertion since the
+// replacement supersedes it.
+func applyReplacementsAndInsertions(
+	src []byte,
+	edits []insertion,
+	reps []replacement,
+) []byte {
+	// Convert replacements into a form comparable to insertions
+	// while remembering the delete range. Sort both by start pos.
+	sort.SliceStable(reps, func(i, j int) bool {
+		return reps[i].start < reps[j].start
+	})
+	sort.SliceStable(edits, func(i, j int) bool {
+		return edits[i].pos < edits[j].pos
+	})
+	var buf bytes.Buffer
+	buf.Grow(len(src) + 64*(len(edits)+len(reps)))
+	var srcPos int64
+	ei, ri := 0, 0
+	for srcPos < int64(len(src)) {
+		// Which comes next — an insertion at srcPos or a
+		// replacement starting at srcPos?
+		nextIns := int64(-1)
+		if ei < len(edits) {
+			nextIns = edits[ei].pos
+		}
+		nextRep := int64(-1)
+		if ri < len(reps) {
+			nextRep = reps[ri].start
+		}
+		if nextIns < 0 && nextRep < 0 {
+			buf.Write(src[srcPos:])
+			break
+		}
+		// Determine the next event position.
+		var next int64
+		switch {
+		case nextIns < 0:
+			next = nextRep
+		case nextRep < 0:
+			next = nextIns
+		case nextIns <= nextRep:
+			next = nextIns
+		default:
+			next = nextRep
+		}
+		if next > srcPos {
+			buf.Write(src[srcPos:next])
+			srcPos = next
+		}
+		// Emit any insertions AT this exact position first (so an
+		// insertion at the start of a replacement's range lands
+		// before the replacement text), then the replacement.
+		for ei < len(edits) && edits[ei].pos == srcPos {
+			buf.WriteString(edits[ei].text)
+			ei++
+		}
+		if ri < len(reps) && reps[ri].start == srcPos {
+			buf.WriteString(reps[ri].replace)
+			srcPos = reps[ri].end
+			// Skip any insertions that fell inside the replaced
+			// range — the replacement supersedes them.
+			for ei < len(edits) && edits[ei].pos < srcPos {
+				ei++
+			}
+			ri++
+		}
+	}
+	// Trailing edits past end-of-src (shouldn't happen, but write
+	// them anyway rather than silently dropping).
+	for ei < len(edits) {
+		buf.WriteString(edits[ei].text)
+		ei++
+	}
+	return buf.Bytes()
+}
+
+// rewriteTaxonNameTag decides whether a <tp:taxon-name> opening
+// tag needs updating based on its full-name attribute (is it an
+// abbreviation? what did verification return?) and returns the
+// replacement tag text. changed=false means the tag doesn't need
+// rewriting (full-form name, or an abbreviation with no in-doc
+// candidates that we already annotated).
+func rewriteTaxonNameTag(
 	se xml.StartElement,
 	candidates map[string][]string,
 	verifyResults map[string]*vlib.Name,
-) xml.StartElement {
-	var fullNameIdx = -1
+) (string, bool) {
 	var fullName string
-	for i, attr := range se.Attr {
+	for _, attr := range se.Attr {
 		if attr.Name.Local == "full-name" {
-			fullNameIdx = i
 			fullName = attr.Value
 			break
 		}
 	}
-	if fullNameIdx < 0 {
-		return se
+	if fullName == "" {
+		return "", false
 	}
 	parts := strings.SplitN(fullName, " ", 2)
 	if len(parts) < 2 || !strings.HasSuffix(parts[0], ".") {
-		return se
+		return "", false
 	}
+	newFullName := fullName
+	var extra []xml.Attr
 	cands := candidates[fullName]
 	if len(cands) == 0 {
-		se.Attr = append(se.Attr, xml.Attr{
-			Name:  xml.Name{Space: GNNamespace, Local: "source"},
+		extra = append(extra, xml.Attr{
+			Name:  xml.Name{Local: GNPrefix + ":source"},
 			Value: "unresolved",
 		})
-		return se
-	}
-	type verified struct {
-		name  string
-		score float64
-	}
-	var vs []verified
-	for _, c := range cands {
-		r := verifyResults[c]
-		if r == nil || r.MatchType == vlib.NoMatch || r.BestResult == nil {
-			continue
+	} else {
+		type verified struct {
+			name  string
+			score float64
 		}
-		vs = append(vs, verified{name: c, score: r.BestResult.SortScore})
-	}
-	switch len(vs) {
-	case 0:
-		// Heuristic proposed candidates; none verified.
-		se.Attr = append(se.Attr, xml.Attr{
-			Name:  xml.Name{Space: GNNamespace, Local: "source"},
-			Value: "unverified",
-		})
-	case 1:
-		se.Attr[fullNameIdx].Value = vs[0].name
-		se.Attr = append(se.Attr,
-			xml.Attr{
-				Name:  xml.Name{Space: GNNamespace, Local: "source"},
-				Value: "verified",
-			},
-			xml.Attr{
-				Name:  xml.Name{Space: GNNamespace, Local: "score"},
-				Value: formatScore(vs[0].score),
-			},
-		)
-	default:
-		names := make([]string, len(vs))
-		for i, v := range vs {
-			names[i] = v.name
+		var vs []verified
+		for _, c := range cands {
+			r := verifyResults[c]
+			if r == nil || r.MatchType == vlib.NoMatch || r.BestResult == nil {
+				continue
+			}
+			vs = append(vs, verified{name: c, score: r.BestResult.SortScore})
 		}
-		se.Attr = append(se.Attr,
-			xml.Attr{
-				Name:  xml.Name{Space: GNNamespace, Local: "source"},
-				Value: "ambiguous",
-			},
-			xml.Attr{
-				Name:  xml.Name{Space: GNNamespace, Local: "candidates"},
-				Value: strings.Join(names, ", "),
-			},
-		)
+		switch len(vs) {
+		case 0:
+			extra = append(extra, xml.Attr{
+				Name:  xml.Name{Local: GNPrefix + ":source"},
+				Value: "unverified",
+			})
+		case 1:
+			newFullName = vs[0].name
+			extra = append(extra,
+				xml.Attr{
+					Name:  xml.Name{Local: GNPrefix + ":source"},
+					Value: "verified",
+				},
+				xml.Attr{
+					Name:  xml.Name{Local: GNPrefix + ":score"},
+					Value: formatScore(vs[0].score),
+				},
+			)
+		default:
+			names := make([]string, len(vs))
+			for i, v := range vs {
+				names[i] = v.name
+			}
+			extra = append(extra,
+				xml.Attr{
+					Name:  xml.Name{Local: GNPrefix + ":source"},
+					Value: "ambiguous",
+				},
+				xml.Attr{
+					Name:  xml.Name{Local: GNPrefix + ":candidates"},
+					Value: strings.Join(names, ", "),
+				},
+			)
+		}
 	}
-	return se
+	// Rebuild the opening tag from scratch. Preserves the original
+	// prefix (tp:) and keeps only the full-name + our new
+	// attributes — other attributes on a <tp:taxon-name> from
+	// FindNames don't exist, so this is exhaustive.
+	var b strings.Builder
+	b.WriteByte('<')
+	b.WriteString(TaxPubPrefix)
+	b.WriteString(":taxon-name full-name=\"")
+	b.WriteString(escapeAttrValue(newFullName))
+	b.WriteByte('"')
+	for _, a := range extra {
+		b.WriteByte(' ')
+		b.WriteString(a.Name.Local)
+		b.WriteString("=\"")
+		b.WriteString(escapeAttrValue(a.Value))
+		b.WriteByte('"')
+	}
+	b.WriteByte('>')
+	return b.String(), true
 }
 
 func formatScore(s float64) string {
