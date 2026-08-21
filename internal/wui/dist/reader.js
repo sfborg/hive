@@ -57,7 +57,11 @@ class SfgaReader extends LitElement {
       color: var(--fg);
       font-family: var(--font-body);
     }
-    header {
+    /* Scope the sticky-nav layout to the top-level <header> —
+       without :host >, this rule also hit <header class="paper-
+       header"> inside the article and turned that block into a
+       horizontal flex row. */
+    :host > header {
       position: sticky;
       top: 0;
       background: var(--bg);
@@ -68,8 +72,9 @@ class SfgaReader extends LitElement {
       align-items: center;
       gap: var(--sp-2);
       z-index: 1;
+      flex-wrap: wrap;
     }
-    header h1 {
+    :host > header h1 {
       margin: 0;
       font-size: var(--fs-md);
       color: var(--dim);
@@ -122,14 +127,17 @@ class SfgaReader extends LitElement {
       font-size: var(--fs-md);
       line-height: 1.6;
     }
-    /* Paper header — title / authors / abstract / citation card.
-       Sits at the top of the article so the paper's identity and
-       a copy-pasteable citation are always visible on load,
-       without having to hunt around the reader for them. */
+    /* Paper header — title / authors / abstract. Centered so
+       the paper's identity reads as a formal title block. Copy
+       buttons for citation formats live in the top nav bar
+       (.cite-toolbar), not here, so they stay accessible while
+       the reader body scrolls without cluttering the paper's
+       title area. */
     .paper-header {
       margin-bottom: var(--sp-4);
       padding-bottom: var(--sp-4);
       border-bottom: 1px solid var(--border);
+      text-align: center;
     }
     .paper-title {
       font-size: 1.5rem;
@@ -142,7 +150,8 @@ class SfgaReader extends LitElement {
       color: var(--dim);
     }
     .paper-abstract {
-      margin: 0 0 var(--sp-3);
+      margin: 0;
+      text-align: left;
     }
     .paper-abstract summary {
       cursor: pointer;
@@ -153,28 +162,14 @@ class SfgaReader extends LitElement {
       margin: var(--sp-1) 0;
       color: var(--fg);
     }
-    /* Citation card: monospace citation text with copy buttons
-       below. Slight background tint separates it visually from
-       the body prose without introducing a new palette value. */
-    .citation-card {
-      background: color-mix(in oklab, var(--fg) 4%, transparent);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--sp-2) var(--sp-3);
-    }
-    .citation-text {
-      font-family: var(--font-mono);
-      font-size: var(--fs-sm);
-      white-space: pre-wrap;
-      word-break: break-word;
-      margin-bottom: var(--sp-2);
-    }
-    .citation-buttons {
+    /* Citation copy toolbar in the sticky top nav — sits with
+       the other reader controls, wraps to a new row when narrow. */
+    .cite-toolbar {
       display: flex;
       flex-wrap: wrap;
       gap: var(--sp-1);
     }
-    .citation-buttons button {
+    .cite-toolbar button {
       font: inherit;
       font-size: var(--fs-sm);
       padding: var(--sp-1) var(--sp-2);
@@ -184,11 +179,11 @@ class SfgaReader extends LitElement {
       border-radius: var(--radius-sm);
       cursor: pointer;
     }
-    .citation-buttons button:hover {
+    .cite-toolbar button:hover {
       border-color: var(--accent);
     }
     /* "Copied" feedback: accent border + accent text for ~1.5s. */
-    .citation-buttons button.copied {
+    .cite-toolbar button.copied {
       border-color: var(--accent);
       color: var(--accent);
     }
@@ -357,6 +352,10 @@ class SfgaReader extends LitElement {
   }
 
   render() {
+    // Compute paper metadata once per render so the top nav's
+    // copy buttons and the article header share a single source
+    // of truth. Cheap (single XML walk); no need to memoize.
+    const meta = this._doc ? this._extractPaperMeta() : null;
     return html`
       <header>
         <h1>${this._sha ? this._sha.slice(0, 16) + "…" : "(no sha)"}</h1>
@@ -382,6 +381,18 @@ class SfgaReader extends LitElement {
             />
             Show PDF
           </label>
+          ${meta && meta.plain
+            ? html`
+                <div class="cite-toolbar" aria-label="copy citation">
+                  <button @click=${(e) => this._copy(meta.plain, e)}>Copy citation</button>
+                  <button @click=${(e) => this._copy(meta.cslJSON, e)}>Copy CSL-JSON</button>
+                  <button @click=${(e) => this._copy(meta.bibtex, e)}>Copy BibTeX</button>
+                  ${meta.doiURL
+                    ? html`<button @click=${(e) => this._copy(meta.doiURL, e)}>Copy DOI URL</button>`
+                    : nothing}
+                </div>
+              `
+            : nothing}
         </div>
       </header>
       ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}
@@ -428,35 +439,51 @@ class SfgaReader extends LitElement {
       }
       return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
     }
-    // Paper header (title, authors, abstract, citation block)
-    // comes from <teiHeader>. Renders before the body so the
-    // reader lands with the paper's identity visible up top and
-    // the citation-copy affordances one click away.
-    const teiHeader = this._doc.getElementsByTagNameNS(teiNS, "teiHeader")[0];
-    // Render <body> and <back> contents in document order — the
-    // reader shows the whole paper (introduction through
-    // references + acknowledgements). The DOI-from-references
-    // guard against picking a cited-work DOI as the paper's own
-    // DOI lives elsewhere (pkg/grobid.ExtractDOI, scoped to
-    // <teiHeader>) so it doesn't need a filter here.
+    // Paper identity header (title / byline / abstract) at the
+    // top of the article. Copy buttons live in the sticky top
+    // nav (see render()), not here — keeps the article clean.
+    // Render <body> and <back> contents in document order.
+    const meta = this._extractPaperMeta();
     return html`
       <article>
-        ${teiHeader ? this._renderPaperHeader(teiHeader) : nothing}
+        ${this._renderPaperHeader(meta)}
         ${this._renderNodes(text.childNodes)}
       </article>
     `;
   }
 
   // _renderPaperHeader emits the top-of-paper block: title,
-  // author byline, collapsible abstract, and a citation card with
-  // copy buttons for plain-text / BibTeX / DOI URL. All fields
-  // pulled from <teiHeader>; missing pieces elide gracefully.
-  //
-  // The citation lives at the top because publishers famously
-  // don't standardize placement of a copy-pasteable citation in
-  // the PDF itself — this makes the reader itself the reliable
-  // source of a citation for any paper hive processes.
-  _renderPaperHeader(teiHeader) {
+  // author byline, and collapsible abstract. Copy affordances
+  // live in the top nav bar (via _extractPaperMeta) so they stay
+  // one click away without cluttering the paper's identity block.
+  _renderPaperHeader(meta) {
+    if (!meta) return nothing;
+    return html`
+      <header class="paper-header">
+        ${meta.title ? html`<h1 class="paper-title">${meta.title}</h1>` : nothing}
+        ${meta.authors.length
+          ? html`<p class="paper-authors">${meta.authors.join(", ")}</p>`
+          : nothing}
+        ${meta.abstractParas.length
+          ? html`
+              <details class="paper-abstract" open>
+                <summary>Abstract</summary>
+                ${meta.abstractParas.map((p) => html`<p>${p}</p>`)}
+              </details>
+            `
+          : nothing}
+      </header>
+    `;
+  }
+
+  // _extractPaperMeta pulls the paper-identity fields out of
+  // <teiHeader> and precomputes the three copy-buffer strings
+  // (plain / CSL-JSON / BibTeX). Called once per render — cheap;
+  // no memoization needed. Returns null when teiHeader is absent.
+  _extractPaperMeta() {
+    const teiNS = "http://www.tei-c.org/ns/1.0";
+    const teiHeader = this._doc.getElementsByTagNameNS(teiNS, "teiHeader")[0];
+    if (!teiHeader) return null;
     const biblStruct = this._findDescendant(teiHeader, "biblStruct");
     const data = biblStruct ? this._biblStructToData(biblStruct) : null;
     const title = this._paperTitle(teiHeader, data);
@@ -466,37 +493,7 @@ class SfgaReader extends LitElement {
     const bibtex = data ? this._formatBibTeX(title, data) : "";
     const cslJSON = data ? this._formatCSLJSON(title, data) : "";
     const doiURL = data && data.doi ? `https://doi.org/${data.doi}` : "";
-    return html`
-      <header class="paper-header">
-        ${title ? html`<h1 class="paper-title">${title}</h1>` : nothing}
-        ${authors.length
-          ? html`<p class="paper-authors">${authors.join(", ")}</p>`
-          : nothing}
-        ${abstractParas.length
-          ? html`
-              <details class="paper-abstract" open>
-                <summary>Abstract</summary>
-                ${abstractParas.map((p) => html`<p>${p}</p>`)}
-              </details>
-            `
-          : nothing}
-        ${plain
-          ? html`
-              <div class="citation-card">
-                <div class="citation-text">${plain}</div>
-                <div class="citation-buttons">
-                  <button @click=${(e) => this._copy(plain, e)}>Copy citation</button>
-                  <button @click=${(e) => this._copy(cslJSON, e)}>Copy CSL-JSON</button>
-                  <button @click=${(e) => this._copy(bibtex, e)}>Copy BibTeX</button>
-                  ${doiURL
-                    ? html`<button @click=${(e) => this._copy(doiURL, e)}>Copy DOI URL</button>`
-                    : nothing}
-                </div>
-              </div>
-            `
-          : nothing}
-      </header>
-    `;
+    return { title, authors, abstractParas, plain, bibtex, cslJSON, doiURL };
   }
 
   _paperTitle(teiHeader, biblData) {
@@ -531,16 +528,22 @@ class SfgaReader extends LitElement {
   }
 
   async _copy(text, event) {
+    // Capture the button reference *before* the await —
+    // event.currentTarget is nulled by the browser once the
+    // synchronous portion of the handler returns, so a reference
+    // read after `await` fires as `null`.
+    const btn = event.currentTarget;
+    const orig = btn ? btn.textContent : "";
     try {
       await navigator.clipboard.writeText(text);
-      const btn = event.currentTarget;
-      const orig = btn.textContent;
-      btn.textContent = "Copied";
-      btn.classList.add("copied");
-      setTimeout(() => {
-        btn.textContent = orig;
-        btn.classList.remove("copied");
-      }, 1500);
+      if (btn) {
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove("copied");
+        }, 1500);
+      }
     } catch (e) {
       alert("Copy failed: " + e.message);
     }
