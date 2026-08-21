@@ -139,12 +139,21 @@ class SfgaReader extends LitElement {
     article .passthrough {
       margin: var(--sp-2) 0;
     }
-    article ul {
+    article ul,
+    article ol {
       margin: var(--sp-2) 0;
       padding-left: var(--sp-4);
     }
     article li {
       margin: var(--sp-1) 0;
+    }
+    /* References list — extra vertical space per entry so the
+       author/title/imprint text that renders as an inline run per
+       entry is still readable, and hanging indent so wrapped lines
+       align to the text rather than the number. */
+    article .references li {
+      margin: var(--sp-2) 0;
+      padding-left: var(--sp-1);
     }
     /* Inline reference citations ("(Doe 2020)"). Dimmer than body
        text so they read as parenthetical. */
@@ -411,6 +420,21 @@ class SfgaReader extends LitElement {
         continue;
       }
       if (local === "item") {
+        out.push(html`<li>${this._renderNodes(node.childNodes)}</li>`);
+        continue;
+      }
+      // Reference list — GROBID emits <listBibl><biblStruct>… per
+      // cited reference. Render as an ordered list so numbering
+      // matches "as cited in [12]" body-text references. The
+      // biblStruct's internal author/title/imprint structure falls
+      // through as inline spans, which produces a run-together
+      // reference line — good enough for reading; slice 5's
+      // reference-parsing will replace with structured display.
+      if (local === "listBibl") {
+        out.push(html`<ol class="references">${this._renderNodes(node.childNodes)}</ol>`);
+        continue;
+      }
+      if (local === "biblStruct") {
         out.push(html`<li>${this._renderNodes(node.childNodes)}</li>`);
         continue;
       }
