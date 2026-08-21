@@ -435,7 +435,7 @@ class SfgaReader extends LitElement {
         continue;
       }
       if (local === "biblStruct") {
-        out.push(html`<li>${this._renderNodes(node.childNodes)}</li>`);
+        out.push(html`<li>${this._renderBiblStruct(node)}</li>`);
         continue;
       }
       // Cited-reference marker inside body text. Render inline —
@@ -494,6 +494,170 @@ class SfgaReader extends LitElement {
       data-full-name=${fullName}
       >${display}</span
     >`;
+  }
+
+  // _renderBiblStruct pulls fields from a GROBID biblStruct and
+  // formats them as a readable citation. Structure differs by
+  // publication kind:
+  //
+  //   Journal article: <analytic> holds article title + authors;
+  //                    <monogr> holds journal title + imprint.
+  //   Book:            <monogr> holds title + authors + imprint;
+  //                    no <analytic>.
+  //   Book chapter:    <analytic> holds chapter title + authors;
+  //                    <monogr> holds book title + editors +
+  //                    imprint.
+  //
+  // Output format: "Author A, Coauthor B (Year). Article title.
+  // Journal (italic) Volume(Issue): pages. doi:X". Missing fields
+  // elide gracefully. Nested <tp:taxon-name> chips in titles are
+  // preserved because titles render via _renderNodes recursion.
+  _renderBiblStruct(el) {
+    const analytic = this._directChild(el, "analytic");
+    const monogr = this._directChild(el, "monogr");
+    // Authors: prefer analytic (article-level); fall back to
+    // monogr (book-level with no analytic wrapper).
+    const authorsFrom = analytic || monogr;
+    const authors = authorsFrom
+      ? this._collectAuthors(authorsFrom)
+      : [];
+    const year = monogr ? this._extractYear(monogr) : "";
+    const analyticTitle =
+      analytic ? this._directChild(analytic, "title") : null;
+    const monogrTitle =
+      monogr ? this._directChild(monogr, "title") : null;
+    const imprint = monogr ? this._directChild(monogr, "imprint") : null;
+    const volume = this._extractBiblScope(imprint, "volume");
+    const issue = this._extractBiblScope(imprint, "issue");
+    const page = this._extractPage(imprint);
+    const publisher = imprint ? this._directChildText(imprint, "publisher") : "";
+    const pubPlace = imprint ? this._directChildText(imprint, "pubPlace") : "";
+    const doi = this._extractIdno(el, "DOI");
+    // Compose. Each segment renders only when it has content;
+    // punctuation between segments joins conditionally so
+    // omitted fields don't leave stranded commas or periods.
+    const parts = [];
+    if (authors.length) parts.push(html`${authors.join(", ")}`);
+    if (year) parts.push(html` (${year}).`);
+    else if (authors.length) parts.push(html`.`);
+    if (analyticTitle) {
+      parts.push(html` ${this._renderNodes(analyticTitle.childNodes)}.`);
+    }
+    if (monogrTitle) {
+      // Journal titles italicize; book titles also italicize (both
+      // use the same visual convention in most scientific styles).
+      parts.push(html` <i>${this._renderNodes(monogrTitle.childNodes)}</i>`);
+    }
+    if (volume) {
+      let volPart = ` ${volume}`;
+      if (issue) volPart += `(${issue})`;
+      parts.push(volPart);
+    }
+    if (page) parts.push(`: ${page}`);
+    parts.push(".");
+    if (publisher) {
+      parts.push(` ${publisher}`);
+      if (pubPlace) parts.push(`, ${pubPlace}`);
+      parts.push(".");
+    }
+    if (doi) {
+      const doiURL = `https://doi.org/${doi}`;
+      parts.push(html` <a href=${doiURL} target="_blank" rel="noopener">doi:${doi}</a>`);
+    }
+    return html`${parts}`;
+  }
+
+  // _directChild returns the first child element with the given
+  // local name, or null. Namespace-agnostic (matches on localName)
+  // so it works whether GROBID's TEI is in the tei-c namespace or
+  // was flattened during a round-trip.
+  _directChild(el, localName) {
+    if (!el) return null;
+    for (const child of el.children) {
+      if (child.localName === localName) return child;
+    }
+    return null;
+  }
+
+  _directChildText(el, localName) {
+    const c = this._directChild(el, localName);
+    return c ? (c.textContent || "").trim() : "";
+  }
+
+  // _collectAuthors returns an array of formatted author strings
+  // ("Smith AB") from the direct-child <author><persName> elements
+  // under the given parent. Handles both forename + surname and
+  // surname-only cases; ignores authors GROBID couldn't parse.
+  _collectAuthors(parent) {
+    const authors = [];
+    for (const child of parent.children) {
+      if (child.localName !== "author") continue;
+      const persName = this._directChild(child, "persName");
+      if (!persName) continue;
+      const forenames = [];
+      let surname = "";
+      for (const p of persName.children) {
+        if (p.localName === "forename") {
+          const t = (p.textContent || "").trim();
+          if (t) forenames.push(t[0]); // initial only, standard biblio style
+        } else if (p.localName === "surname") {
+          surname = (p.textContent || "").trim();
+        }
+      }
+      if (!surname) continue;
+      const initials = forenames.join("");
+      authors.push(initials ? `${surname} ${initials}` : surname);
+    }
+    return authors;
+  }
+
+  _extractYear(monogr) {
+    const imprint = this._directChild(monogr, "imprint");
+    if (!imprint) return "";
+    const date = this._directChild(imprint, "date");
+    if (!date) return "";
+    const when = date.getAttribute("when") || date.textContent || "";
+    const m = /(\d{4})/.exec(when);
+    return m ? m[1] : "";
+  }
+
+  _extractBiblScope(imprint, unit) {
+    if (!imprint) return "";
+    for (const child of imprint.children) {
+      if (child.localName === "biblScope" && child.getAttribute("unit") === unit) {
+        return (child.textContent || "").trim();
+      }
+    }
+    return "";
+  }
+
+  // _extractPage handles both inline-text pages ("1-20") and the
+  // from/to attribute form GROBID emits for numeric page ranges.
+  _extractPage(imprint) {
+    if (!imprint) return "";
+    for (const child of imprint.children) {
+      if (child.localName !== "biblScope") continue;
+      if (child.getAttribute("unit") !== "page") continue;
+      const from = child.getAttribute("from");
+      const to = child.getAttribute("to");
+      if (from && to && from !== to) return `${from}-${to}`;
+      if (from) return from;
+      const text = (child.textContent || "").trim();
+      if (text) return text;
+    }
+    return "";
+  }
+
+  _extractIdno(el, type) {
+    for (const child of el.children) {
+      if (
+        child.localName === "idno" &&
+        (child.getAttribute("type") || "").toUpperCase() === type.toUpperCase()
+      ) {
+        return (child.textContent || "").trim();
+      }
+    }
+    return "";
   }
 }
 
