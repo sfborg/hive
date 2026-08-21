@@ -422,10 +422,15 @@ class SfgaReader extends LitElement {
         out.push(html`<span class="cite">${this._renderNodes(node.childNodes)}</span>`);
         continue;
       }
-      // Unknown element — wrap in a passthrough block so the text
-      // gets visible layout instead of collapsing into an inline
-      // run. Better than a blank spot in the reader.
-      out.push(html`<div class="passthrough">${this._renderNodes(node.childNodes)}</div>`);
+      // Unknown element — wrap in an inline span. TEI's vocabulary
+      // skews heavily inline (rs, hi, seg, name, persName, …); the
+      // few block-ish elements we've seen in GROBID output (div,
+      // figure, table, list) are all handled explicitly above. A
+      // wrong-way-round mistake on an inline element (wrapping rs
+      // in a block) shatters paragraphs into per-name lines; the
+      // reverse mistake (inline wrapper on a truly block element)
+      // just runs adjacent content together, which is milder.
+      out.push(html`<span>${this._renderNodes(node.childNodes)}</span>`);
     }
     return out;
   }
