@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -15,9 +16,10 @@ import (
 
 func main() {
 	out := flag.String("o", "", "output path (default: stdout)")
+	expand := flag.Bool("expand", false, "also expand abbreviated genera (hits GNverifier)")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: annotate-tei [-o out.xml] input.tei.xml")
+		fmt.Fprintln(os.Stderr, "usage: annotate-tei [-o out.xml] [-expand] input.tei.xml")
 		os.Exit(2)
 	}
 	src, err := os.ReadFile(flag.Arg(0))
@@ -26,7 +28,12 @@ func main() {
 		os.Exit(1)
 	}
 	a := annotator.New()
-	augmented, err := a.FindNames(src)
+	var augmented []byte
+	if *expand {
+		augmented, err = a.Annotate(context.Background(), src)
+	} else {
+		augmented, err = a.FindNames(src)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "annotate:", err)
 		os.Exit(1)
