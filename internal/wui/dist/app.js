@@ -13652,6 +13652,10 @@ class SfgaReferences extends LitElement {
     _current: { state: true },
     _loading: { state: true },
     _error: { state: true },
+    // Free-text search across author / title / citation / DOI.
+    // Empty query returns the paginated default list; non-empty
+    // hits /api/reference/search via a trailing-edge debounce.
+    _query: { state: true },
   };
 
   static styles = css`
@@ -13673,6 +13677,24 @@ class SfgaReferences extends LitElement {
       border-right: 1px solid var(--border);
       font-family: var(--font-mono);
       font-size: var(--fs-sm);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: var(--sp-1);
+      align-content: start;
+    }
+    aside .search {
+      width: 100%;
+      padding: var(--sp-1) var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font: inherit;
+      box-sizing: border-box;
+    }
+    aside .search:focus {
+      outline: none;
+      border-color: var(--accent);
     }
     ul.list {
       list-style: none;
@@ -13734,6 +13756,7 @@ class SfgaReferences extends LitElement {
     this._current = null;
     this._loading = false;
     this._error = "";
+    this._query = "";
   }
 
   async connectedCallback() {
@@ -13792,36 +13815,71 @@ class SfgaReferences extends LitElement {
   }
 
   render() {
-    if (this._loading && this._hits.length === 0) {
-      return html`<div class="empty" role="status">Loading…</div>`;
-    }
     if (this._error) {
       return html`<div class="error" role="alert">${this._error}</div>`;
     }
-    if (this._hits.length === 0) {
-      return html`<div class="empty">(No references)</div>`;
-    }
     return html`
       <aside>
-        <ul class="list" role="listbox" aria-label="References">
-          ${this._hits.map(
-            (h) => html`
-              <li
-                role="option"
-                aria-selected=${h.id === this._selectedId ? "true" : "false"}
-                class=${h.id === this._selectedId ? "selected" : ""}
-                @click=${() => this._select(h.id)}
-              >
-                <span class="author">${h.author || "(no author)"}</span
-                ><span class="year">${h.year || ""}</span>
-                <span class="title">${h.title || h.citation || ""}</span>
-              </li>
-            `,
-          )}
-        </ul>
+        <input
+          class="search"
+          type="text"
+          placeholder="Search author / title / citation / DOI…"
+          .value=${this._query}
+          @input=${(e) => this._onQueryChange(e.target.value)}
+        />
+        ${this._loading && this._hits.length === 0
+          ? html`<div class="empty" role="status">Loading…</div>`
+          : this._hits.length === 0
+            ? html`<div class="empty">
+                ${this._query
+                  ? "(No references match the search)"
+                  : "(No references)"}
+              </div>`
+            : html`
+                <ul class="list" role="listbox" aria-label="References">
+                  ${this._hits.map(
+                    (h) => html`
+                      <li
+                        role="option"
+                        aria-selected=${h.id === this._selectedId ? "true" : "false"}
+                        class=${h.id === this._selectedId ? "selected" : ""}
+                        @click=${() => this._select(h.id)}
+                      >
+                        <span class="author">${h.author || "(no author)"}</span
+                        ><span class="year">${h.year || ""}</span>
+                        <span class="title">${h.title || h.citation || ""}</span>
+                      </li>
+                    `,
+                  )}
+                </ul>
+              `}
       </aside>
       <section>${this._renderDetail()}</section>
     `;
+  }
+
+  // _onQueryChange debounces the search endpoint. Empty query
+  // restores the default paginated list (first 200) — same as
+  // the initial mount fetch. Trailing-edge 200 ms matches the
+  // reference-modal Project-tab search debounce so keystrokes
+  // feel consistent across the two surfaces.
+  _onQueryChange(q) {
+    this._query = q;
+    clearTimeout(this._searchDebounce);
+    this._searchDebounce = setTimeout(async () => {
+      this._loading = true;
+      this._error = "";
+      try {
+        const page = q.trim()
+          ? await api.reference.search({ q: q.trim(), limit: 200 })
+          : await api.reference.list({ limit: 200 });
+        this._hits = page.items || [];
+      } catch (err) {
+        this._error = err instanceof Problem ? err.detail || err.title : String(err);
+      } finally {
+        this._loading = false;
+      }
+    }, 200);
   }
 
   _renderDetail() {
