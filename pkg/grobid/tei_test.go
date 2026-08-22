@@ -195,11 +195,38 @@ func TestParseHeaderNoTypeAttribute(t *testing.T) {
 	}
 }
 
+// TestParseHeaderKeepsMiddleInitial covers the normal case where a
+// paper's byline includes middle initials. GROBID emits these as a
+// second <forename type="middle"> element; the parser should
+// concatenate given + middle so "John A. Smith" survives instead
+// of collapsing to "John Smith".
+func TestParseHeaderKeepsMiddleInitial(t *testing.T) {
+	tei := []byte(`<?xml version="1.0"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader><fileDesc><sourceDesc>
+    <biblStruct>
+      <analytic>
+        <author><persName>
+          <forename type="first">John</forename>
+          <forename type="middle">A</forename>
+          <surname>Smith</surname>
+        </persName></author>
+      </analytic>
+    </biblStruct>
+  </sourceDesc></fileDesc></teiHeader>
+</TEI>`)
+	h, _ := ParseHeader(tei)
+	if h.Authors != "John A Smith" {
+		t.Errorf("Authors = %q, want 'John A Smith'", h.Authors)
+	}
+}
+
 // TestParseHeaderMultipleForenames covers GROBID's multi-<forename>
 // output (typically type="first" + type="middle"). Regression case
 // from a real PDF where GROBID misfiled an author-separator
 // character ("Douglass ; Miller") into the middle-name slot; the
-// parser should keep only the given name, not overwrite it.
+// parser should filter the punctuation-only middle and keep the
+// given name + surname.
 func TestParseHeaderMultipleForenames(t *testing.T) {
 	tei := []byte(`<?xml version="1.0"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">

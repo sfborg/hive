@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // BibHeader captures the bibliographic metadata GROBID extracts from
@@ -103,16 +104,28 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 				}
 			case "forename":
 				// TEI persName can contain multiple <forename>
-				// elements (e.g. first + middle). Keep only the
-				// first one so a middle-name slot GROBID misfilled
-				// with punctuation ("Douglass ; Miller" for author
-				// separator artifacts) doesn't overwrite the given
-				// name. Middle initials are omitted deliberately —
-				// display uses given + surname.
+				// elements (first + middle + rarely more). Keep
+				// each one that has at least one letter and join
+				// them with spaces in document order — GROBID
+				// emits type="first" before type="middle" reliably,
+				// so document order matches natural byline order.
+				//
+				// The letter filter catches the pathological case
+				// where GROBID misfiles an author-separator
+				// artifact into the middle-name slot as pure
+				// punctuation ("Douglass ; Miller"): the ";"
+				// forename has no letters and gets dropped, so
+				// output collapses to "Douglass Miller" while a
+				// real middle initial ("John A Smith") survives.
 				if currentAuthor != nil {
 					if text, ok := readCharData(dec); ok {
-						if currentAuthor.Forename == "" {
-							currentAuthor.Forename = strings.TrimSpace(text)
+						trimmed := strings.TrimSpace(text)
+						if hasLetter(trimmed) {
+							if currentAuthor.Forename == "" {
+								currentAuthor.Forename = trimmed
+							} else {
+								currentAuthor.Forename += " " + trimmed
+							}
 						}
 					}
 				}
@@ -355,6 +368,18 @@ func readCharData(dec *xml.Decoder) (string, bool) {
 		return "", false
 	}
 	return string(cd), true
+}
+
+// hasLetter reports whether s contains at least one unicode letter.
+// Used to filter forename tokens that GROBID misfiled as pure
+// punctuation ("; ", "-") into the middle-name slot.
+func hasLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // stackContains reports whether the tag stack has an ancestor with
