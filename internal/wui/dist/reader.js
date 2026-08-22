@@ -62,11 +62,23 @@ class SfgaReader extends LitElement {
 
   static styles = css`
     :host {
-      display: block;
+      /* Flex column so the paginated article can flex-fill the
+         remaining height below the header regardless of how many
+         rows the header wraps into. calc(100vh - Nrem) was
+         fragile — the header actually varies with controls and
+         window width, causing pages to overflow by ~1-2 lines
+         and forcing intra-page scroll. */
+      display: flex;
+      flex-direction: column;
       min-height: 100vh;
+      height: 100vh;
       background: var(--bg);
       color: var(--fg);
       font-family: var(--font-body);
+      overflow: hidden;
+    }
+    :host > header {
+      flex: 0 0 auto;
     }
     /* Scope the sticky-nav layout to the top-level <header> —
        without :host >, this rule also hit <header class="paper-
@@ -127,7 +139,8 @@ class SfgaReader extends LitElement {
        spread. Column width caps at 32ch for readability; the
        browser packs as many columns as fit at that width. */
     .layout.paginated {
-      height: calc(100vh - 3rem);
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
       position: relative;
     }
@@ -136,6 +149,7 @@ class SfgaReader extends LitElement {
       max-width: none;
       margin: 0;
       padding: var(--sp-4) var(--sp-6);
+      box-sizing: border-box;
       column-width: 32ch;
       column-gap: var(--sp-6);
       column-rule: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
@@ -444,6 +458,22 @@ class SfgaReader extends LitElement {
     else if (x > (rect.width * 2) / 3) this._pageForward();
   }
 
+  // Wheel-to-turn: scroll gestures flip pages instead of scrolling
+  // within the container (there's nothing to scroll — pages are
+  // fixed to the container). Debounced so a trackpad's rapid
+  // small-deltaY events fire one turn per gesture rather than
+  // burning through the whole document in one flick.
+  _onPageWheel(e) {
+    if (!this._paginated) return;
+    if (Math.abs(e.deltaY) < 5) return;
+    e.preventDefault();
+    const now = Date.now();
+    if (this._lastWheelTurn && now - this._lastWheelTurn < 300) return;
+    this._lastWheelTurn = now;
+    if (e.deltaY > 0) this._pageForward();
+    else this._pageBack();
+  }
+
   _recomputePages() {
     if (!this._paginated) {
       this._pageCount = 1;
@@ -584,6 +614,7 @@ class SfgaReader extends LitElement {
           : html`
               <div class=${"layout" + (this._paginated ? " paginated" : "")}
                 @click=${(e) => this._paginated && this._onPageClick(e)}
+                @wheel=${(e) => this._paginated && this._onPageWheel(e)}
               >
                 ${this._renderBody()}
               </div>
