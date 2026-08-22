@@ -2396,7 +2396,11 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, err.Error())
 		return
 	}
-	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset)
+	sort := hive.ReferenceSortAuthor
+	if r.URL.Query().Get("sort") == "recent" {
+		sort = hive.ReferenceSortRecent
+	}
+	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset, sort)
 	if err != nil {
 		writeProblem(w, r, err)
 		return

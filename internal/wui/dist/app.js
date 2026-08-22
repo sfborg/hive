@@ -13734,6 +13734,17 @@ class SfgaReferences extends LitElement {
     // a modal. Bibliography is the default because "look at the
     // reference and copy a citation" is the most common visit.
     _workspaceTab: { state: true },
+    // Sort order for the reference list. "recent" (default)
+    // orders by col__modified desc — newly-imported and recently-
+    // edited references land at the top, the useful landing view
+    // for a large archive where alphabetical scan is impractical.
+    // "author" is the alphabetical fallback for curators who
+    // specifically want to scan by name. Persisted in localStorage.
+    _sort: { state: true },
+    // Infinite-scroll state: true when there are more references
+    // to fetch past the currently-loaded window. False once we've
+    // paginated to the end (or a search returns everything at once).
+    _hasMore: { state: true },
   };
 
   static styles = css`
@@ -13817,6 +13828,10 @@ class SfgaReferences extends LitElement {
     aside {
       overflow: auto;
       padding: var(--sp-2);
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: var(--sp-1);
+      align-content: start;
     }
     /* Right pane stacks structured detail and (when present) the
        augmented reader in one scrolling column. Detail scrolls
@@ -13899,10 +13914,7 @@ class SfgaReferences extends LitElement {
       border-right: 1px solid var(--border);
       font-family: var(--font-mono);
       font-size: var(--fs-sm);
-      display: grid;
-      grid-template-rows: auto 1fr;
-      gap: var(--sp-1);
-      align-content: start;
+      grid-template-rows: auto auto 1fr;
     }
     aside .search-row {
       display: flex;
@@ -13938,6 +13950,36 @@ class SfgaReferences extends LitElement {
     aside .add-btn:hover {
       border-color: var(--accent);
       color: var(--accent);
+    }
+    aside .sort-row {
+      display: flex;
+      gap: var(--sp-1);
+    }
+    aside .sort-chip {
+      flex: 1;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1) var(--sp-2);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--fs-xs);
+      color: var(--dim);
+    }
+    aside .sort-chip:hover:not([disabled]) {
+      border-color: var(--accent);
+    }
+    aside .sort-chip.active {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    aside .sort-chip[disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    aside .scroll-sentinel {
+      height: 1px;
     }
     ul.list {
       list-style: none;
@@ -14005,6 +14047,11 @@ class SfgaReferences extends LitElement {
     this._wide = false;
     this._readerExpanded = false;
     this._workspaceTab = "bibliography";
+    this._sort =
+      localStorage.getItem("hive.references.sort") === "author"
+        ? "author"
+        : "recent";
+    this._hasMore = true;
   }
 
   async connectedCallback() {
@@ -14021,20 +14068,71 @@ class SfgaReferences extends LitElement {
       this._wide = w >= 1300;
     });
     this._resizeObserver.observe(this);
+    await this._fetchPage(true);
+    // Prefer the caller-requested id (deep-link from an Issues
+    // click); fall back to the first hit. `_select` fetches by id
+    // directly, so a requested id that isn't in the first-page
+    // list still resolves — it just won't be highlighted in the
+    // sidebar until the curator scrolls or filters to it.
+    if (this.selectId) {
+      this._select(this.selectId);
+    } else if (this._hits.length > 0) {
+      this._select(this._hits[0].id);
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._resizeObserver) this._resizeObserver.disconnect();
+    if (this._scrollObserver) this._scrollObserver.disconnect();
+    super.disconnectedCallback();
+  }
+
+  firstUpdated() {
+    // Attach infinite-scroll observer on the sentinel div at the
+    // bottom of the list. IntersectionObserver fires when the
+    // sentinel scrolls into the viewport, triggering the next
+    // page fetch.
+    this._scrollObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && this._hasMore && !this._loading && !this._query.trim()) {
+            this._fetchPage(false);
+          }
+        }
+      },
+      { root: this.renderRoot.querySelector("aside"), rootMargin: "200px" },
+    );
+    const sentinel = this.renderRoot.querySelector(".scroll-sentinel");
+    if (sentinel) this._scrollObserver.observe(sentinel);
+  }
+
+  // _fetchPage loads references. reset=true starts over (query
+  // change / sort change / mount). reset=false appends the next
+  // page for infinite scroll. Search mode doesn't paginate — the
+  // search endpoint returns top-relevance hits in one shot.
+  async _fetchPage(reset) {
+    if (!reset && (!this._hasMore || this._loading)) return;
     this._loading = true;
+    this._error = "";
+    const q = this._query.trim();
+    const offset = reset ? 0 : this._hits.length;
+    const limit = 200;
     try {
-      const page = await api.reference.list({ limit: 200 });
-      this._hits = page.items || [];
-      // Prefer the caller-requested id (deep-link from an Issues
-      // click); fall back to the first hit. `_select` fetches by id
-      // directly, so a requested id that isn't in the first-page
-      // list still resolves — it just won't be highlighted in the
-      // sidebar until the curator scrolls or filters to it.
-      if (this.selectId) {
-        this._select(this.selectId);
-      } else if (this._hits.length > 0) {
-        this._select(this._hits[0].id);
+      let items;
+      if (q) {
+        // Search returns relevance-ranked results in one shot; no
+        // pagination. Sort toggle doesn't apply during search.
+        const page = await api.reference.search({ q, limit });
+        items = page.items || [];
+        this._hasMore = false;
+      } else {
+        const opts = { limit, offset };
+        if (this._sort === "recent") opts.sort = "recent";
+        const page = await api.reference.list(opts);
+        items = page.items || [];
+        this._hasMore = items.length === limit;
       }
+      this._hits = reset ? items : [...this._hits, ...items];
     } catch (err) {
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
     } finally {
@@ -14042,9 +14140,13 @@ class SfgaReferences extends LitElement {
     }
   }
 
-  disconnectedCallback() {
-    if (this._resizeObserver) this._resizeObserver.disconnect();
-    super.disconnectedCallback();
+  _setSort(sort) {
+    if (this._sort === sort) return;
+    this._sort = sort;
+    try {
+      localStorage.setItem("hive.references.sort", sort);
+    } catch {}
+    this._fetchPage(true);
   }
 
   // Post-mount: if the shell hands us a new `selectId` (e.g. curator
@@ -14114,6 +14216,26 @@ class SfgaReferences extends LitElement {
             +
           </button>
         </div>
+        <div class="sort-row" role="group" aria-label="Sort references">
+          <button
+            class=${"sort-chip" + (this._sort === "recent" ? " active" : "")}
+            type="button"
+            title="Sort by most recently added or edited"
+            ?disabled=${!!this._query.trim()}
+            @click=${() => this._setSort("recent")}
+          >
+            Recent
+          </button>
+          <button
+            class=${"sort-chip" + (this._sort === "author" ? " active" : "")}
+            type="button"
+            title="Sort alphabetically by author"
+            ?disabled=${!!this._query.trim()}
+            @click=${() => this._setSort("author")}
+          >
+            A–Z
+          </button>
+        </div>
         ${this._loading && this._hits.length === 0
           ? html`<div class="empty" role="status">Loading…</div>`
           : this._hits.length === 0
@@ -14139,6 +14261,10 @@ class SfgaReferences extends LitElement {
                     `,
                   )}
                 </ul>
+                <div class="scroll-sentinel" aria-hidden="true"></div>
+                ${this._loading && this._hits.length > 0
+                  ? html`<div class="empty" role="status">Loading more…</div>`
+                  : nothing}
               `}
       </aside>
       ${this._renderRightPanes()}
@@ -14164,12 +14290,7 @@ class SfgaReferences extends LitElement {
     this._closeModal();
     // Refresh list so the new reference appears; select it so the
     // curator lands on the detail they just created.
-    try {
-      const page = this._query.trim()
-        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
-        : await api.reference.list({ limit: 200 });
-      this._hits = page.items || [];
-    } catch {}
+    await this._fetchPage(true);
     if (id) this._select(id);
   }
 
@@ -14303,12 +14424,7 @@ class SfgaReferences extends LitElement {
         this._current = await api.reference.get(id);
       } catch {}
     }
-    try {
-      const page = this._query.trim()
-        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
-        : await api.reference.list({ limit: 200 });
-      this._hits = page.items || [];
-    } catch {}
+    await this._fetchPage(true);
   }
 
   // _onQueryChange debounces the search endpoint. Empty query
@@ -14319,20 +14435,7 @@ class SfgaReferences extends LitElement {
   _onQueryChange(q) {
     this._query = q;
     clearTimeout(this._searchDebounce);
-    this._searchDebounce = setTimeout(async () => {
-      this._loading = true;
-      this._error = "";
-      try {
-        const page = q.trim()
-          ? await api.reference.search({ q: q.trim(), limit: 200 })
-          : await api.reference.list({ limit: 200 });
-        this._hits = page.items || [];
-      } catch (err) {
-        this._error = err instanceof Problem ? err.detail || err.title : String(err);
-      } finally {
-        this._loading = false;
-      }
-    }, 200);
+    this._searchDebounce = setTimeout(() => this._fetchPage(true), 200);
   }
 
   _renderDetail() {
@@ -14443,13 +14546,8 @@ class SfgaReferences extends LitElement {
     this._selectedId = "";
     // Refresh list and pick a neighboring reference so the pane
     // isn't blank after the delete.
-    try {
-      const page = this._query.trim()
-        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
-        : await api.reference.list({ limit: 200 });
-      this._hits = page.items || [];
-      if (this._hits.length > 0) this._select(this._hits[0].id);
-    } catch {}
+    await this._fetchPage(true);
+    if (this._hits.length > 0) this._select(this._hits[0].id);
   }
 
   async _copy(text, event) {

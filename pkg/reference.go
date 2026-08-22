@@ -171,15 +171,39 @@ type ReferenceHit struct {
 	MaxSeverity string
 }
 
+// ReferenceSort selects the ordering ListReferencesPage uses.
+type ReferenceSort int
+
+const (
+	// ReferenceSortAuthor orders alphabetically by author + year +
+	// title. Default; matches the "browse Andersons" mental model
+	// for scanning a small-medium archive.
+	ReferenceSortAuthor ReferenceSort = iota
+	// ReferenceSortRecent orders by col__modified descending, so
+	// newly-imported and recently-edited references land at the
+	// top. Preferred landing view for large archives where
+	// alphabetical scan is impractical.
+	ReferenceSortRecent
+)
+
 // ListReferencesPage returns references with SQL-level LIMIT/OFFSET
-// pagination. limit == 0 disables the LIMIT clause. Ordered by author
-// then year for a stable, curator-scannable list.
-func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int) ([]ReferenceHit, int, error) {
+// pagination. limit == 0 disables the LIMIT clause. Sort order
+// selected by the sort parameter.
+func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sort ReferenceSort) ([]ReferenceHit, int, error) {
 	var total int
 	if err := a.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM reference`,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("core: count references: %w", err)
+	}
+
+	orderBy := "col__author, col__issued, col__title"
+	if sort == ReferenceSortRecent {
+		// col__modified is set on every write; DESC puts newest
+		// first. Tie-break by id for a deterministic sort so
+		// paginated infinite-scroll doesn't re-shuffle rows across
+		// LIMIT/OFFSET windows.
+		orderBy = "col__modified DESC, col__id"
 	}
 
 	q := `SELECT
@@ -190,7 +214,7 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int) ([]
 		COALESCE(col__citation, ''),
 		COALESCE(col__type_id, '')
 	FROM reference
-	ORDER BY col__author, col__issued, col__title`
+	ORDER BY ` + orderBy
 
 	args := []any{}
 	if limit > 0 {
