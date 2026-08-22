@@ -13683,6 +13683,10 @@ class SfgaReferences extends LitElement {
     // of owning the modal-mount state locally so each screen
     // that offers editing gets its own modal instance.
     _editRefID: { state: true },
+    // True when the modal is open in add mode (curator hit the +
+    // button). Separate from _editRefID because the modal keys off
+    // the presence of editID to switch between edit and add flows.
+    _addingNew: { state: true },
     // True when the host is wide enough (~1300px+) for a 3-column
     // layout (list | detail | reader). Narrow viewports collapse
     // the reader into the detail pane below the structured info,
@@ -13765,8 +13769,13 @@ class SfgaReferences extends LitElement {
       gap: var(--sp-1);
       align-content: start;
     }
+    aside .search-row {
+      display: flex;
+      gap: var(--sp-1);
+      align-items: stretch;
+    }
     aside .search {
-      width: 100%;
+      flex: 1;
       padding: var(--sp-1) var(--sp-2);
       background: var(--bg);
       color: var(--fg);
@@ -13774,10 +13783,26 @@ class SfgaReferences extends LitElement {
       border-radius: var(--radius-sm);
       font: inherit;
       box-sizing: border-box;
+      min-width: 0;
     }
     aside .search:focus {
       outline: none;
       border-color: var(--accent);
+    }
+    aside .add-btn {
+      padding: 0 var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--fs-lg);
+      line-height: 1;
+    }
+    aside .add-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
     }
     ul.list {
       list-style: none;
@@ -13841,6 +13866,7 @@ class SfgaReferences extends LitElement {
     this._error = "";
     this._query = "";
     this._editRefID = "";
+    this._addingNew = false;
     this._wide = false;
   }
 
@@ -13922,13 +13948,24 @@ class SfgaReferences extends LitElement {
     }
     return html`
       <aside>
-        <input
-          class="search"
-          type="text"
-          placeholder="Search author / title / citation / DOI…"
-          .value=${this._query}
-          @input=${(e) => this._onQueryChange(e.target.value)}
-        />
+        <div class="search-row">
+          <input
+            class="search"
+            type="text"
+            placeholder="Search author / title / citation / DOI…"
+            .value=${this._query}
+            @input=${(e) => this._onQueryChange(e.target.value)}
+          />
+          <button
+            class="add-btn"
+            type="button"
+            title="Add reference"
+            aria-label="Add reference"
+            @click=${() => (this._addingNew = true)}
+          >
+            +
+          </button>
+        </div>
         ${this._loading && this._hits.length === 0
           ? html`<div class="empty" role="status">Loading…</div>`
           : this._hits.length === 0
@@ -13957,14 +13994,35 @@ class SfgaReferences extends LitElement {
               `}
       </aside>
       ${this._renderRightPanes()}
-      ${this._editRefID
+      ${this._editRefID || this._addingNew
         ? html`<sfga-add-reference-modal
             .editID=${this._editRefID}
+            .defaultTab=${this._addingNew ? "project" : "manual"}
             @reference-updated=${(e) => this._onEditSaved(e)}
-            @close=${() => (this._editRefID = "")}
+            @reference-picked=${(e) => this._onReferenceAdded(e)}
+            @close=${() => this._closeModal()}
           ></sfga-add-reference-modal>`
         : nothing}
     `;
+  }
+
+  _closeModal() {
+    this._editRefID = "";
+    this._addingNew = false;
+  }
+
+  async _onReferenceAdded(e) {
+    const id = (e && e.detail && e.detail.id) || "";
+    this._closeModal();
+    // Refresh list so the new reference appears; select it so the
+    // curator lands on the detail they just created.
+    try {
+      const page = this._query.trim()
+        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
+        : await api.reference.list({ limit: 200 });
+      this._hits = page.items || [];
+    } catch {}
+    if (id) this._select(id);
   }
 
   // _renderRightPanes lays out the detail + optional reader

@@ -105,31 +105,20 @@ class SfgaReader extends LitElement {
       font-size: var(--fs-sm);
       color: var(--dim);
     }
-    /* Layout modes: single-column reader by default (article max-
-       width centered); split when the PDF pane is visible (two
-       equal columns filling the viewport height below the sticky
-       header). The article in split mode drops its centered max-
-       width so the text can breathe in the narrower column. */
+    /* Show PDF replaces the reader entirely rather than splitting.
+       Curator toggles between the two views; when they want the
+       PDF alongside the augmented text (fact-checking flow), the
+       full-screen reference editor is where that side-by-side
+       affordance lives. Keeps this reader focused on one thing
+       at a time — matches the intent of a reading surface. */
     .layout {
       display: block;
     }
-    .layout.split {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      height: calc(100vh - 3rem);
-      gap: 0;
-    }
-    .layout.split article {
-      max-width: none;
-      overflow: auto;
-      padding: var(--sp-4);
-      margin: 0;
-    }
-    .layout.split .pdf {
+    .pdf-full {
       width: 100%;
-      height: 100%;
+      height: calc(100vh - 3rem);
       border: 0;
-      border-right: 1px solid var(--border);
+      display: block;
     }
     /* Paginated mode: multi-column layout that fills the viewport
        and pages horizontally instead of scrolling. Solves the
@@ -581,22 +570,19 @@ class SfgaReader extends LitElement {
         ? html`<p class="error" role="alert">${this._error}</p>`
         : nothing}
       ${this._doc
-        ? html`
-            <div class=${"layout" +
-              (this._showPDF ? " split" : "") +
-              (this._paginated ? " paginated" : "")}
-              @click=${(e) => this._paginated && this._onPageClick(e)}
-            >
-              ${this._showPDF
-                ? html`<iframe
-                    class="pdf"
-                    src=${`/api/reference/library/${encodeURIComponent(this._sha)}/source#page=1`}
-                    title="Source PDF"
-                  ></iframe>`
-                : nothing}
-              ${this._renderBody()}
-            </div>
-          `
+        ? this._showPDF
+          ? html`<iframe
+              class="pdf-full"
+              src=${`/api/reference/library/${encodeURIComponent(this._sha)}/source#page=1`}
+              title="Source PDF"
+            ></iframe>`
+          : html`
+              <div class=${"layout" + (this._paginated ? " paginated" : "")}
+                @click=${(e) => this._paginated && this._onPageClick(e)}
+              >
+                ${this._renderBody()}
+              </div>
+            `
         : nothing}
     `;
   }
