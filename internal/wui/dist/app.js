@@ -13952,15 +13952,18 @@ class SfgaReferences extends LitElement {
       color: var(--accent);
     }
     aside .sort-row {
-      display: flex;
+      /* Grid over flex — deterministic 50/50 columns that don't
+         re-flow when the button's border-color changes on active.
+         The earlier flex attempt widened visibly on click because
+         browsers' default button min-width and the flex-basis
+         interpretation combined unexpectedly. */
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: var(--sp-1);
     }
     aside .sort-chip {
-      /* flex: 1 1 0 forces equal 50/50 widths regardless of the
-         button text length — flex: 1 defaults to flex-basis: auto
-         which content-sizes and lets the active chip visibly
-         widen when its border color changes. */
-      flex: 1 1 0;
+      min-width: 0;
+      box-sizing: border-box;
       background: var(--bg);
       color: var(--fg);
       border: 1px solid var(--border);
@@ -13970,6 +13973,9 @@ class SfgaReferences extends LitElement {
       font: inherit;
       font-size: var(--fs-xs);
       color: var(--dim);
+    }
+    aside .sort-chip:focus {
+      outline: none;
     }
     aside .sort-chip:hover:not([disabled]) {
       border-color: var(--accent);
