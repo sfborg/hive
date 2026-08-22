@@ -125,6 +125,14 @@ class SfgaReader extends LitElement {
        at a time — matches the intent of a reading surface. */
     .layout {
       display: block;
+      /* Non-paginated (scrolling) mode fills remaining vertical
+         space below the header and scrolls vertically. Curator
+         reads by scrolling down like a normal document; the
+         paginated mode below overrides these for its horizontal
+         page-turn behavior. */
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
     }
     .pdf-full {
       width: 100%;
