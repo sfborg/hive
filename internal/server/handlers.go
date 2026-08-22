@@ -132,6 +132,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/reference/search", s.handleReferenceSearch)
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
 	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
+	mux.HandleFunc("POST /api/reference/{id}/attach-pdf", s.handleAttachReferencePDF)
 	// Add-reference modal helpers. All three return *unsaved* previews
 	// — the modal shows a form the curator confirms, then POSTs to
 	// /api/reference to actually write.
@@ -2439,6 +2440,38 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiPage[apiReferenceHit]{Items: items})
 }
 
+// handleAttachReferencePDF associates a sidecar-library sha512
+// with an existing reference. The sha comes from a prior
+// POST /api/reference/upload response. Curator use case: the
+// reference was created without a PDF, and later they want to
+// upload one and link it.
+//
+// Body: {"sha512": "..."}. Idempotent — a repeat attach with
+// the same sha is a no-op.
+func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		SHA512 string `json:"sha512"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	body.SHA512 = strings.TrimSpace(body.SHA512)
+	if body.SHA512 == "" {
+		writeBadRequest(w, r, "sha512 required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.AttachReferencePDF(id, body.SHA512)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"reference_id": id, "sha512": body.SHA512})
+}
+
 // handleRegenerateCitations rewrites col__citation on reference
 // rows using ComposeCitation over each row's current structured
 // fields. Query param overwrite=true replaces every row's citation
@@ -2476,6 +2509,13 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := apiReferenceToColdp(body)
+	// Optional ?attach_pdf_sha=... query param associates a
+	// sidecar-library sha512 with the newly-created reference in
+	// the same transaction. Populated by the reference-add modal
+	// when a PDF was uploaded and the resulting sha needs to be
+	// linked to the record. Empty is fine — plenty of references
+	// have no attached PDF.
+	attachSha := strings.TrimSpace(r.URL.Query().Get("attach_pdf_sha"))
 
 	var newID string
 	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
@@ -2484,6 +2524,11 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		newID = id
+		if attachSha != "" {
+			if err := tx.AttachReferencePDF(id, attachSha); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -2495,11 +2540,16 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, err)
 		return
 	}
+	out := referenceToAPI(fresh)
+	if attachSha != "" {
+		out.AttachedPDFShas = []string{attachSha}
+		out.HasSourceDoc = true
+	}
 	if fresh.Modified != "" {
 		w.Header().Set("ETag", fresh.Modified)
 	}
 	w.Header().Set("Location", "/api/reference/"+newID)
-	writeJSON(w, http.StatusCreated, referenceToAPI(fresh))
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // handleResolveDOI fetches an OpenAlex Work for the DOI in the `doi`
@@ -2681,7 +2731,15 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 	if ref.Modified != "" {
 		w.Header().Set("ETag", ref.Modified)
 	}
-	writeJSON(w, http.StatusOK, referenceToAPI(ref))
+	out := referenceToAPI(ref)
+	// Attach sidecar-PDF associations from hive__reference_pdf so
+	// the references-screen reader pane knows which sha (if any)
+	// to fetch. Empty slice is elided by omitempty.
+	if shas, err := s.a.ReferencePDFs(r.Context(), id); err == nil && len(shas) > 0 {
+		out.AttachedPDFShas = shas
+		out.HasSourceDoc = true
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handlePatchReference applies a partial update to a reference row.

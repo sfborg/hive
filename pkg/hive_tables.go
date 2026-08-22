@@ -124,6 +124,30 @@ CREATE TABLE IF NOT EXISTS hive__metadata_touched (
 	touched_at  TEXT NOT NULL
 );
 
+-- hive__reference_pdf associates a reference row with one or more
+-- source-document sidecars (PDF / EPUB / HTML / JATS). The sha512
+-- is the sidecar library's content-addressed key — the actual file
+-- lives at <archive>.library/<sha>.<ext>. Populated by the upload
+-- handler when a curator attaches a file to a reference; read by
+-- the references screen and reader components to know which sha
+-- (if any) to fetch for the currently-selected reference.
+--
+-- Composite primary key allows one reference to carry multiple
+-- attachments (multi-media works, translated editions) — rare but
+-- semantically valid. Same sha can appear across multiple
+-- references (two curators point at the same content from
+-- different reference rows) without violating uniqueness.
+CREATE TABLE IF NOT EXISTS hive__reference_pdf (
+	reference_id  TEXT NOT NULL,
+	sha512        TEXT NOT NULL,
+	attached_at   TEXT NOT NULL,
+	attached_by   TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (reference_id, sha512)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__reference_pdf_sha
+	ON hive__reference_pdf (sha512);
+
 -- hive__config_rules holds per-rule overrides of enabled state and
 -- severity. Missing row (or NULL columns) means "use the ruleset
 -- bundle's default." CHECK constraints reject bad values at write

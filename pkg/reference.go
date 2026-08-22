@@ -509,6 +509,48 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 //
 //   - Missing reference → ErrNotFound.
 //   - Any dependent row → ErrConflict with the offending table name.
+// AttachReferencePDF associates a sidecar-library sha512 with a
+// reference row. Idempotent — repeat attachments with the same
+// (reference_id, sha512) are no-ops. Stamps attached_at + the
+// actor from the context so the audit trail records who linked
+// the file.
+func (t *Tx) AttachReferencePDF(referenceID, sha512 string) error {
+	if referenceID == "" || sha512 == "" {
+		return fmt.Errorf("core: AttachReferencePDF: both reference_id and sha512 required")
+	}
+	actor := ActorFromContext(t.ctx)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	const q = `INSERT INTO hive__reference_pdf
+		(reference_id, sha512, attached_at, attached_by)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(reference_id, sha512) DO NOTHING`
+	if _, err := t.tx.ExecContext(t.ctx, q, referenceID, sha512, now, actor); err != nil {
+		return fmt.Errorf("core: attach pdf to reference %s: %w", referenceID, err)
+	}
+	return nil
+}
+
+// ReferencePDFs returns every sha512 attached to the given
+// reference, in attach order. Empty slice when nothing is attached.
+func (a *Archive) ReferencePDFs(ctx context.Context, referenceID string) ([]string, error) {
+	const q = `SELECT sha512 FROM hive__reference_pdf
+		WHERE reference_id = ? ORDER BY attached_at`
+	rows, err := a.db.QueryContext(ctx, q, referenceID)
+	if err != nil {
+		return nil, fmt.Errorf("core: list attached PDFs for %s: %w", referenceID, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sha string
+		if err := rows.Scan(&sha); err != nil {
+			return nil, err
+		}
+		out = append(out, sha)
+	}
+	return out, rows.Err()
+}
+
 // RegenerateCitations rewrites col__citation on reference rows
 // using ComposeCitation over each row's current structured fields.
 // Two modes:

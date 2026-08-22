@@ -512,7 +512,16 @@ export const api = {
     list: (opts) => j("GET", `/api/reference${qs(opts)}`),
     get: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}`),
     search: (opts) => j("GET", `/api/reference/search${qs(opts)}`),
-    create: (body) => j("POST", `/api/reference`, body),
+    // create optionally accepts an attach_pdf_sha which links the
+    // newly-created reference to a sidecar-library sha in the same
+    // transaction. Used by the reference-add modal when the curator
+    // uploaded a PDF before completing the form.
+    create: (body, attachPdfSha) =>
+      j(
+        "POST",
+        `/api/reference${attachPdfSha ? qs({ attach_pdf_sha: attachPdfSha }) : ""}`,
+        body,
+      ),
     patch: (id, patch, ifMatch) =>
       j(
         "PATCH",
@@ -521,6 +530,10 @@ export const api = {
         ifMatch ? { "If-Match": ifMatch } : {},
       ),
     resolveDOI: (doi) => j("GET", `/api/reference/resolve-doi${qs({ doi })}`),
+    attachPDF: (id, sha512) =>
+      j("POST", `/api/reference/${encodeURIComponent(id)}/attach-pdf`, { sha512 }),
+    regenerateCitations: (overwrite) =>
+      j("POST", `/api/reference/regenerate-citations${qs({ overwrite: overwrite ? "true" : "" })}`, {}),
     // lookupOpenAlex searches OpenAlex by extracted metadata (title +
     // optional author surname + optional year) for a paper that has
     // no DOI printed on it. Used to surface publisher-backfill and

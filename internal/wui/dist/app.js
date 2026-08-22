@@ -11290,7 +11290,14 @@ class SfgaAddReferenceModal extends LitElement {
     try {
       // Strip id so core.CreateReference mints a fresh UUID.
       const body = { ...ref, id: "" };
-      const saved = await api.reference.create(body);
+      // If a PDF was uploaded during this modal session, link its
+      // sidecar sha to the newly-created reference so the reader
+      // can find it later from the references screen.
+      const attachSha =
+        this._uploadResult && this._uploadResult.sha512
+          ? this._uploadResult.sha512
+          : "";
+      const saved = await api.reference.create(body, attachSha);
       this._pick(saved.id, referenceHitLabel(saved));
     } catch (err) {
       this._error = err.detail || err.message || String(err);
@@ -12006,8 +12013,14 @@ class SfgaAddReferenceModal extends LitElement {
         this._close();
       } else {
         // Add mode: POST-create + pick, same path as _createAndPick.
+        // Attach the upload sha (if any) so the reference gets its
+        // sidecar-library association from the start.
         const body = { ...this._manual, id: "" };
-        const saved = await api.reference.create(body);
+        const attachSha =
+          this._uploadResult && this._uploadResult.sha512
+            ? this._uploadResult.sha512
+            : "";
+        const saved = await api.reference.create(body, attachSha);
         this._pick(saved.id, referenceHitLabel(saved));
       }
     } catch (err) {
@@ -13660,6 +13673,11 @@ class SfgaReferences extends LitElement {
     // Empty query returns the paginated default list; non-empty
     // hits /api/reference/search via a trailing-edge debounce.
     _query: { state: true },
+    // Non-empty when the reference-edit modal is open for the
+    // currently-selected reference. Mirrors SfgaDetail's pattern
+    // of owning the modal-mount state locally so each screen
+    // that offers editing gets its own modal instance.
+    _editRefID: { state: true },
   };
 
   static styles = css`
@@ -13672,10 +13690,47 @@ class SfgaReferences extends LitElement {
       overflow: hidden;
       height: 100%;
     }
-    aside,
+    aside {
+      overflow: auto;
+      padding: var(--sp-2);
+    }
+    /* Right pane stacks structured detail and (when present) the
+       augmented reader in one scrolling column. Detail scrolls
+       away as curator scrolls down, so the reader takes the full
+       pane below it — matches the "reading takes priority once
+       you're reading" pattern from the reader design. */
     section {
       overflow: auto;
       padding: var(--sp-2);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+    section .reader {
+      flex: 1;
+      min-height: 40rem;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    section .detail-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: var(--sp-2);
+    }
+    section .edit-btn {
+      font: inherit;
+      font-size: var(--fs-sm);
+      padding: var(--sp-1) var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    section .edit-btn:hover {
+      border-color: var(--accent);
     }
     aside {
       border-right: 1px solid var(--border);
@@ -13761,6 +13816,7 @@ class SfgaReferences extends LitElement {
     this._loading = false;
     this._error = "";
     this._query = "";
+    this._editRefID = "";
   }
 
   async connectedCallback() {
@@ -13858,8 +13914,48 @@ class SfgaReferences extends LitElement {
                 </ul>
               `}
       </aside>
-      <section>${this._renderDetail()}</section>
+      <section>
+        ${this._renderDetail()}
+        ${this._current && this._current.attached_pdf_shas && this._current.attached_pdf_shas.length
+          ? html`<iframe
+              class="reader"
+              title="Reader"
+              src=${`/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`}
+            ></iframe>`
+          : nothing}
+      </section>
+      ${this._editRefID
+        ? html`<sfga-add-reference-modal
+            .editID=${this._editRefID}
+            @reference-updated=${(e) => this._onEditSaved(e)}
+            @close=${() => (this._editRefID = "")}
+          ></sfga-add-reference-modal>`
+        : nothing}
     `;
+  }
+
+  _openEdit() {
+    if (this._selectedId) this._editRefID = this._selectedId;
+  }
+
+  async _onEditSaved(e) {
+    const id = (e && e.detail && e.detail.id) || this._editRefID;
+    this._editRefID = "";
+    // Reload the current detail so structured-field changes made
+    // in the modal are visible immediately. Also refresh the list
+    // so any author / title / citation edits update the visible
+    // list row.
+    if (id) {
+      try {
+        this._current = await api.reference.get(id);
+      } catch {}
+    }
+    try {
+      const page = this._query.trim()
+        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
+        : await api.reference.list({ limit: 200 });
+      this._hits = page.items || [];
+    } catch {}
   }
 
   // _onQueryChange debounces the search endpoint. Empty query
@@ -13900,7 +13996,12 @@ class SfgaReferences extends LitElement {
         : html`<dt>${label}</dt>
             <dd><a href=${value} target="_blank" rel="noopener">${value}</a></dd>`;
     return html`
-      <h2>${r.title || r.citation || r.id}</h2>
+      <div class="detail-header">
+        <h2>${r.title || r.citation || r.id}</h2>
+        <button class="edit-btn" type="button" @click=${() => this._openEdit()}>
+          Edit
+        </button>
+      </div>
       <hr />
       <dl>
         ${row("Author", r.author)} ${row("Issued", r.issued)}

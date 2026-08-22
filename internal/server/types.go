@@ -774,6 +774,12 @@ type apiReference struct {
 	// resolver on the WUI side fetches /api/issue directly and
 	// computes both locally to keep this endpoint fast.)
 	HasSourceDoc bool `json:"has_source_doc,omitempty"`
+	// AttachedPDFShas lists the sidecar-library sha512s associated
+	// with this reference via hive__reference_pdf. Typically one
+	// entry (one PDF per reference); the references-screen reader
+	// pane loads the first sha. Empty when no source document has
+	// been attached.
+	AttachedPDFShas []string `json:"attached_pdf_shas,omitempty"`
 }
 
 func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
