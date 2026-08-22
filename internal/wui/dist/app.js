@@ -2004,7 +2004,11 @@ class SfgaApp extends LitElement {
       this._syncingFromHash = false;
       return;
     }
-    if (changed.has("screen") || changed.has("selectedId")) {
+    if (
+      changed.has("screen") ||
+      changed.has("selectedId") ||
+      changed.has("_pendingReferenceId")
+    ) {
       this._syncToHash();
     }
   }
@@ -2033,7 +2037,9 @@ class SfgaApp extends LitElement {
   //   #/                    → taxa screen, no selection
   //   #/taxon/{id}          → taxa screen, taxon revealed + selected
   //   #/metadata            → metadata screen
-  //   #/references          → references screen
+  //   #/references          → references screen, no selection
+  //   #/reference/{id}      → references screen with that reference
+  //                           selected on load (deep-link / reload)
   // Unknown paths fall back to the taxa screen — safer than leaving
   // the UI in a broken state when someone shares an old-schema link.
   _syncFromHash() {
@@ -2049,6 +2055,9 @@ class SfgaApp extends LitElement {
     } else if (parts[0] === "taxon") {
       this.screen = "taxa";
       this.selectedId = parts[1] || "";
+    } else if (parts[0] === "reference") {
+      this.screen = "references";
+      this._pendingReferenceId = parts[1] || "";
     } else if (SfgaApp.views.some((v) => v.id === parts[0])) {
       this.screen = parts[0];
     } else {
@@ -2064,6 +2073,10 @@ class SfgaApp extends LitElement {
     let wanted;
     if (this.screen === "taxa") {
       wanted = this.selectedId ? `#/taxon/${this.selectedId}` : "#/";
+    } else if (this.screen === "references") {
+      wanted = this._pendingReferenceId
+        ? `#/reference/${this._pendingReferenceId}`
+        : `#/references`;
     } else {
       wanted = `#/${this.screen}`;
     }
@@ -2493,7 +2506,15 @@ class SfgaApp extends LitElement {
           <div class="screen references">
             <sfga-references
               .selectId=${this._pendingReferenceId}
-              @reference-selected=${() => (this._pendingReferenceId = "")}
+              @reference-selected=${(e) => {
+                // Track the current selection in the shell so the
+                // hash can reflect it — reloading / bookmarking /
+                // sharing a URL to a specific reference stays lossless.
+                const id = (e && e.detail && e.detail.id) || "";
+                if (this._pendingReferenceId !== id) {
+                  this._pendingReferenceId = id;
+                }
+              }}
             ></sfga-references>
           </div>
         `;
