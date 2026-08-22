@@ -596,7 +596,8 @@
       "enforcement": "soft",
       "severity": "warn",
       "parameters": {
-        "algorithm": "issn"
+        "algorithm": "issn",
+        "separator": ","
       },
       "error_message": "",
       "warning_message": "This ISSN may be invalid — its check digit doesn't match. Usually that means one digit is wrong or two are swapped.",

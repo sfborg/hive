@@ -142,6 +142,59 @@ func TestRepairTagBoundarySpacing(t *testing.T) {
 	}
 }
 
+// TestISSNJoinsAllWithLinkingFirst covers the multi-ISSN case
+// (a journal with both print + electronic ISSNs). All ISSNs land
+// in col__issn comma-joined with the ISSN-L first so downstream
+// serial lookups can match on either medium's ISSN — TaxonWorks
+// and other systems may index only one form.
+func TestISSNJoinsAllWithLinkingFirst(t *testing.T) {
+	const fixture = `{
+		"id": "https://openalex.org/W1",
+		"doi": "https://doi.org/10.11646/zootaxa.1362.1.2",
+		"title": "Key to conifer-infesting species of Lepidosaphes",
+		"primary_location": {
+			"source": {
+				"display_name": "Zootaxa",
+				"type": "journal",
+				"issn": ["1175-5334", "1175-5326"],
+				"issn_l": "1175-5326"
+			}
+		}
+	}`
+	var w work
+	if err := json.Unmarshal([]byte(fixture), &w); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	r := w.toReference()
+	if r.ISSN != "1175-5326, 1175-5334" {
+		t.Errorf("ISSN = %q, want ISSN-L first then remaining", r.ISSN)
+	}
+}
+
+// TestISSNMissingLinkingUsesArrayOrder covers OpenAlex records
+// without an issn_l — every array-order ISSN is kept.
+func TestISSNMissingLinkingUsesArrayOrder(t *testing.T) {
+	const fixture = `{
+		"id": "https://openalex.org/W2",
+		"doi": "https://doi.org/10.example/x",
+		"title": "Example",
+		"primary_location": {
+			"source": {
+				"display_name": "Somewhere",
+				"issn": ["1234-5678", "8765-4321"]
+			}
+		}
+	}`
+	var w work
+	if err := json.Unmarshal([]byte(fixture), &w); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	r := w.toReference()
+	if r.ISSN != "1234-5678, 8765-4321" {
+		t.Errorf("ISSN = %q, want all ISSNs joined in array order", r.ISSN)
+	}
+}
+
 // TestTitleCaseIfShouting covers publisher-uppercased author name
 // repair. Only fires when the input has zero lowercase letters —
 // mixed-case input passes through untouched.

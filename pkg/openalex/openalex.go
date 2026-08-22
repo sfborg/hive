@@ -341,10 +341,24 @@ func (w work) toReference() *coldp.Reference {
 		issns                               []string
 	)
 	if w.PrimaryLocation != nil && w.PrimaryLocation.Source != nil {
-		container = repairTagBoundarySpacing(w.PrimaryLocation.Source.DisplayName)
-		containerType = w.PrimaryLocation.Source.Type
-		publisher = w.PrimaryLocation.Source.Publisher
-		issns = w.PrimaryLocation.Source.ISSN
+		src := w.PrimaryLocation.Source
+		container = repairTagBoundarySpacing(src.DisplayName)
+		containerType = src.Type
+		publisher = src.Publisher
+		// Preserve every ISSN (print + electronic when a journal
+		// has both) so downstream serial lookups can match on
+		// either — TaxonWorks and other systems may index serials
+		// by only one medium's ISSN. The comma-joined value is
+		// safe for check-digit validation because the ISSN rule
+		// carries a `separator: ","` param and validates per-token.
+		if src.ISSN_L != "" {
+			issns = append(issns, src.ISSN_L)
+		}
+		for _, i := range src.ISSN {
+			if i != src.ISSN_L {
+				issns = append(issns, i)
+			}
+		}
 	}
 	var landing string
 	if w.PrimaryLocation != nil {
