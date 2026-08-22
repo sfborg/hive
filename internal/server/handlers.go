@@ -142,6 +142,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference/parse-bibtex", s.handleParseBibTeX)
 	mux.HandleFunc("GET /api/reference/{id}", s.handleGetReference)
 	mux.HandleFunc("PATCH /api/reference/{id}", s.handlePatchReference)
+	mux.HandleFunc("DELETE /api/reference/{id}", s.handleDeleteReference)
 	// POST /api/reference/upload accepts a multipart file
 	// (PDF / EPUB / HTML / JATS), stores it in the archive's
 	// sidecar directory content-addressed on sha512, and returns
@@ -2470,6 +2471,26 @@ func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"reference_id": id, "sha512": body.SHA512})
+}
+
+// handleDeleteReference removes a reference row. Fails with 409
+// when downstream aggregates still cite the reference — DeleteReference
+// refuses rather than orphaning them. Curator's UI shows the error
+// so they can un-cite the reference first.
+func (s *server) handleDeleteReference(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeBadRequest(w, r, "reference id is required in path")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteReference(id)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleRegenerateCitations rewrites col__citation on reference

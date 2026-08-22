@@ -13694,6 +13694,11 @@ class SfgaReferences extends LitElement {
     // leave one column empty. Set by a ResizeObserver in
     // connectedCallback.
     _wide: { state: true },
+    // True when the reader pane has been expanded to cover the
+    // detail column too. Only meaningful in the 3-column layout;
+    // curator toggles via ⤢ in the detail header when they want
+    // to dedicate the whole non-list area to reading.
+    _readerExpanded: { state: true },
   };
 
   static styles = css`
@@ -13701,16 +13706,26 @@ class SfgaReferences extends LitElement {
       display: grid;
       /* Default 2-column layout: list + detail (with optional
          reader stacked inside detail). Wide viewports with an
-         attached reader get promoted to 3 columns by the
-         :has() selector below — the third iframe.reader-full
-         is only rendered by _renderRightPanes when both
-         conditions are met. */
+         attached reader get promoted to 3 columns via the
+         data-layout attribute set in updated() below —
+         attribute-selector matching is universally reliable
+         across browsers, unlike :has() which has scoping
+         quirks inside shadow roots. */
       grid-template-columns: minmax(18rem, 22rem) 1fr;
       overflow: hidden;
       height: 100%;
     }
-    :host(:has(.reader-full)) {
-      grid-template-columns: minmax(18rem, 22rem) minmax(22rem, 30rem) 1fr;
+    :host([data-layout="three-col"]) {
+      grid-template-columns: minmax(18rem, 22rem) minmax(22rem, 26rem) 1fr;
+    }
+    /* Reader expanded to cover the detail column too — detail
+       section stays mounted (for state persistence across
+       toggles) but hides via display:none. */
+    :host([data-layout="three-col-reader-full"]) {
+      grid-template-columns: minmax(18rem, 22rem) 0 1fr;
+    }
+    :host([data-layout="three-col-reader-full"]) section.detail {
+      display: none;
     }
     .reader-full {
       width: 100%;
@@ -13747,7 +13762,42 @@ class SfgaReferences extends LitElement {
       align-items: baseline;
       gap: var(--sp-2);
     }
-    section .edit-btn {
+    section .header-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    section .icon-btn {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    section .icon-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    section .icon-btn.danger:hover {
+      border-color: var(--error);
+      color: var(--error);
+    }
+    /* Citation copy toolbar in the center column — sits at the
+       bottom of the structured detail. Matches the reader's
+       cite-toolbar visual language so a curator moving between
+       the two surfaces recognizes the affordance. */
+    section .cite-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1);
+      margin-top: var(--sp-3);
+    }
+    section .cite-toolbar button {
       font: inherit;
       font-size: var(--fs-sm);
       padding: var(--sp-1) var(--sp-2);
@@ -13757,8 +13807,12 @@ class SfgaReferences extends LitElement {
       border-radius: var(--radius-sm);
       cursor: pointer;
     }
-    section .edit-btn:hover {
+    section .cite-toolbar button:hover {
       border-color: var(--accent);
+    }
+    section .cite-toolbar button.copied {
+      border-color: var(--accent);
+      color: var(--accent);
     }
     aside {
       border-right: 1px solid var(--border);
@@ -13868,6 +13922,7 @@ class SfgaReferences extends LitElement {
     this._editRefID = "";
     this._addingNew = false;
     this._wide = false;
+    this._readerExpanded = false;
   }
 
   async connectedCallback() {
@@ -13917,6 +13972,24 @@ class SfgaReferences extends LitElement {
   updated(changed) {
     if (changed.has("selectId") && this.selectId && this.selectId !== this._selectedId) {
       this._select(this.selectId);
+    }
+    // Sync the data-layout host attribute with the current state
+    // so CSS matches the 3-column layout only when both the
+    // viewport is wide enough AND the selected reference has an
+    // attached reader iframe. Attribute-based selectors work
+    // reliably across browsers where :host(:has(...)) can be
+    // scoped-out in shadow-root nesting cases.
+    const hasReader =
+      this._current &&
+      this._current.attached_pdf_shas &&
+      this._current.attached_pdf_shas.length > 0;
+    if (this._wide && hasReader) {
+      this.setAttribute(
+        "data-layout",
+        this._readerExpanded ? "three-col-reader-full" : "three-col",
+      );
+    } else {
+      this.removeAttribute("data-layout");
     }
   }
 
@@ -14048,6 +14121,11 @@ class SfgaReferences extends LitElement {
       ? `/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`
       : "";
     if (this._wide && hasReader) {
+      // 3-column wide layout. When the curator expanded the reader
+      // (⤢), hide the detail column via CSS on the host attribute
+      // — the section still renders (needed to keep the copy
+      // buttons + edit affordance mounted between toggles) but is
+      // display:none.
       return html`
         <section class="detail">${this._renderDetail()}</section>
         <iframe class="reader-full" title="Reader" src=${readerSrc}></iframe>
@@ -14124,12 +14202,53 @@ class SfgaReferences extends LitElement {
         ? ""
         : html`<dt>${label}</dt>
             <dd><a href=${value} target="_blank" rel="noopener">${value}</a></dd>`;
+    const hasReader =
+      r.attached_pdf_shas && r.attached_pdf_shas.length > 0;
     return html`
       <div class="detail-header">
         <h2>${r.title || r.citation || r.id}</h2>
-        <button class="edit-btn" type="button" @click=${() => this._openEdit()}>
-          Edit
-        </button>
+        <div class="header-actions">
+          ${hasReader && this._wide
+            ? html`<button
+                class="icon-btn"
+                type="button"
+                @click=${() => (this._readerExpanded = !this._readerExpanded)}
+                title=${this._readerExpanded
+                  ? "shrink reader back to third column"
+                  : "expand reader to cover the middle column"}
+                aria-label="toggle reader-expanded"
+              >
+                ${this._readerExpanded ? "⤡" : "⤢"}
+              </button>`
+            : nothing}
+          <button
+            class="icon-btn"
+            type="button"
+            @click=${() => (this._addingNew = true)}
+            title="Add reference"
+            aria-label="Add reference"
+          >
+            ${renderIcon("plus", 16)}
+          </button>
+          <button
+            class="icon-btn"
+            type="button"
+            @click=${() => this._openEdit()}
+            title="Edit reference"
+            aria-label="Edit reference"
+          >
+            ${renderIcon("pencil", 16)}
+          </button>
+          <button
+            class="icon-btn danger"
+            type="button"
+            @click=${() => this._deleteReference()}
+            title="Delete reference"
+            aria-label="Delete reference"
+          >
+            ${renderIcon("trash-2", 16)}
+          </button>
+        </div>
       </div>
       <hr />
       <dl>
@@ -14149,7 +14268,141 @@ class SfgaReferences extends LitElement {
       ${r.citation && r.citation !== r.title
         ? html`<div class="citation">${r.citation}</div>`
         : ""}
+      <div class="cite-toolbar">
+        <button @click=${(e) => this._copy(r.citation || r.title || "", e)}>
+          Copy citation
+        </button>
+        <button @click=${(e) => this._copy(this._buildCSLJSON(r), e)}>
+          Copy CSL-JSON
+        </button>
+        <button @click=${(e) => this._copy(this._buildBibTeX(r), e)}>
+          Copy BibTeX
+        </button>
+        ${r.doi
+          ? html`<button @click=${(e) => this._copy(`https://doi.org/${r.doi}`, e)}>
+              Copy DOI URL
+            </button>`
+          : nothing}
+      </div>
     `;
+  }
+
+  async _deleteReference() {
+    if (!this._selectedId || !this._current) return;
+    const label =
+      this._current.title || this._current.citation || this._selectedId;
+    if (
+      !confirm(
+        `Delete this reference?\n\n${label}\n\nThe reference row is removed only when no other record cites it; otherwise the delete fails and you'll need to un-cite it first.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.reference.delete(this._selectedId);
+    } catch (err) {
+      alert(
+        `Delete failed: ${
+          err instanceof Problem ? err.detail || err.title : String(err)
+        }`,
+      );
+      return;
+    }
+    this._current = null;
+    this._selectedId = "";
+    // Refresh list and pick a neighboring reference so the pane
+    // isn't blank after the delete.
+    try {
+      const page = this._query.trim()
+        ? await api.reference.search({ q: this._query.trim(), limit: 200 })
+        : await api.reference.list({ limit: 200 });
+      this._hits = page.items || [];
+      if (this._hits.length > 0) this._select(this._hits[0].id);
+    } catch {}
+  }
+
+  async _copy(text, event) {
+    const btn = event.currentTarget;
+    const orig = btn ? btn.textContent : "";
+    try {
+      await navigator.clipboard.writeText(text);
+      if (btn) {
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove("copied");
+        }, 1500);
+      }
+    } catch (e) {
+      alert("Copy failed: " + e.message);
+    }
+  }
+
+  // _buildCSLJSON / _buildBibTeX mirror the reader's formatters,
+  // built off the reference row's structured fields. Kept inline
+  // here rather than shared with reader.js because the reader
+  // reads from parsed JATS while this reads from the row's JSON;
+  // the two formatters end up divergent enough that shared code
+  // would be more overhead than value.
+  _buildCSLJSON(r) {
+    const parts = (r.author || "").split(";").map((s) => s.trim()).filter(Boolean);
+    const authorList = parts.map((a) => {
+      const p = a.split(" ");
+      return p.length >= 2
+        ? { family: p.slice(0, -1).join(" "), given: p[p.length - 1] }
+        : { family: a };
+    });
+    const year = r.issued ? parseInt(String(r.issued).slice(0, 4), 10) : null;
+    const rec = {
+      id: (parts[0] || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20) + (year || ""),
+      type: r.container_title ? "article-journal" : r.publisher ? "book" : "article",
+    };
+    if (r.title) rec.title = r.title;
+    if (authorList.length) rec.author = authorList;
+    if (year) rec.issued = { "date-parts": [[year]] };
+    if (r.container_title) rec["container-title"] = r.container_title;
+    if (r.volume) rec.volume = r.volume;
+    if (r.issue) rec.issue = r.issue;
+    if (r.page) rec.page = r.page;
+    if (r.publisher) rec.publisher = r.publisher;
+    if (r.publisher_place) rec["publisher-place"] = r.publisher_place;
+    if (r.doi) rec.DOI = r.doi;
+    return JSON.stringify(rec, null, 2);
+  }
+
+  _buildBibTeX(r) {
+    const esc = (s) =>
+      String(s || "")
+        .replace(/\\/g, "\\\\")
+        .replace(/[{}]/g, "\\$&")
+        .replace(/[&%#_~$]/g, "\\$&");
+    const parts = (r.author || "").split(";").map((s) => s.trim()).filter(Boolean);
+    const bibAuthors = parts
+      .map((a) => {
+        const p = a.split(" ");
+        return p.length >= 2
+          ? `${p.slice(0, -1).join(" ")}, ${p[p.length - 1]}`
+          : a;
+      })
+      .join(" and ");
+    const year = r.issued ? String(r.issued).slice(0, 4) : "";
+    const firstAuthorKey = (parts[0] || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+    const kind = r.container_title ? "article" : r.publisher ? "book" : "misc";
+    const lines = [`@${kind}{${firstAuthorKey}${year},`];
+    if (bibAuthors) lines.push(`  author = {${bibAuthors}},`);
+    if (r.title) lines.push(`  title = {{${esc(r.title)}}},`);
+    if (r.container_title) lines.push(`  journal = {${esc(r.container_title)}},`);
+    if (year) lines.push(`  year = {${year}},`);
+    if (r.volume) lines.push(`  volume = {${r.volume}},`);
+    if (r.issue) lines.push(`  number = {${r.issue}},`);
+    if (r.page) lines.push(`  pages = {${r.page.replace(/-/g, "--")}},`);
+    if (r.publisher) lines.push(`  publisher = {${esc(r.publisher)}},`);
+    if (r.publisher_place) lines.push(`  address = {${esc(r.publisher_place)}},`);
+    if (r.doi) lines.push(`  doi = {${r.doi}},`);
+    if (lines.length > 1) lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, "");
+    lines.push("}");
+    return lines.join("\n");
   }
 }
 

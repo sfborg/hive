@@ -530,6 +530,7 @@ export const api = {
         ifMatch ? { "If-Match": ifMatch } : {},
       ),
     resolveDOI: (doi) => j("GET", `/api/reference/resolve-doi${qs({ doi })}`),
+    delete: (id) => j("DELETE", `/api/reference/${encodeURIComponent(id)}`),
     attachPDF: (id, sha512) =>
       j("POST", `/api/reference/${encodeURIComponent(id)}/attach-pdf`, { sha512 }),
     regenerateCitations: (overwrite) =>

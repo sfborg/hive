@@ -341,7 +341,12 @@ class SfgaReader extends LitElement {
     this._doc = null;
     this._showExpanded = false;
     this._showPDF = false;
-    this._paginated = false;
+    // Columned view is on by default — journal-style multi-column
+    // layout with paginated navigation. column-width naturally
+    // collapses to a single column when the viewport is narrow or
+    // the font is enlarged (accessibility), so this default doesn't
+    // penalize readers who need larger text.
+    this._paginated = true;
     this._page = 0;
     this._pageCount = 1;
     const params = new URLSearchParams(location.search);
