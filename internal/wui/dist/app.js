@@ -1672,8 +1672,13 @@ class SfgaApp extends LitElement {
       padding: 1rem;
       overflow: auto;
     }
+    /* Single grid track — the sfga-references custom element owns
+       its own list / detail / reader multi-column layout inside
+       its shadow root. The taxa screen's two-child pattern (aside
+       + section as direct children of the outer grid) doesn't fit
+       here because the component is one custom element. */
     .screen.references {
-      grid-template-columns: minmax(20rem, 1fr) 1fr;
+      grid-template-columns: 1fr;
     }
     aside,
     section {
@@ -13678,17 +13683,36 @@ class SfgaReferences extends LitElement {
     // of owning the modal-mount state locally so each screen
     // that offers editing gets its own modal instance.
     _editRefID: { state: true },
+    // True when the host is wide enough (~1300px+) for a 3-column
+    // layout (list | detail | reader). Narrow viewports collapse
+    // the reader into the detail pane below the structured info,
+    // scroll-away style, so a single browser half-screen doesn't
+    // leave one column empty. Set by a ResizeObserver in
+    // connectedCallback.
+    _wide: { state: true },
   };
 
   static styles = css`
     :host {
       display: grid;
-      /* Matches the taxa screen's 50/50 split — reference list left,
-         detail right — so the two primary editing surfaces feel
-         consistent when a curator moves between screens. */
-      grid-template-columns: minmax(18rem, 1fr) 1fr;
+      /* Default 2-column layout: list + detail (with optional
+         reader stacked inside detail). Wide viewports with an
+         attached reader get promoted to 3 columns by the
+         :has() selector below — the third iframe.reader-full
+         is only rendered by _renderRightPanes when both
+         conditions are met. */
+      grid-template-columns: minmax(18rem, 22rem) 1fr;
       overflow: hidden;
       height: 100%;
+    }
+    :host(:has(.reader-full)) {
+      grid-template-columns: minmax(18rem, 22rem) minmax(22rem, 30rem) 1fr;
+    }
+    .reader-full {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-left: 1px solid var(--border);
     }
     aside {
       overflow: auto;
@@ -13817,10 +13841,23 @@ class SfgaReferences extends LitElement {
     this._error = "";
     this._query = "";
     this._editRefID = "";
+    this._wide = false;
   }
 
   async connectedCallback() {
     super.connectedCallback();
+    // Responsive layout gate: wide viewports (~1300px+) get a
+    // 3-column layout with the reader in its own pane; narrower
+    // ones stack the reader below the detail in a 2-column
+    // layout. ResizeObserver on the host watches its own width
+    // rather than window.innerWidth so nesting the component
+    // inside a narrower container (e.g. a future sidebar-heavy
+    // shell) still adapts correctly.
+    this._resizeObserver = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width || 0;
+      this._wide = w >= 1300;
+    });
+    this._resizeObserver.observe(this);
     this._loading = true;
     try {
       const page = await api.reference.list({ limit: 200 });
@@ -13840,6 +13877,11 @@ class SfgaReferences extends LitElement {
     } finally {
       this._loading = false;
     }
+  }
+
+  disconnectedCallback() {
+    if (this._resizeObserver) this._resizeObserver.disconnect();
+    super.disconnectedCallback();
   }
 
   // Post-mount: if the shell hands us a new `selectId` (e.g. curator
@@ -13914,16 +13956,7 @@ class SfgaReferences extends LitElement {
                 </ul>
               `}
       </aside>
-      <section>
-        ${this._renderDetail()}
-        ${this._current && this._current.attached_pdf_shas && this._current.attached_pdf_shas.length
-          ? html`<iframe
-              class="reader"
-              title="Reader"
-              src=${`/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`}
-            ></iframe>`
-          : nothing}
-      </section>
+      ${this._renderRightPanes()}
       ${this._editRefID
         ? html`<sfga-add-reference-modal
             .editID=${this._editRefID}
@@ -13931,6 +13964,44 @@ class SfgaReferences extends LitElement {
             @close=${() => (this._editRefID = "")}
           ></sfga-add-reference-modal>`
         : nothing}
+    `;
+  }
+
+  // _renderRightPanes lays out the detail + optional reader
+  // according to viewport width:
+  //
+  //   Wide (_wide=true) + hasReader:
+  //     3-column layout — detail in its own middle column, reader
+  //     in a 3rd column that fills the remaining width. Each
+  //     pane scrolls independently so the reader can be read
+  //     without losing the structured detail off-screen.
+  //
+  //   Narrow OR no reader:
+  //     2-column layout — detail (and optional reader below it)
+  //     stack in the second column, sharing one scrolling area.
+  //     Detail scrolls away naturally when the curator scrolls
+  //     into the reader.
+  _renderRightPanes() {
+    const hasReader =
+      this._current &&
+      this._current.attached_pdf_shas &&
+      this._current.attached_pdf_shas.length > 0;
+    const readerSrc = hasReader
+      ? `/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`
+      : "";
+    if (this._wide && hasReader) {
+      return html`
+        <section class="detail">${this._renderDetail()}</section>
+        <iframe class="reader-full" title="Reader" src=${readerSrc}></iframe>
+      `;
+    }
+    return html`
+      <section class="detail">
+        ${this._renderDetail()}
+        ${hasReader
+          ? html`<iframe class="reader" title="Reader" src=${readerSrc}></iframe>`
+          : nothing}
+      </section>
     `;
   }
 
