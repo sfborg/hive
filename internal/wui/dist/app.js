@@ -13956,7 +13956,11 @@ class SfgaReferences extends LitElement {
       gap: var(--sp-1);
     }
     aside .sort-chip {
-      flex: 1;
+      /* flex: 1 1 0 forces equal 50/50 widths regardless of the
+         button text length — flex: 1 defaults to flex-basis: auto
+         which content-sizes and lets the active chip visibly
+         widen when its border color changes. */
+      flex: 1 1 0;
       background: var(--bg);
       color: var(--fg);
       border: 1px solid var(--border);
@@ -14088,10 +14092,13 @@ class SfgaReferences extends LitElement {
   }
 
   firstUpdated() {
-    // Attach infinite-scroll observer on the sentinel div at the
-    // bottom of the list. IntersectionObserver fires when the
-    // sentinel scrolls into the viewport, triggering the next
-    // page fetch.
+    // Attach infinite-scroll observer whose root is the scrolling
+    // aside pane. IntersectionObserver fires when the sentinel
+    // scrolls into the viewport, triggering the next page fetch.
+    // Sentinel re-observation happens in updated() below because
+    // the sentinel doesn't exist until _hits has content (lit
+    // template branch); observing here alone would be a no-op on
+    // first mount with an empty list.
     this._scrollObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -14102,8 +14109,16 @@ class SfgaReferences extends LitElement {
       },
       { root: this.renderRoot.querySelector("aside"), rootMargin: "200px" },
     );
+    this._observeSentinel();
+  }
+
+  _observeSentinel() {
+    if (!this._scrollObserver) return;
     const sentinel = this.renderRoot.querySelector(".scroll-sentinel");
-    if (sentinel) this._scrollObserver.observe(sentinel);
+    if (!sentinel || sentinel === this._observedSentinel) return;
+    if (this._observedSentinel) this._scrollObserver.unobserve(this._observedSentinel);
+    this._scrollObserver.observe(sentinel);
+    this._observedSentinel = sentinel;
   }
 
   // _fetchPage loads references. reset=true starts over (query
@@ -14167,6 +14182,13 @@ class SfgaReferences extends LitElement {
         this._current.attached_pdf_shas &&
         this._current.attached_pdf_shas.length > 0;
       if (!hasReader) this._workspaceTab = "bibliography";
+    }
+    // The infinite-scroll sentinel lives inside a lit template
+    // branch that only renders when _hits is non-empty. Re-observe
+    // whenever the sentinel enters the DOM (first data load, or
+    // after a sort/search change that wiped and refilled the list).
+    if (changed.has("_hits")) {
+      this._observeSentinel();
     }
   }
 
