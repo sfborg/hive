@@ -418,12 +418,16 @@ class SfgaReader extends LitElement {
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     switch (e.key) {
       case "ArrowRight":
+      case "ArrowDown":
       case "PageDown":
       case " ":
+        // Down maps to forward-page because curators used to
+        // reading PDFs reach for the down-arrow instinctively.
         e.preventDefault();
         this._pageForward();
         break;
       case "ArrowLeft":
+      case "ArrowUp":
       case "PageUp":
         e.preventDefault();
         this._pageBack();
@@ -487,29 +491,39 @@ class SfgaReader extends LitElement {
     // Reset transform so scrollWidth reflects true content width.
     article.style.transform = "";
     // Measure the actual column layout so page-turns advance by a
-    // whole number of columns and always land the left edge of a
-    // column at the left edge of the pane. Advancing by
-    // article.offsetWidth (previous approach) drifted mid-column
-    // whenever the pane width wasn't an exact multiple of
-    // column-pitch (column-width + column-gap).
+    // whole number of columns and always land a column's left edge
+    // at the pane's left edge. Subtle point: getComputedStyle
+    // returns the *specified* column-width (e.g. "32ch"), not the
+    // *actual* width the browser rendered — with `column-width` set,
+    // the browser packs as many columns as fit at MINIMUM that
+    // width, then stretches each to fill. Using the specified value
+    // for pagination underestimates the page-width and drifts
+    // mid-column. Compute the actual column width from the pane
+    // content width and the column count the browser chose.
     const style = getComputedStyle(article);
-    const colWidth = parseFloat(style.columnWidth) || 0;
     const colGap = parseFloat(style.columnGap) || 0;
-    const colPitch = colWidth + colGap;
+    const specifiedColWidth = parseFloat(style.columnWidth) || 0;
     const padLeft = parseFloat(style.paddingLeft) || 0;
     const padRight = parseFloat(style.paddingRight) || 0;
     const contentAreaWidth = article.clientWidth - padLeft - padRight;
-    // How many whole columns fit — floor so a partial column
-    // doesn't count. Add colGap to the numerator because the last
-    // column in a row doesn't need a trailing gap.
     let colsPerPage = 1;
-    if (colPitch > 0 && contentAreaWidth > 0) {
+    if (specifiedColWidth > 0 && contentAreaWidth > 0) {
       colsPerPage = Math.max(
         1,
-        Math.floor((contentAreaWidth + colGap) / colPitch),
+        Math.floor(
+          (contentAreaWidth + colGap) / (specifiedColWidth + colGap),
+        ),
       );
     }
-    this._pageWidth = colsPerPage * colPitch;
+    // Actual per-column width: browser divides the available
+    // content-area width by the chosen column count, minus the
+    // internal gaps.
+    const actualColWidth =
+      colsPerPage > 0
+        ? (contentAreaWidth - (colsPerPage - 1) * colGap) / colsPerPage
+        : 0;
+    const actualPitch = actualColWidth + colGap;
+    this._pageWidth = colsPerPage * actualPitch;
     const contentWidth = article.scrollWidth - padLeft - padRight;
     const pages =
       this._pageWidth > 0
