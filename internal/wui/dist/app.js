@@ -13699,39 +13699,99 @@ class SfgaReferences extends LitElement {
     // curator toggles via ⤢ in the detail header when they want
     // to dedicate the whole non-list area to reading.
     _readerExpanded: { state: true },
+    // Workspace tab controlling what fills the two-pane area on
+    // the right of the list:
+    //
+    //   "bibliography" — bibliographic detail + copy buttons | reader
+    //   "digitize"     — reader | PDF (compare digitization quality)
+    //   "facts"        — NER-extracted facts | reader (placeholder
+    //                    until the extraction pipeline lands)
+    //
+    // Tabs make each combination one click away — a curator moving
+    // between "read a reference", "verify JATS digitization", and
+    // (future) "fact-check NER extraction" doesn't need to hunt for
+    // a modal. Bibliography is the default because "look at the
+    // reference and copy a citation" is the most common visit.
+    _workspaceTab: { state: true },
   };
 
   static styles = css`
     :host {
       display: grid;
-      /* Default 2-column layout: list + detail (with optional
-         reader stacked inside detail). Wide viewports with an
-         attached reader get promoted to 3 columns via the
-         data-layout attribute set in updated() below —
-         attribute-selector matching is universally reliable
-         across browsers, unlike :has() which has scoping
-         quirks inside shadow roots. */
+      /* 2-column layout: list on the left, workspace on the right.
+         Workspace has its own tabs + two-pane layout inside so
+         the outer host grid stays simple. */
       grid-template-columns: minmax(18rem, 22rem) 1fr;
       overflow: hidden;
       height: 100%;
     }
-    :host([data-layout="three-col"]) {
-      grid-template-columns: minmax(18rem, 22rem) minmax(22rem, 26rem) 1fr;
+    .workspace {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
     }
-    /* Reader expanded to cover the detail column too — detail
-       section stays mounted (for state persistence across
-       toggles) but hides via display:none. */
-    :host([data-layout="three-col-reader-full"]) {
-      grid-template-columns: minmax(18rem, 22rem) 0 1fr;
+    .workspace-tabs {
+      display: flex;
+      gap: var(--sp-1);
+      padding: var(--sp-2) var(--sp-2) 0;
+      border-bottom: 1px solid var(--border);
     }
-    :host([data-layout="three-col-reader-full"]) section.detail {
-      display: none;
+    .workspace-tabs button {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+      padding: var(--sp-1) var(--sp-3);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--fs-sm);
     }
-    .reader-full {
-      width: 100%;
-      height: 100%;
+    .workspace-tabs button[disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .workspace-tabs button.active {
+      border-color: var(--border);
+      background: var(--bg);
+      position: relative;
+      top: 1px;
+    }
+    /* Two-pane area under the tabs — a 2-column grid that fills
+       the remaining vertical space. Each pane scrolls
+       independently so reading one doesn't drag the other. */
+    .workspace-panes {
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .workspace-panes .pane {
+      overflow: auto;
+      min-width: 0;
+    }
+    .workspace-panes iframe.pane {
       border: 0;
       border-left: 1px solid var(--border);
+      width: 100%;
+      height: 100%;
+    }
+    .workspace-panes iframe.pane:first-child {
+      border-left: none;
+    }
+    .workspace-panes .pane.detail {
+      padding: var(--sp-2);
+    }
+    .workspace-panes .pane-empty {
+      padding: var(--sp-4);
+      color: var(--dim);
+      font-style: italic;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
     }
     aside {
       overflow: auto;
@@ -13923,6 +13983,7 @@ class SfgaReferences extends LitElement {
     this._addingNew = false;
     this._wide = false;
     this._readerExpanded = false;
+    this._workspaceTab = "bibliography";
   }
 
   async connectedCallback() {
@@ -13973,23 +14034,16 @@ class SfgaReferences extends LitElement {
     if (changed.has("selectId") && this.selectId && this.selectId !== this._selectedId) {
       this._select(this.selectId);
     }
-    // Sync the data-layout host attribute with the current state
-    // so CSS matches the 3-column layout only when both the
-    // viewport is wide enough AND the selected reference has an
-    // attached reader iframe. Attribute-based selectors work
-    // reliably across browsers where :host(:has(...)) can be
-    // scoped-out in shadow-root nesting cases.
-    const hasReader =
-      this._current &&
-      this._current.attached_pdf_shas &&
-      this._current.attached_pdf_shas.length > 0;
-    if (this._wide && hasReader) {
-      this.setAttribute(
-        "data-layout",
-        this._readerExpanded ? "three-col-reader-full" : "three-col",
-      );
-    } else {
-      this.removeAttribute("data-layout");
+    // When the selected reference changes, if the current tab is
+    // no longer meaningful (Digitize tab without an attached PDF)
+    // fall back to Bibliography. Curators shouldn't get stuck on
+    // an empty tab.
+    if (changed.has("_current") && this._workspaceTab === "digitize") {
+      const hasReader =
+        this._current &&
+        this._current.attached_pdf_shas &&
+        this._current.attached_pdf_shas.length > 0;
+      if (!hasReader) this._workspaceTab = "bibliography";
     }
   }
 
@@ -14120,25 +14174,96 @@ class SfgaReferences extends LitElement {
     const readerSrc = hasReader
       ? `/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`
       : "";
-    if (this._wide && hasReader) {
-      // 3-column wide layout. When the curator expanded the reader
-      // (⤢), hide the detail column via CSS on the host attribute
-      // — the section still renders (needed to keep the copy
-      // buttons + edit affordance mounted between toggles) but is
-      // display:none.
-      return html`
-        <section class="detail">${this._renderDetail()}</section>
-        <iframe class="reader-full" title="Reader" src=${readerSrc}></iframe>
-      `;
-    }
+    const pdfSrc = hasReader
+      ? `/api/reference/library/${encodeURIComponent(this._current.attached_pdf_shas[0])}/source#page=1`
+      : "";
+    // Tabs are always present so curators discover the alternative
+    // side-by-side workflows (digitize, fact-check) without hunting
+    // for a modal. Facts tab renders a "coming soon" placeholder
+    // until the NER extraction pipeline lands — showing it now
+    // teaches the eventual UX shape.
     return html`
-      <section class="detail">
-        ${this._renderDetail()}
-        ${hasReader
-          ? html`<iframe class="reader" title="Reader" src=${readerSrc}></iframe>`
-          : nothing}
-      </section>
+      <div class="workspace">
+        <div class="workspace-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected=${this._workspaceTab === "bibliography"}
+            class=${this._workspaceTab === "bibliography" ? "active" : ""}
+            @click=${() => (this._workspaceTab = "bibliography")}
+          >
+            Bibliography
+          </button>
+          <button
+            role="tab"
+            aria-selected=${this._workspaceTab === "digitize"}
+            class=${this._workspaceTab === "digitize" ? "active" : ""}
+            ?disabled=${!hasReader}
+            title=${hasReader
+              ? "Compare the augmented JATS reader with the source PDF"
+              : "No PDF attached to this reference"}
+            @click=${() => (this._workspaceTab = "digitize")}
+          >
+            Digitize
+          </button>
+          <button
+            role="tab"
+            aria-selected=${this._workspaceTab === "facts"}
+            class=${this._workspaceTab === "facts" ? "active" : ""}
+            title="Fact-check extracted NER claims against the source (coming soon)"
+            @click=${() => (this._workspaceTab = "facts")}
+          >
+            Facts
+          </button>
+        </div>
+        <div class="workspace-panes">
+          ${this._renderWorkspaceContent(hasReader, readerSrc, pdfSrc)}
+        </div>
+      </div>
     `;
+  }
+
+  _renderWorkspaceContent(hasReader, readerSrc, pdfSrc) {
+    switch (this._workspaceTab) {
+      case "digitize":
+        if (!hasReader) {
+          return html`<div class="pane-empty">
+            No source PDF attached to this reference — upload one via
+            the reference-edit modal to enable the digitization
+            comparison view.
+          </div>`;
+        }
+        return html`
+          <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+          <iframe class="pane pdf" title="Source PDF" src=${pdfSrc}></iframe>
+        `;
+      case "facts":
+        return html`
+          <div class="pane pane-empty">
+            <strong>Facts view — coming soon.</strong> Once the NER
+            extraction pipeline lands, this pane will show the
+            extracted scientific names, nomenclatural acts,
+            distributions, and other structured facts hive pulled
+            from the paper. Clicking a fact will jump the reader on
+            the right to the source paragraph so you can verify.
+          </div>
+          ${hasReader
+            ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
+            : html`<div class="pane pane-empty">
+                No source available — attach a PDF to enable the reader pane.
+              </div>`}
+        `;
+      case "bibliography":
+      default:
+        return html`
+          <section class="pane detail">${this._renderDetail()}</section>
+          ${hasReader
+            ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
+            : html`<div class="pane pane-empty">
+                No source PDF attached — the reader pane will appear
+                once a PDF is attached via the reference-edit modal.
+              </div>`}
+        `;
+    }
   }
 
   _openEdit() {
@@ -14202,25 +14327,10 @@ class SfgaReferences extends LitElement {
         ? ""
         : html`<dt>${label}</dt>
             <dd><a href=${value} target="_blank" rel="noopener">${value}</a></dd>`;
-    const hasReader =
-      r.attached_pdf_shas && r.attached_pdf_shas.length > 0;
     return html`
       <div class="detail-header">
         <h2>${r.title || r.citation || r.id}</h2>
         <div class="header-actions">
-          ${hasReader && this._wide
-            ? html`<button
-                class="icon-btn"
-                type="button"
-                @click=${() => (this._readerExpanded = !this._readerExpanded)}
-                title=${this._readerExpanded
-                  ? "shrink reader back to third column"
-                  : "expand reader to cover the middle column"}
-                aria-label="toggle reader-expanded"
-              >
-                ${this._readerExpanded ? "⤡" : "⤢"}
-              </button>`
-            : nothing}
           <button
             class="icon-btn"
             type="button"
