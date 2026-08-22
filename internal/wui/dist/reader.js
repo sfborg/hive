@@ -363,6 +363,7 @@ class SfgaReader extends LitElement {
     this._paginated = true;
     this._page = 0;
     this._pageCount = 1;
+    this._pageWidth = 0;
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -478,16 +479,42 @@ class SfgaReader extends LitElement {
     if (!this._paginated) {
       this._pageCount = 1;
       this._page = 0;
+      this._pageWidth = 0;
       return;
     }
     const article = this.renderRoot.querySelector(".layout.paginated article");
     if (!article) return;
-    // Reset transform so scrollWidth reflects true content width
-    // (transform doesn't affect layout metrics but reset for clarity).
+    // Reset transform so scrollWidth reflects true content width.
     article.style.transform = "";
-    const paneWidth = article.offsetWidth;
-    const contentWidth = article.scrollWidth;
-    const pages = Math.max(1, Math.ceil(contentWidth / paneWidth));
+    // Measure the actual column layout so page-turns advance by a
+    // whole number of columns and always land the left edge of a
+    // column at the left edge of the pane. Advancing by
+    // article.offsetWidth (previous approach) drifted mid-column
+    // whenever the pane width wasn't an exact multiple of
+    // column-pitch (column-width + column-gap).
+    const style = getComputedStyle(article);
+    const colWidth = parseFloat(style.columnWidth) || 0;
+    const colGap = parseFloat(style.columnGap) || 0;
+    const colPitch = colWidth + colGap;
+    const padLeft = parseFloat(style.paddingLeft) || 0;
+    const padRight = parseFloat(style.paddingRight) || 0;
+    const contentAreaWidth = article.clientWidth - padLeft - padRight;
+    // How many whole columns fit — floor so a partial column
+    // doesn't count. Add colGap to the numerator because the last
+    // column in a row doesn't need a trailing gap.
+    let colsPerPage = 1;
+    if (colPitch > 0 && contentAreaWidth > 0) {
+      colsPerPage = Math.max(
+        1,
+        Math.floor((contentAreaWidth + colGap) / colPitch),
+      );
+    }
+    this._pageWidth = colsPerPage * colPitch;
+    const contentWidth = article.scrollWidth - padLeft - padRight;
+    const pages =
+      this._pageWidth > 0
+        ? Math.max(1, Math.ceil(contentWidth / this._pageWidth))
+        : 1;
     this._pageCount = pages;
     if (this._page >= pages) this._page = pages - 1;
     this._applyPageTransform();
@@ -496,7 +523,10 @@ class SfgaReader extends LitElement {
   _applyPageTransform() {
     const article = this.renderRoot.querySelector(".layout.paginated article");
     if (!article) return;
-    const offset = this._page * article.offsetWidth;
+    // Translate by page-width increments; each increment is a
+    // whole number of column-pitches, so the left edge of the
+    // "next page" is always the left edge of a column.
+    const offset = this._page * (this._pageWidth || article.offsetWidth);
     article.style.transform = `translateX(-${offset}px)`;
   }
 
