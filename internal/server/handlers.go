@@ -131,6 +131,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/reference", s.handleReferences)
 	mux.HandleFunc("GET /api/reference/search", s.handleReferenceSearch)
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
+	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
 	// Add-reference modal helpers. All three return *unsaved* previews
 	// — the modal shows a form the curator confirms, then POSTs to
 	// /api/reference to actually write.
@@ -2436,6 +2437,30 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 		items = append(items, referenceHitToAPI(h))
 	}
 	writeJSON(w, http.StatusOK, apiPage[apiReferenceHit]{Items: items})
+}
+
+// handleRegenerateCitations rewrites col__citation on reference
+// rows using ComposeCitation over each row's current structured
+// fields. Query param overwrite=true replaces every row's citation
+// with the freshly-composed one (for normalizing an archive
+// imported from a source with poorly-formatted citations); default
+// (or overwrite=false) only fills currently-empty citations,
+// preserving import citations that came with their own format.
+//
+// Returns the number of rows actually updated.
+func (s *server) handleRegenerateCitations(w http.ResponseWriter, r *http.Request) {
+	overwrite := r.URL.Query().Get("overwrite") == "true"
+	var updated int
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		n, err := tx.RegenerateCitations(overwrite)
+		updated = n
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"updated": updated})
 }
 
 // handleCreateReference writes a new reference from the JSON body and

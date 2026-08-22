@@ -12,6 +12,97 @@ import (
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
+// ComposeCitation builds a full journal-style citation string from a
+// reference's structured fields. Used to auto-populate col__citation
+// when it's empty — the citation string is what most search paths
+// hit, so an empty one makes the reference invisible to text search.
+//
+// Format matches the reader's plain-text citation output:
+//
+//	"Author (Year). Title. Journal Volume(Issue): Page. doi:DOI"
+//
+// Segments elide when their field is empty; joining punctuation is
+// conditional so an omitted field doesn't leave a stranded period.
+// Returns empty when there's not enough content to build something
+// meaningful (no author AND no title AND no citation-worthy fields).
+func ComposeCitation(r *coldp.Reference) string {
+	if r == nil {
+		return ""
+	}
+	var b strings.Builder
+	wrote := false
+	writeSep := func(sep string) {
+		if wrote {
+			b.WriteString(sep)
+		}
+	}
+	if r.Author != "" {
+		b.WriteString(r.Author)
+		wrote = true
+	}
+	if year := yearFromIssued(r.Issued); year != "" {
+		writeSep(" ")
+		b.WriteString("(")
+		b.WriteString(year)
+		b.WriteString(").")
+		wrote = true
+	} else if r.Author != "" {
+		b.WriteString(".")
+	}
+	if r.Title != "" {
+		writeSep(" ")
+		b.WriteString(r.Title)
+		if !strings.HasSuffix(r.Title, ".") {
+			b.WriteString(".")
+		}
+		wrote = true
+	}
+	if r.ContainerTitle != "" {
+		writeSep(" ")
+		b.WriteString(r.ContainerTitle)
+		wrote = true
+	}
+	if r.Volume != "" {
+		writeSep(" ")
+		b.WriteString(r.Volume)
+		if r.Issue != "" {
+			b.WriteString("(")
+			b.WriteString(r.Issue)
+			b.WriteString(")")
+		}
+		wrote = true
+	}
+	if r.Page != "" {
+		if r.Volume != "" || r.ContainerTitle != "" {
+			b.WriteString(": ")
+		} else {
+			writeSep(" ")
+		}
+		b.WriteString(r.Page)
+		wrote = true
+	}
+	if r.Publisher != "" {
+		writeSep(". ")
+		b.WriteString(r.Publisher)
+		if r.PublisherPlace != "" {
+			b.WriteString(", ")
+			b.WriteString(r.PublisherPlace)
+		}
+		wrote = true
+	}
+	if wrote && !strings.HasSuffix(b.String(), ".") {
+		b.WriteString(".")
+	}
+	if r.DOI != "" {
+		if wrote {
+			b.WriteString(" ")
+		}
+		b.WriteString("https://doi.org/")
+		b.WriteString(r.DOI)
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // ReferenceLabel composes a compact "Author (Year) Title" display from
 // a coldp.Reference — the same format the /api/reference/search hits
 // use and the shape the TUI/WUI pickers show curators.
@@ -271,6 +362,16 @@ func (t *Tx) CreateReference(r coldp.Reference) (string, error) {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
+	// col__citation is a derived / cached field. Auto-compose it
+	// when the caller didn't supply one — the citation string is
+	// what search paths hit against and it would otherwise stay
+	// blank for the many callers (OpenAlex resolve, GROBID pre-
+	// fill, manual entry) that populate only the structured fields.
+	// Imported citations that came with the source are preserved
+	// (r.Citation != "" case).
+	if r.Citation == "" {
+		r.Citation = ComposeCitation(&r)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	const insert = `INSERT INTO reference (
@@ -349,6 +450,12 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 			)
 		}
 	}
+	// Auto-compose the citation when empty, mirroring CreateReference.
+	// Existing non-empty citations are preserved so imported records
+	// (and any curator-edited citations from other tools) survive.
+	if r.Citation == "" {
+		r.Citation = ComposeCitation(&r)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	const update = `UPDATE reference SET
 		col__alternative_id = ?, col__source_id = ?,
@@ -402,6 +509,87 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 //
 //   - Missing reference → ErrNotFound.
 //   - Any dependent row → ErrConflict with the offending table name.
+// RegenerateCitations rewrites col__citation on reference rows
+// using ComposeCitation over each row's current structured fields.
+// Two modes:
+//
+//   - overwrite=false: only rows whose col__citation is currently
+//     empty get filled. Preserves imported citations that came with
+//     their own format.
+//   - overwrite=true: every row's citation is replaced with the
+//     freshly-composed one. Use to normalize an archive imported
+//     from a source with poorly-formatted citations.
+//
+// Skips rows where ComposeCitation returns empty (no structured
+// fields to build from). Returns the number of rows actually
+// updated. Bumps col__modified and col__modified_by on each
+// updated row, so the change is visible in the audit trail.
+func (t *Tx) RegenerateCitations(overwrite bool) (int, error) {
+	actor := ActorFromContext(t.ctx)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// Read every reference's id + current citation + composable
+	// structured fields. Cheap for the archive sizes hive targets
+	// (up to millions of rows still fits comfortably in memory as
+	// pointers; drop to a cursor loop later if needed).
+	const sel = `SELECT
+		col__id, COALESCE(col__citation, ''),
+		COALESCE(col__author, ''), COALESCE(col__issued, ''),
+		COALESCE(col__title, ''), COALESCE(col__container_title, ''),
+		COALESCE(col__volume, ''), COALESCE(col__issue, ''),
+		COALESCE(col__page, ''), COALESCE(col__publisher, ''),
+		COALESCE(col__publisher_place, ''), COALESCE(col__doi, '')
+	FROM reference`
+	rows, err := t.tx.QueryContext(t.ctx, sel)
+	if err != nil {
+		return 0, fmt.Errorf("core: read references for regenerate: %w", err)
+	}
+	type refRow struct {
+		id, current string
+		r           coldp.Reference
+	}
+	var toUpdate []refRow
+	for rows.Next() {
+		var rr refRow
+		if err := rows.Scan(
+			&rr.id, &rr.current,
+			&rr.r.Author, &rr.r.Issued,
+			&rr.r.Title, &rr.r.ContainerTitle,
+			&rr.r.Volume, &rr.r.Issue,
+			&rr.r.Page, &rr.r.Publisher,
+			&rr.r.PublisherPlace, &rr.r.DOI,
+		); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("core: scan reference for regenerate: %w", err)
+		}
+		if !overwrite && rr.current != "" {
+			continue
+		}
+		fresh := ComposeCitation(&rr.r)
+		if fresh == "" {
+			continue
+		}
+		if fresh == rr.current {
+			continue
+		}
+		toUpdate = append(toUpdate, refRow{id: rr.id, current: fresh})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("core: iterate references for regenerate: %w", err)
+	}
+	const upd = `UPDATE reference
+		SET col__citation = ?, col__modified = ?, col__modified_by = ?
+		WHERE col__id = ?`
+	updated := 0
+	for _, rr := range toUpdate {
+		if _, err := t.tx.ExecContext(t.ctx, upd, rr.current, now, actor, rr.id); err != nil {
+			return updated, fmt.Errorf("core: regenerate citation for %s: %w", rr.id, err)
+		}
+		updated++
+	}
+	return updated, nil
+}
+
 func (t *Tx) DeleteReference(id string) error {
 	if id == "" {
 		return fmt.Errorf("core: delete reference: %w: id required", ErrValidation)

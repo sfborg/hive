@@ -880,6 +880,20 @@
       "priority": 20
     },
     {
+      "rule_id": "hive_reference_missing_citation",
+      "table_name": "reference",
+      "field_name": "col__citation",
+      "rule_name": "Reference missing citation string",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Empty citation string — the reference won't surface in citation-based search. New writes auto-compose from structured fields; import-time citations that came in blank stay blank until a curator triggers Regenerate on the references screen.",
+      "is_active": true,
+      "priority": 20
+    },
+    {
       "rule_id": "hive_infraspecific_marker_missing",
       "table_name": "name",
       "field_name": "col__scientific_name",

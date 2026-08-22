@@ -11778,10 +11778,14 @@ class SfgaAddReferenceModal extends LitElement {
           short after an auto-fetch. Toggle at the bottom reveals
           the rest.
         -->
-        ${this._renderManualTextField("citation", "Citation", {
-          placeholder: "Free-text citation (auto-composed when empty)",
-          essential: true,
-        })}
+        <!--
+          col__citation is a derived / cached field auto-composed
+          from the structured fields at write time (see pkg/reference
+          ComposeCitation). Removed from the Manual tab because a
+          curator-typed value would get overwritten on save and
+          that's a bad surprise. Curators shape the citation
+          indirectly by editing the structured fields below.
+        -->
 
         ${this._shouldShowManualField("type", true)
           ? html`
