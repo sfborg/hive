@@ -142,6 +142,39 @@ func TestRepairTagBoundarySpacing(t *testing.T) {
 	}
 }
 
+// TestTitleCaseIfShouting covers publisher-uppercased author name
+// repair. Only fires when the input has zero lowercase letters —
+// mixed-case input passes through untouched.
+func TestTitleCaseIfShouting(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Publisher-shouted: repaired.
+		{"DOUGLASS R. MILLER", "Douglass R. Miller"},
+		{"JOHN A. DAVIDSON", "John A. Davidson"},
+		// Particle handling: van/de/von etc. stay lowercase after
+		// the first word.
+		{"JOHN VAN DER BERG", "John van der Berg"},
+		{"MARIA DE LA CRUZ", "Maria de la Cruz"},
+		{"HANS VON HUMBOLDT", "Hans von Humboldt"},
+		// Mc prefix.
+		{"PIERRE MCDONALD", "Pierre McDonald"},
+		// Already mixed-case: no-op.
+		{"Douglass R. Miller", "Douglass R. Miller"},
+		{"John de Olso", "John de Olso"},
+		// Curator's edge case: genuinely-capital "De" gets
+		// preserved because the input is mixed-case.
+		{"John De Olso", "John De Olso"},
+		// Empty and pure-punctuation: no-op.
+		{"", ""},
+		{"; ,", "; ,"},
+	}
+	for _, c := range cases {
+		got := titleCaseIfShouting(c.in)
+		if got != c.want {
+			t.Errorf("titleCaseIfShouting(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestUserAgent(t *testing.T) {
 	withEmail := New("curator@example.org").userAgent()
 	if withEmail != "hive/0.1 (mailto:curator@example.org)" {

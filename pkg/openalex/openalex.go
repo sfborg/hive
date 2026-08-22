@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -240,6 +242,83 @@ func repairTagBoundarySpacing(s string) string {
 	return s
 }
 
+// lowerParticles are the surname / given-name particles that
+// conventionally stay lowercase in a title-cased name — "van der
+// Berg", "de la Cruz", "y Cajal". Applied only when they appear
+// after the first word (a leading "Van" is more likely to be an
+// English given name than a Dutch particle).
+var lowerParticles = map[string]bool{
+	"de": true, "del": true, "la": true, "le": true, "les": true,
+	"du": true, "des": true, "den": true, "der": true, "das": true,
+	"dos": true, "di": true, "da": true, "do": true, "van": true,
+	"von": true, "y": true, "e": true, "of": true, "the": true, "el": true,
+}
+
+// titleCaseIfShouting fixes publisher-uppercased author names
+// ("DOUGLASS R. MILLER" → "Douglass R. Miller") while leaving
+// already-mixed-case input alone. The trigger is strict: any
+// lowercase letter in the input means "leave as-is", so a name
+// that's genuinely mixed-case (including edge cases like "John
+// De Olso" where "De" is genuinely capitalized for that person)
+// doesn't get downcased.
+//
+// Particle-aware — "JOHN VAN DER BERG" resolves to "John van der
+// Berg" rather than the naive titlecase "John Van Der Berg" —
+// though this is wrong for the rare "Sean Van Buren"-as-given-
+// name case. The taxonomic-author convention favors particle
+// lowercasing so we skew that way.
+//
+// Mc-prefix handling: "MCDONALD" becomes "McDonald". Mac is left
+// as-is (Mac* words split ambiguously — "Machel" isn't a Mc-name
+// but shares the prefix).
+func titleCaseIfShouting(s string) string {
+	if !isShouting(s) {
+		return s
+	}
+	words := strings.Fields(strings.ToLower(s))
+	for i, w := range words {
+		if i > 0 && lowerParticles[strings.TrimRight(w, ".,;")] {
+			continue
+		}
+		words[i] = capitalizeAuthorWord(w)
+	}
+	return strings.Join(words, " ")
+}
+
+// isShouting reports whether a string has letters but no
+// lowercase letters — the "publisher SHOUTED THE AUTHOR NAMES"
+// signal. Punctuation, digits, and whitespace don't count either
+// way; the presence of any lowercase letter defeats the trigger.
+func isShouting(s string) bool {
+	hasUpper := false
+	for _, r := range s {
+		if unicode.IsLower(r) {
+			return false
+		}
+		if unicode.IsUpper(r) {
+			hasUpper = true
+		}
+	}
+	return hasUpper
+}
+
+// capitalizeAuthorWord titlecases a single lowercased word with
+// small allowances for Mc-prefix names. Punctuation trailing the
+// alphabetic part (a period after an initial) survives untouched.
+func capitalizeAuthorWord(w string) string {
+	if w == "" {
+		return w
+	}
+	if strings.HasPrefix(w, "mc") && len(w) > 2 {
+		r, _ := utf8.DecodeRuneInString(w[2:])
+		if unicode.IsLetter(r) {
+			return "Mc" + string(unicode.ToUpper(r)) + w[2+utf8.RuneLen(r):]
+		}
+	}
+	r, size := utf8.DecodeRuneInString(w)
+	return string(unicode.ToUpper(r)) + w[size:]
+}
+
 func (w work) toReference() *coldp.Reference {
 	title := w.Title
 	if title == "" {
@@ -253,7 +332,7 @@ func (w work) toReference() *coldp.Reference {
 			name = a.Author.DisplayName
 		}
 		if name != "" {
-			authors = append(authors, name)
+			authors = append(authors, titleCaseIfShouting(name))
 		}
 	}
 	authorField := strings.Join(authors, "; ")
