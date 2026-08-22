@@ -47,6 +47,17 @@ class SfgaReader extends LitElement {
     // text (verify a chip's expansion, check for content GROBID
     // dropped, spot-check the reading order).
     _showPDF: { state: true },
+    // Print layout: multi-column paginated mode where the article
+    // fills the viewport and turns pages horizontally (arrow /
+    // space / click-to-turn) instead of scrolling. Multi-column
+    // matches the density of a print journal and doesn't suffer
+    // the "scroll back up to find column-2's start" problem
+    // because each viewport holds one full spread. Mutually
+    // exclusive with _showPDF — the PDF pane preempts the
+    // paginated layout.
+    _paginated: { state: true },
+    _page: { state: true },
+    _pageCount: { state: true },
   };
 
   static styles = css`
@@ -119,6 +130,41 @@ class SfgaReader extends LitElement {
       height: 100%;
       border: 0;
       border-right: 1px solid var(--border);
+    }
+    /* Paginated mode: multi-column layout that fills the viewport
+       and pages horizontally instead of scrolling. Solves the
+       "scroll back up to find column 2's start" problem inherent
+       to scrolling multi-column — each viewport is one complete
+       spread. Column width caps at 32ch for readability; the
+       browser packs as many columns as fit at that width. */
+    .layout.paginated {
+      height: calc(100vh - 3rem);
+      overflow: hidden;
+      position: relative;
+    }
+    .layout.paginated article {
+      height: 100%;
+      max-width: none;
+      margin: 0;
+      padding: var(--sp-4) var(--sp-6);
+      column-width: 32ch;
+      column-gap: var(--sp-6);
+      column-rule: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+      transition: transform 0.25s ease;
+      cursor: pointer;
+    }
+    /* Avoid mid-element breaks that would split a chip or a
+       heading across columns / pages. */
+    .layout.paginated h1,
+    .layout.paginated h2,
+    .layout.paginated .taxon-name,
+    .layout.paginated .passthrough {
+      break-inside: avoid;
+    }
+    .page-indicator {
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      color: var(--dim);
     }
     article {
       max-width: 44rem;
@@ -306,6 +352,9 @@ class SfgaReader extends LitElement {
     this._doc = null;
     this._showExpanded = false;
     this._showPDF = false;
+    this._paginated = false;
+    this._page = 0;
+    this._pageCount = 1;
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -317,6 +366,114 @@ class SfgaReader extends LitElement {
       return;
     }
     this._load();
+    // Keyboard navigation for paginated mode. Bound at the
+    // document level so keys work regardless of what's focused
+    // inside the reader. No-op when not in paginated mode.
+    this._onKeyDown = (e) => this._handleKey(e);
+    document.addEventListener("keydown", this._onKeyDown);
+    // Recompute page count on window resize so the "Page N of M"
+    // indicator and page-turn translation stay accurate.
+    this._onResize = () => this._recomputePages();
+    window.addEventListener("resize", this._onResize);
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener("keydown", this._onKeyDown);
+    window.removeEventListener("resize", this._onResize);
+    super.disconnectedCallback();
+  }
+
+  updated(changed) {
+    // Recompute pages whenever the doc, paginated mode, expand-
+    // abbreviations toggle, or PDF-toggle changes — any of these
+    // can affect layout dimensions.
+    if (
+      changed.has("_doc") ||
+      changed.has("_paginated") ||
+      changed.has("_showExpanded") ||
+      changed.has("_showPDF")
+    ) {
+      // Wait a frame so Lit finishes committing DOM changes
+      // before we measure.
+      requestAnimationFrame(() => this._recomputePages());
+    }
+    if (changed.has("_page") || changed.has("_pageCount")) {
+      this._applyPageTransform();
+    }
+  }
+
+  _handleKey(e) {
+    if (!this._paginated) return;
+    // Ignore keys when the curator is focused in an input.
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    switch (e.key) {
+      case "ArrowRight":
+      case "PageDown":
+      case " ":
+        e.preventDefault();
+        this._pageForward();
+        break;
+      case "ArrowLeft":
+      case "PageUp":
+        e.preventDefault();
+        this._pageBack();
+        break;
+      case "Home":
+        e.preventDefault();
+        this._page = 0;
+        break;
+      case "End":
+        e.preventDefault();
+        this._page = Math.max(0, this._pageCount - 1);
+        break;
+    }
+  }
+
+  _pageForward() {
+    if (this._page < this._pageCount - 1) this._page += 1;
+  }
+
+  _pageBack() {
+    if (this._page > 0) this._page -= 1;
+  }
+
+  // Click-to-turn: left third goes back, right third goes forward,
+  // middle third is a dead zone so accidental clicks (or selecting
+  // text) don't flip pages.
+  _onPageClick(e) {
+    const layout = this.renderRoot.querySelector(".layout.paginated");
+    if (!layout) return;
+    const rect = layout.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x < rect.width / 3) this._pageBack();
+    else if (x > (rect.width * 2) / 3) this._pageForward();
+  }
+
+  _recomputePages() {
+    if (!this._paginated) {
+      this._pageCount = 1;
+      this._page = 0;
+      return;
+    }
+    const article = this.renderRoot.querySelector(".layout.paginated article");
+    if (!article) return;
+    // Reset transform so scrollWidth reflects true content width
+    // (transform doesn't affect layout metrics but reset for clarity).
+    article.style.transform = "";
+    const paneWidth = article.offsetWidth;
+    const contentWidth = article.scrollWidth;
+    const pages = Math.max(1, Math.ceil(contentWidth / paneWidth));
+    this._pageCount = pages;
+    if (this._page >= pages) this._page = pages - 1;
+    this._applyPageTransform();
+  }
+
+  _applyPageTransform() {
+    const article = this.renderRoot.querySelector(".layout.paginated article");
+    if (!article) return;
+    const offset = this._page * article.offsetWidth;
+    article.style.transform = `translateX(-${offset}px)`;
   }
 
   async _load() {
@@ -377,10 +534,34 @@ class SfgaReader extends LitElement {
             <input
               type="checkbox"
               .checked=${this._showPDF}
-              @change=${(e) => (this._showPDF = e.target.checked)}
+              @change=${(e) => {
+                this._showPDF = e.target.checked;
+                // PDF pane preempts paginated layout — the
+                // horizontal-scroll pagination and the split-view
+                // both want the viewport, so make them mutually
+                // exclusive to avoid a broken compound state.
+                if (this._showPDF) this._paginated = false;
+              }}
             />
             Show PDF
           </label>
+          <label>
+            <input
+              type="checkbox"
+              .checked=${this._paginated}
+              @change=${(e) => {
+                this._paginated = e.target.checked;
+                if (this._paginated) this._showPDF = false;
+                this._page = 0;
+              }}
+            />
+            Columned view
+          </label>
+          ${this._paginated
+            ? html`<span class="page-indicator">
+                Page ${this._page + 1} of ${this._pageCount}
+              </span>`
+            : nothing}
           ${meta && meta.plain
             ? html`
                 <div class="cite-toolbar" aria-label="copy citation">
@@ -401,7 +582,11 @@ class SfgaReader extends LitElement {
         : nothing}
       ${this._doc
         ? html`
-            <div class=${"layout" + (this._showPDF ? " split" : "")}>
+            <div class=${"layout" +
+              (this._showPDF ? " split" : "") +
+              (this._paginated ? " paginated" : "")}
+              @click=${(e) => this._paginated && this._onPageClick(e)}
+            >
               ${this._showPDF
                 ? html`<iframe
                     class="pdf"
