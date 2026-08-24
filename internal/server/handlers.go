@@ -19,6 +19,7 @@ import (
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
 	"github.com/sfborg/hive/pkg/grobid"
+	"github.com/sfborg/hive/pkg/jatsconv"
 	"github.com/sfborg/hive/pkg/ocr"
 	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
@@ -2890,16 +2891,17 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tryAnnotate runs the GNfinder + GNverifier pass over the just-
-// generated (or previously-cached) TEI and stores the resulting
-// TaxPub-augmented XML at <sha>.taxpub.xml. Runs synchronously
-// after tryGrobidConvert; while it adds a few seconds to upload
-// latency, the GROBID pass upstream already dominates that time
-// and having the augmented XML on disk unblocks every downstream
-// reader / feedback / corpus-query path without on-demand work.
+// tryAnnotate converts the just-generated (or previously-cached)
+// GROBID TEI into JATS via pkg/jatsconv, runs the GNfinder +
+// GNverifier annotation pass over that JATS, and stores the
+// resulting TaxPub-augmented JATS at <sha>.jats.xml. Runs
+// synchronously after tryGrobidConvert; the GROBID pass upstream
+// dominates the latency budget, and having the augmented JATS on
+// disk unblocks every downstream reader / feedback / corpus-query
+// path without on-demand work.
 //
 // Skips when there's no TEI (non-PDF upload, GROBID unavailable),
-// dedups when the augmented XML already exists on disk. Errors
+// dedups when the augmented JATS already exists on disk. Errors
 // don't propagate to the upload response — the raw source and TEI
 // are still stored, and the curator can retry the annotation pass
 // separately.
@@ -2910,18 +2912,22 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	if s.annotator == nil {
 		return "skipped", 0
 	}
-	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "taxpub.xml"); err == nil && existing != nil {
+	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "jats.xml"); err == nil && existing != nil {
 		return "already_exists", countTaxonNameElements(existing)
 	}
 	tei, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml")
 	if err != nil || tei == nil {
 		return "failed", 0
 	}
-	augmented, err := s.annotator.Annotate(ctx, tei)
+	jats, err := jatsconv.TEIToJATS(tei)
 	if err != nil {
 		return "failed", 0
 	}
-	if err := sidecar.Store(s.archivePath, res.SHA512, "taxpub.xml", augmented); err != nil {
+	augmented, err := s.annotator.Annotate(ctx, jats)
+	if err != nil {
+		return "failed", 0
+	}
+	if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
 		return "failed", 0
 	}
 	return "annotated", countTaxonNameElements(augmented)
@@ -3154,19 +3160,19 @@ func (s *server) handleReferenceLibrarySource(w http.ResponseWriter, r *http.Req
 	http.ServeContent(w, r, info.Name(), meta.UploadedAt, f)
 }
 
-// handleReferenceLibraryTaxpub streams the TaxPub-augmented XML
+// handleReferenceLibraryTaxpub streams the TaxPub-augmented JATS
 // produced by the annotator (GNfinder + GNverifier) and stored
-// alongside the raw source at <sha>.taxpub.xml. Consumers: the
-// future reader UI, corpus-scale analysis, curator eyeballing via
-// curl. Returns 404 when no augmented XML exists (upload happened
-// but annotation was skipped or failed).
+// alongside the raw source at <sha>.jats.xml. Consumers: the
+// reader UI, corpus-scale analysis, curator eyeballing via curl.
+// Returns 404 when no augmented XML exists (upload happened but
+// annotation was skipped or failed).
 func (s *server) handleReferenceLibraryTaxpub(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
 	if sha == "" {
 		writeBadRequest(w, r, "sha required")
 		return
 	}
-	data, err := sidecar.Read(s.archivePath, sha, "taxpub.xml")
+	data, err := sidecar.Read(s.archivePath, sha, "jats.xml")
 	if err != nil {
 		writeProblem(w, r, err)
 		return

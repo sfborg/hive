@@ -1052,8 +1052,8 @@ type apiReferenceUpload struct {
 	DOI            string              `json:"doi,omitempty"`
 	Metadata       *apiUploadBibHeader `json:"metadata,omitempty"`
 	// AnnotationStatus reports what happened during the follow-on
-	// GNfinder + GNverifier pass that produces augmented TaxPub XML
-	// stored at <sha>.taxpub.xml. Values:
+	// GNfinder + GNverifier pass that produces augmented JATS +
+	// TaxPub XML stored at <sha>.jats.xml. Values:
 	//
 	//	"annotated"      — augmented XML generated and stored
 	//	"skipped"        — no TEI was available (upstream GROBID
