@@ -1,7 +1,11 @@
-// Package annotator produces TaxPub-augmented XML from GROBID TEI
+// Package annotator produces TaxPub-augmented XML from JATS
 // documents, wrapping every scientific name GNfinder detects in
 // <tp:taxon-name> markup so downstream readers can render chips,
 // toggles, and expansions on top of the source text.
+//
+// The upstream pipeline converts GROBID's TEI output into JATS via
+// pkg/jatsconv before invoking this annotator — see
+// JATS_MIGRATION_PLAN.md for the migration context.
 //
 // This is the first slice of the extraction pipeline documented in
 // REFERENCE_PDF_PLAN.md § Reader UI. Later slices add abbreviation
@@ -108,25 +112,24 @@ func (a *Annotator) ensureReady() error {
 	return a.initErr
 }
 
-// FindNames walks a GROBID TEI document, runs GNfinder over the
-// body text (everything inside <text> — the paper's own content),
-// and returns a new document with <tp:taxon-name> wrapped around
-// every detected scientific name. Content outside <text> (the
-// header, sourceDesc bibliography, encoding metadata) is copied
-// through unchanged — GNfinder isn't useful on structured metadata,
-// and header content already has its own domain-specific parsing
-// (see pkg/grobid ParseHeader / ExtractDOI).
+// FindNames walks a JATS document, runs GNfinder over the body
+// text (everything inside <body> — the paper's own prose), and
+// returns a new document with <tp:taxon-name> wrapped around every
+// detected scientific name. Content outside <body> (the <front>
+// article-meta and <back> ref-list) is copied through unchanged —
+// GNfinder isn't useful on structured metadata, and header content
+// already has its own domain-specific parsing (see pkg/grobid
+// ParseHeader / ExtractDOI).
 //
-// Deterministic: same TEI in → same augmented XML out. Runs
+// Deterministic: same JATS in → same augmented XML out. Runs
 // GNfinder per-text-node (not per-document) so cross-node names —
-// which don't happen in well-formed XML anyway, since GROBID never
-// splits a name across element boundaries — aren't detectable, but
-// intra-node names are found and wrapped correctly.
+// which don't happen in well-formed XML anyway — aren't detectable,
+// but intra-node names are found and wrapped correctly.
 //
 // The returned bytes carry the TaxPub namespace declaration on the
 // root element. Downstream readers that walk the augmented XML get
 // resolvable <tp:taxon-name> elements.
-func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
+func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 	if err := a.ensureReady(); err != nil {
 		return nil, err
 	}
@@ -140,18 +143,24 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 	// insertion positions. Everything outside the insertions is
 	// byte-identical to the input.
 	var edits []insertion
-	// Insert xmlns:tp on the root open tag.
-	rootAttrPos, err := rootOpenTagAttrPos(tei)
-	if err != nil {
-		return nil, err
+	// Insert xmlns:tp on the root open tag when the input does not
+	// already declare it. jatsconv emits the declaration up front so
+	// annotator output stays byte-stable across annotated / un-
+	// annotated inputs; a raw JATS document (e.g. a test fixture)
+	// still needs the declaration injected.
+	if !bytes.Contains(jats, []byte(`xmlns:`+TaxPubPrefix+`="`+TaxPubNamespace+`"`)) {
+		rootAttrPos, err := rootOpenTagAttrPos(jats)
+		if err != nil {
+			return nil, err
+		}
+		edits = append(edits, insertion{
+			pos:  rootAttrPos,
+			text: ` xmlns:` + TaxPubPrefix + `="` + TaxPubNamespace + `"`,
+		})
 	}
-	edits = append(edits, insertion{
-		pos:  rootAttrPos,
-		text: ` xmlns:` + TaxPubPrefix + `="` + TaxPubNamespace + `"`,
-	})
 
-	dec := xml.NewDecoder(bytes.NewReader(tei))
-	textDepth := 0
+	dec := xml.NewDecoder(bytes.NewReader(jats))
+	bodyDepth := 0
 	var beforeOffset int64
 	for {
 		beforeOffset = dec.InputOffset()
@@ -160,23 +169,23 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 			if err.Error() == "EOF" {
 				break
 			}
-			return nil, fmt.Errorf("annotator: parse TEI: %w", err)
+			return nil, fmt.Errorf("annotator: parse JATS: %w", err)
 		}
 		afterOffset := dec.InputOffset()
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "text" {
-				textDepth++
+			if t.Name.Local == "body" {
+				bodyDepth++
 			}
 		case xml.EndElement:
-			if t.Name.Local == "text" && textDepth > 0 {
-				textDepth--
+			if t.Name.Local == "body" && bodyDepth > 0 {
+				bodyDepth--
 			}
 		case xml.CharData:
-			if textDepth <= 0 || !hasWordContent(t) {
+			if bodyDepth <= 0 || !hasWordContent(t) {
 				continue
 			}
-			raw := tei[beforeOffset:afterOffset]
+			raw := jats[beforeOffset:afterOffset]
 			decoded := string(t)
 			// Skip chunks where decoding differs from the raw
 			// bytes — entities (&amp; etc.) make GNfinder's
@@ -190,6 +199,12 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 			for _, n := range res.Names {
 				if n.OffsetStart < 0 || n.OffsetEnd > len(decoded) ||
 					n.OffsetStart >= n.OffsetEnd {
+					continue
+				}
+				if isLabelWord(n.Name) {
+					// Skip common label words that also happen to
+					// exist as real genus names in CoL. See
+					// isLabelWord for the rationale and list.
 					continue
 				}
 				startPos := beforeOffset + int64(n.OffsetStart)
@@ -206,7 +221,7 @@ func (a *Annotator) FindNames(tei []byte) ([]byte, error) {
 			}
 		}
 	}
-	return applyInsertions(tei, edits), nil
+	return applyInsertions(jats, edits), nil
 }
 
 // insertion is one atomic "insert this text at this byte position"
@@ -299,15 +314,61 @@ func (a *Annotator) SetVerifier(v gnverifier.GNverifier) {
 	a.verifierOnce.Do(func() { a.verifier = v })
 }
 
-// Annotate is the full pipeline: FindNames + ExpandAbbreviations.
-// Convenience wrapper for callers that want the augmented output
-// in one shot; equivalent to calling the two individually.
-func (a *Annotator) Annotate(ctx context.Context, tei []byte) ([]byte, error) {
-	marked, err := a.FindNames(tei)
+// Annotate is the full pipeline: FindNames + VerifyFullNames +
+// ExpandAbbreviations. Convenience wrapper for callers that want
+// the augmented output in one shot; equivalent to calling the
+// three passes individually.
+func (a *Annotator) Annotate(ctx context.Context, jats []byte) ([]byte, error) {
+	marked, err := a.FindNames(jats)
 	if err != nil {
 		return nil, err
 	}
-	return a.ExpandAbbreviations(ctx, marked)
+	verified, err := a.VerifyFullNames(ctx, marked)
+	if err != nil {
+		return nil, err
+	}
+	return a.ExpandAbbreviations(ctx, verified)
+}
+
+// VerifyFullNames batch-verifies every full-form <tp:taxon-name>
+// chip in the input against GNverifier and stamps the outcome as
+// gn:source (verified / unverified) plus gn:score for verified
+// matches. Abbreviated chips (full-name attribute contains a
+// letter-then-period token such as "C. strepitans") are left
+// untouched — those go through ExpandAbbreviations, which does
+// its own candidate-based verification.
+//
+// One GNverifier VerifyBatch call per document. Deduplicates
+// candidate names before sending so a paper that mentions
+// Panthera onca fifty times still costs one row in the batch.
+//
+// Attribute semantics on the rewritten chip:
+//   - gn:source = "verified"   — GNverifier returned a full-name
+//     match (Exact / Fuzzy / SpeciesGroup / Virus). Includes score.
+//   - gn:source = "unverified" — GNverifier returned NoMatch or a
+//     Partial* match (only genus verified, species didn't). The
+//     chip stays but the reader can style it as "GNfinder said so
+//     but no authority backs it up".
+//
+// Idempotent: chips that already carry gn:source keep their
+// existing value (ExpandAbbreviations may have added one; that
+// pass runs after VerifyFullNames, but a defensive check keeps
+// the pipeline order flexible).
+func (a *Annotator) VerifyFullNames(ctx context.Context, augmented []byte) ([]byte, error) {
+	fullNames, err := collectFullNames(augmented)
+	if err != nil {
+		return nil, err
+	}
+	if len(fullNames) == 0 {
+		return augmented, nil
+	}
+	a.ensureVerifier()
+	batch := a.verifier.VerifyBatch(ctx, fullNames)
+	verifyResults := make(map[string]*vlib.Name, len(fullNames))
+	for i := range batch {
+		verifyResults[fullNames[i]] = &batch[i]
+	}
+	return rewriteFullNames(augmented, verifyResults)
 }
 
 // ensureVerifier lazily constructs the GNverifier HTTP client on
@@ -405,11 +466,13 @@ func collectNames(augmented []byte) (fullGenera map[string]bool, abbrevs map[str
 		if se.Name.Local != "taxon-name" {
 			continue
 		}
-		var fullName string
+		var fullName, source string
 		for _, attr := range se.Attr {
-			if attr.Name.Local == "full-name" {
+			switch attr.Name.Local {
+			case "full-name":
 				fullName = attr.Value
-				break
+			case "source":
+				source = attr.Value
 			}
 		}
 		if fullName == "" {
@@ -421,6 +484,20 @@ func collectNames(augmented []byte) (fullGenera map[string]bool, abbrevs map[str
 			if len(parts) > 1 {
 				abbrevs[fullName] = true
 			}
+			continue
+		}
+		// Only accept genera from chips that verified against
+		// GNverifier. VerifyFullNames runs before ExpandAbbrev-
+		// iations and stamps every full-form chip with
+		// gn:source={verified,unverified}. Filtering here prevents
+		// GNfinder false positives (capitalized-word sequences
+		// that look name-shaped but aren't actual taxa) from
+		// polluting the abbreviation-candidate pool.
+		//
+		// Chips with no gn:source are older/legacy — accept them
+		// as a fallback so pipelines that skip VerifyFullNames
+		// still work.
+		if source != "" && source != "verified" {
 			continue
 		}
 		if len(parts) >= 2 {
@@ -436,6 +513,238 @@ func collectNames(augmented []byte) (fullGenera map[string]bool, abbrevs map[str
 		}
 	}
 	return fullGenera, abbrevs, nil
+}
+
+// collectFullNames walks the augmented XML and returns the
+// deduplicated set of full-name attribute values on <tp:taxon-name>
+// chips that aren't abbreviations. Fed to VerifyFullNames' batch
+// call so we hit GNverifier once per document with one row per
+// unique candidate name.
+func collectFullNames(augmented []byte) ([]string, error) {
+	seen := make(map[string]bool)
+	dec := xml.NewDecoder(bytes.NewReader(augmented))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, fmt.Errorf("annotator: parse augmented XML: %w", err)
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local != "taxon-name" {
+			continue
+		}
+		var fullName string
+		alreadyMarked := false
+		for _, attr := range se.Attr {
+			switch attr.Name.Local {
+			case "full-name":
+				fullName = attr.Value
+			case "source":
+				// gn:source already set — likely by an earlier
+				// verification pass (or a hand-edited chip).
+				// Skip re-verifying so we don't paper over
+				// curator-supplied metadata.
+				alreadyMarked = true
+			}
+		}
+		if alreadyMarked || fullName == "" {
+			continue
+		}
+		parts := strings.SplitN(fullName, " ", 2)
+		if strings.HasSuffix(parts[0], ".") {
+			// Abbreviated — ExpandAbbreviations handles this.
+			continue
+		}
+		if seen[fullName] {
+			continue
+		}
+		seen[fullName] = true
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// rewriteFullNames walks the augmented XML and, for each full-form
+// <tp:taxon-name> chip:
+//
+//   - If GNverifier confirmed the name (Exact / Fuzzy / SpeciesGroup
+//     / Virus match type), stamp gn:source="verified" and gn:score
+//     on the opening tag.
+//   - If GNverifier can't confirm it, UNWRAP the chip — delete the
+//     open and close tp:taxon-name tags, leaving the inner text as
+//     plain body prose. GNfinder uses patterns (italics, capital-
+//     ization) that produce false positives, and asserting a chip
+//     the authoritative DB can't confirm would put wrong metadata
+//     into the JATS that downstream tools would take at face value.
+//
+// Abbreviated chips (e.g. "C. strepitans") and chips already
+// carrying gn:source are left alone — ExpandAbbreviations handles
+// abbreviations, and any pre-stamped chip is treated as
+// authoritative (a curator or earlier pass supplied the metadata).
+func rewriteFullNames(
+	augmented []byte,
+	verifyResults map[string]*vlib.Name,
+) ([]byte, error) {
+	var edits []insertion
+	if !bytes.Contains(augmented, []byte(`xmlns:`+GNPrefix+`="`+GNNamespace+`"`)) {
+		rootAttrPos, err := rootOpenTagAttrPos(augmented)
+		if err != nil {
+			return nil, err
+		}
+		edits = append(edits, insertion{
+			pos:  rootAttrPos,
+			text: ` xmlns:` + GNPrefix + `="` + GNNamespace + `"`,
+		})
+	}
+	var reps []replacement
+	dec := xml.NewDecoder(bytes.NewReader(augmented))
+	var beforeOffset int64
+	for {
+		beforeOffset = dec.InputOffset()
+		tok, err := dec.Token()
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, fmt.Errorf("annotator: parse augmented XML: %w", err)
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local != "taxon-name" {
+			continue
+		}
+		afterOpenOffset := dec.InputOffset()
+		action, verifiedTag := planFullNameAction(se, verifyResults)
+		switch action {
+		case fullNameKeep:
+			continue
+		case fullNameStamp:
+			// Rewrite the opening tag in place with the verified
+			// attributes.
+			reps = append(reps, replacement{
+				start:   beforeOffset,
+				end:     afterOpenOffset,
+				replace: verifiedTag,
+			})
+		case fullNameUnwrap:
+			// Delete the opening tag now, then find and delete the
+			// matching closing tag. Uses depth tracking so nested
+			// tp:taxon-name chips (biologically legitimate — see
+			// jatsconv nesting rationale) close-match correctly.
+			reps = append(reps, replacement{
+				start:   beforeOffset,
+				end:     afterOpenOffset,
+				replace: "",
+			})
+			closeStart, closeEnd, err := findMatchingClose(dec)
+			if err != nil {
+				return nil, err
+			}
+			reps = append(reps, replacement{
+				start:   closeStart,
+				end:     closeEnd,
+				replace: "",
+			})
+		}
+	}
+	return applyReplacementsAndInsertions(augmented, edits, reps), nil
+}
+
+// fullNameAction is what rewriteFullNames should do with a
+// full-form chip based on verification outcome.
+type fullNameAction int
+
+const (
+	fullNameKeep   fullNameAction = iota // leave untouched (already stamped, or abbreviated)
+	fullNameStamp                        // rewrite open tag with gn:source="verified" + gn:score
+	fullNameUnwrap                       // delete open + close tags, keep inner text
+)
+
+// planFullNameAction inspects a <tp:taxon-name> opening tag and
+// decides what rewriteFullNames should do with the chip. Returns
+// the verified opening-tag replacement text only when the action
+// is fullNameStamp.
+func planFullNameAction(
+	se xml.StartElement,
+	verifyResults map[string]*vlib.Name,
+) (fullNameAction, string) {
+	var fullName string
+	for _, attr := range se.Attr {
+		switch attr.Name.Local {
+		case "full-name":
+			fullName = attr.Value
+		case "source":
+			// Already stamped — trust the earlier pass.
+			return fullNameKeep, ""
+		}
+	}
+	if fullName == "" {
+		return fullNameKeep, ""
+	}
+	parts := strings.SplitN(fullName, " ", 2)
+	if strings.HasSuffix(parts[0], ".") {
+		// Abbreviated — ExpandAbbreviations owns this case.
+		return fullNameKeep, ""
+	}
+	r := verifyResults[fullName]
+	if r == nil || r.BestResult == nil || !isFullNameMatch(r.MatchType) {
+		return fullNameUnwrap, ""
+	}
+	// Rebuild the opening tag with the verified metadata.
+	var b strings.Builder
+	b.WriteByte('<')
+	b.WriteString(TaxPubPrefix)
+	b.WriteString(":taxon-name full-name=\"")
+	b.WriteString(escapeAttrValue(fullName))
+	b.WriteString(`" `)
+	b.WriteString(GNPrefix)
+	b.WriteString(`:source="verified" `)
+	b.WriteString(GNPrefix)
+	b.WriteString(`:score="`)
+	b.WriteString(escapeAttrValue(formatScore(r.BestResult.SortScore)))
+	b.WriteString(`">`)
+	return fullNameStamp, b.String()
+}
+
+// findMatchingClose consumes tokens from the decoder until it
+// hits the closing tag that balances an already-open
+// <tp:taxon-name>. Returns the byte range of that closing tag
+// (start inclusive, end exclusive). Uses depth tracking so nested
+// tp:taxon-name inside the target don't confuse the balance.
+func findMatchingClose(dec *xml.Decoder) (int64, int64, error) {
+	depth := 1
+	for {
+		start := dec.InputOffset()
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, 0, fmt.Errorf("annotator: find matching close: %w", err)
+		}
+		end := dec.InputOffset()
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "taxon-name" {
+				depth++
+			}
+		case xml.EndElement:
+			if t.Name.Local == "taxon-name" {
+				depth--
+				if depth == 0 {
+					return start, end, nil
+				}
+			}
+		}
+	}
 }
 
 // expansionCandidates returns possible full-form binomials by
@@ -476,15 +785,21 @@ func rewriteAbbreviations(
 	verifyResults map[string]*vlib.Name,
 ) ([]byte, error) {
 	// Insert xmlns:gn on the root open tag so gn:source and friends
-	// resolve.
-	rootAttrPos, err := rootOpenTagAttrPos(augmented)
-	if err != nil {
-		return nil, err
+	// resolve — but skip when the input already declares the
+	// namespace (jatsconv emits both tp: and gn: preemptively so
+	// annotator output stays byte-stable across annotated and
+	// un-annotated inputs).
+	var edits []insertion
+	if !bytes.Contains(augmented, []byte(`xmlns:`+GNPrefix+`="`+GNNamespace+`"`)) {
+		rootAttrPos, err := rootOpenTagAttrPos(augmented)
+		if err != nil {
+			return nil, err
+		}
+		edits = append(edits, insertion{
+			pos:  rootAttrPos,
+			text: ` xmlns:` + GNPrefix + `="` + GNNamespace + `"`,
+		})
 	}
-	edits := []insertion{{
-		pos:  rootAttrPos,
-		text: ` xmlns:` + GNPrefix + `="` + GNNamespace + `"`,
-	}}
 	// Replacements: for each <tp:taxon-name ...> opening tag we
 	// need to modify, we record the byte range of the whole opening
 	// tag plus the replacement text. Applied as a delete + insert
@@ -649,14 +964,44 @@ func rewriteTaxonNameTag(
 			name  string
 			score float64
 		}
-		var vs []verified
+		// Dedupe candidates by resolved-taxon identity: when two
+		// candidate strings both verify but point at the SAME
+		// underlying record in CoL, they aren't really ambiguous.
+		// Common causes: (a) the paper spells the genus two ways
+		// (e.g., "Paecilomyces" and its typo "Paecelomyces") and
+		// both verify — one Exact, one Fuzzy — against the same
+		// CoL entry; (b) the paper uses a genus + its synonym and
+		// both resolve to the same currently-accepted name.
+		//
+		// Key preference: CurrentNameID (accepted-taxon UUID, handles
+		// synonymy) → MatchedNameID (matched-record UUID, handles
+		// spelling variants of the same record) → MatchedCanonicalFull
+		// (canonical string, defensive fallback for records missing
+		// UUIDs). Keep the highest-scoring representative per cluster
+		// so Exact matches beat Fuzzy matches when both resolve to
+		// the same taxon.
+		byTaxon := make(map[string]verified)
 		for _, c := range cands {
 			r := verifyResults[c]
-			if r == nil || r.MatchType == vlib.NoMatch || r.BestResult == nil {
+			if r == nil || r.BestResult == nil || !isFullNameMatch(r.MatchType) {
 				continue
 			}
-			vs = append(vs, verified{name: c, score: r.BestResult.SortScore})
+			key := candidateTaxonKey(r.BestResult)
+			cand := verified{name: c, score: r.BestResult.SortScore}
+			if existing, found := byTaxon[key]; !found || cand.score > existing.score {
+				byTaxon[key] = cand
+			}
 		}
+		vs := make([]verified, 0, len(byTaxon))
+		for _, v := range byTaxon {
+			vs = append(vs, v)
+		}
+		// Order matters for reproducible output — sort by descending
+		// score so the top match is always first (matters for the
+		// gn:candidates attribute rendering when we end up ambiguous).
+		sort.SliceStable(vs, func(i, j int) bool {
+			return vs[i].score > vs[j].score
+		})
 		switch len(vs) {
 		case 0:
 			extra = append(extra, xml.Attr{
@@ -715,6 +1060,99 @@ func rewriteTaxonNameTag(
 
 func formatScore(s float64) string {
 	return fmt.Sprintf("%.3f", s)
+}
+
+// candidateTaxonKey derives a dedup key for a GNverifier result
+// row. Two candidate name-strings that share this key represent
+// the same underlying taxon — either because they matched the same
+// record in the data source (spelling variants), or because they
+// resolve to the same accepted name via synonymy.
+//
+// Preference order:
+//   - CurrentNameID: the accepted taxon's UUID after synonymy is
+//     resolved. Two names that are synonyms of the same accepted
+//     name share this key; ideal for dedup.
+//   - MatchedNameID: the matched record's UUID. Falls back to
+//     this when the data source doesn't track a current name (some
+//     legacy DBs). Two spellings that hit the same record share
+//     the UUID.
+//   - MatchedCanonicalFull: canonical string form. Last-resort
+//     fallback when both UUIDs are empty (shouldn't happen for
+//     CoL-backed results but defends against future data sources
+//     with sparser metadata).
+func candidateTaxonKey(r *vlib.ResultData) string {
+	if r.CurrentNameID != "" {
+		return "current:" + r.CurrentNameID
+	}
+	if r.MatchedNameID != "" {
+		return "matched:" + r.MatchedNameID
+	}
+	return "canonical:" + r.MatchedCanonicalFull
+}
+
+// isFullNameMatch reports whether the given GNverifier match type
+// represents a match against the FULL input name-string. Partial
+// matches (PartialExact / PartialFuzzy / PartialFuzzyRelaxed) mean
+// GNverifier fell back to matching a shorter form — for a binomial
+// input like "Bacillus bassiana" that produces a Partial* match,
+// only the genus "Bacillus" verified, and the species "bassiana"
+// doesn't exist in that genus. Treating such matches as verified
+// is what let phantom binomials into the candidate-expansion set,
+// pushing legitimate resolutions toward "ambiguous".
+//
+// Accepted match types: Exact / ExactSpeciesGroup / Fuzzy /
+// FuzzyRelaxed / FuzzySpeciesGroup / FuzzySpeciesGroupRelaxed /
+// Virus. Everything else fails the check.
+func isFullNameMatch(mt vlib.MatchTypeValue) bool {
+	switch mt {
+	case vlib.Exact,
+		vlib.ExactSpeciesGroup,
+		vlib.Fuzzy,
+		vlib.FuzzyRelaxed,
+		vlib.FuzzySpeciesGroup,
+		vlib.FuzzySpeciesGroupRelaxed,
+		vlib.Virus:
+		return true
+	}
+	return false
+}
+
+// labelWordSet holds single-word GNfinder hits that also happen
+// to be real (obscure) genus names in CoL, but in scientific-
+// paper text virtually always appear as figure/table label words
+// in some language rather than as taxonomic references.
+//
+// Examples of what we filter and why:
+//   - Figura: Spanish/Portuguese/Italian for "Figure" — GNfinder
+//     picks it up in bilingual captions ("Figura 1. Dinámica..."),
+//     GNverifier confirms it as Figura Piesch (1927, a nematode
+//     genus). Real taxonomic references to that genus would be
+//     "Figura Piesch" or "Figura sp." — never bare "Figura".
+//   - Same rationale for other label words we've seen tokenized.
+//
+// A real Figura-genus mention (rare) would be missed by this
+// filter — accepted tradeoff. Scientific-paper false-positive
+// rate on these words is essentially 100%; true-positive rate is
+// vanishingly small.
+var labelWordSet = map[string]bool{
+	"Figure": true, "Figura": true, "Fig": true,
+	"Table": true, "Tabla": true, "Tab": true,
+	"Abbildung": true, // German for "Figure"
+	"Tabelle":   true, // German for "Table"
+	"Tableau":   true, // French for "Table"
+}
+
+// isLabelWord reports whether a GNfinder name is a single-word
+// hit from the labelWordSet — a common non-taxonomic word that
+// GNverifier happens to have as a valid genus.
+func isLabelWord(name string) bool {
+	// Only single-word hits qualify. A binomial containing one of
+	// these words (e.g. "Figura piesch"; unlikely but well-formed)
+	// falls through to the normal verification pipeline.
+	if strings.ContainsRune(name, ' ') {
+		return false
+	}
+	return labelWordSet[name]
 }
 
 // hasWordContent reports whether a char-data chunk contains any

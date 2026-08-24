@@ -1,8 +1,9 @@
 // annotate-tei is a scratch CLI for eyeballing the annotator's
 // output against a real GROBID TEI file. Point it at a .tei.xml
-// and it writes the augmented XML to stdout (or a file with -o).
-// Useful for iterating on the annotator before wiring it into the
-// server; not shipped in the hive binary.
+// and it writes the JATS+TaxPub augmented XML to stdout (or a
+// file with -o). The input is converted from TEI to JATS via
+// pkg/jatsconv before the annotator runs; that mirrors the
+// server-side upload pipeline. Not shipped in the hive binary.
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	"os"
 
 	"github.com/sfborg/hive/pkg/annotator"
+	"github.com/sfborg/hive/pkg/jatsconv"
 )
 
 func main() {
@@ -22,17 +24,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: annotate-tei [-o out.xml] [-expand] input.tei.xml")
 		os.Exit(2)
 	}
-	src, err := os.ReadFile(flag.Arg(0))
+	tei, err := os.ReadFile(flag.Arg(0))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "read:", err)
+		os.Exit(1)
+	}
+	jats, err := jatsconv.TEIToJATS(tei)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tei->jats:", err)
 		os.Exit(1)
 	}
 	a := annotator.New()
 	var augmented []byte
 	if *expand {
-		augmented, err = a.Annotate(context.Background(), src)
+		augmented, err = a.Annotate(context.Background(), jats)
 	} else {
-		augmented, err = a.FindNames(src)
+		augmented, err = a.FindNames(jats)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "annotate:", err)

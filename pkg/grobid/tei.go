@@ -43,6 +43,16 @@ type BibHeader struct {
 	// Publisher from <imprint><publisher>. Rarely populated for
 	// journal articles; more common for books.
 	Publisher string
+	// Abstract paragraphs from <abstract><div><p>... GROBID extracts
+	// the paper's abstract into the header when it can identify one.
+	// Multiple paragraphs preserved as a slice; downstream can join
+	// on newline or emit each as a separate <p> element. Multilingual
+	// papers with more than one abstract typically get only their
+	// primary-language abstract extracted here — GROBID's abstract
+	// classifier is language-single. Non-primary abstracts (a Spanish
+	// resumen in an English paper, etc.) may appear in the body
+	// under a <div> with a heading like "Resumen".
+	AbstractParagraphs []string
 }
 
 // ParseHeader extracts bibliographic metadata from GROBID's TEI XML.
@@ -70,6 +80,10 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 	type person struct{ Forename, Surname string }
 	var authors []person
 	var currentAuthor *person
+	// Abstract accumulation: <abstract><div><p>...</p></div></abstract>
+	// under <teiHeader>. Each <p> we hit inside the abstract subtree
+	// contributes one paragraph to the output slice.
+	inAbstract := false
 
 	for {
 		tok, err := dec.Token()
@@ -85,6 +99,31 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 			stack = append(stack, local)
 
 			switch local {
+			case "abstract":
+				// GROBID emits the paper's abstract inside
+				// <teiHeader><profileDesc><abstract>. Guard on stack
+				// so a stray <abstract> inside body content (rare but
+				// possible in some producers) doesn't leak in.
+				if stackContains(stack, "teiHeader") {
+					inAbstract = true
+				}
+			case "p":
+				// Abstract paragraphs: collect the text content of
+				// each <p> inside <abstract>. Uses readElementContent
+				// so mixed content (nested spans, formatting) still
+				// contributes text. Skips empty paragraphs.
+				if inAbstract {
+					if text, ok := readElementContent(dec, "p"); ok {
+						trimmed := collapseSpaces(text)
+						if trimmed != "" {
+							out.AbstractParagraphs = append(out.AbstractParagraphs, trimmed)
+						}
+						// readElementContent consumed the </p>, pop stack.
+						if len(stack) > 0 && stack[len(stack)-1] == "p" {
+							stack = stack[:len(stack)-1]
+						}
+					}
+				}
 			case "biblStruct":
 				// Any <biblStruct> reached from inside <teiHeader> is
 				// the paper's own metadata by TEI convention (there's
@@ -239,6 +278,8 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 				stack = stack[:len(stack)-1]
 			}
 			switch local {
+			case "abstract":
+				inAbstract = false
 			case "biblStruct":
 				inHeaderBiblStruct = false
 			case "author":
@@ -351,6 +392,41 @@ func trimDOIPunct(s string) string {
 // bytesIndex wraps strings.Index for the []byte-first idiom.
 func bytesIndex(haystack, needle []byte) int {
 	return strings.Index(string(haystack), string(needle))
+}
+
+// readElementContent consumes tokens until it hits the matching
+// end tag for `name` and returns the concatenated text of every
+// CharData token encountered, including text inside nested
+// descendants. Nested markup (e.g. <hi>, <ref>) contributes its
+// text but its wrapper tags are dropped — appropriate for abstract
+// paragraphs where the plain text is the payload and inline
+// formatting isn't preserved. Returns ("", false) at EOF or when
+// the next token isn't a start of usable content.
+func readElementContent(dec *xml.Decoder, name string) (string, bool) {
+	var b strings.Builder
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			if b.Len() == 0 {
+				return "", false
+			}
+			return b.String(), true
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == name {
+				depth++
+			}
+		case xml.EndElement:
+			if t.Name.Local == name {
+				depth--
+			}
+		case xml.CharData:
+			b.Write(t)
+		}
+	}
+	return b.String(), true
 }
 
 // readCharData consumes the next CharData token from the decoder
