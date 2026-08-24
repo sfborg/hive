@@ -110,7 +110,19 @@ func Run(archivePath string, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("wui/dist embed: %w", err)
 	}
-	mux.Handle("GET /", http.FileServer(http.FS(staticFS)))
+	// Cache-Control: no-cache tells browsers to revalidate with the server
+	// on every request before using the cached copy. Prevents the "old
+	// reader.js served from cache after container rebuild" foot-gun we
+	// hit repeatedly during development — especially painful for iframe
+	// content because Firefox caches nested-iframe resources across
+	// parent-page reloads. The revalidation is cheap (server-side embed
+	// is in-memory) and correct behavior for a self-updating dev tool
+	// where every restart may ship changed assets.
+	fileServer := http.FileServer(http.FS(staticFS))
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		fileServer.ServeHTTP(w, r)
+	}))
 
 	// Wrap the whole mux with a middleware that stamps the acting user into
 	// each request's context. All mutation handlers pick it up via
