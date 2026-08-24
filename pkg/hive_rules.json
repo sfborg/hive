@@ -880,6 +880,20 @@
       "priority": 20
     },
     {
+      "rule_id": "hive_jats_validation",
+      "table_name": "reference",
+      "field_name": "",
+      "rule_name": "Attached-PDF JATS validation",
+      "validator_type": "hive.jats_validation",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Attached-PDF JATS sidecar failed schema validation.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
       "rule_id": "hive_reference_missing_citation",
       "table_name": "reference",
       "field_name": "col__citation",

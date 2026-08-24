@@ -31,15 +31,35 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     .
 
 # ------------------------------------------------------------------
-# Runtime image. Distroless static — glibc-free, shell-free. If you
-# need to debug inside the container, swap this for
-# gcr.io/distroless/static-debian12:debug (adds busybox).
-FROM gcr.io/distroless/static-debian12:nonroot
+# Runtime image. debian:12-slim (~40 MB) instead of distroless
+# because the JATS-validation rule shells out to `xmllint` (from
+# libxml2-utils) to validate the augmented-JATS sidecar against the
+# hive-jats.rng schema. Distroless has no package manager and no
+# libxml2 pre-installed, so copying xmllint + its shared-lib deps
+# in from another stage is fragile. debian:12-slim keeps the image
+# small enough while giving us a real package manager and a shell
+# for debugging.
+FROM debian:12-slim
+
+# Install xmllint (libxml2-utils) + CA certs for HTTPS. Purge apt
+# caches after install to keep the image small.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		libxml2-utils \
+		ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Non-root user so the hive process doesn't run as root in the
+# container. matches the previous distroless-nonroot behavior.
+RUN groupadd --system --gid 65532 hive \
+	&& useradd --system --uid 65532 --gid hive --home /data hive
 
 # Sidecar directories (<archive>.library/) live next to their .db;
 # operators mount an archive-hosting volume at /data and point the
 # hive command at /data/<name>.db.
 WORKDIR /data
+RUN chown hive:hive /data
+USER hive:hive
 
 # Copy the compiled binary from the build stage.
 COPY --from=build /out/hive /usr/local/bin/hive

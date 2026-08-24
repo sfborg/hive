@@ -127,7 +127,7 @@ func openReadOnly(path string) (*Archive, error) {
 	}
 	a := &Archive{db: db, path: path, readOnly: true}
 	var vErr error
-	a.validator, a.ruleLoader, vErr = newHiveValidator(db)
+	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
 	if vErr != nil {
 		db.Close()
 		return nil, vErr
@@ -177,7 +177,7 @@ func openReadWrite(path string) (*Archive, error) {
 		parser: gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
 	}
 	var vErr error
-	a.validator, a.ruleLoader, vErr = newHiveValidator(db)
+	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
 	if vErr != nil {
 		db.Close()
 		return nil, vErr

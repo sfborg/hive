@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  hive-jats.rng — hive's extensions to the JATS Publishing 1.3
+  Relax NG schema. Includes NCBI's base schema unchanged and adds
+  extension points for two extra namespaces:
+
+    tp:  TaxPub (http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0)
+         Scientific-name markup used by Plazi, Pensoft, hive, and
+         the wider TaxPub ecosystem.
+
+    gn:  GN metadata (https://hive.sfborg.org/ns/gn/1.0)
+         hive-native extraction metadata attached to tp: elements
+         (verifier source, verifier score, alternative candidates).
+
+  The overlay adds tp:taxon-name to JATS's `p-elements` inline
+  content model — the annotator only emits taxon-name markup inside
+  <p>, so `p-elements` is the one extension point we need for the
+  current pipeline.
+
+  Kept small on purpose. Each future namespace (dwc:, additional
+  tp: elements, etc.) grows by one `<define combine="choice">`
+  block at the appropriate extension point; see
+  JATS_MIGRATION_PLAN.md § Follow-on work for the DwC arc.
+
+  Vendored base schema:  schema/vendor/JATS-journalpublishing1-3.rng
+  Downloaded from:       https://jats.nlm.nih.gov/publishing/1.3/rng/
+  Version:               ANSI/NISO JATS Version 1.3 (Z39.96-2021)
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         xmlns:tp="http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
+         xmlns:gn="https://hive.sfborg.org/ns/gn/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <include href="vendor/JATS-journalpublishing1-3.rng"/>
+
+  <!-- Extend JATS's phrase-level content model with tp:taxon-name.
+       phrase.class is a <choice> included by p-elements (body
+       paragraphs), simple-phrase (section / article titles,
+       abstract, caption), and many other inline-content models;
+       widening it once via combine="choice" covers every place
+       the annotator can legitimately wrap a scientific name. -->
+  <define name="phrase.class" combine="choice">
+    <ref name="tp.taxon-name"/>
+  </define>
+
+  <!-- TaxPub scientific-name markup with hive's gn:* attributes.
+       full-name is mandatory (every chip carries it); gn:source,
+       gn:score, and gn:candidates are optional and only populated
+       by ExpandAbbreviations. Content allows nested tp:taxon-name
+       because GNfinder can detect one scientific name as a
+       subsequence inside a longer one — e.g. Mytilaspis
+       (Lepidosaphes) pallida — and biology genuinely produces
+       nested references (subgenera in parens, species groups
+       inside genera). -->
+  <define name="tp.taxon-name">
+    <element name="tp:taxon-name">
+      <attribute name="full-name"/>
+      <optional>
+        <attribute name="gn:source">
+          <choice>
+            <value>verified</value>
+            <value>ambiguous</value>
+            <value>unverified</value>
+            <value>unresolved</value>
+          </choice>
+        </attribute>
+      </optional>
+      <optional>
+        <attribute name="gn:score"/>
+      </optional>
+      <optional>
+        <attribute name="gn:candidates"/>
+      </optional>
+      <zeroOrMore>
+        <choice>
+          <text/>
+          <ref name="tp.taxon-name"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <!-- Widen <fig>'s attribute set with gn:pdf-page + gn:pdf-bbox.
+       jatsconv preserves GROBID's per-figure page + bounding-box
+       coord from the source PDF so the reader can jump the PDF
+       pane to the referenced page when a curator clicks a figure
+       xref. Both attributes are optional — they're absent when the
+       upstream GROBID pass didn't produce coord metadata (older
+       archives or coord-tracking disabled). -->
+  <define name="fig-atts" combine="interleave">
+    <optional>
+      <attribute name="gn:pdf-page"/>
+    </optional>
+    <optional>
+      <attribute name="gn:pdf-bbox"/>
+    </optional>
+  </define>
+
+</grammar>

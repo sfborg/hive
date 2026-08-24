@@ -48,7 +48,7 @@ type rulesetSource struct {
 // rule metadata (Trigger, RecheckDays) for time-based scheduling.
 // Rules from all enabled bundles are merged into a single
 // mergedRuleLoader wired into the use case.
-func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
+func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
 	sources := []rulesetSource{
 		{name: "hive", bundle: hiveRulesJSON, enabled: true},
 		{name: "clb", bundle: clbRulesJSON, enabled: true},
@@ -145,6 +145,13 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	// the inline-quick-fix UX that resolves flagged rows without a
 	// side quest to the References screen.
 	registry.Register(newReferenceMetadataValidator())
+	// Hive-native: warn when an attached PDF's augmented-JATS
+	// sidecar fails schema validation against hive-jats.rng.
+	// Developer-facing telemetry — a curator can't fix a bad
+	// jatsconv output by editing anything, but the row in the
+	// Issues dashboard tells us where to look for the bug. Silent-
+	// skip on hosts without xmllint (docker ships it).
+	registry.Register(newJATSValidationValidator(archivePath))
 	// Hive-native: soft-warn when an infraspecific name lacks its
 	// rank marker (var., f., subsp., subvar., subf.) in the scientific
 	// name string. Code-aware: skips ICZN + SUBSPECIES (marker is
