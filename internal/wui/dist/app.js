@@ -13734,6 +13734,12 @@ class SfgaReferences extends LitElement {
     // a modal. Bibliography is the default because "look at the
     // reference and copy a citation" is the most common visit.
     _workspaceTab: { state: true },
+    // _pdfPage drives the PDF iframe's #page=N fragment in the
+    // Digitize tab. Reactive because clicking a fig-xref in the
+    // reader posts a message that updates this — Lit needs to
+    // observe the change and re-render the iframe with the new
+    // src fragment so the PDF viewer scrolls to the target page.
+    _pdfPage: { state: true },
     // Sort order for the reference list. "recent" (default)
     // orders by col__modified desc — newly-imported and recently-
     // edited references land at the top, the useful landing view
@@ -13796,9 +13802,24 @@ class SfgaReferences extends LitElement {
     .workspace-panes {
       flex: 1;
       display: grid;
+      min-height: 0;
+      overflow: hidden;
+    }
+    /* Every tab-content stacks in the same grid cell so iframes stay
+       mounted while inactive tabs sit hidden. Preserves scroll and
+       iframe state per-tab within a single reference; switching to a
+       different reference re-mounts because iframe srcs point at the
+       new sha. */
+    .workspace-panes .tab-content {
+      grid-column: 1;
+      grid-row: 1;
+      display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       min-height: 0;
       overflow: hidden;
+    }
+    .workspace-panes .tab-content[hidden] {
+      display: none;
     }
     .workspace-panes .pane {
       overflow: auto;
@@ -13810,7 +13831,7 @@ class SfgaReferences extends LitElement {
       width: 100%;
       height: 100%;
     }
-    .workspace-panes iframe.pane:first-child {
+    .workspace-panes .tab-content > .pane:first-child {
       border-left: none;
     }
     .workspace-panes .pane.detail {
@@ -14057,6 +14078,13 @@ class SfgaReferences extends LitElement {
     this._wide = false;
     this._readerExpanded = false;
     this._workspaceTab = "bibliography";
+    // _pdfPage drives the PDF iframe's #page=N fragment. Updated
+    // when a curator clicks a figure xref in the reader — see
+    // _onReaderMessage. Starts at 1 for each new reference; the
+    // constructor runs once but _select() also resets it on
+    // reference switch so navigating to a new reference doesn't
+    // leave a stale page number.
+    this._pdfPage = 1;
     this._sort =
       localStorage.getItem("hive.references.sort") === "author"
         ? "author"
@@ -14078,6 +14106,26 @@ class SfgaReferences extends LitElement {
       this._wide = w >= 1300;
     });
     this._resizeObserver.observe(this);
+    // Reader iframes post messages when a curator clicks a figure
+    // xref — the reader wants to switch us to the Digitize tab
+    // and jump the PDF pane to the figure's source page.
+    // Bound handler stored so disconnectedCallback can remove it.
+    this._onReaderMessage = (e) => {
+      const d = e.data;
+      if (!d || typeof d !== "object" || d.type !== "hive:jump-to-pdf") return;
+      // Ignore messages for a different reference — a stale iframe
+      // from a previous _current shouldn't hijack our current view.
+      const currentSha =
+        this._current &&
+        this._current.attached_pdf_shas &&
+        this._current.attached_pdf_shas[0];
+      if (d.sha && currentSha && d.sha !== currentSha) return;
+      if (d.page && Number.isFinite(d.page)) {
+        this._pdfPage = d.page;
+      }
+      this._workspaceTab = "digitize";
+    };
+    window.addEventListener("message", this._onReaderMessage);
     await this._fetchPage(true);
     // Prefer the caller-requested id (deep-link from an Issues
     // click); fall back to the first hit. `_select` fetches by id
@@ -14094,6 +14142,9 @@ class SfgaReferences extends LitElement {
   disconnectedCallback() {
     if (this._resizeObserver) this._resizeObserver.disconnect();
     if (this._scrollObserver) this._scrollObserver.disconnect();
+    if (this._onReaderMessage) {
+      window.removeEventListener("message", this._onReaderMessage);
+    }
     super.disconnectedCallback();
   }
 
@@ -14196,12 +14247,52 @@ class SfgaReferences extends LitElement {
     if (changed.has("_hits")) {
       this._observeSentinel();
     }
+    // Imperative PDF-page nav. Firefox's PDF.js often ignores
+    // src-attribute changes that only differ in the fragment
+    // (`#page=N`) — the iframe holds its current view instead of
+    // scrolling. Setting contentWindow.location.hash directly
+    // triggers a real hashchange event that PDF.js listens for and
+    // acts on. Same-origin (both served by hive) so cross-frame
+    // access is permitted. Guarded on _pdfPage change so it only
+    // fires when the curator actually clicked a fig-xref.
+    if (changed.has("_pdfPage") && this._pdfPage) {
+      this._navPdfPane(this._pdfPage);
+    }
+  }
+
+  // _navPdfPane imperatively scrolls the Digitize tab's PDF pane
+  // to the given page. Called from updated() when _pdfPage changes.
+  // Uses requestAnimationFrame so the DOM update from the same
+  // render cycle (workspace-tab switch) has flushed before we look
+  // for the iframe.
+  _navPdfPane(page) {
+    requestAnimationFrame(() => {
+      const iframe = this.renderRoot.querySelector("iframe.pane.pdf");
+      if (!iframe) return;
+      try {
+        // Same-origin: contentWindow.location is accessible.
+        // Setting hash triggers PDF.js's hashchange listener which
+        // scrolls to the specified page.
+        iframe.contentWindow.location.hash = `page=${page}`;
+      } catch (err) {
+        // Cross-origin surprise (shouldn't happen — the PDF is
+        // served from the same origin as the app) or contentWindow
+        // gone. Fall back to src update, which some browsers do
+        // pick up even when hash-only.
+        const url = iframe.src.replace(/#.*$/, "") + `#page=${page}`;
+        iframe.src = url;
+      }
+    });
   }
 
   async _select(id) {
     if (!id || id === this._selectedId) return;
     this._selectedId = id;
     this._current = null;
+    // Fresh reference → fresh PDF page. Otherwise the new
+    // reference's PDF iframe would open at whatever page the
+    // previous reference was last showing.
+    this._pdfPage = 1;
     // Announce so the shell can clear its pending-select state; this
     // matters when the same id is routed twice (a second click on the
     // same Issues row should still reveal it, even if the property
@@ -14345,7 +14436,7 @@ class SfgaReferences extends LitElement {
       ? `/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`
       : "";
     const pdfSrc = hasReader
-      ? `/api/reference/library/${encodeURIComponent(this._current.attached_pdf_shas[0])}/source#page=1`
+      ? `/api/reference/library/${encodeURIComponent(this._current.attached_pdf_shas[0])}/source#page=${this._pdfPage || 1}`
       : "";
     // Tabs are always present so curators discover the alternative
     // side-by-side workflows (digitize, fact-check) without hunting
@@ -14392,48 +14483,62 @@ class SfgaReferences extends LitElement {
     `;
   }
 
+  // _renderWorkspaceContent always renders all three tabs (each in
+  // its own wrapper div) and toggles visibility via CSS. Keeping
+  // inactive tabs mounted preserves per-tab scroll positions and
+  // iframe state (reader-page, PDF-page) across tab switches within
+  // the same reference — so a curator who scrolls the reader to
+  // page 5 in Bibliography, jumps to Digitize to check the PDF,
+  // and toggles back to Bibliography lands exactly where they left
+  // off. Switching to a different reference re-mounts everything
+  // (Lit re-renders when this._current changes; iframe srcs point
+  // at the new sha, forcing a fresh load) — which is the intended
+  // "different reference = clean slate" behavior.
   _renderWorkspaceContent(hasReader, readerSrc, pdfSrc) {
-    switch (this._workspaceTab) {
-      case "digitize":
-        if (!hasReader) {
-          return html`<div class="pane-empty">
-            No source PDF attached to this reference — upload one via
-            the reference-edit modal to enable the digitization
-            comparison view.
-          </div>`;
-        }
-        return html`
-          <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
-          <iframe class="pane pdf" title="Source PDF" src=${pdfSrc}></iframe>
-        `;
-      case "facts":
-        return html`
-          <div class="pane pane-empty">
-            <strong>Facts view — coming soon.</strong> Once the NER
-            extraction pipeline lands, this pane will show the
-            extracted scientific names, nomenclatural acts,
-            distributions, and other structured facts hive pulled
-            from the paper. Clicking a fact will jump the reader on
-            the right to the source paragraph so you can verify.
-          </div>
-          ${hasReader
-            ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
-            : html`<div class="pane pane-empty">
-                No source available — attach a PDF to enable the reader pane.
-              </div>`}
-        `;
-      case "bibliography":
-      default:
-        return html`
-          <section class="pane detail">${this._renderDetail()}</section>
-          ${hasReader
-            ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
-            : html`<div class="pane pane-empty">
-                No source PDF attached — the reader pane will appear
-                once a PDF is attached via the reference-edit modal.
-              </div>`}
-        `;
-    }
+    return html`
+      <div
+        class="tab-content"
+        ?hidden=${this._workspaceTab !== "bibliography"}
+      >
+        <section class="pane detail">${this._renderDetail()}</section>
+        ${hasReader
+          ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
+          : html`<div class="pane pane-empty">
+              No source PDF attached — the reader pane will appear
+              once a PDF is attached via the reference-edit modal.
+            </div>`}
+      </div>
+      <div
+        class="tab-content"
+        ?hidden=${this._workspaceTab !== "digitize"}
+      >
+        ${hasReader
+          ? html`
+              <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+              <iframe class="pane pdf" title="Source PDF" src=${pdfSrc}></iframe>
+            `
+          : html`<div class="pane pane-empty">
+              No source PDF attached to this reference — upload one
+              via the reference-edit modal to enable the digitization
+              comparison view.
+            </div>`}
+      </div>
+      <div class="tab-content" ?hidden=${this._workspaceTab !== "facts"}>
+        <div class="pane pane-empty">
+          <strong>Facts view — coming soon.</strong> Once the NER
+          extraction pipeline lands, this pane will show the
+          extracted scientific names, nomenclatural acts,
+          distributions, and other structured facts hive pulled
+          from the paper. Clicking a fact will jump the reader on
+          the right to the source paragraph so you can verify.
+        </div>
+        ${hasReader
+          ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
+          : html`<div class="pane pane-empty">
+              No source available — attach a PDF to enable the reader pane.
+            </div>`}
+      </div>
+    `;
   }
 
   _openEdit() {

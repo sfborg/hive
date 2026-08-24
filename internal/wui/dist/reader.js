@@ -1,19 +1,20 @@
 /**
  * hive WUI — augmented-JATS reader.
  *
- * Standalone page that renders the TaxPub-augmented XML produced by
- * pkg/annotator for a given PDF upload. Curator opens the reader
+ * Standalone page that renders the TaxPub-augmented JATS produced
+ * by pkg/annotator for a given PDF upload. Curator opens the reader
  * either by navigating to /read.html?sha=... directly or via a
  * popout from a reference detail view. Popout is the multi-monitor
  * use case — a separate browser window lets curators park the
  * reader on one screen and their curation UI on another.
  *
  * Rendering: parses the augmented XML into a DOM, walks the
- * <text><body> subtree, and emits readable HTML with each
- * <tp:taxon-name> element rendered as a styled chip. Chip color
- * (green / amber / orange / red) reflects the gn:source attribute
- * from the annotator's abbreviation-expansion pass — verified,
- * ambiguous, unverified, unresolved.
+ * <article><body> subtree (plus <back> for the reference list), and
+ * emits readable HTML with each <tp:taxon-name> element rendered
+ * as a styled chip. Chip color (green / amber / orange / red)
+ * reflects the gn:source attribute from the annotator's
+ * abbreviation-expansion pass — verified, ambiguous, unverified,
+ * unresolved.
  *
  * Interactions:
  *   - "Expand abbreviations" toggle swaps abbreviated chip text
@@ -253,9 +254,9 @@ class SfgaReader extends LitElement {
     article p {
       margin: var(--sp-2) 0;
     }
-    /* Fallback wrapper for GROBID elements without a specific
-       renderer (figure, table, unknown). Gives content basic block
-       layout so it doesn't collapse into an inline run beside
+    /* Fallback wrapper for JATS block elements without a specific
+       renderer (fig, table-wrap, unknown). Gives content basic
+       block layout so it doesn't collapse into an inline run beside
        siblings. Kept visually neutral — no borders or shading — so
        misclassified prose reads as prose. */
     article .passthrough {
@@ -270,9 +271,9 @@ class SfgaReader extends LitElement {
       margin: var(--sp-1) 0;
     }
     /* References list — extra vertical space per entry so the
-       author/title/imprint text that renders as an inline run per
-       entry is still readable, and hanging indent so wrapped lines
-       align to the text rather than the number. */
+       author + title + source text that renders as an inline run
+       per entry is still readable, and hanging indent so wrapped
+       lines align to the text rather than the number. */
     article .references li {
       margin: var(--sp-2) 0;
       padding-left: var(--sp-1);
@@ -282,11 +283,56 @@ class SfgaReader extends LitElement {
     article .cite {
       color: var(--dim);
     }
+    /* Figure xrefs are clickable — jump the PDF pane to the
+       referenced page. Distinct-link styling (accent color, always
+       underlined, bolder weight) rather than "invisible until
+       hover" — curators should be able to scan a paragraph and
+       immediately see which numeric spans are figure references
+       vs. plain-text digits (mortality percentages, sample sizes,
+       etc.). Cursor: pointer telegraphs the click affordance. */
+    article .fig-xref {
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    article .fig-xref:hover {
+      text-decoration-thickness: 2px;
+    }
+    article .fig-xref:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+    /* Figure-jump affordance: a small "Open in PDF — page N" link
+       above each figure's caption in the trailing "Figures" sec.
+       The discovery-path click for curators who scroll to a
+       figure and want to see the source page. Emphasis subtle so
+       it doesn't fight the caption text below it. */
+    article .fig-block {
+      margin: var(--sp-3) 0;
+    }
+    article a.fig-jump {
+      display: inline-block;
+      font-size: var(--fs-sm);
+      color: var(--accent);
+      text-decoration: none;
+      padding: var(--sp-1) 0;
+      margin-bottom: var(--sp-1);
+      cursor: pointer;
+    }
+    article a.fig-jump:hover {
+      text-decoration: underline;
+    }
     /* Chip styling per gn:source. Verified is the confident state
        (accent-tinted); ambiguous / unverified sit in the middle
-       (amber / orange); unresolved is red. Untagged chips (plain
-       full-form names GNfinder detected) get a subtle underline —
-       "we found this" without a color claim about the resolution. */
+       (amber / orange); unresolved is red. Every full-form chip
+       carries a gn:source — VerifyFullNames stamps verified and
+       unwraps unverified — so there is no "no source" case to
+       style. Abbreviations that don't resolve stay wrapped with
+       gn:source="unresolved" (red). */
     .taxon-name {
       display: inline;
       padding: 0.05rem 0.3rem;
@@ -294,10 +340,6 @@ class SfgaReader extends LitElement {
       border: 1px solid transparent;
       cursor: help;
       font-style: italic;
-    }
-    .taxon-name.plain {
-      border-bottom-color: var(--dim);
-      border-bottom-style: dashed;
     }
     .taxon-name.verified {
       background: color-mix(in oklab, var(--sev-info) 15%, transparent);
@@ -675,38 +717,26 @@ class SfgaReader extends LitElement {
     `;
   }
 
-  // _renderBody walks the TEI <text><body> subtree of the augmented
-  // document, converting known elements to their HTML equivalents.
-  // Anything outside <text> (the header, sourceDesc, encoding
-  // metadata) is skipped — the reader is for paper text, not
-  // machine-readable metadata. Reference-list divs inside <back>
-  // are also skipped for the same reason (references have their
-  // own curator UI).
+  // _renderBody walks the JATS <body> subtree (plus <back>) of the
+  // augmented document, converting known elements to their HTML
+  // equivalents. Content in <front> is surfaced via the paper header
+  // (title / byline / abstract) at the top of the article, not
+  // rendered inline — front-matter is machine-readable metadata, not
+  // prose. Copy buttons live in the sticky top nav (see render()),
+  // not in the paper header, so the article stays clean.
   _renderBody() {
-    const teiNS = "http://www.tei-c.org/ns/1.0";
-    const text =
-      this._doc.getElementsByTagNameNS(teiNS, "text")[0] ||
-      this._doc.getElementsByTagName("text")[0];
-    if (!text) {
-      // No <text> wrapper — fall back to <body> alone.
-      const bodies =
-        this._doc.getElementsByTagNameNS(teiNS, "body").length > 0
-          ? this._doc.getElementsByTagNameNS(teiNS, "body")
-          : this._doc.getElementsByTagName("body");
-      if (bodies.length === 0) {
-        return html`<p class="empty">document has no &lt;body&gt; content</p>`;
-      }
-      return html`<article>${this._renderNodes(bodies[0].childNodes)}</article>`;
+    const bodies = this._doc.getElementsByTagName("body");
+    if (bodies.length === 0) {
+      return html`<p class="empty">document has no &lt;body&gt; content</p>`;
     }
-    // Paper identity header (title / byline / abstract) at the
-    // top of the article. Copy buttons live in the sticky top
-    // nav (see render()), not here — keeps the article clean.
-    // Render <body> and <back> contents in document order.
+    const body = bodies[0];
+    const back = this._doc.getElementsByTagName("back")[0];
     const meta = this._extractPaperMeta();
     return html`
       <article>
         ${this._renderPaperHeader(meta)}
-        ${this._renderNodes(text.childNodes)}
+        ${this._renderNodes(body.childNodes)}
+        ${back ? this._renderNodes(back.childNodes) : nothing}
       </article>
     `;
   }
@@ -735,40 +765,39 @@ class SfgaReader extends LitElement {
     `;
   }
 
-  // _extractPaperMeta pulls the paper-identity fields out of
-  // <teiHeader> and precomputes the three copy-buffer strings
-  // (plain / CSL-JSON / BibTeX). Called once per render — cheap;
-  // no memoization needed. Returns null when teiHeader is absent.
+  // _extractPaperMeta pulls the paper-identity fields out of the
+  // JATS <front> subtree and precomputes the three copy-buffer
+  // strings (plain / CSL-JSON / BibTeX). Called once per render —
+  // cheap; no memoization needed. Returns null when <front> is
+  // absent.
   _extractPaperMeta() {
-    const teiNS = "http://www.tei-c.org/ns/1.0";
-    const teiHeader = this._doc.getElementsByTagNameNS(teiNS, "teiHeader")[0];
-    if (!teiHeader) return null;
-    const biblStruct = this._findDescendant(teiHeader, "biblStruct");
-    const data = biblStruct ? this._biblStructToData(biblStruct) : null;
-    const title = this._paperTitle(teiHeader, data);
-    const authors = data ? data.authors : [];
-    const abstractParas = this._extractAbstract(teiHeader);
-    const plain = data ? this._formatPlainCitation(title, data) : "";
-    const bibtex = data ? this._formatBibTeX(title, data) : "";
-    const cslJSON = data ? this._formatCSLJSON(title, data) : "";
-    const doiURL = data && data.doi ? `https://doi.org/${data.doi}` : "";
-    return { title, authors, abstractParas, plain, bibtex, cslJSON, doiURL };
+    const front = this._doc.getElementsByTagName("front")[0];
+    if (!front) return null;
+    const data = this._paperMetaToData(front);
+    const abstractParas = this._extractAbstract(front);
+    const plain = this._formatPlainCitation(data);
+    const bibtex = this._formatBibTeX(data);
+    const cslJSON = this._formatCSLJSON(data);
+    const doiURL = data.doi ? `https://doi.org/${data.doi}` : "";
+    return {
+      title: data.title,
+      authors: data.authors,
+      abstractParas,
+      plain,
+      bibtex,
+      cslJSON,
+      doiURL,
+    };
   }
 
-  _paperTitle(teiHeader, biblData) {
-    // Prefer titleStmt/title (canonical GROBID location); fall
-    // back to the analytic title in the biblStruct.
-    const ts = this._findDescendant(teiHeader, "titleStmt");
-    if (ts) {
-      const t = this._directChild(ts, "title");
-      if (t) return (t.textContent || "").trim();
-    }
-    if (biblData && biblData.analyticTitleText) return biblData.analyticTitleText;
-    return "";
-  }
-
-  _extractAbstract(teiHeader) {
-    const abs = this._findDescendant(teiHeader, "abstract");
+  // _extractAbstract pulls each <abstract><p> under <article-meta>
+  // into a plain string. Falls through to the raw abstract text
+  // when there's no <p> wrapper (an unusual JATS producer might
+  // put text directly under <abstract>).
+  _extractAbstract(front) {
+    const articleMeta = this._directChild(front, "article-meta");
+    if (!articleMeta) return [];
+    const abs = this._directChild(articleMeta, "abstract");
     if (!abs) return [];
     const paras = [];
     for (const child of abs.children) {
@@ -777,13 +806,51 @@ class SfgaReader extends LitElement {
         if (t) paras.push(t);
       }
     }
-    // Fallback: some GROBID output puts abstract text directly
-    // inside <abstract> without a <p> wrapper.
     if (paras.length === 0) {
       const t = (abs.textContent || "").trim();
       if (t) paras.push(t);
     }
     return paras;
+  }
+
+  // _jumpToFig fires when a curator clicks a figure xref in the
+  // reader. Sends a postMessage to the parent frame (the app.js
+  // shell) asking to switch to the Digitize tab and scroll the
+  // PDF pane to the referenced figure's source page. The parent's
+  // handler is what actually changes tab state and PDF src.
+  //
+  // Standalone reader (opened at /read.html directly, no parent
+  // frame): fall back to opening the PDF in a new tab at the
+  // right page. window.parent === window when not iframed, so
+  // detect that and take the fallback path.
+  _jumpToFig(event, figID, page) {
+    event.preventDefault();
+    // Stop propagation so the click doesn't bubble to the
+    // .layout.paginated click handler that turns pages in
+    // columned-view mode — otherwise a click on a fig-xref in
+    // paginated mode both jumps to the PDF AND turns the reader
+    // page, which looks like a random unrelated page flip.
+    event.stopPropagation();
+    const pageNum = page ? parseInt(page, 10) : null;
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(
+        {
+          type: "hive:jump-to-pdf",
+          sha: this._sha,
+          figID: figID,
+          page: pageNum,
+        },
+        "*",
+      );
+      return;
+    }
+    // Standalone-reader fallback: open PDF in a new tab at the page.
+    if (this._sha && pageNum) {
+      window.open(
+        `/api/reference/library/${encodeURIComponent(this._sha)}/source#page=${pageNum}`,
+        "_blank",
+      );
+    }
   }
 
   async _copy(text, event) {
@@ -809,16 +876,15 @@ class SfgaReader extends LitElement {
   }
 
   // _formatPlainCitation composes a human-readable citation string
-  // from the biblStruct data. Same shape as the reference-list
-  // items but flattened to text — no HTML, so it copies cleanly
-  // into a chat / email.
-  _formatPlainCitation(title, data) {
+  // from the paper-meta data. Flattened to text — no HTML, so it
+  // copies cleanly into a chat / email.
+  _formatPlainCitation(data) {
     const parts = [];
     if (data.authors.length) parts.push(data.authors.join(", "));
     if (data.year) parts.push(` (${data.year}).`);
     else if (data.authors.length) parts.push(".");
-    if (title) parts.push(` ${title}.`);
-    if (data.monogrTitleText) parts.push(` ${data.monogrTitleText}`);
+    if (data.title) parts.push(` ${data.title}.`);
+    if (data.journal) parts.push(` ${data.journal}`);
     if (data.volume) {
       let v = ` ${data.volume}`;
       if (data.issue) v += `(${data.issue})`;
@@ -836,12 +902,12 @@ class SfgaReader extends LitElement {
   }
 
   // _formatBibTeX emits a BibTeX @article (or @book) entry from
-  // the biblStruct data. Values wrap in double braces to preserve
+  // the paper-meta data. Values wrap in double braces to preserve
   // scientific-name capitalization (BibTeX lowercases title-cased
   // words by default in most bibliography styles). Author list
   // joined with " and " per BibTeX convention.
-  _formatBibTeX(title, data) {
-    const kind = data.monogrTitleText ? "article" : "misc";
+  _formatBibTeX(data) {
+    const kind = data.journal ? "article" : "misc";
     const firstAuthor = data.authors[0] || "unknown";
     const firstAuthorKey = firstAuthor
       .toLowerCase()
@@ -862,9 +928,9 @@ class SfgaReader extends LitElement {
       .join(" and ");
     const lines = [`@${kind}{${key},`];
     if (bibAuthors) lines.push(`  author = {${bibAuthors}},`);
-    if (title) lines.push(`  title = {{${bibTexEscape(title)}}},`);
-    if (data.monogrTitleText)
-      lines.push(`  journal = {${bibTexEscape(data.monogrTitleText)}},`);
+    if (data.title) lines.push(`  title = {{${bibTexEscape(data.title)}}},`);
+    if (data.journal)
+      lines.push(`  journal = {${bibTexEscape(data.journal)}},`);
     if (data.year) lines.push(`  year = {${data.year}},`);
     if (data.volume) lines.push(`  volume = {${data.volume}},`);
     if (data.issue) lines.push(`  number = {${data.issue}},`);
@@ -888,15 +954,13 @@ class SfgaReader extends LitElement {
   // ~10,000 published citation styles. No BibTeX escaping /
   // name-parsing quirks and Unicode round-trips cleanly.
   //
-  // Type inference is minimal: monogr title present → article-
-  // journal; monogr title absent but publisher present → book;
-  // otherwise misc. Book chapters need a future refinement (need
-  // to detect "analytic AND monogr AND publisher" as the chapter
-  // signal).
-  _formatCSLJSON(title, data) {
+  // Type inference is minimal: journal present → article-journal;
+  // journal absent but publisher present → book; otherwise misc.
+  // Book chapters need a future refinement.
+  _formatCSLJSON(data) {
     let type = "article-journal";
-    if (!data.monogrTitleText && data.publisher) type = "book";
-    else if (!data.monogrTitleText && !data.publisher) type = "article";
+    if (!data.journal && data.publisher) type = "book";
+    else if (!data.journal && !data.publisher) type = "article";
     const firstAuthor = data.authors[0] || "unknown";
     const firstAuthorKey = firstAuthor
       .toLowerCase()
@@ -906,7 +970,7 @@ class SfgaReader extends LitElement {
       id: `${firstAuthorKey}${data.year || ""}`,
       type,
     };
-    if (title) record.title = title;
+    if (data.title) record.title = data.title;
     if (data.authors.length) {
       record.author = data.authors.map((a) => {
         const parts = a.split(" ");
@@ -922,7 +986,7 @@ class SfgaReader extends LitElement {
     if (data.year) {
       record.issued = { "date-parts": [[parseInt(data.year, 10)]] };
     }
-    if (data.monogrTitleText) record["container-title"] = data.monogrTitleText;
+    if (data.journal) record["container-title"] = data.journal;
     if (data.volume) record.volume = data.volume;
     if (data.issue) record.issue = data.issue;
     if (data.page) record.page = data.page;
@@ -932,58 +996,144 @@ class SfgaReader extends LitElement {
     return JSON.stringify(record, null, 2);
   }
 
-  // _biblStructToData extracts the fields hive cares about from a
-  // GROBID biblStruct into a plain object. Shared by the header
-  // citation block and the reference-list formatter — the input
-  // shape is identical for the paper's own biblStruct in
-  // <teiHeader> and each cited reference in <back>.
-  _biblStructToData(el) {
-    const analytic = this._directChild(el, "analytic");
-    const monogr = this._directChild(el, "monogr");
-    const authorsFrom = analytic || monogr;
-    const authors = authorsFrom ? this._collectAuthors(authorsFrom) : [];
-    const year = monogr ? this._extractYear(monogr) : "";
-    const analyticTitle = analytic ? this._directChild(analytic, "title") : null;
-    const monogrTitle = monogr ? this._directChild(monogr, "title") : null;
-    const imprint = monogr ? this._directChild(monogr, "imprint") : null;
+  // _paperMetaToData flattens the JATS <front> subtree into a
+  // normalized data object shared by the citation formatters.
+  // Structurally different from a reference (<element-citation>),
+  // where the fields live directly on the element rather than
+  // nested under journal-meta / article-meta.
+  _paperMetaToData(front) {
+    const journalMeta = this._directChild(front, "journal-meta");
+    const articleMeta = this._directChild(front, "article-meta");
+    let journal = "";
+    let publisher = "";
+    let pubPlace = "";
+    if (journalMeta) {
+      const jtg = this._directChild(journalMeta, "journal-title-group");
+      if (jtg) journal = this._directChildText(jtg, "journal-title");
+      const pub = this._directChild(journalMeta, "publisher");
+      if (pub) {
+        publisher = this._directChildText(pub, "publisher-name");
+        pubPlace = this._directChildText(pub, "publisher-loc");
+      }
+    }
+    let title = "";
+    let authors = [];
+    let year = "";
+    let volume = "";
+    let issue = "";
+    let fpage = "";
+    let lpage = "";
+    let doi = "";
+    if (articleMeta) {
+      const titleGroup = this._directChild(articleMeta, "title-group");
+      if (titleGroup) title = this._directChildText(titleGroup, "article-title");
+      const contribGroup = this._directChild(articleMeta, "contrib-group");
+      if (contribGroup) authors = this._collectAuthors(contribGroup);
+      const pubDate = this._directChild(articleMeta, "pub-date");
+      if (pubDate) year = this._directChildText(pubDate, "year");
+      volume = this._directChildText(articleMeta, "volume");
+      issue = this._directChildText(articleMeta, "issue");
+      fpage = this._directChildText(articleMeta, "fpage");
+      lpage = this._directChildText(articleMeta, "lpage");
+      doi = this._extractPubIdByAttr(articleMeta, "article-id", "pub-id-type", "doi");
+    }
+    const page = fpage && lpage && fpage !== lpage ? `${fpage}-${lpage}` : fpage;
     return {
-      analytic,
-      monogr,
-      analyticTitle,
-      analyticTitleText: analyticTitle ? (analyticTitle.textContent || "").trim() : "",
-      monogrTitle,
-      monogrTitleText: monogrTitle ? (monogrTitle.textContent || "").trim() : "",
+      title,
       authors,
+      journal,
       year,
-      volume: this._extractBiblScope(imprint, "volume"),
-      issue: this._extractBiblScope(imprint, "issue"),
-      page: this._extractPage(imprint),
-      publisher: imprint ? this._directChildText(imprint, "publisher") : "",
-      pubPlace: imprint ? this._directChildText(imprint, "pubPlace") : "",
-      doi: this._extractIdno(el, "DOI"),
+      volume,
+      issue,
+      page,
+      publisher,
+      pubPlace,
+      doi,
     };
   }
 
-  // _findDescendant walks a subtree looking for the first element
-  // with the given local name. Namespace-agnostic. Used to locate
-  // teiHeader-nested elements (titleStmt, biblStruct, abstract)
-  // without needing to hard-code the intermediate wrappers.
-  _findDescendant(root, localName) {
-    if (!root) return null;
-    const stack = [root];
-    while (stack.length) {
-      const el = stack.shift();
-      for (const child of el.children) {
-        if (child.localName === localName) return child;
-        stack.push(child);
+  // _elementCitationToData flattens a JATS <element-citation> (the
+  // structured form used inside <ref>) into the shape _renderRef
+  // consumes. Field extraction differs from _paperMetaToData
+  // because element-citation puts everything at one level rather
+  // than nested under journal-meta / article-meta wrappers.
+  _elementCitationToData(ec) {
+    const personGroup = this._directChild(ec, "person-group");
+    const authors = personGroup ? this._collectAuthors(personGroup) : [];
+    const articleTitle = this._directChild(ec, "article-title");
+    const source = this._directChild(ec, "source");
+    const year = this._directChildText(ec, "year");
+    const volume = this._directChildText(ec, "volume");
+    const issue = this._directChildText(ec, "issue");
+    const fpage = this._directChildText(ec, "fpage");
+    const lpage = this._directChildText(ec, "lpage");
+    const page = fpage && lpage && fpage !== lpage ? `${fpage}-${lpage}` : fpage;
+    const publisher = this._directChildText(ec, "publisher-name");
+    const publisherLoc = this._directChildText(ec, "publisher-loc");
+    const doi = this._extractPubIdByAttr(ec, "pub-id", "pub-id-type", "doi");
+    return {
+      articleTitle,
+      source,
+      authors,
+      year,
+      volume,
+      issue,
+      page,
+      publisher,
+      publisherLoc,
+      doi,
+    };
+  }
+
+  // _collectAuthors reads a JATS <contrib-group> or <person-group>
+  // and returns "Surname Initials" strings in document order. Each
+  // author's element is either <contrib><name>…</name></contrib>
+  // (article-meta authors) or <name>…</name> (element-citation
+  // person-group members); both shapes route through the same
+  // <name><surname> + <given-names> pair.
+  _collectAuthors(container) {
+    const authors = [];
+    for (const child of container.children) {
+      const local = child.localName;
+      let name = null;
+      if (local === "contrib") name = this._directChild(child, "name");
+      else if (local === "name") name = child;
+      else continue;
+      if (!name) continue;
+      const surname = this._directChildText(name, "surname");
+      if (!surname) continue;
+      const given = this._directChildText(name, "given-names");
+      const initials = given
+        .split(/\s+/)
+        .filter((s) => s)
+        .map((s) => s[0])
+        .join("");
+      authors.push(initials ? `${surname} ${initials}` : surname);
+    }
+    return authors;
+  }
+
+  // _extractPubIdByAttr scans direct children of `el` for an
+  // element with the given local name whose attribute value matches
+  // `attrValue`, and returns its text content. Handles both
+  // <article-id pub-id-type="doi"> (paper) and <pub-id
+  // pub-id-type="doi"> (reference).
+  _extractPubIdByAttr(el, localName, attrName, attrValue) {
+    for (const child of el.children) {
+      if (
+        child.localName === localName &&
+        (child.getAttribute(attrName) || "").toLowerCase() ===
+          attrValue.toLowerCase()
+      ) {
+        return (child.textContent || "").trim();
       }
     }
-    return null;
+    return "";
   }
 
   // _renderNodes converts a NodeList into Lit-html templates,
   // dispatching per element/text kind. Recursive: element children
-  // render via the same function so nested content (div > p > span)
+  // render via the same function so nested content (sec > p > span)
   // survives.
   _renderNodes(nodes) {
     const out = [];
@@ -994,13 +1144,6 @@ class SfgaReader extends LitElement {
       }
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
       const local = node.localName;
-      // <back> in TEI/GROBID holds acknowledgements, funding
-      // statements, author contributions, annexes, and the
-      // reference list. Recurse — all of it belongs in the reader.
-      if (local === "back") {
-        out.push(this._renderNodes(node.childNodes));
-        continue;
-      }
       // <tp:taxon-name> — the annotated chip.
       if (
         (node.namespaceURI === TAXPUB_NS || node.prefix === "tp") &&
@@ -1009,13 +1152,16 @@ class SfgaReader extends LitElement {
         out.push(this._renderTaxonName(node));
         continue;
       }
-      if (local === "head") {
+      // <title> is a section (or ref-list / fig / table-wrap)
+      // heading in JATS. Article/journal titles live under
+      // <front> and never reach _renderNodes.
+      if (local === "title") {
         out.push(html`<h2>${this._renderNodes(node.childNodes)}</h2>`);
         continue;
       }
-      // GROBID emits <label>N</label> next to <head>Figure N .</head>
-      // and <head>Table N .</head> — the number in the label just
-      // duplicates the number already in the head text. Suppress.
+      // JATS emits <label>N</label> next to figure/table titles;
+      // the number in the label typically duplicates the number in
+      // the caption title itself. Suppress to avoid double-numbering.
       if (local === "label") {
         continue;
       }
@@ -1023,15 +1169,44 @@ class SfgaReader extends LitElement {
         out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
         continue;
       }
-      if (local === "div") {
+      if (local === "sec") {
         out.push(html`<section>${this._renderNodes(node.childNodes)}</section>`);
         continue;
       }
-      // GROBID often misclassifies dense passages (species lists,
-      // synonymy sections, taxonomic keys) as <figure>. Render them
-      // as blocks so the text stays visible instead of collapsing
-      // into an inline run alongside siblings.
-      if (local === "figure" || local === "figDesc" || local === "table") {
+      // <fig> gets an explicit rendering: caption text stays as
+      // block passthrough (chips inside caption prose remain
+      // visible), but a "→ jump to page N" affordance is emitted
+      // before the caption when the figure carries gn:pdf-page
+      // (from GROBID's coords). The jump-affordance is what
+      // curators actually click to reach the PDF — sparse inline
+      // xrefs in body prose are easy to miss, so making the fig
+      // itself clickable is the reliable discovery path.
+      if (local === "fig") {
+        const figID = node.getAttribute("id") || "";
+        const page =
+          node.getAttributeNS(GN_NS, "pdf-page") ||
+          node.getAttribute("gn:pdf-page") ||
+          "";
+        out.push(html`
+          <div class="passthrough fig-block">
+            ${page
+              ? html`<a
+                  class="fig-jump"
+                  href="#${figID}"
+                  @click=${(e) => this._jumpToFig(e, figID, page)}
+                  title="Open the source PDF at this figure's page"
+                  >Open in PDF — page ${page}</a>`
+              : nothing}
+            ${this._renderNodes(node.childNodes)}
+          </div>
+        `);
+        continue;
+      }
+      // Captions and table wrappers pass through as blocks so
+      // their internal text (which often carries taxon chips)
+      // stays legible instead of collapsing into an inline run
+      // alongside siblings.
+      if (local === "caption" || local === "table-wrap") {
         out.push(html`<div class="passthrough">${this._renderNodes(node.childNodes)}</div>`);
         continue;
       }
@@ -1039,51 +1214,125 @@ class SfgaReader extends LitElement {
         out.push(html`<ul>${this._renderNodes(node.childNodes)}</ul>`);
         continue;
       }
-      if (local === "item") {
+      if (local === "list-item") {
         out.push(html`<li>${this._renderNodes(node.childNodes)}</li>`);
         continue;
       }
-      // Reference list — GROBID emits <listBibl><biblStruct>… per
-      // cited reference. Render as an ordered list so numbering
-      // matches "as cited in [12]" body-text references. The
-      // biblStruct's internal author/title/imprint structure falls
-      // through as inline spans, which produces a run-together
-      // reference line — good enough for reading; slice 5's
-      // reference-parsing will replace with structured display.
-      if (local === "listBibl") {
+      // Reference list — JATS <ref-list> contains <ref> entries
+      // each wrapping an <element-citation>. Render as an ordered
+      // list so numbering matches "(Doe 2020)" xref anchors in
+      // body text.
+      if (local === "ref-list") {
         out.push(html`<ol class="references">${this._renderNodes(node.childNodes)}</ol>`);
         continue;
       }
-      if (local === "biblStruct") {
-        out.push(html`<li>${this._renderBiblStruct(node)}</li>`);
+      if (local === "ref") {
+        out.push(html`<li>${this._renderRef(node)}</li>`);
         continue;
       }
-      // Cited-reference marker inside body text. Render inline —
-      // "as seen in (Doe 2020)" — so it flows with surrounding
-      // sentence text. Passthrough of children preserves any nested
-      // <tp:taxon-name> chips.
-      if (local === "ref") {
+      // Cited-reference anchor inside body text — JATS <xref>.
+      // For xrefs whose rid points at a <fig>, render as a
+      // clickable link that posts a message to the parent frame
+      // asking to switch to the Digitize tab and scroll the PDF
+      // pane to the figure's source page (from GROBID's coords,
+      // stored as gn:pdf-page). Non-fig xrefs (bibliography
+      // references, other in-doc targets) render as inline styled
+      // text — same behavior as before.
+      if (local === "xref") {
+        const rid = node.getAttribute("rid");
+        // querySelector, not getElementById — for XML documents
+        // (which DOMParser produces for application/xml), id-based
+        // lookup only works when the DTD declares "id" as an
+        // ID-type attribute. Our JATS ships without a DTD load, so
+        // getElementById returns null on every rid → every fig-xref
+        // fell through to the non-clickable branch. querySelector
+        // does attribute-value matching directly and works
+        // regardless of DTD. CSS.escape guards against rids that
+        // contain selector-special characters (colons, dots, etc.).
+        const target = rid
+          ? this._doc.querySelector(`[id="${CSS.escape(rid)}"]`)
+          : null;
+        if (target && target.localName === "fig") {
+          const page =
+            target.getAttributeNS(GN_NS, "pdf-page") ||
+            target.getAttribute("gn:pdf-page") ||
+            "";
+          // No href — we don't want the browser to scroll the
+          // reader iframe to the fig anchor in the trailing
+          // "Figures" sec. The click handler is the ONLY thing
+          // that fires: posts a message to the parent, which
+          // switches to Digitize and jumps the PDF pane to the
+          // figure's source page. role=button + tabindex keep it
+          // keyboard-accessible without navigation semantics.
+          out.push(html`<span
+            class="cite fig-xref"
+            role="button"
+            tabindex="0"
+            @click=${(e) => this._jumpToFig(e, rid, page)}
+            @keydown=${(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                this._jumpToFig(e, rid, page);
+              }
+            }}
+            >${this._renderNodes(node.childNodes)}</span>`);
+          continue;
+        }
         out.push(html`<span class="cite">${this._renderNodes(node.childNodes)}</span>`);
         continue;
       }
-      // Unknown element — wrap in an inline span. TEI's vocabulary
-      // skews heavily inline (rs, hi, seg, name, persName, …); the
-      // few block-ish elements we've seen in GROBID output (div,
-      // figure, table, list) are all handled explicitly above. A
-      // wrong-way-round mistake on an inline element (wrapping rs
-      // in a block) shatters paragraphs into per-name lines; the
-      // reverse mistake (inline wrapper on a truly block element)
-      // just runs adjacent content together, which is milder.
+      // JATS inline emphasis / phrase-level markup that flows in
+      // running text. Convert to the corresponding HTML element so
+      // the reader honors the source styling.
+      if (local === "italic") {
+        out.push(html`<i>${this._renderNodes(node.childNodes)}</i>`);
+        continue;
+      }
+      if (local === "bold") {
+        out.push(html`<b>${this._renderNodes(node.childNodes)}</b>`);
+        continue;
+      }
+      if (local === "sup") {
+        out.push(html`<sup>${this._renderNodes(node.childNodes)}</sup>`);
+        continue;
+      }
+      if (local === "sub") {
+        out.push(html`<sub>${this._renderNodes(node.childNodes)}</sub>`);
+        continue;
+      }
+      // Unknown element — wrap in an inline span. JATS phrase-
+      // level markup (named-content, monospace, styled-content,
+      // ext-link, …) doesn't need block containers, and the few
+      // block-ish elements JATS actually uses (sec, fig, list,
+      // ref-list) are all handled explicitly above.
       out.push(html`<span>${this._renderNodes(node.childNodes)}</span>`);
     }
     return out;
   }
 
+  // _renderTaxonName renders a <tp:taxon-name> as a styled chip.
+  // Children render recursively via _renderNodes so nested
+  // <tp:taxon-name> elements appear as chips-within-chips; because
+  // the chip backgrounds use alpha color-mix, the nested region
+  // shows visually darker where the two chip backgrounds stack —
+  // no extra styling needed to make overlap distinctive.
+  //
+  // Nested chips occur when GNfinder returns overlapping matches
+  // for one source range — e.g. "Mytilaspis (Lepidosaphes)
+  // pallida" produces an outer detection of the binomial and an
+  // inner detection of the subgenus (which is also a valid genus
+  // name in some classifications). Both are correct
+  // identifications and both survive into the rendered chip.
+  //
+  // Abbreviation expansion still works on the outer chip: when
+  // the wrapped text starts with a letter-then-period abbrev
+  // (e.g. "C. strepitans") and "Expand abbreviations" is toggled,
+  // the display swaps to the resolved full-name. That branch
+  // falls back to opaque text (no nested chip rendering) because
+  // the resolved full-name is just a string.
   _renderTaxonName(el) {
     const original = el.textContent || "";
     const fullName = el.getAttribute("full-name") || "";
-    // gn:source lives in the GN namespace; access via getAttributeNS
-    // so a re-encoded document with different prefix still resolves.
     const source =
       el.getAttributeNS(GN_NS, "source") ||
       el.getAttribute("gn:source") ||
@@ -1101,51 +1350,52 @@ class SfgaReader extends LitElement {
       "";
     const cls = source || "plain";
     const isAbbrev = /^[A-Za-z]{1,3}\.\s/.test(original);
-    const display =
-      this._showExpanded && isAbbrev && fullName ? fullName : original;
+    const expanded = this._showExpanded && isAbbrev && fullName;
     let title = fullName || original;
     if (source === "verified" && score) title += ` (verified · score ${score})`;
     else if (source === "ambiguous") title += ` (ambiguous · candidates: ${candidates})`;
     else if (source === "unverified") title += ` (unverified)`;
     else if (source === "unresolved") title += ` (unresolved abbreviation)`;
+    const body = expanded ? fullName : this._renderNodes(el.childNodes);
     return html`<span
       class="taxon-name ${cls}"
       title=${title}
       data-full-name=${fullName}
-      >${display}</span
+      >${body}</span
     >`;
   }
 
-  // _renderBiblStruct pulls fields from a GROBID biblStruct and
-  // formats them as a readable citation. Structure differs by
-  // publication kind:
-  //
-  //   Journal article: <analytic> holds article title + authors;
-  //                    <monogr> holds journal title + imprint.
-  //   Book:            <monogr> holds title + authors + imprint;
-  //                    no <analytic>.
-  //   Book chapter:    <analytic> holds chapter title + authors;
-  //                    <monogr> holds book title + editors +
-  //                    imprint.
+  // _renderRef formats a JATS <ref> as a readable citation line.
+  // Accepts either <element-citation> (structured; the form jatsconv
+  // emits) or <mixed-citation> (prose-with-embedded-tags; some
+  // publishers use this style). Falls back to the raw text content
+  // when neither wrapper is present.
   //
   // Output format: "Author A, Coauthor B (Year). Article title.
   // Journal (italic) Volume(Issue): pages. doi:X". Missing fields
   // elide gracefully. Nested <tp:taxon-name> chips in titles are
   // preserved because titles render via _renderNodes recursion.
-  _renderBiblStruct(el) {
-    const d = this._biblStructToData(el);
+  _renderRef(el) {
+    const ec =
+      this._directChild(el, "element-citation") ||
+      this._directChild(el, "mixed-citation");
+    if (!ec) {
+      // Nothing structured to work with — render the raw children.
+      return html`${this._renderNodes(el.childNodes)}`;
+    }
+    const d = this._elementCitationToData(ec);
     // Compose. Each segment renders only when it has content;
-    // punctuation between segments joins conditionally so
-    // omitted fields don't leave stranded commas or periods.
+    // punctuation between segments joins conditionally so omitted
+    // fields don't leave stranded commas or periods.
     const parts = [];
     if (d.authors.length) parts.push(html`${d.authors.join(", ")}`);
     if (d.year) parts.push(html` (${d.year}).`);
     else if (d.authors.length) parts.push(html`.`);
-    if (d.analyticTitle) {
-      parts.push(html` ${this._renderNodes(d.analyticTitle.childNodes)}.`);
+    if (d.articleTitle) {
+      parts.push(html` ${this._renderNodes(d.articleTitle.childNodes)}.`);
     }
-    if (d.monogrTitle) {
-      parts.push(html` <i>${this._renderNodes(d.monogrTitle.childNodes)}</i>`);
+    if (d.source) {
+      parts.push(html` <i>${this._renderNodes(d.source.childNodes)}</i>`);
     }
     if (d.volume) {
       let volPart = ` ${d.volume}`;
@@ -1156,7 +1406,7 @@ class SfgaReader extends LitElement {
     parts.push(".");
     if (d.publisher) {
       parts.push(` ${d.publisher}`);
-      if (d.pubPlace) parts.push(`, ${d.pubPlace}`);
+      if (d.publisherLoc) parts.push(`, ${d.publisherLoc}`);
       parts.push(".");
     }
     if (d.doi) {
@@ -1168,8 +1418,8 @@ class SfgaReader extends LitElement {
 
   // _directChild returns the first child element with the given
   // local name, or null. Namespace-agnostic (matches on localName)
-  // so it works whether GROBID's TEI is in the tei-c namespace or
-  // was flattened during a round-trip.
+  // so prefix/namespace mismatches between the input document and
+  // the code's expectations don't break lookup.
   _directChild(el, localName) {
     if (!el) return null;
     for (const child of el.children) {
@@ -1182,82 +1432,6 @@ class SfgaReader extends LitElement {
     const c = this._directChild(el, localName);
     return c ? (c.textContent || "").trim() : "";
   }
-
-  // _collectAuthors returns an array of formatted author strings
-  // ("Smith AB") from the direct-child <author><persName> elements
-  // under the given parent. Handles both forename + surname and
-  // surname-only cases; ignores authors GROBID couldn't parse.
-  _collectAuthors(parent) {
-    const authors = [];
-    for (const child of parent.children) {
-      if (child.localName !== "author") continue;
-      const persName = this._directChild(child, "persName");
-      if (!persName) continue;
-      const forenames = [];
-      let surname = "";
-      for (const p of persName.children) {
-        if (p.localName === "forename") {
-          const t = (p.textContent || "").trim();
-          if (t) forenames.push(t[0]); // initial only, standard biblio style
-        } else if (p.localName === "surname") {
-          surname = (p.textContent || "").trim();
-        }
-      }
-      if (!surname) continue;
-      const initials = forenames.join("");
-      authors.push(initials ? `${surname} ${initials}` : surname);
-    }
-    return authors;
-  }
-
-  _extractYear(monogr) {
-    const imprint = this._directChild(monogr, "imprint");
-    if (!imprint) return "";
-    const date = this._directChild(imprint, "date");
-    if (!date) return "";
-    const when = date.getAttribute("when") || date.textContent || "";
-    const m = /(\d{4})/.exec(when);
-    return m ? m[1] : "";
-  }
-
-  _extractBiblScope(imprint, unit) {
-    if (!imprint) return "";
-    for (const child of imprint.children) {
-      if (child.localName === "biblScope" && child.getAttribute("unit") === unit) {
-        return (child.textContent || "").trim();
-      }
-    }
-    return "";
-  }
-
-  // _extractPage handles both inline-text pages ("1-20") and the
-  // from/to attribute form GROBID emits for numeric page ranges.
-  _extractPage(imprint) {
-    if (!imprint) return "";
-    for (const child of imprint.children) {
-      if (child.localName !== "biblScope") continue;
-      if (child.getAttribute("unit") !== "page") continue;
-      const from = child.getAttribute("from");
-      const to = child.getAttribute("to");
-      if (from && to && from !== to) return `${from}-${to}`;
-      if (from) return from;
-      const text = (child.textContent || "").trim();
-      if (text) return text;
-    }
-    return "";
-  }
-
-  _extractIdno(el, type) {
-    for (const child of el.children) {
-      if (
-        child.localName === "idno" &&
-        (child.getAttribute("type") || "").toUpperCase() === type.toUpperCase()
-      ) {
-        return (child.textContent || "").trim();
-      }
-    }
-    return "";
-  }
 }
 
 // bibTexEscape escapes BibTeX value special characters so
@@ -1266,7 +1440,7 @@ class SfgaReader extends LitElement {
 // ampersand / hash / underscore / tilde are BibTeX-reserved and
 // need escaping via backslash. Scientific-name titles rarely
 // trigger any of these, but a defensive escape keeps output
-// robust across GROBID's variety.
+// robust across the variety of upstream sources.
 function bibTexEscape(s) {
   return String(s || "")
     .replace(/\\/g, "\\\\")
