@@ -1494,6 +1494,11 @@ class SfgaApp extends LitElement {
     // _onIssueNavigate when a reference-scoped issue is opened, so
     // the References component focuses that row on first render.
     _pendingReferenceId: { state: true },
+    // Which workspace tab (bibliography / digitize / assertions)
+    // to activate when SfgaReferences mounts or a new reference is
+    // selected. Synced with location.hash so reloads land back on
+    // the tab the curator was on.
+    _pendingWorkspaceTab: { state: true },
     // Omnibox filter state — persists to localStorage under
     // "hive-search-filters". See DESIGN.md § Search combobox filter
     // chips. `mode` is "prefix" (default) / "partial" / "fuzzy" —
@@ -1725,6 +1730,7 @@ class SfgaApp extends LitElement {
     this.helpOpen = false;
     this._pendingWarnings = null;
     this._pendingReferenceId = "";
+    this._pendingWorkspaceTab = "";
     this._searchFilters = this._loadSearchFilters();
     // Bind the top-bar source once so the combobox reference is
     // stable across renders; the closure reads `this._searchFilters`
@@ -2007,7 +2013,8 @@ class SfgaApp extends LitElement {
     if (
       changed.has("screen") ||
       changed.has("selectedId") ||
-      changed.has("_pendingReferenceId")
+      changed.has("_pendingReferenceId") ||
+      changed.has("_pendingWorkspaceTab")
     ) {
       this._syncToHash();
     }
@@ -2034,12 +2041,14 @@ class SfgaApp extends LitElement {
 
   // _syncFromHash parses location.hash into screen + selectedId.
   // Recognized paths:
-  //   #/                    → taxa screen, no selection
-  //   #/taxon/{id}          → taxa screen, taxon revealed + selected
-  //   #/metadata            → metadata screen
-  //   #/references          → references screen, no selection
-  //   #/reference/{id}      → references screen with that reference
-  //                           selected on load (deep-link / reload)
+  //   #/                                → taxa screen, no selection
+  //   #/taxon/{id}                      → taxa screen, taxon revealed + selected
+  //   #/metadata                        → metadata screen
+  //   #/references                      → references screen, no selection
+  //   #/reference/{id}                  → references screen with ref selected
+  //   #/reference/{id}/{tab}            → references screen with ref selected
+  //                                       and a specific workspace tab active
+  //                                       (bibliography / digitize / assertions)
   // Unknown paths fall back to the taxa screen — safer than leaving
   // the UI in a broken state when someone shares an old-schema link.
   _syncFromHash() {
@@ -2048,16 +2057,19 @@ class SfgaApp extends LitElement {
     this._syncingFromHash = true;
     if (parts.length === 0) {
       this.screen = "taxa";
-      // Preserve any existing selection when the hash is just #/ —
-      // arriving at this branch during a screen switch (e.g. from
-      // metadata → taxa via alt+t) shouldn't discard the current
-      // taxon. Only clear when we're explicitly navigating to root.
     } else if (parts[0] === "taxon") {
       this.screen = "taxa";
       this.selectedId = parts[1] || "";
     } else if (parts[0] === "reference") {
       this.screen = "references";
       this._pendingReferenceId = parts[1] || "";
+      // Third segment is the workspace tab. Only accept known
+      // values so a stale link can't put the UI in a broken state.
+      const tab = parts[2] || "";
+      this._pendingWorkspaceTab =
+        tab === "bibliography" || tab === "digitize" || tab === "assertions"
+          ? tab
+          : "";
     } else if (SfgaApp.views.some((v) => v.id === parts[0])) {
       this.screen = parts[0];
     } else {
@@ -2074,9 +2086,17 @@ class SfgaApp extends LitElement {
     if (this.screen === "taxa") {
       wanted = this.selectedId ? `#/taxon/${this.selectedId}` : "#/";
     } else if (this.screen === "references") {
-      wanted = this._pendingReferenceId
-        ? `#/reference/${this._pendingReferenceId}`
-        : `#/references`;
+      if (!this._pendingReferenceId) {
+        wanted = `#/references`;
+      } else {
+        // Include the workspace tab in the URL when the curator
+        // has explicitly landed on one; omit for the default so
+        // shared links stay clean. Empty _pendingWorkspaceTab
+        // means "let the component pick its default."
+        wanted = this._pendingWorkspaceTab
+          ? `#/reference/${this._pendingReferenceId}/${this._pendingWorkspaceTab}`
+          : `#/reference/${this._pendingReferenceId}`;
+      }
     } else {
       wanted = `#/${this.screen}`;
     }
@@ -2506,6 +2526,7 @@ class SfgaApp extends LitElement {
           <div class="screen references">
             <sfga-references
               .selectId=${this._pendingReferenceId}
+              .workspaceTab=${this._pendingWorkspaceTab}
               @reference-selected=${(e) => {
                 // Track the current selection in the shell so the
                 // hash can reflect it — reloading / bookmarking /
@@ -2513,6 +2534,14 @@ class SfgaApp extends LitElement {
                 const id = (e && e.detail && e.detail.id) || "";
                 if (this._pendingReferenceId !== id) {
                   this._pendingReferenceId = id;
+                }
+              }}
+              @workspace-tab-changed=${(e) => {
+                // Same story for the workspace tab — reload lands on
+                // whichever pane the curator was working in.
+                const tab = (e && e.detail && e.detail.tab) || "";
+                if (this._pendingWorkspaceTab !== tab) {
+                  this._pendingWorkspaceTab = tab;
                 }
               }}
             ></sfga-references>
@@ -9978,6 +10007,10 @@ class SfgaAddReferenceModal extends LitElement {
     // still POST-create rather than PATCH-replace — Slice 2 wires
     // those. See REFERENCE_PDF_PLAN.md.
     editID: { attribute: false },
+    // initialFile lets a caller (SfgaReferences drop handler)
+    // hand a File object to the modal so the curator doesn't have
+    // to re-pick it. Auto-uploaded in firstUpdated when set.
+    initialFile: { attribute: false },
     _tab: { state: true }, // 0..4
     // Tab 0 (project) — inline DOI preview when the local search
     // finds nothing and the query looks like a DOI. Shows a save-
@@ -10302,6 +10335,33 @@ class SfgaAddReferenceModal extends LitElement {
         display: grid;
         gap: var(--sp-1);
         font-size: var(--fs-sm);
+      }
+      .upload-result.dedupe {
+        border-color: color-mix(in oklab, var(--sev-warn) 40%, transparent);
+        background: color-mix(in oklab, var(--sev-warn) 10%, transparent);
+      }
+      .dedupe-title {
+        font-weight: 600;
+      }
+      .dedupe-refs {
+        list-style: none;
+        margin: var(--sp-1) 0 0;
+        padding: 0;
+        display: grid;
+        gap: var(--sp-1);
+      }
+      .dedupe-refs button.link {
+        background: none;
+        border: none;
+        color: var(--link);
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        font: inherit;
+        text-decoration: underline;
+      }
+      .dedupe-refs button.link:hover {
+        color: var(--link-hover, var(--link));
       }
       .upload-result code {
         font-family: var(--font-mono);
@@ -10696,6 +10756,14 @@ class SfgaAddReferenceModal extends LitElement {
     this._releaseFocus = trapFocus(this.renderRoot, {
       initialFocus: "input, textarea",
     });
+    // Auto-upload a file the caller handed us via initialFile
+    // (drag-and-drop path from SfgaReferences). Routes to the File
+    // tab first so the progress + result render there, then
+    // triggers the same upload path the tab's file picker uses.
+    if (this.initialFile) {
+      this._tab = SfgaAddReferenceModal._tabIndex("file");
+      this._uploadFile(this.initialFile);
+    }
   }
 
   _close() {
@@ -11410,20 +11478,63 @@ class SfgaAddReferenceModal extends LitElement {
       ${err
         ? html`<div class="error" role="alert">${err}</div>`
         : ""}
-      ${res
+      ${res && res.attached_references && res.attached_references.length > 0
         ? html`
-            <div class="upload-result">
-              <div><strong>${res.ext.toUpperCase()}</strong> stored (${formatBytes(res.size)})</div>
-              <div class="hint">
-                ${res.already_existed
-                  ? "identical file already in the library — deduplicated on hash"
-                  : "added to the library"}
+            <div class="upload-result dedupe" role="status">
+              <div class="dedupe-title">
+                This PDF is already attached to
+                ${res.attached_references.length === 1
+                  ? "a reference"
+                  : `${res.attached_references.length} references`}
               </div>
-              ${this._renderTEIStatusHint(res)}
+              <div class="hint">
+                No need to fill out bibliographic info — jump to an
+                existing reference or dismiss this dialog.
+              </div>
+              <ul class="dedupe-refs">
+                ${res.attached_references.map(
+                  (r) => html`<li>
+                    <button
+                      type="button"
+                      class="link"
+                      @click=${() => this._pickExistingReference(r.id)}
+                      title="Open this reference"
+                    >
+                      ${r.title || r.citation || r.id}
+                    </button>
+                  </li>`,
+                )}
+              </ul>
             </div>
           `
-        : ""}
+        : res
+          ? html`
+              <div class="upload-result">
+                <div><strong>${res.ext.toUpperCase()}</strong> stored (${formatBytes(res.size)})</div>
+                <div class="hint">
+                  ${res.already_existed
+                    ? "identical file already in the library — deduplicated on hash"
+                    : "added to the library"}
+                </div>
+                ${this._renderTEIStatusHint(res)}
+              </div>
+            `
+          : ""}
     `;
+  }
+
+  // _pickExistingReference dispatches the standard reference-picked
+  // event so the parent (SfgaReferences) selects the pre-existing
+  // reference. Same wire as the normal pick flow.
+  _pickExistingReference(id) {
+    this.dispatchEvent(
+      new CustomEvent("reference-picked", {
+        detail: { id },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    this._close();
   }
 
   // _renderTEIStatusHint explains what happened on the TEI /
@@ -11536,6 +11647,18 @@ class SfgaAddReferenceModal extends LitElement {
     try {
       const result = await api.reference.upload(file);
       this._uploadResult = result;
+      // Dedupe short-circuit: the PDF is already attached to one or
+      // more references. Show a "this PDF is already imported"
+      // prompt in place of the normal DOI/manual flow — otherwise
+      // curator wastes time filling out fields they'd end up
+      // discarding when they realize (or don't realize) the
+      // reference already exists.
+      if (
+        result.attached_references &&
+        result.attached_references.length > 0
+      ) {
+        return;
+      }
       // Post-upload routing:
       //   1. DOI extracted → resolve via OpenAlex, cross-check
       //      against GROBID's extracted title. If titles agree,
@@ -13690,6 +13813,12 @@ class SfgaReferences extends LitElement {
     // event so subsequent property assignments (even to the same id)
     // still trigger a reveal.
     selectId: { attribute: false },
+    // Public: shell-provided workspace tab hint. Set from the URL
+    // hash on load / navigation; the component switches its
+    // internal _workspaceTab to match. Empty string means "let
+    // the component keep its default." Curator tab clicks flow
+    // back to the shell via workspace-tab-changed events.
+    workspaceTab: { attribute: false },
     _hits: { state: true },
     _selectedId: { state: true },
     _current: { state: true },
@@ -13725,14 +13854,14 @@ class SfgaReferences extends LitElement {
     //
     //   "bibliography" — bibliographic detail + copy buttons | reader
     //   "digitize"     — reader | PDF (compare digitization quality)
-    //   "facts"        — NER-extracted facts | reader (placeholder
+    //   "assertions"   — extracted assertions | reader (placeholder
     //                    until the extraction pipeline lands)
     //
     // Tabs make each combination one click away — a curator moving
     // between "read a reference", "verify JATS digitization", and
-    // (future) "fact-check NER extraction" doesn't need to hunt for
-    // a modal. Bibliography is the default because "look at the
-    // reference and copy a citation" is the most common visit.
+    // (future) "review extracted assertions" doesn't need to hunt
+    // for a modal. Bibliography is the default because "look at
+    // the reference and copy a citation" is the most common visit.
     _workspaceTab: { state: true },
     // _pdfPage drives the PDF iframe's #page=N fragment in the
     // Digitize tab. Reactive because clicking a fig-xref in the
@@ -13751,6 +13880,35 @@ class SfgaReferences extends LitElement {
     // to fetch past the currently-loaded window. False once we've
     // paginated to the end (or a search returns everything at once).
     _hasMore: { state: true },
+    // Aggregated progress across the 4-step reference workflow —
+    // fetched from /api/reference/dashboard on mount and refreshed
+    // when a ref completes a step (save, add, upload, import).
+    // Rendered as the right-pane landing view when no reference is
+    // selected. Null while the initial fetch is in flight.
+    _dashboard: { state: true },
+    // Digitize-tab correction tools: which tool is active in the
+    // toolbar ('read' | 'bbox'), which corrections apply to the
+    // currently-selected reference, and whether the bbox-form
+    // modal is open (populated with a fresh draw's page + bbox
+    // waiting for content_type + label + save).
+    _activeTool: { state: true },
+    _corrections: { state: true },
+    _bboxForm: { state: true },
+    _bboxFormBusy: { state: true },
+    // GROBID-extracted regions from the JATS sidecar — rendered
+    // as muted overlays on the PDF viewer alongside the curator
+    // corrections so the curator sees every detected region at a
+    // glance. Curator additions render in the primary color;
+    // GROBID regions render dimmed so they stay in the background.
+    _grobidRegions: { state: true },
+    // File dropped on the references pane, waiting to be handed
+    // off to the newly-opened add-reference modal. Non-null value
+    // triggers the modal to auto-upload it on first render.
+    _pendingDropFile: { state: true },
+    // Visual state during an active dragover — shows a subtle
+    // outline on the references pane so curators know they can
+    // drop the file here to import it.
+    _dropActive: { state: true },
   };
 
   static styles = css`
@@ -13762,7 +13920,12 @@ class SfgaReferences extends LitElement {
       grid-template-columns: minmax(18rem, 22rem) 1fr;
       overflow: hidden;
       height: 100%;
+      position: relative;
     }
+    /* Drop-zone highlight lives at document level (see styles.css
+       body[data-drop-active]) so it can extend across iframes and
+       the full viewport. Component-local styles wouldn't reach
+       past the shadow DOM boundary. */
     .workspace {
       display: flex;
       flex-direction: column;
@@ -13830,6 +13993,212 @@ class SfgaReferences extends LitElement {
       border-left: 1px solid var(--border);
       width: 100%;
       height: 100%;
+    }
+    .workspace-panes sfga-pdf-viewer.pane {
+      width: 100%;
+      height: 100%;
+    }
+    /* Digitize tab has an extra row for the correction toolbar
+       and a nested grid so the chip strip can sit above only the
+       PDF pane, not the reader. Overrides the default
+       tab-content 2-column grid inherited from .workspace-panes. */
+    .workspace-panes .tab-content.digitize {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+    }
+    .digitize-toolbar {
+      display: flex;
+      gap: var(--sp-2);
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .digitize-toolbar .tool-btn {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1) var(--sp-3);
+      font: inherit;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+    .digitize-toolbar .tool-btn.active {
+      background: color-mix(in oklab, var(--sev-info) 25%, transparent);
+      border-color: color-mix(in oklab, var(--sev-info) 60%, transparent);
+    }
+    .digitize-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .pdf-column {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border-left: 1px solid var(--border);
+    }
+    .chip-strip {
+      display: flex;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      overflow-x: auto;
+      min-height: 2rem;
+      align-items: center;
+    }
+    .chip-strip .empty-hint {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-style: italic;
+    }
+    .bbox-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--sp-2);
+      font-size: var(--fs-xs);
+      white-space: nowrap;
+    }
+    .bbox-chip .chip-label {
+      cursor: pointer;
+    }
+    .bbox-chip .chip-delete {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      color: var(--fg);
+      cursor: pointer;
+      font-size: var(--fs-md);
+      line-height: 1;
+      padding: 0 var(--sp-1);
+      margin-left: var(--sp-1);
+      min-width: 1.2rem;
+    }
+    .bbox-chip .chip-delete:hover {
+      background: var(--error);
+      border-color: var(--error);
+      color: white;
+    }
+    /* BBox form modal — appears after a bbox is drawn to collect
+       content type + label before the correction is saved. */
+    .bbox-form-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bbox-form {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-4);
+      width: 22rem;
+      max-width: 90vw;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+    .bbox-form.wide {
+      width: 32rem;
+    }
+    .bbox-form h3 {
+      margin: 0;
+      font-size: var(--fs-md);
+    }
+    .bbox-preview {
+      max-height: 20rem;
+      overflow: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bbox-preview-img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+    .bbox-preview-loading,
+    .bbox-preview-empty {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      padding: var(--sp-3);
+      text-align: center;
+    }
+    .bbox-detected {
+      font-size: var(--fs-sm);
+      color: var(--fg);
+    }
+    .bbox-detected.dim {
+      color: var(--dim);
+      font-style: italic;
+    }
+    .bbox-warn {
+      background: color-mix(in oklab, var(--sev-warn) 15%, transparent);
+      border: 1px solid color-mix(in oklab, var(--sev-warn) 40%, transparent);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1) var(--sp-2);
+      font-size: var(--fs-xs);
+    }
+    .bbox-existing-labels {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-2);
+      max-height: 8rem;
+      overflow: auto;
+    }
+    .bbox-existing-labels-title {
+      font-size: var(--fs-xs);
+      color: var(--dim);
+      margin-bottom: var(--sp-1);
+    }
+    .bbox-existing-labels ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+      gap: var(--sp-1);
+      font-size: var(--fs-xs);
+    }
+    .bbox-existing-labels .dim {
+      color: var(--dim);
+    }
+    .bbox-form label {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+      font-size: var(--fs-sm);
+    }
+    .bbox-form input,
+    .bbox-form select,
+    .bbox-form textarea {
+      padding: var(--sp-1) var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--fg);
+      font: inherit;
+      font-family: var(--font-body);
+      resize: vertical;
+    }
+    .bbox-form-actions {
+      display: flex;
+      gap: var(--sp-2);
+      justify-content: flex-end;
     }
     .workspace-panes .tab-content > .pane:first-child {
       border-left: none;
@@ -14060,13 +14429,131 @@ class SfgaReferences extends LitElement {
       font-family: var(--font-body);
       line-height: 1.4;
     }
+    .attached-pdfs {
+      margin-top: var(--sp-4);
+      padding: var(--sp-2) var(--sp-3);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .attached-pdfs-title {
+      font-size: var(--fs-xs);
+      color: var(--dim);
+      margin-bottom: var(--sp-1);
+    }
+    .attached-pdf-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      font-size: var(--fs-sm);
+      font-family: var(--font-mono);
+    }
+    .attached-pdf-sha {
+      color: var(--fg);
+    }
     .empty { color: var(--dim); padding: var(--sp-2); }
     .error { color: var(--error); font-family: var(--font-mono); padding: var(--sp-2); }
+    /* Dashboard landing view — shown in the right pane when no ref
+       is selected. Fills the workspace column so the 4 step bars +
+       hot list read as a full page, not a floating widget. */
+    .dashboard {
+      padding: var(--sp-5) var(--sp-6);
+      overflow: auto;
+      color: var(--fg);
+    }
+    .dashboard h2 {
+      margin: 0 0 var(--sp-2);
+      font-size: var(--fs-lg);
+    }
+    .dashboard-total {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      margin-bottom: var(--sp-5);
+    }
+    .dashboard-steps {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-6);
+    }
+    .dashboard-step {
+      display: grid;
+      grid-template-columns: minmax(10rem, 14rem) 1fr auto;
+      align-items: center;
+      gap: var(--sp-3);
+      font-size: var(--fs-sm);
+    }
+    .dashboard-step-label {
+      color: var(--fg);
+    }
+    .dashboard-step-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      height: 0.9rem;
+      overflow: hidden;
+    }
+    .dashboard-step-fill {
+      background: color-mix(in oklab, var(--sev-info) 55%, transparent);
+      height: 100%;
+      transition: width 200ms ease-out;
+    }
+    .dashboard-step-count {
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+      font-size: var(--fs-xs);
+      min-width: 4.5rem;
+      text-align: right;
+    }
+    .dashboard details {
+      margin-bottom: var(--sp-6);
+      color: var(--dim);
+      font-size: var(--fs-sm);
+    }
+    .dashboard details summary {
+      cursor: pointer;
+      color: var(--fg);
+      margin-bottom: var(--sp-2);
+    }
+    .dashboard details dl {
+      margin: 0 0 0 var(--sp-3);
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: var(--sp-1) var(--sp-3);
+    }
+    .dashboard details dt { color: var(--fg); }
+    .dashboard details dd { margin: 0; }
+    .dashboard-attention h3 {
+      font-size: var(--fs-md);
+      margin: 0 0 var(--sp-2);
+    }
+    .dashboard-attention ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+    }
+    .dashboard-attention li {
+      font-size: var(--fs-sm);
+      color: var(--fg);
+    }
+    .dashboard-attention .count {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .dashboard-loading {
+      color: var(--dim);
+      padding: var(--sp-4);
+    }
   `;
 
   constructor() {
     super();
     this.selectId = "";
+    this.workspaceTab = "";
     this._hits = [];
     this._selectedId = "";
     this._current = null;
@@ -14090,6 +14577,14 @@ class SfgaReferences extends LitElement {
         ? "author"
         : "recent";
     this._hasMore = true;
+    this._dashboard = null;
+    this._activeTool = "read";
+    this._corrections = [];
+    this._bboxForm = null;
+    this._bboxFormBusy = false;
+    this._grobidRegions = [];
+    this._pendingDropFile = null;
+    this._dropActive = false;
   }
 
   async connectedCallback() {
@@ -14127,16 +14622,80 @@ class SfgaReferences extends LitElement {
     };
     window.addEventListener("message", this._onReaderMessage);
     await this._fetchPage(true);
-    // Prefer the caller-requested id (deep-link from an Issues
-    // click); fall back to the first hit. `_select` fetches by id
-    // directly, so a requested id that isn't in the first-page
-    // list still resolves — it just won't be highlighted in the
-    // sidebar until the curator scrolls or filters to it.
-    if (this.selectId) {
+    // Deep-link from the shell (Issues click, deep-link on reload,
+    // etc.) auto-selects the requested id — but only when the
+    // updated() handler hasn't already selected it. Lit sets the
+    // selectId property before connectedCallback runs and the
+    // updated() hook fires from the same microtask; whichever gets
+    // to _select first wins. The second call would see
+    // id === this._selectedId and treat it as a click-to-deselect
+    // gesture, snapping the right pane back to the dashboard.
+    if (this.selectId && this.selectId !== this._selectedId) {
       this._select(this.selectId);
-    } else if (this._hits.length > 0) {
-      this._select(this._hits[0].id);
     }
+    // Fetch the dashboard rollup in parallel — small query, needed
+    // as soon as the landing view renders. No await; a slow fetch
+    // just delays the dashboard's populated state, not the shell.
+    this._fetchDashboard();
+    // Window-level drag-and-drop capture. Attached on window (not
+    // the host) so drops anywhere on the References screen —
+    // including over the reader iframe or the pdf viewer — reach
+    // us instead of being swallowed by the target element or the
+    // browser's default file:/// navigation.
+    //
+    // Only mounted while SfgaReferences is on-screen, so the
+    // capture is naturally scoped to the References screen (drops
+    // on Taxa / Metadata / Issues screens fall through to the
+    // browser).
+    //
+    // Iframes present a specific hazard: drops on same-origin
+    // iframe content don't bubble out to the parent document. We
+    // work around this by setting `body[data-drop-active]` during
+    // dragover; global CSS then applies `pointer-events: none` to
+    // iframes so the browser routes the drop event to the underlying
+    // body element instead of into the iframe's document.
+    this._dragCounter = 0;
+    this._onWinDragEnter = (e) => {
+      if (!e.dataTransfer) return;
+      if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
+      this._dragCounter++;
+      if (!this._dropActive) {
+        this._dropActive = true;
+        document.body.setAttribute("data-drop-active", "");
+      }
+    };
+    this._onWinDragOver = (e) => {
+      if (!e.dataTransfer) return;
+      if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
+      // preventDefault on both dragover AND drop is required to
+      // suppress the browser's default file:/// navigation.
+      e.preventDefault();
+    };
+    this._onWinDragLeave = (e) => {
+      if (!e.dataTransfer) return;
+      this._dragCounter = Math.max(0, this._dragCounter - 1);
+      if (this._dragCounter === 0) {
+        this._dropActive = false;
+        document.body.removeAttribute("data-drop-active");
+      }
+    };
+    this._onWinDrop = (e) => {
+      if (!e.dataTransfer) return;
+      // preventDefault regardless of whether we actually process
+      // the drop — otherwise a stray drop navigates to file:///.
+      e.preventDefault();
+      this._dragCounter = 0;
+      this._dropActive = false;
+      document.body.removeAttribute("data-drop-active");
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      this._pendingDropFile = file;
+      this._addingNew = true;
+    };
+    window.addEventListener("dragenter", this._onWinDragEnter);
+    window.addEventListener("dragover", this._onWinDragOver);
+    window.addEventListener("dragleave", this._onWinDragLeave);
+    window.addEventListener("drop", this._onWinDrop);
   }
 
   disconnectedCallback() {
@@ -14144,6 +14703,13 @@ class SfgaReferences extends LitElement {
     if (this._scrollObserver) this._scrollObserver.disconnect();
     if (this._onReaderMessage) {
       window.removeEventListener("message", this._onReaderMessage);
+    }
+    if (this._onWinDragEnter) {
+      window.removeEventListener("dragenter", this._onWinDragEnter);
+      window.removeEventListener("dragover", this._onWinDragOver);
+      window.removeEventListener("dragleave", this._onWinDragLeave);
+      window.removeEventListener("drop", this._onWinDrop);
+      document.body.removeAttribute("data-drop-active");
     }
     super.disconnectedCallback();
   }
@@ -14229,13 +14795,43 @@ class SfgaReferences extends LitElement {
     if (changed.has("selectId") && this.selectId && this.selectId !== this._selectedId) {
       this._select(this.selectId);
     }
+    // _dropActive state → document.body[data-drop-active] is
+    // synced imperatively in the window listeners (connectedCallback)
+    // so the CSS at document level can reach across iframes.
+    // Sync incoming workspaceTab (from the URL hash via the shell)
+    // into internal state. The suppressTabEmit flag guards against
+    // an echo — accepting the hint shouldn't fire another event
+    // back to the shell that would just re-apply the same value.
+    if (changed.has("workspaceTab") && this.workspaceTab &&
+        this.workspaceTab !== this._workspaceTab) {
+      this._suppressTabEmit = true;
+      this._workspaceTab = this.workspaceTab;
+    }
+    if (changed.has("_workspaceTab")) {
+      if (this._suppressTabEmit) {
+        this._suppressTabEmit = false;
+      } else {
+        this.dispatchEvent(
+          new CustomEvent("workspace-tab-changed", {
+            detail: { tab: this._workspaceTab },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+    }
     // When the selected reference changes, if the current tab is
     // no longer meaningful (Digitize tab without an attached PDF)
-    // fall back to Bibliography. Curators shouldn't get stuck on
-    // an empty tab.
-    if (changed.has("_current") && this._workspaceTab === "digitize") {
+    // fall back to Bibliography. Skip when _current is null —
+    // that's the mid-load state during _select, not a real
+    // "loaded ref with no PDF" state. Falling back here would
+    // clobber a workspaceTab hint the shell just set from the URL.
+    if (
+      changed.has("_current") &&
+      this._current &&
+      this._workspaceTab === "digitize"
+    ) {
       const hasReader =
-        this._current &&
         this._current.attached_pdf_shas &&
         this._current.attached_pdf_shas.length > 0;
       if (!hasReader) this._workspaceTab = "bibliography";
@@ -14261,34 +14857,60 @@ class SfgaReferences extends LitElement {
   }
 
   // _navPdfPane imperatively scrolls the Digitize tab's PDF pane
-  // to the given page. Called from updated() when _pdfPage changes.
-  // Uses requestAnimationFrame so the DOM update from the same
-  // render cycle (workspace-tab switch) has flushed before we look
-  // for the iframe.
+  // to the given page. Called from updated() when _pdfPage changes
+  // (fig-xref click in the reader posts a message that ends up
+  // setting _pdfPage). Uses requestAnimationFrame so the DOM
+  // update from the same render cycle (workspace-tab switch) has
+  // flushed before we look for the viewer element.
+  //
+  // Retries when the viewer hasn't finished rendering pages yet —
+  // pdf.js loads asynchronously; a fig-xref click during the
+  // initial load would otherwise silently do nothing.
   _navPdfPane(page) {
-    requestAnimationFrame(() => {
-      const iframe = this.renderRoot.querySelector("iframe.pane.pdf");
-      if (!iframe) return;
-      try {
-        // Same-origin: contentWindow.location is accessible.
-        // Setting hash triggers PDF.js's hashchange listener which
-        // scrolls to the specified page.
-        iframe.contentWindow.location.hash = `page=${page}`;
-      } catch (err) {
-        // Cross-origin surprise (shouldn't happen — the PDF is
-        // served from the same origin as the app) or contentWindow
-        // gone. Fall back to src update, which some browsers do
-        // pick up even when hash-only.
-        const url = iframe.src.replace(/#.*$/, "") + `#page=${page}`;
-        iframe.src = url;
+    let attempts = 0;
+    const tryScroll = () => {
+      const viewer = this.renderRoot.querySelector("sfga-pdf-viewer.pane.pdf");
+      if (viewer && typeof viewer.goToPage === "function") {
+        const canvas = viewer.renderRoot?.querySelector(
+          `canvas[data-page="${page}"]`,
+        );
+        if (canvas) {
+          viewer.goToPage(page);
+          return;
+        }
       }
-    });
+      // Retry up to ~2s while the PDF finishes loading. Bail after
+      // that so a truly-broken viewer doesn't spin forever.
+      if (++attempts < 20) {
+        setTimeout(tryScroll, 100);
+      }
+    };
+    requestAnimationFrame(tryScroll);
   }
 
   async _select(id) {
-    if (!id || id === this._selectedId) return;
+    if (!id) return;
+    // Clicking the already-selected reference deselects it, which
+    // returns the right pane to the dashboard landing view. Matches
+    // the sidebar-Refs re-click return path documented in
+    // REFERENCES_DASHBOARD_PLAN.
+    if (id === this._selectedId) {
+      this._selectedId = "";
+      this._current = null;
+      this._corrections = [];
+      this._grobidRegions = [];
+      this._activeTool = "read";
+      this._fetchDashboard();
+      return;
+    }
     this._selectedId = id;
     this._current = null;
+    // Reset per-ref correction state so the previous ref's chips
+    // don't flash on-screen while the new ref's corrections load.
+    this._corrections = [];
+    this._grobidRegions = [];
+    this._activeTool = "read";
+    this._fetchCorrections(id);
     // Fresh reference → fresh PDF page. Otherwise the new
     // reference's PDF iframe would open at whatever page the
     // previous reference was last showing.
@@ -14306,9 +14928,735 @@ class SfgaReferences extends LitElement {
     );
     try {
       this._current = await api.reference.get(id);
+      // Now that we know the sha, fetch the GROBID-extracted
+      // regions so the PDF viewer can render them alongside
+      // curator corrections.
+      const sha =
+        this._current?.attached_pdf_shas &&
+        this._current.attached_pdf_shas[0];
+      if (sha) this._fetchGrobidRegions(sha);
     } catch (err) {
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
     }
+  }
+
+  // _fetchGrobidRegions pulls every fig/table-wrap region from the
+  // sidecar JATS (both curator-added and GROBID-extracted) and
+  // filters to just GROBID ones — curator additions come through
+  // _fetchCorrections. Rendered as muted overlays so a curator
+  // sees the full set of detected regions at a glance without
+  // confusing them for correction targets.
+  async _fetchGrobidRegions(sha) {
+    try {
+      const r = await fetch(
+        `/api/reference/library/${encodeURIComponent(sha)}/regions`,
+      );
+      if (!r.ok) return;
+      const body = await r.json();
+      const items = (body.items || []).filter((rg) => rg.origin === "grobid");
+      this._grobidRegions = items;
+    } catch (err) {
+      // Silent — regions are a visualization aid, not critical.
+    }
+  }
+
+  // _mergedBBoxes returns the union of curator corrections and
+  // GROBID-detected regions in the shape the pdf viewer expects.
+  // Three visual states via the `state` field, which the viewer
+  // maps to a CSS class for color styling:
+  //
+  //   - "auto"      — GROBID-detected, no modification (blue)
+  //   - "modified"  — GROBID-detected + a bbox-modify targets it
+  //                   (blue-green)
+  //   - "curator"   — curator-added new region via bbox-add
+  //                   (green)
+  _mergedBBoxes() {
+    const out = [];
+    // Build sets of GROBID target ids under active corrections.
+    // modifiedTargets → render blue-green; removedTargets → skip
+    // entirely (the reapply loop will drop them from the JATS
+    // on the next rebuild).
+    const modifiedTargets = new Set();
+    const removedTargets = new Set();
+    for (const c of this._corrections || []) {
+      if (c.status !== "active" || !c.target_element_id) continue;
+      if (c.kind === "bbox-modify") modifiedTargets.add(c.target_element_id);
+      if (c.kind === "bbox-remove") removedTargets.add(c.target_element_id);
+    }
+    // Curator additions (bbox-add).
+    for (const c of this._corrections || []) {
+      if (c.kind !== "bbox-add") continue;
+      if (!c.bbox || !c.bbox_page) continue;
+      out.push({
+        id: c.id,
+        page: c.bbox_page,
+        bbox: c.bbox,
+        label: c.label,
+        origin: "curator",
+        state: "curator",
+      });
+    }
+    // GROBID regions, tagged as auto or modified based on whether
+    // an active bbox-modify targets them. The label for modified
+    // regions comes from the corrected payload when available so
+    // the label shown on the bbox matches the curator's fix.
+    for (const g of this._grobidRegions || []) {
+      if (!g.bbox || !g.page) continue;
+      if (removedTargets.has(g.id)) continue;
+      const isModified = modifiedTargets.has(g.id);
+      let label = g.label;
+      if (isModified) {
+        const mod = (this._corrections || []).find(
+          (c) => c.kind === "bbox-modify" && c.target_element_id === g.id,
+        );
+        if (mod && mod.payload) {
+          try {
+            const p = JSON.parse(mod.payload);
+            if (p.corrected && p.corrected.label) label = p.corrected.label;
+          } catch (err) {
+            // ignore — keep grobid label
+          }
+        }
+      }
+      out.push({
+        id: g.id,
+        page: g.page,
+        bbox: g.bbox,
+        label,
+        origin: "grobid",
+        state: isModified ? "modified" : "auto",
+      });
+    }
+    return out;
+  }
+
+  // _fetchDashboard pulls the 4-step progress rollup from the
+  // server. Called on mount, on deselect, and after any operation
+  // that could change step counts (add / save / upload). Silently
+  // absorbs failures — dashboard is a landing-page convenience,
+  // not a critical view; a fetch error just leaves the previous
+  // (or null) rollup in place rather than blocking the shell.
+  async _fetchDashboard() {
+    try {
+      const r = await fetch("/api/reference/dashboard");
+      if (r.ok) this._dashboard = await r.json();
+    } catch (err) {
+      // Intentionally silent — see method doc.
+    }
+  }
+
+  // _fetchCorrections pulls all corrections attached to the given
+  // reference and populates _corrections. The bbox list drives the
+  // chip strip above the PDF pane and the overlay rectangles on
+  // the pdf viewer. Silent on failure — same rationale as
+  // _fetchDashboard.
+  async _fetchCorrections(refID) {
+    if (!refID) return;
+    try {
+      const r = await fetch(
+        `/api/reference/${encodeURIComponent(refID)}/corrections`,
+      );
+      if (r.ok) {
+        const body = await r.json();
+        this._corrections = body.items || [];
+      }
+    } catch (err) {
+      // Intentionally silent.
+    }
+  }
+
+  // _onBBoxDrawn receives the pdf viewer's bbox-drawn event and
+  // opens the bbox form pre-populated with the drawn page + bbox.
+  // Fires a preview fetch in the background so the form can show
+  // the PNG crop + auto-detected content type + real caption label
+  // as soon as the server responds.
+  _onBBoxDrawn(e) {
+    if (!this._current) return;
+    // Open with a naive starting label so the form is usable even
+    // if the preview fetch is slow or fails. Preview overwrites
+    // the label + content type once it lands.
+    this._bboxForm = {
+      page: e.detail.page,
+      bbox: e.detail.bbox,
+      contentType: "figure",
+      label: this._suggestBBoxLabel("figure"),
+      previewLoading: true,
+      previewPNG: "",
+      detectedType: "",
+      detectedLabel: "",
+      extractedText: "",
+      existingLabels: [],
+      editingID: "", // empty = new correction; set = edit existing
+    };
+    this._fetchBBoxPreview();
+  }
+
+  // _onBBoxEdit opens the form pre-populated with an existing
+  // region's values. Two paths:
+  //
+  //   - Curator addition (bbox-add correction) → editingID is set
+  //     to the correction id; save runs as delete-then-create.
+  //   - GROBID region → targetElementID is set to the JATS
+  //     element id; save creates a bbox-modify correction that
+  //     patches the element in place. If a bbox-modify already
+  //     targets this element, the form pre-populates with the
+  //     corrected values so the curator can iterate on their fix.
+  _onBBoxEdit(id, origin) {
+    if (!id || !this._current) return;
+    if (origin === "grobid") {
+      const grobid = (this._grobidRegions || []).find((g) => g.id === id);
+      if (!grobid || !grobid.bbox) return;
+      // Check for an existing bbox-modify targeting this element.
+      const existingMod = (this._corrections || []).find(
+        (c) => c.kind === "bbox-modify" && c.target_element_id === id,
+      );
+      let ctype = grobid.kind || "figure";
+      let label = grobid.label || "";
+      let caption = "";
+      if (existingMod && existingMod.payload) {
+        try {
+          const p = JSON.parse(existingMod.payload);
+          if (p.corrected) {
+            if (p.corrected.content_type) ctype = p.corrected.content_type;
+            if (p.corrected.label) label = p.corrected.label;
+            if (p.corrected.caption) caption = p.corrected.caption;
+          }
+        } catch (err) {
+          // ignore — fall back to grobid defaults
+        }
+      }
+      this._bboxForm = {
+        page: grobid.page,
+        bbox: grobid.bbox,
+        contentType: ctype,
+        label,
+        caption,
+        previewLoading: true,
+        previewPNG: "",
+        detectedType: "",
+        detectedLabel: "",
+        extractedText: "",
+        existingLabels: [],
+        editingID: existingMod ? existingMod.id : "",
+        targetElementID: id,
+        originalContentType: grobid.kind || "figure",
+        originalLabel: grobid.label || "",
+        originalCaption: "", // populated by preview fetch's extracted_text
+      };
+      this._fetchBBoxPreview();
+      return;
+    }
+    const c = (this._corrections || []).find((x) => x.id === id);
+    if (!c || !c.bbox) return;
+    this._bboxForm = {
+      page: c.bbox_page,
+      bbox: c.bbox,
+      contentType: c.content_type || "figure",
+      label: c.label || "",
+      caption: "",
+      previewLoading: true,
+      previewPNG: "",
+      detectedType: "",
+      detectedLabel: "",
+      extractedText: "",
+      existingLabels: [],
+      editingID: id,
+      targetElementID: "",
+    };
+    this._fetchBBoxPreview();
+  }
+
+  // _suggestBBoxLabel returns "figure-N" or "table-N" based on the
+  // count of existing bboxes of the same type plus one. Used as
+  // the pre-preview fallback; a real caption-derived label
+  // supersedes it once the preview lands.
+  _suggestBBoxLabel(contentType) {
+    const same = (this._corrections || []).filter(
+      (c) => c.content_type === contentType,
+    );
+    return `${contentType}-${same.length + 1}`;
+  }
+
+  // _fetchBBoxPreview posts to the correction-preview endpoint
+  // and folds the response into the current bbox form: PNG for
+  // visual review, detected content type + label for smart
+  // defaults, existing labels for curator context.
+  //
+  // Preview failures degrade gracefully — the form still works
+  // without preview data; the curator just picks the fields
+  // manually.
+  async _fetchBBoxPreview() {
+    if (!this._bboxForm || !this._current) return;
+    const sha =
+      this._current.attached_pdf_shas && this._current.attached_pdf_shas[0];
+    if (!sha) {
+      this._bboxForm = { ...this._bboxForm, previewLoading: false };
+      return;
+    }
+    try {
+      const r = await fetch("/api/reference/correction/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sidecar_sha: sha,
+          page: this._bboxForm.page,
+          bbox: this._bboxForm.bbox,
+        }),
+      });
+      if (!r.ok) throw new Error("preview " + r.status);
+      const body = await r.json();
+      if (!this._bboxForm) return; // curator closed form during fetch
+      const next = {
+        ...this._bboxForm,
+        previewLoading: false,
+        previewPNG: body.png_data_url || "",
+        detectedType: body.detected_type || "",
+        detectedLabel: body.detected_label || "",
+        extractedText: body.extracted_text || "",
+        existingLabels: body.existing_labels || [],
+      };
+      // Prefer the detected values when they're present — real
+      // caption text always beats a numeric fallback.
+      if (body.detected_type) next.contentType = body.detected_type;
+      if (body.detected_label) next.label = body.detected_label;
+      this._bboxForm = next;
+    } catch (err) {
+      if (this._bboxForm) {
+        this._bboxForm = { ...this._bboxForm, previewLoading: false };
+      }
+    }
+  }
+
+  _closeBBoxForm() {
+    this._bboxForm = null;
+    this._bboxFormBusy = false;
+  }
+
+  // _saveBBoxForm posts the pending bbox as a correction. Two
+  // save paths:
+  //
+  //   - bbox-add (curator drew a new region OR is editing a
+  //     previous curator addition) → delete + create. Delete
+  //     rebuilds the JATS from TEI, create re-adds with new values.
+  //
+  //   - bbox-modify (curator is editing a GROBID-detected region)
+  //     → delete any existing bbox-modify targeting the same
+  //     element, then create fresh with a payload capturing both
+  //     original state and corrected state for training-corpus use.
+  async _saveBBoxForm() {
+    if (!this._bboxForm || !this._current) return;
+    const sha =
+      this._current.attached_pdf_shas && this._current.attached_pdf_shas[0];
+    if (!sha) return;
+    this._bboxFormBusy = true;
+    const f = this._bboxForm;
+    const editingID = f.editingID || "";
+    const targetID = f.targetElementID || "";
+    try {
+      if (editingID) {
+        await fetch(
+          `/api/reference/correction/${encodeURIComponent(editingID)}`,
+          { method: "DELETE" },
+        );
+      }
+      let body;
+      if (targetID) {
+        // bbox-modify path — patch an existing GROBID element.
+        const payload = {
+          original: {
+            content_type: f.originalContentType || "",
+            label: f.originalLabel || "",
+            caption: f.originalCaption || "",
+          },
+          corrected: {},
+        };
+        if (f.contentType && f.contentType !== f.originalContentType) {
+          payload.corrected.content_type = f.contentType;
+        }
+        if (f.label && f.label !== f.originalLabel) {
+          payload.corrected.label = f.label;
+        }
+        if (f.caption && f.caption !== f.originalCaption) {
+          payload.corrected.caption = f.caption;
+        }
+        body = {
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "bbox-modify",
+          content_type: f.contentType,
+          target_element_id: targetID,
+          label: f.label,
+          payload: JSON.stringify(payload),
+        };
+      } else {
+        // bbox-add path — brand new curator region.
+        body = {
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "bbox-add",
+          content_type: f.contentType,
+          bbox_page: f.page,
+          bbox: f.bbox,
+          label: f.label,
+        };
+      }
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        this._closeBBoxForm();
+        await this._fetchCorrections(this._current.id);
+        if (sha) this._fetchGrobidRegions(sha);
+        this._reloadReaderIframe();
+      } else {
+        this._bboxFormBusy = false;
+      }
+    } catch (err) {
+      this._bboxFormBusy = false;
+    }
+  }
+
+  // _deleteCorrection handles the trash-icon click on a bbox.
+  // Two paths depending on the bbox origin:
+  //
+  //   - "curator" — id is a correction row id. DELETE the row;
+  //     server re-derives JATS from TEI + reapply remaining
+  //     corrections. Optimistic UI drops the correction locally
+  //     while the server catches up.
+  //
+  //   - "grobid" — id is the JATS element id (not a correction
+  //     id). POST a bbox-remove correction that suppresses the
+  //     element on this + future reapplies. Optimistic UI drops
+  //     the region from _grobidRegions.
+  async _deleteCorrection(id, origin) {
+    if (!id || !this._current) return;
+    if (this._pendingDeletes && this._pendingDeletes.has(id)) return;
+    if (!this._pendingDeletes) this._pendingDeletes = new Set();
+    this._pendingDeletes.add(id);
+    const sha =
+      this._current.attached_pdf_shas &&
+      this._current.attached_pdf_shas[0];
+    if (origin === "grobid") {
+      // Optimistic: hide the GROBID region.
+      const beforeRegions = this._grobidRegions;
+      this._grobidRegions = (this._grobidRegions || []).filter(
+        (g) => g.id !== id,
+      );
+      try {
+        const region = (beforeRegions || []).find((g) => g.id === id);
+        const contentType = region?.kind || "figure";
+        const r = await fetch("/api/reference/correction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reference_id: this._current.id,
+            sidecar_sha: sha,
+            kind: "bbox-remove",
+            content_type: contentType,
+            target_element_id: id,
+          }),
+        });
+        if (r.ok) {
+          await this._fetchCorrections(this._current.id);
+          if (sha) this._fetchGrobidRegions(sha);
+          this._reloadReaderIframe();
+        } else {
+          this._grobidRegions = beforeRegions;
+        }
+      } catch (err) {
+        this._grobidRegions = beforeRegions;
+      } finally {
+        this._pendingDeletes.delete(id);
+      }
+      return;
+    }
+    // Curator delete path.
+    const before = this._corrections;
+    this._corrections = (this._corrections || []).filter((c) => c.id !== id);
+    try {
+      const r = await fetch(
+        `/api/reference/correction/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      if (r.ok) {
+        await this._fetchCorrections(this._current.id);
+        if (sha) this._fetchGrobidRegions(sha);
+        this._reloadReaderIframe();
+      } else {
+        this._corrections = before;
+      }
+    } catch (err) {
+      this._corrections = before;
+    } finally {
+      this._pendingDeletes.delete(id);
+    }
+  }
+
+  // _reloadReaderIframe forces the reader pane to re-fetch its
+  // sidecar so the JATS mutation (new fig/table-wrap added by the
+  // just-saved correction) becomes visible. Simplest reliable
+  // mechanism: reassign the iframe's src to the same URL with a
+  // cache-busting query param.
+  _reloadReaderIframe() {
+    const iframes = this.renderRoot?.querySelectorAll("iframe.pane.reader") || [];
+    for (const iframe of iframes) {
+      const base = iframe.src.replace(/[?&]t=\d+$/, "");
+      const sep = base.includes("?") ? "&" : "?";
+      iframe.src = `${base}${sep}t=${Date.now()}`;
+    }
+  }
+
+  // _renderChipStrip renders the row of bbox chips above the PDF
+  // pane in the Digitize tab. Each chip shows the label + a delete
+  // control; clicking the label scrolls the pdf viewer to the
+  // bbox's page.
+  _renderChipStrip() {
+    const chips = (this._corrections || []).filter(
+      (c) => c.kind === "bbox-add" && c.status === "active",
+    );
+    if (chips.length === 0) {
+      return html`<div class="chip-strip">
+        <span class="empty-hint"
+          >Draw a box on the PDF while BBox tool is active to add a
+          missed figure or table.</span
+        >
+      </div>`;
+    }
+    return html`<div class="chip-strip">
+      ${chips.map(
+        (c) => html`
+          <span class="bbox-chip" title=${"page " + c.bbox_page}>
+            <span
+              class="chip-label"
+              @click=${() => this._scrollPdfToPage(c.bbox_page)}
+              >${c.label || c.content_type || "bbox"}</span
+            >
+            <button
+              class="chip-delete"
+              type="button"
+              aria-label="Delete correction"
+              @click=${() => this._deleteCorrection(c.id)}
+            >
+              ×
+            </button>
+          </span>
+        `,
+      )}
+    </div>`;
+  }
+
+  _scrollPdfToPage(page) {
+    const viewer = this.renderRoot?.querySelector("sfga-pdf-viewer.pane.pdf");
+    if (viewer && typeof viewer.goToPage === "function") viewer.goToPage(page);
+  }
+
+  // _renderBBoxForm renders the modal that pops up after a bbox is
+  // drawn on the PDF. Shows the PNG preview of the cropped region,
+  // any auto-detected content type + label from the caption text,
+  // and the list of existing figs/tables in the paper for context.
+  //
+  // Preview data is fetched asynchronously; the form is usable
+  // immediately with placeholder values and refreshes when the
+  // preview lands.
+  _renderBBoxForm() {
+    if (!this._bboxForm) return nothing;
+    const f = this._bboxForm;
+    const detectionMismatch =
+      f.detectedType && f.detectedType !== f.contentType;
+    return html`
+      <div
+        class="bbox-form-backdrop"
+        @click=${(e) => {
+          if (e.target === e.currentTarget) this._closeBBoxForm();
+        }}
+      >
+        <div class="bbox-form wide" role="dialog" aria-modal="true" aria-labelledby="bbox-form-title">
+          <h3 id="bbox-form-title">
+            ${f.editingID ? "Edit region" : "Add missed region"} — page ${f.page}
+          </h3>
+          <div class="bbox-preview">
+            ${f.previewLoading
+              ? html`<div class="bbox-preview-loading" role="status">
+                  Loading preview…
+                </div>`
+              : f.previewPNG
+                ? html`<img
+                    class="bbox-preview-img"
+                    src=${f.previewPNG}
+                    alt="Preview of the cropped bbox region"
+                  />`
+                : html`<div class="bbox-preview-empty">
+                    Preview unavailable — pdftocairo missing on the server or
+                    the source PDF isn't accessible. Save still works.
+                  </div>`}
+          </div>
+          ${f.detectedLabel
+            ? html`<div class="bbox-detected">
+                Detected caption: <strong>${f.detectedLabel}</strong>
+              </div>`
+            : f.previewLoading
+              ? nothing
+              : html`<div class="bbox-detected dim">
+                  No caption prefix detected — pick content type and
+                  label manually.
+                </div>`}
+          <label>
+            Content type
+            <select
+              .value=${f.contentType}
+              @change=${(e) => {
+                const next = e.target.value;
+                // Preserve the label unless it was still the naive
+                // pre-preview suggestion — curator override wins.
+                const naive = this._suggestBBoxLabel(f.contentType);
+                const label =
+                  f.label === naive
+                    ? this._suggestBBoxLabel(next)
+                    : f.label;
+                this._bboxForm = { ...f, contentType: next, label };
+              }}
+            >
+              <option value="figure">Figure</option>
+              <option value="table">Table</option>
+            </select>
+          </label>
+          ${detectionMismatch
+            ? html`<div class="bbox-warn" role="alert">
+                Caption says "${f.detectedLabel}" but content type is set
+                to "${f.contentType}". Double-check before saving.
+              </div>`
+            : nothing}
+          <label>
+            Label
+            <input
+              type="text"
+              placeholder=${f.contentType === "table"
+                ? "e.g. Table 1"
+                : "e.g. Figure 1"}
+              .value=${f.label}
+              @input=${(e) => (this._bboxForm = { ...f, label: e.target.value })}
+            />
+          </label>
+          ${f.targetElementID
+            ? html`<label>
+                Caption
+                <textarea
+                  rows="3"
+                  placeholder="Corrected caption text — leave blank to keep the extractor's caption"
+                  .value=${f.caption || ""}
+                  @input=${(e) =>
+                    (this._bboxForm = { ...f, caption: e.target.value })}
+                ></textarea>
+              </label>`
+            : nothing}
+          ${f.existingLabels && f.existingLabels.length > 0
+            ? html`<div class="bbox-existing-labels">
+                <div class="bbox-existing-labels-title">
+                  Already extracted from this paper:
+                </div>
+                <ul>
+                  ${f.existingLabels.map(
+                    (l) => html`<li>
+                      <strong>${l.label}</strong>
+                      ${l.page ? html`<span class="dim"> — page ${l.page}</span>` : nothing}
+                    </li>`,
+                  )}
+                </ul>
+              </div>`
+            : nothing}
+          <div class="bbox-form-actions">
+            <button type="button" @click=${() => this._closeBBoxForm()}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="primary"
+              ?disabled=${this._bboxFormBusy}
+              @click=${() => this._saveBBoxForm()}
+            >
+              ${this._bboxFormBusy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // _renderDashboard renders the landing view shown in the right
+  // pane when no reference is selected. Mirrors the ASCII mockup
+  // in REFERENCES_DASHBOARD_PLAN § Dashboard layout: 4 step bars,
+  // collapsed explainer, hot list of attention buckets. Renders
+  // "Loading…" while the initial fetch resolves.
+  _renderDashboard() {
+    if (!this._dashboard) {
+      return html`<div class="dashboard dashboard-loading" role="status">Loading dashboard…</div>`;
+    }
+    const d = this._dashboard;
+    const bar = (label, step, hint) => {
+      const pct = step.total > 0 ? Math.round((step.done / step.total) * 100) : 0;
+      return html`
+        <div class="dashboard-step">
+          <span class="dashboard-step-label" title=${hint}>${label}</span>
+          <div
+            class="dashboard-step-bar"
+            role="progressbar"
+            aria-label=${label + ": " + step.done + " of " + step.total}
+            aria-valuenow=${step.done}
+            aria-valuemin="0"
+            aria-valuemax=${step.total}
+          >
+            <div class="dashboard-step-fill" style=${"width: " + pct + "%;"}></div>
+          </div>
+          <span class="dashboard-step-count">${step.done} / ${step.total} · ${pct}%</span>
+        </div>
+      `;
+    };
+    return html`
+      <div class="dashboard">
+        <h2>References</h2>
+        <div class="dashboard-total">${d.total} total</div>
+        <div class="dashboard-steps">
+          ${bar("Step 1 — Bibliographic", d.steps.bibliographic,
+            "Author, publication date, and title all populated")}
+          ${bar("Step 2 — Digitized", d.steps.digitized,
+            "PDF attached and converted to a JATS sidecar")}
+          ${bar("Step 3 — Assertions extracted", d.steps.assertions_extracted,
+            "Structured claims staged for curator review")}
+          ${bar("Step 4 — Imported", d.steps.imported,
+            "Reviewed assertions written into the archive")}
+        </div>
+        <details>
+          <summary>What does each step mean?</summary>
+          <dl>
+            <dt>Bibliographic</dt>
+            <dd>Author, publication date, and title are captured so the reference can compose a citation and match against external DBs.</dd>
+            <dt>Digitized</dt>
+            <dd>The attached PDF has been converted to a structured JATS sidecar and is readable in hive's reader.</dd>
+            <dt>Assertions extracted</dt>
+            <dd>Extraction has produced structured claims (taxa, distributions, vernaculars, ...) from the JATS, awaiting curator review.</dd>
+            <dt>Imported</dt>
+            <dd>The reviewed assertions have been written into the archive proper and appear in the taxonomic tree.</dd>
+          </dl>
+        </details>
+        ${d.attention && d.attention.length > 0
+          ? html`
+              <div class="dashboard-attention">
+                <h3>Needs attention</h3>
+                <ul>
+                  ${d.attention.map(
+                    (a) => html`<li>
+                      <span class="count">${a.count}</span>
+                      ${a.count === 1 ? " ref " : " refs "}${a.description}
+                    </li>`,
+                  )}
+                </ul>
+              </div>
+            `
+          : html`<div class="dashboard-attention"><h3>Needs attention</h3><p class="empty">All caught up.</p></div>`}
+      </div>
+    `;
   }
 
   render() {
@@ -14390,26 +15738,35 @@ class SfgaReferences extends LitElement {
       ${this._editRefID || this._addingNew
         ? html`<sfga-add-reference-modal
             .editID=${this._editRefID}
-            .defaultTab=${this._addingNew ? "project" : "manual"}
+            .defaultTab=${this._pendingDropFile
+              ? "file"
+              : this._addingNew
+                ? "project"
+                : "manual"}
+            .initialFile=${this._pendingDropFile}
             @reference-updated=${(e) => this._onEditSaved(e)}
             @reference-picked=${(e) => this._onReferenceAdded(e)}
             @close=${() => this._closeModal()}
           ></sfga-add-reference-modal>`
         : nothing}
+      ${this._renderBBoxForm()}
     `;
   }
 
   _closeModal() {
     this._editRefID = "";
     this._addingNew = false;
+    this._pendingDropFile = null;
   }
 
   async _onReferenceAdded(e) {
     const id = (e && e.detail && e.detail.id) || "";
     this._closeModal();
     // Refresh list so the new reference appears; select it so the
-    // curator lands on the detail they just created.
+    // curator lands on the detail they just created. Also refresh
+    // the dashboard so its totals reflect the new ref immediately.
     await this._fetchPage(true);
+    this._fetchDashboard();
     if (id) this._select(id);
   }
 
@@ -14428,6 +15785,14 @@ class SfgaReferences extends LitElement {
   //     Detail scrolls away naturally when the curator scrolls
   //     into the reader.
   _renderRightPanes() {
+    // Landing view — no reference selected → show the dashboard
+    // rollup instead of an empty workspace. Curator picks a
+    // reference from the list to enter the detail view; clicking
+    // the same reference again (or Refs in the sidebar) returns
+    // here.
+    if (!this._current) {
+      return this._renderDashboard();
+    }
     const hasReader =
       this._current &&
       this._current.attached_pdf_shas &&
@@ -14439,10 +15804,10 @@ class SfgaReferences extends LitElement {
       ? `/api/reference/library/${encodeURIComponent(this._current.attached_pdf_shas[0])}/source#page=${this._pdfPage || 1}`
       : "";
     // Tabs are always present so curators discover the alternative
-    // side-by-side workflows (digitize, fact-check) without hunting
-    // for a modal. Facts tab renders a "coming soon" placeholder
-    // until the NER extraction pipeline lands — showing it now
-    // teaches the eventual UX shape.
+    // side-by-side workflows (digitize, assertion-review) without
+    // hunting for a modal. Assertions tab renders a "coming soon"
+    // placeholder until the extraction pipeline lands — showing it
+    // now teaches the eventual UX shape.
     return html`
       <div class="workspace">
         <div class="workspace-tabs" role="tablist">
@@ -14468,12 +15833,12 @@ class SfgaReferences extends LitElement {
           </button>
           <button
             role="tab"
-            aria-selected=${this._workspaceTab === "facts"}
-            class=${this._workspaceTab === "facts" ? "active" : ""}
-            title="Fact-check extracted NER claims against the source (coming soon)"
-            @click=${() => (this._workspaceTab = "facts")}
+            aria-selected=${this._workspaceTab === "assertions"}
+            class=${this._workspaceTab === "assertions" ? "active" : ""}
+            title="Review structured assertions extracted from the paper against the source (coming soon)"
+            @click=${() => (this._workspaceTab = "assertions")}
           >
-            Facts
+            Assertions
           </button>
         </div>
         <div class="workspace-panes">
@@ -14509,13 +15874,42 @@ class SfgaReferences extends LitElement {
             </div>`}
       </div>
       <div
-        class="tab-content"
+        class="tab-content digitize"
         ?hidden=${this._workspaceTab !== "digitize"}
       >
         ${hasReader
           ? html`
-              <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
-              <iframe class="pane pdf" title="Source PDF" src=${pdfSrc}></iframe>
+              <div class="digitize-toolbar" role="toolbar" aria-label="Digitize tools">
+                <button
+                  type="button"
+                  class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
+                  aria-pressed=${this._activeTool === "read"}
+                  title="Read — no active correction tool"
+                  @click=${() => (this._activeTool = "read")}
+                >Read</button>
+                <button
+                  type="button"
+                  class=${"tool-btn" + (this._activeTool === "bbox" ? " active" : "")}
+                  aria-pressed=${this._activeTool === "bbox"}
+                  title="BBox — click and drag on the PDF to mark a missed figure or table"
+                  @click=${() => (this._activeTool = "bbox")}
+                >BBox</button>
+              </div>
+              <div class="digitize-grid">
+                <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+                <div class="pdf-column">
+                  ${this._renderChipStrip()}
+                  <sfga-pdf-viewer
+                    class="pane pdf"
+                    .src=${pdfSrc.replace(/#.*$/, "")}
+                    .mode=${this._activeTool}
+                    .bboxes=${this._mergedBBoxes()}
+                    @bbox-drawn=${(e) => this._onBBoxDrawn(e)}
+                    @bbox-delete=${(e) => this._deleteCorrection(e.detail.id, e.detail.origin)}
+                    @bbox-edit=${(e) => this._onBBoxEdit(e.detail.id, e.detail.origin)}
+                  ></sfga-pdf-viewer>
+                </div>
+              </div>
             `
           : html`<div class="pane pane-empty">
               No source PDF attached to this reference — upload one
@@ -14523,14 +15917,14 @@ class SfgaReferences extends LitElement {
               comparison view.
             </div>`}
       </div>
-      <div class="tab-content" ?hidden=${this._workspaceTab !== "facts"}>
+      <div class="tab-content" ?hidden=${this._workspaceTab !== "assertions"}>
         <div class="pane pane-empty">
-          <strong>Facts view — coming soon.</strong> Once the NER
+          <strong>Assertions view — coming soon.</strong> Once the
           extraction pipeline lands, this pane will show the
-          extracted scientific names, nomenclatural acts,
-          distributions, and other structured facts hive pulled
-          from the paper. Clicking a fact will jump the reader on
-          the right to the source paragraph so you can verify.
+          scientific names, nomenclatural acts, distributions, and
+          other structured claims hive pulled from the paper.
+          Clicking an assertion will jump the reader on the right
+          to the source paragraph so you can verify.
         </div>
         ${hasReader
           ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
@@ -14558,6 +15952,10 @@ class SfgaReferences extends LitElement {
       } catch {}
     }
     await this._fetchPage(true);
+    // Edits can move a reference across step boundaries (filling in
+    // author / issued / title advances step 1). Refresh the
+    // dashboard so its counts stay in sync with the change.
+    this._fetchDashboard();
   }
 
   // _onQueryChange debounces the search endpoint. Empty query
@@ -14635,6 +16033,27 @@ class SfgaReferences extends LitElement {
       ${r.citation && r.citation !== r.title
         ? html`<div class="citation">${r.citation}</div>`
         : ""}
+      ${r.attached_pdf_shas && r.attached_pdf_shas.length > 0
+        ? html`<div class="attached-pdfs">
+            <div class="attached-pdfs-title">Attached PDF</div>
+            ${r.attached_pdf_shas.map(
+              (sha) => html`<div class="attached-pdf-row">
+                <span class="attached-pdf-sha" title=${sha}
+                  >${sha.slice(0, 12)}…</span
+                >
+                <button
+                  class="icon-btn danger"
+                  type="button"
+                  title="Detach this PDF — removes the attachment, all extraction corrections for it, and (if not shared with another reference) the sidecar files on disk"
+                  aria-label="Detach PDF"
+                  @click=${() => this._detachPDF(sha)}
+                >
+                  ${renderIcon("trash-2", 16)}
+                </button>
+              </div>`,
+            )}
+          </div>`
+        : nothing}
       <div class="cite-toolbar">
         <button @click=${(e) => this._copy(r.citation || r.title || "", e)}>
           Copy citation
@@ -14652,6 +16071,47 @@ class SfgaReferences extends LitElement {
           : nothing}
       </div>
     `;
+  }
+
+  // _detachPDF removes the (reference, sha) attachment and cascades:
+  //   - Correction rows for this (reference, sha) are deleted so they
+  //     don't silently re-apply on a future re-attach.
+  //   - If no other reference still uses this sha, sidecar files
+  //     (pdf, tei.xml, jats.xml, figures/, meta.json) are wiped from
+  //     disk and every correction row targeting the sha is removed.
+  //
+  // Confirms first — this is destructive and the curator's bboxes
+  // for this PDF disappear.
+  async _detachPDF(sha) {
+    if (!this._selectedId || !sha) return;
+    if (
+      !confirm(
+        `Detach this PDF?\n\nThis removes the attachment and every extraction correction you made against it. If no other reference is using this PDF, the sidecar files (rendered pages, extracted figures, JATS) will also be deleted from disk. You can re-upload the same PDF later, but the corrections won't come back.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await fetch(
+        `/api/reference/${encodeURIComponent(this._selectedId)}/attached-pdf/${encodeURIComponent(sha)}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) {
+        alert("Detach failed: HTTP " + r.status);
+        return;
+      }
+      // Refetch the reference to update attached_pdf_shas and
+      // clear any correction / region UI that depended on it.
+      this._current = await api.reference.get(this._selectedId);
+      this._corrections = [];
+      this._grobidRegions = [];
+      this._fetchDashboard();
+    } catch (err) {
+      alert(
+        "Detach failed: " +
+          (err instanceof Problem ? err.detail || err.title : String(err)),
+      );
+    }
   }
 
   async _deleteReference() {
@@ -17360,6 +18820,588 @@ async function confirmAction({
   return result === "confirm";
 }
 
+// SfgaPdfViewer renders a PDF as a stack of canvases using pdf.js
+// (vendored under /vendor/pdfjs-*). Replaces the browser's built-in
+// PDF iframe viewer specifically in the Digitize tab because a
+// self-rendered canvas is the only surface hive can overlay
+// bbox-drawing tools on. Read-only reference viewing elsewhere keeps
+// using the iframe viewer since it needs no interactive overlay.
+//
+// Contract:
+//   - src (property): PDF URL. Changing src reloads and re-renders.
+//   - goToPage(n) (public method): scrolls the given 1-indexed page
+//     into view. Preserves the current jump-to-page UX driven by
+//     fig-xref clicks in the reader (which post messages that end
+//     up here via SfgaReferences._navPdfPane).
+//
+// Rendering strategy: all pages up-front at a fixed scale, stacked
+// vertically inside a scrollable container. This is simpler than
+// virtualized lazy rendering and adequate for the paper-sized PDFs
+// hive processes (typically <30 pages). Optimizing to lazy render
+// is a later concern once we see performance issues with large PDFs.
+//
+// pdf.js worker: uses the vendored worker under /vendor/pdfjs-*.
+// Same-origin so no CORS worries. GlobalWorkerOptions.workerSrc is
+// set the first time the component loads a PDF; subsequent loads
+// reuse the same worker.
+// PDF_RENDER_SCALE controls both the canvas resolution and the
+// canvas-coord ↔ PDF-point conversion. Higher = sharper text but
+// bigger canvases. 1.5 = 108 DPI equivalent, readable at typical
+// laptop screens without excessive memory use on longer PDFs.
+const PDF_RENDER_SCALE = 1.5;
+
+class SfgaPdfViewer extends LitElement {
+  static properties = {
+    src: { type: String },
+    // 'read' — pointer interaction is passive (default)
+    // 'bbox' — dragging inside a page's overlay draws a bounding
+    //          box; on release the viewer fires bbox-drawn with
+    //          {page, bbox: {x,y,w,h}} in PDF points.
+    mode: { type: String },
+    // Existing corrections to render as visible rectangles over
+    // the appropriate pages. Each entry: {id, label, page, bbox}
+    // where bbox is in PDF points and page is 1-indexed. The
+    // parent (SfgaReferences) owns this list — the viewer only
+    // renders and reports interactions.
+    bboxes: { attribute: false },
+    _loading: { state: true },
+    _error: { state: true },
+    _numPages: { state: true },
+    _currentPage: { state: true },
+  };
+
+  static styles = css`
+    :host {
+      display: block;
+      overflow: auto;
+      background: var(--surface, #333);
+      height: 100%;
+      position: relative;
+    }
+    .pages {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--sp-2, 8px);
+      padding: var(--sp-2, 8px);
+    }
+    .page-wrapper {
+      position: relative;
+      display: block;
+    }
+    .pages canvas {
+      background: white;
+      display: block;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+      max-width: 100%;
+      height: auto;
+    }
+    /* Overlay that captures pointer events for bbox drawing and
+       hosts the visible bbox rectangles. Position sized to match
+       the canvas exactly via matching absolute inset. */
+    .bbox-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    :host([mode="bbox"]) .bbox-layer {
+      pointer-events: auto;
+      cursor: crosshair;
+    }
+    .bbox-existing,
+    .bbox-drawing {
+      position: absolute;
+      border: 2px solid var(--sev-info, #4a90e2);
+      background: color-mix(in oklab, var(--sev-info, #4a90e2) 15%, transparent);
+      pointer-events: none;
+      box-sizing: border-box;
+    }
+    /* Enable hover interaction on saved (existing) bboxes so a
+       curator can hover to reveal the delete button. Drawing
+       previews stay pointer-events:none. */
+    .bbox-existing {
+      pointer-events: auto;
+      cursor: default;
+    }
+    .bbox-existing.selected {
+      border-color: var(--accent, #ff8c00);
+      background: color-mix(in oklab, var(--accent, #ff8c00) 20%, transparent);
+    }
+    /* Three-color visual state for bbox overlays:
+         auto     — GROBID-detected, no modification (blue, default
+                    inherited from .bbox-existing above)
+         modified — GROBID-detected + curator edited (blue-green)
+         curator  — curator-added new region (green)
+       Distinguishes fully-automatic extraction, curator-corrected
+       extraction, and pure-curator annotation at a glance without
+       needing to hover or open a label. */
+    .bbox-existing.bbox-state-modified {
+      border-color: #2e8b8b;
+      background: color-mix(in oklab, #2e8b8b 18%, transparent);
+    }
+    .bbox-existing.bbox-state-modified .bbox-label {
+      background: #2e8b8b;
+    }
+    .bbox-existing.bbox-state-curator {
+      border-color: #2e8b3f;
+      background: color-mix(in oklab, #2e8b3f 18%, transparent);
+    }
+    .bbox-existing.bbox-state-curator .bbox-label {
+      background: #2e8b3f;
+    }
+    .bbox-label {
+      position: absolute;
+      top: -1.4em;
+      left: 0;
+      background: var(--sev-info, #4a90e2);
+      color: white;
+      font-size: var(--fs-xs, 11px);
+      padding: 0 var(--sp-1, 4px);
+      border-radius: var(--radius-xs, 2px) var(--radius-xs, 2px) 0 0;
+      white-space: nowrap;
+    }
+    /* Delete button appears on hover in the top-right corner of
+       each saved bbox — the intuitive spot for "remove this
+       thing" affordance. Always visible on touch devices via
+       @media (hover:none) since hover isn't a reliable signal. */
+    .bbox-delete {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(200, 30, 30, 0.9);
+      color: white;
+      border: none;
+      border-radius: 2px;
+      width: 1.6rem;
+      height: 1.6rem;
+      line-height: 0;
+      cursor: pointer;
+      display: none;
+      padding: 0;
+      align-items: center;
+      justify-content: center;
+    }
+    .bbox-existing:hover .bbox-delete {
+      display: inline-flex;
+    }
+    @media (hover: none) {
+      .bbox-delete { display: inline-flex; }
+    }
+    /* Hover reveal + always-on for touch consolidated with the
+       .bbox-delete rule above (uses inline-flex for icon center). */
+    .empty,
+    .loading,
+    .error {
+      padding: var(--sp-4, 16px);
+      color: var(--dim, #aaa);
+      text-align: center;
+    }
+    .error {
+      color: var(--error, #c00);
+      font-family: var(--font-mono, monospace);
+    }
+    .status {
+      position: sticky;
+      top: 0;
+      background: var(--surface, #333);
+      color: var(--dim, #aaa);
+      font-size: var(--fs-xs, 11px);
+      padding: var(--sp-1, 4px) var(--sp-2, 8px);
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border, #555);
+    }
+  `;
+
+  constructor() {
+    super();
+    this.src = "";
+    this.mode = "read";
+    this.bboxes = [];
+    this._loading = false;
+    this._error = "";
+    this._numPages = 0;
+    this._currentPage = 1;
+    this._pdfDoc = null;
+    // Track last successful load so src property re-assignments to
+    // the same URL don't retrigger loading.
+    this._loadedSrc = "";
+    // Per-page CSS-pixel viewport dimensions, indexed by 1-based
+    // page number. Set during _load; used by _syncBboxes to
+    // position existing bbox rectangles when the parent updates
+    // the bboxes property (either the initial fetch or after a
+    // save / delete).
+    this._pageViewports = {};
+    // Active drag state during a bbox draw. Cleared on pointerup.
+    this._drag = null;
+  }
+
+  updated(changed) {
+    if (changed.has("src") && this.src && this.src !== this._loadedSrc) {
+      this._load();
+    }
+    if (changed.has("bboxes") && this._loadedSrc) {
+      this._syncBboxes();
+    }
+    if (changed.has("mode")) {
+      this.setAttribute("mode", this.mode || "read");
+    }
+  }
+
+  async _load() {
+    this._loading = true;
+    this._error = "";
+    this._numPages = 0;
+    this._pageViewports = {};
+    // Clear old page wrappers before rendering the new PDF.
+    // Imperative because Lit doesn't manage the .pages children.
+    const container = this.renderRoot?.querySelector(".pages");
+    if (container) container.innerHTML = "";
+    // Attach scroll listener once. Saves current scrollTop into
+    // localStorage keyed by the PDF URL so a reload/return to the
+    // same reference lands roughly where the curator was reading.
+    if (!this._scrollListenerAttached) {
+      this._scrollListenerAttached = true;
+      let saveTimer = 0;
+      this.addEventListener("scroll", () => {
+        if (!this._loadedSrc) return;
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          try {
+            localStorage.setItem(
+              "hive:pdf-scroll:" + this._loadedSrc,
+              String(this.scrollTop),
+            );
+          } catch (err) {
+            // Storage disabled / quota — best-effort feature.
+          }
+        }, 250);
+      });
+    }
+    try {
+      const pdfjsLib = await import("/vendor/pdfjs-6.2.108/pdf.mjs");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs-6.2.108/pdf.worker.mjs";
+      // pdf.js 6.x requires an options object — a bare string URL
+      // is no longer accepted (getDocument returns the "expected
+      // either data, range, or url" error).
+      const loadingTask = pdfjsLib.getDocument({ url: this.src });
+      const doc = await loadingTask.promise;
+      this._pdfDoc = doc;
+      this._numPages = doc.numPages;
+      this._loadedSrc = this.src;
+      // Await one render cycle so the .pages container exists after
+      // _numPages assignment triggered a re-render.
+      await this.updateComplete;
+      const pagesContainer = this.renderRoot.querySelector(".pages");
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        // Wrap canvas + bbox overlay in a position:relative div so
+        // the overlay's absolute-positioned rectangles align with
+        // the canvas coordinate space regardless of CSS scaling.
+        const wrapper = document.createElement("div");
+        wrapper.className = "page-wrapper";
+        wrapper.dataset.page = String(i);
+        wrapper.style.width = viewport.width + "px";
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.dataset.page = String(i);
+        canvas.className = "pdf-page";
+        wrapper.appendChild(canvas);
+        const overlay = document.createElement("div");
+        overlay.className = "bbox-layer";
+        overlay.dataset.page = String(i);
+        overlay.addEventListener("pointerdown", (e) => this._onDragStart(e, i));
+        wrapper.appendChild(overlay);
+        pagesContainer.appendChild(wrapper);
+        this._pageViewports[i] = { width: viewport.width, height: viewport.height };
+        await page.render({
+          canvasContext: canvas.getContext("2d"),
+          viewport,
+        }).promise;
+      }
+      // Overlay existing bboxes now that dimensions are known.
+      this._syncBboxes();
+      // Restore last scroll position for this PDF so reload
+      // lands on the same page the curator was reading.
+      try {
+        const saved = localStorage.getItem("hive:pdf-scroll:" + this._loadedSrc);
+        if (saved != null) {
+          const n = Number.parseInt(saved, 10);
+          if (Number.isFinite(n)) this.scrollTop = n;
+        }
+      } catch (err) {
+        // Ignore — restore is best-effort.
+      }
+    } catch (err) {
+      this._error = "Failed to load PDF: " + (err?.message || String(err));
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  // goToPage scrolls the given 1-indexed page canvas into view.
+  // Called imperatively by SfgaReferences when a fig-xref click in
+  // the reader requests a jump. No-op when the page hasn't rendered
+  // yet — the caller retries after loading completes.
+  goToPage(n) {
+    const num = Number.parseInt(n, 10);
+    if (!Number.isFinite(num) || num < 1) return;
+    const canvas = this.renderRoot?.querySelector(`canvas[data-page="${num}"]`);
+    if (!canvas) return;
+    canvas.scrollIntoView({ block: "start", behavior: "smooth" });
+    this._currentPage = num;
+  }
+
+  // _syncBboxes rebuilds the visible bbox rectangles from the
+  // current bboxes property. Called after _load finishes rendering
+  // pages and whenever the parent updates the bboxes property (a
+  // new correction was saved, an existing one was deleted). Cheap
+  // to fully rebuild — bbox counts per paper stay small.
+  _syncBboxes() {
+    const bboxes = Array.isArray(this.bboxes) ? this.bboxes : [];
+    // Clear old bbox rectangles from every overlay.
+    const overlays = this.renderRoot?.querySelectorAll(".bbox-layer") || [];
+    for (const overlay of overlays) {
+      overlay.querySelectorAll(".bbox-existing").forEach((el) => el.remove());
+    }
+    for (const b of bboxes) {
+      const page = b.page || b.bbox_page;
+      const bbox = b.bbox;
+      if (!page || !bbox) continue;
+      const overlay = this.renderRoot?.querySelector(
+        `.bbox-layer[data-page="${page}"]`,
+      );
+      if (!overlay) continue;
+      const rect = this._pdfBBoxToCanvasRect(bbox);
+      const el = document.createElement("div");
+      const origin = b.origin || (b.id && b.id.startsWith("curator_") ? "curator" : "grobid");
+      const state = b.state || (origin === "curator" ? "curator" : "auto");
+      el.className = "bbox-existing bbox-state-" + state;
+      el.dataset.correctionId = b.id || "";
+      el.style.left = rect.left + "px";
+      el.style.top = rect.top + "px";
+      el.style.width = rect.width + "px";
+      el.style.height = rect.height + "px";
+      if (b.label) {
+        const label = document.createElement("span");
+        label.className = "bbox-label";
+        label.textContent = b.label;
+        el.appendChild(label);
+      }
+      // Curator additions (bbox-add) and GROBID-detected regions
+      // (from the sidecar's fig/table-wrap elements) are both
+      // click-to-edit. Curator additions also expose a delete
+      // button on hover; GROBID regions don't (deleting a GROBID
+      // region would need a different correction kind that
+      // records "this element shouldn't exist" — deferred).
+      if (b.id) {
+        el.style.cursor = "pointer";
+        el.title =
+          origin === "curator"
+            ? "Click to edit — × to delete"
+            : "Click to edit — original extractor output preserved for training";
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.dispatchEvent(
+            new CustomEvent("bbox-edit", {
+              detail: { id: b.id, origin },
+              bubbles: true,
+              composed: true,
+            }),
+          );
+        });
+      }
+      // Delete button on both curator additions AND GROBID
+       // regions. Semantics differ (curator: delete the row and
+       // its JATS element; GROBID: create a bbox-remove correction
+       // that suppresses the element on this + future reapplies),
+       // but the affordance and icon are the same to the curator.
+      if (b.id) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "bbox-delete";
+        delBtn.type = "button";
+        delBtn.setAttribute("aria-label", "Delete correction");
+        delBtn.title = "Delete this correction";
+        // trash-2 icon (matching the sidebar / detail-header delete
+        // affordance) so this control reads as "delete", not "close".
+        // Same viewBox and stroke conventions as renderIcon() above.
+        delBtn.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+          'stroke-linejoin="round">' +
+          '<path d="M3 6h18" />' +
+          '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />' +
+          '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />' +
+          '<line x1="10" x2="10" y1="11" y2="17" />' +
+          '<line x1="14" x2="14" y1="11" y2="17" />' +
+          "</svg>";
+        delBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.dispatchEvent(
+            new CustomEvent("bbox-delete", {
+              detail: { id: b.id, origin },
+              bubbles: true,
+              composed: true,
+            }),
+          );
+        });
+        el.appendChild(delBtn);
+      }
+      overlay.appendChild(el);
+    }
+  }
+
+  // _pdfBBoxToCanvasRect converts a PDF-point bbox (x, y, w, h with
+  // origin at top-left in PDF-point space) to a canvas-pixel rect
+  // (left, top, width, height) suitable for CSS positioning inside
+  // the overlay layer. Multiplies by PDF_RENDER_SCALE to get pixels
+  // at the current render resolution.
+  _pdfBBoxToCanvasRect(bbox) {
+    return {
+      left: bbox.x * PDF_RENDER_SCALE,
+      top: bbox.y * PDF_RENDER_SCALE,
+      width: bbox.w * PDF_RENDER_SCALE,
+      height: bbox.h * PDF_RENDER_SCALE,
+    };
+  }
+
+  // Drag lifecycle: pointerdown starts the draw, pointermove
+  // resizes a temporary rectangle, pointerup emits the bbox-drawn
+  // event with PDF-point coords and cleans up.
+  //
+  // Uses setPointerCapture so a drag that leaves the overlay still
+  // receives move + up events on the original overlay.
+  _onDragStart(e, pageNum) {
+    if (this.mode !== "bbox") return;
+    e.preventDefault();
+    const overlay = e.currentTarget;
+    overlay.setPointerCapture(e.pointerId);
+    // Overlay's client rect vs canvas rect: identical since the
+    // overlay is `position: absolute; inset: 0` inside the wrapper.
+    // Use overlay for coord math to avoid a separate canvas lookup.
+    const rect = overlay.getBoundingClientRect();
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+    const drawing = document.createElement("div");
+    drawing.className = "bbox-drawing";
+    drawing.style.left = startX + "px";
+    drawing.style.top = startY + "px";
+    drawing.style.width = "0";
+    drawing.style.height = "0";
+    overlay.appendChild(drawing);
+    this._drag = {
+      pageNum,
+      overlay,
+      startX,
+      startY,
+      rect,
+      element: drawing,
+      pointerId: e.pointerId,
+    };
+    overlay.addEventListener("pointermove", this._onDragMove);
+    overlay.addEventListener("pointerup", this._onDragEnd);
+    overlay.addEventListener("pointercancel", this._onDragCancel);
+  }
+
+  _onDragMove = (e) => {
+    if (!this._drag) return;
+    const rect = this._drag.overlay.getBoundingClientRect();
+    // Recompute cursor position relative to the current (possibly
+    // scrolled) overlay rect. Clamp inside 0..overlay dims so a
+    // drag past the edge doesn't produce out-of-range coords.
+    const cx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const cy = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+    const left = Math.min(this._drag.startX, cx);
+    const top = Math.min(this._drag.startY, cy);
+    const width = Math.abs(cx - this._drag.startX);
+    const height = Math.abs(cy - this._drag.startY);
+    const el = this._drag.element;
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+    el.style.width = width + "px";
+    el.style.height = height + "px";
+  };
+
+  _onDragEnd = (e) => {
+    if (!this._drag) return;
+    const d = this._drag;
+    d.overlay.removeEventListener("pointermove", this._onDragMove);
+    d.overlay.removeEventListener("pointerup", this._onDragEnd);
+    d.overlay.removeEventListener("pointercancel", this._onDragCancel);
+    d.overlay.releasePointerCapture(d.pointerId);
+    // Convert the drawn rect (CSS pixels relative to overlay = CSS
+    // pixels relative to canvas since overlay is inset:0) to PDF
+    // points. Overlay's rendered CSS size may not equal the
+    // canvas.width (which is at PDF_RENDER_SCALE) if CSS scales
+    // the canvas — divide by the ratio to normalize.
+    const rect = d.overlay.getBoundingClientRect();
+    const scaleFactorX = d.overlay.parentElement.querySelector("canvas").width / rect.width;
+    const scaleFactorY = d.overlay.parentElement.querySelector("canvas").height / rect.height;
+    const cx = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const cy = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+    const cssLeft = Math.min(d.startX, cx);
+    const cssTop = Math.min(d.startY, cy);
+    const cssWidth = Math.abs(cx - d.startX);
+    const cssHeight = Math.abs(cy - d.startY);
+    // Remove the temporary drawing rect — the parent will re-add
+    // it as a stable one via the bboxes property once the
+    // correction is saved server-side.
+    d.element.remove();
+    this._drag = null;
+    // Ignore tiny drags (misclicks) — a real bbox should be at
+    // least ~10 CSS pixels in each dimension.
+    if (cssWidth < 10 || cssHeight < 10) return;
+    // Convert CSS-pixel → canvas-pixel → PDF-point.
+    const pxLeft = cssLeft * scaleFactorX;
+    const pxTop = cssTop * scaleFactorY;
+    const pxWidth = cssWidth * scaleFactorX;
+    const pxHeight = cssHeight * scaleFactorY;
+    const pdfBBox = {
+      x: pxLeft / PDF_RENDER_SCALE,
+      y: pxTop / PDF_RENDER_SCALE,
+      w: pxWidth / PDF_RENDER_SCALE,
+      h: pxHeight / PDF_RENDER_SCALE,
+    };
+    this.dispatchEvent(
+      new CustomEvent("bbox-drawn", {
+        detail: { page: d.pageNum, bbox: pdfBBox },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  };
+
+  _onDragCancel = () => {
+    if (!this._drag) return;
+    this._drag.element.remove();
+    this._drag.overlay.removeEventListener("pointermove", this._onDragMove);
+    this._drag.overlay.removeEventListener("pointerup", this._onDragEnd);
+    this._drag.overlay.removeEventListener("pointercancel", this._onDragCancel);
+    this._drag = null;
+  };
+
+  render() {
+    if (this._error) {
+      return html`<div class="error" role="alert">${this._error}</div>`;
+    }
+    return html`
+      ${this._numPages > 0
+        ? html`<div class="status">
+            <span>Page ${this._currentPage} of ${this._numPages}</span>
+            ${this._loading ? html`<span>Rendering…</span>` : nothing}
+          </div>`
+        : nothing}
+      ${this._loading && this._numPages === 0
+        ? html`<div class="loading" role="status">Loading PDF…</div>`
+        : nothing}
+      <div class="pages"></div>
+    `;
+  }
+}
+
 customElements.define("sfga-app", SfgaApp);
 customElements.define("sfga-tree", SfgaTree);
 customElements.define("sfga-detail", SfgaDetail);
@@ -17374,3 +19416,4 @@ customElements.define("sfga-agent-modal", SfgaAgentModal);
 customElements.define("sfga-agent-section", SfgaAgentSection);
 customElements.define("sfga-confirm-modal", SfgaConfirmModal);
 customElements.define("sfga-vocab-editor", SfgaVocabEditor);
+customElements.define("sfga-pdf-viewer", SfgaPdfViewer);

@@ -41,11 +41,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # for debugging.
 FROM debian:12-slim
 
-# Install xmllint (libxml2-utils) + CA certs for HTTPS. Purge apt
-# caches after install to keep the image small.
+# Install xmllint (libxml2-utils) for JATS RNG validation,
+# pdftocairo (poppler-utils) for extracting figure/table image
+# crops from source PDFs via GROBID's bounding-box coords, and
+# CA certs for outbound HTTPS. Purge apt caches after install to
+# keep the image small.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		libxml2-utils \
+		poppler-utils \
 		ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 

@@ -29,11 +29,17 @@
 
 import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
 
-// TaxPub + GN namespaces from pkg/annotator. Kept in sync manually
-// since Go and JS can't share constants — if these ever change,
-// update both places (pkg/annotator/annotator.go and here).
+// TaxPub + GN + hive namespaces from pkg/annotator and pkg/jatsconv.
+// Kept in sync manually since Go and JS can't share constants — if
+// these ever change, update both places.
+//
+// gn:   GN-toolchain provenance on tp:taxon-name (source, score,
+//       candidates). Populated by ExpandAbbreviations / verify pass.
+// hive: hive-native annotations that aren't GN-scoped. Currently
+//       pdf-page + pdf-bbox on <fig> / <table-wrap>.
 const TAXPUB_NS = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0";
 const GN_NS = "https://hive.sfborg.org/ns/gn/1.0";
+const HIVE_NS = "https://hive.sfborg.org/ns/1.0";
 
 class SfgaReader extends LitElement {
   static properties = {
@@ -59,6 +65,23 @@ class SfgaReader extends LitElement {
     _paginated: { state: true },
     _page: { state: true },
     _pageCount: { state: true },
+    // ID of the currently-open figure/table modal, or "" when
+    // closed. Set when a curator clicks a fig-xref inline or a
+    // list entry in the trailing "Figures and tables" sec; the
+    // modal renders the figure's caption + extracted PNG (or the
+    // full table structure) + a link back to the source PDF page.
+    _modalFigID: { state: true },
+    // Which modal tab is active — "digitized" (structured HTML,
+    // e.g. rendered table) or "original" (extracted PDF crop
+    // image). Resets when the modal opens; default depends on
+    // what's available (tables prefer Digitized, figures fall
+    // back to Original since there's no structured view yet).
+    _modalTab: { state: true },
+    // When false, the extraction-warning banner is collapsed to a
+    // one-line hint the curator can re-expand. Default true so
+    // curators see extraction gaps on load; hide-away is opt-in
+    // for readers who want the reading pane back at full height.
+    _showExtractionWarning: { state: true },
   };
 
   static styles = css`
@@ -326,6 +349,146 @@ class SfgaReader extends LitElement {
     article a.fig-jump:hover {
       text-decoration: underline;
     }
+    /* Trailing "Figures and tables" list — compact clickable
+       entries, one per figure/table. Modal is where the actual
+       content lives; the list is just discoverability. */
+    article .figures-list ol {
+      list-style: none;
+      padding: 0;
+      margin: var(--sp-2) 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+    }
+    article .figures-list li {
+      margin: 0;
+    }
+    article a.fig-list-link,
+    article a.fig-inline-link {
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    article a.fig-list-link:hover,
+    article a.fig-inline-link:hover {
+      text-decoration: underline;
+    }
+    /* Figure/table modal. Full-screen backdrop dims the page;
+       centered modal box scales to the viewport with scroll for
+       overflow (tables can be wide, images may be tall). */
+    .fig-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: color-mix(in oklab, var(--fg) 50%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-4);
+      z-index: 100;
+    }
+    .fig-modal {
+      background: var(--bg);
+      color: var(--fg);
+      border-radius: var(--radius-md);
+      max-width: 90vw;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 8px 32px color-mix(in oklab, var(--fg) 30%, transparent);
+    }
+    .fig-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .fig-modal-header h2 {
+      margin: 0;
+      font-size: var(--fs-lg);
+    }
+    .fig-modal-close {
+      background: transparent;
+      border: 0;
+      font-size: var(--fs-lg);
+      cursor: pointer;
+      color: var(--fg);
+      padding: 0 var(--sp-1);
+    }
+    .fig-modal-tabs {
+      display: flex;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .fig-modal-tab {
+      background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      color: color-mix(in oklab, var(--fg) 70%, var(--bg));
+      padding: var(--sp-1) var(--sp-2);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--fs-sm);
+    }
+    .fig-modal-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .fig-modal-tab:hover:not(.active) {
+      color: var(--fg);
+    }
+    .fig-modal-body {
+      padding: var(--sp-3);
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+    }
+    .fig-modal-img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      align-self: center;
+    }
+    .fig-modal-table {
+      overflow: auto;
+    }
+    .fig-modal-table table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    .fig-modal-table th,
+    .fig-modal-table td {
+      border: 1px solid var(--border);
+      padding: var(--sp-1) var(--sp-2);
+      text-align: left;
+      vertical-align: top;
+    }
+    .fig-modal-table th {
+      background: color-mix(in oklab, var(--fg) 5%, var(--bg));
+      font-weight: 600;
+    }
+    .fig-modal-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .fig-modal-caption {
+      font-size: var(--fs-sm);
+      color: color-mix(in oklab, var(--fg) 80%, var(--bg));
+      line-height: 1.5;
+    }
+    .fig-modal-pdf-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: var(--fs-sm);
+      align-self: flex-start;
+    }
+    .fig-modal-pdf-link:hover {
+      text-decoration: underline;
+    }
     /* Chip styling per gn:source. Verified is the confident state
        (accent-tinted); ambiguous / unverified sit in the middle
        (amber / orange); unresolved is red. Every full-form chip
@@ -396,6 +559,60 @@ class SfgaReader extends LitElement {
     .legend .dot.unresolved {
       background: color-mix(in oklab, var(--sev-error) 40%, transparent);
     }
+    .extract-warn {
+      background: color-mix(in oklab, var(--sev-warn) 15%, transparent);
+      border: 1px solid color-mix(in oklab, var(--sev-warn) 40%, transparent);
+      border-radius: var(--radius-sm);
+      margin: var(--sp-2) var(--sp-3);
+      padding: var(--sp-2) var(--sp-3);
+      font-size: var(--fs-sm);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--sp-3);
+    }
+    .extract-warn.collapsed {
+      padding: var(--sp-1) var(--sp-3);
+      font-size: var(--fs-xs);
+      color: var(--dim);
+    }
+    .extract-warn-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .extract-warn-title {
+      font-weight: 600;
+      margin-bottom: var(--sp-1);
+    }
+    .extract-warn-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-2);
+    }
+    .extract-warn-list li {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 0 var(--sp-1);
+      font-family: var(--font-mono);
+      font-size: var(--fs-xs);
+    }
+    .extract-warn-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 0 var(--sp-2);
+      font-size: var(--fs-xs);
+      cursor: pointer;
+      color: var(--fg);
+      flex-shrink: 0;
+    }
+    .extract-warn-toggle:hover {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
   `;
 
   constructor() {
@@ -414,6 +631,7 @@ class SfgaReader extends LitElement {
     this._page = 0;
     this._pageCount = 1;
     this._pageWidth = 0;
+    this._showExtractionWarning = true;
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -459,9 +677,37 @@ class SfgaReader extends LitElement {
     if (changed.has("_page") || changed.has("_pageCount")) {
       this._applyPageTransform();
     }
+    // Apply any pending position restore now that pagination is
+    // set up. Only fires once — clears the pending record after
+    // applying so subsequent renders don't re-apply the stale
+    // position over the curator's live navigation.
+    if (changed.has("_pageCount") && this._pendingPositionRestore) {
+      const pos = this._pendingPositionRestore;
+      this._pendingPositionRestore = null;
+      if (this._paginated && Number.isFinite(pos?.page)) {
+        this._page = Math.max(0, Math.min(pos.page, this._pageCount - 1));
+      }
+      if (Number.isFinite(pos?.scrollY)) {
+        window.scrollTo(0, pos.scrollY);
+      }
+    }
+    // Persist position on page-turn so paginated reload restores
+    // the same page. Guarded on _savePos existing (i.e. _load has
+    // wired the listener + save function).
+    if (changed.has("_page") && this._savePos) {
+      this._savePos();
+    }
   }
 
   _handleKey(e) {
+    // Esc closes the figure/table modal when one is open — takes
+    // priority over any other key handling so the modal is always
+    // dismissable regardless of paginated-view state.
+    if (e.key === "Escape" && this._modalFigID) {
+      e.preventDefault();
+      this._closeFigModal();
+      return;
+    }
     if (!this._paginated) return;
     // Ignore keys when the curator is focused in an input.
     const tag = (document.activeElement && document.activeElement.tagName) || "";
@@ -619,6 +865,52 @@ class SfgaReader extends LitElement {
       }
       this._doc = doc;
       document.title = `hive · reader · ${this._sha.slice(0, 12)}`;
+      // Queue a position restore for after pagination is set up.
+      // _recomputePages runs on an rAF after _doc changes and is
+      // what actually sets _pageCount from the DOM layout; a naive
+      // rAF here would race and read _pageCount as its initial
+      // value of 1, collapsing the restored page to 0. Instead,
+      // stash the pending position and let updated() apply it
+      // when _pageCount transitions to its real value.
+      try {
+        const saved = localStorage.getItem("hive:reader-pos:" + this._sha);
+        if (saved != null) {
+          const pos = JSON.parse(saved);
+          this._pendingPositionRestore = pos;
+        }
+      } catch (err) {
+        // Ignore — restore is best-effort.
+      }
+      // Attach listeners once. Debounced save so rapid
+      // scrolling / page-turns don't hammer localStorage.
+      if (!this._posListenerAttached) {
+        this._posListenerAttached = true;
+        let saveTimer = 0;
+        const save = () => {
+          if (!this._sha) return;
+          if (saveTimer) clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            try {
+              const pos = {
+                scrollY: window.scrollY,
+                page: this._page,
+              };
+              localStorage.setItem(
+                "hive:reader-pos:" + this._sha,
+                JSON.stringify(pos),
+              );
+            } catch (err) {
+              // Storage disabled / quota — best-effort feature.
+            }
+          }, 250);
+        };
+        window.addEventListener("scroll", save);
+        // Also save on page-turn — _page is a reactive property so
+        // the change goes through updated(), but we don't have a
+        // direct hook. Instead, tap the existing keyboard handlers
+        // and page-click paths via an updated() addition below.
+        this._savePos = save;
+      }
     } catch (e) {
       this._error = String(e);
     } finally {
@@ -698,6 +990,7 @@ class SfgaReader extends LitElement {
       ${this._error
         ? html`<p class="error" role="alert">${this._error}</p>`
         : nothing}
+      ${this._renderExtractionWarning()}
       ${this._doc
         ? this._showPDF
           ? html`<iframe
@@ -714,6 +1007,7 @@ class SfgaReader extends LitElement {
               </div>
             `
         : nothing}
+      ${this._renderFigModal()}
     `;
   }
 
@@ -851,6 +1145,40 @@ class SfgaReader extends LitElement {
         "_blank",
       );
     }
+  }
+
+  // _openFigModal opens the figure/table modal on a given fig id.
+  // Called from inline xref clicks and from the trailing "Figures
+  // and tables" list. The modal renders in main render() when
+  // _modalFigID is non-empty. stopPropagation prevents the click
+  // from bubbling to the paginated-layout page-turn handler.
+  _openFigModal(event, figID) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (!figID) return;
+    this._modalFigID = figID;
+    // Default tab: prefer Digitized only when the target actually
+    // has structured content to show (a <table> child inside a
+    // <table-wrap>). Curator-added table-wraps have only a bbox +
+    // caption + PNG crop, so Original is the useful default there.
+    // Figures always default to Original since SVG tracing hasn't
+    // landed yet.
+    const target = this._doc &&
+      this._doc.querySelector(`[id="${CSS.escape(figID)}"]`);
+    const hasStructuredTable =
+      target && target.localName === "table-wrap" &&
+      !!this._directChild(target, "table");
+    this._modalTab = hasStructuredTable ? "digitized" : "original";
+  }
+
+  // _closeFigModal closes the currently-open modal. Wired to the
+  // close button, Esc key (via keydown handler in render), and
+  // backdrop click. Idempotent — safe to call when no modal is
+  // open.
+  _closeFigModal() {
+    this._modalFigID = "";
   }
 
   async _copy(text, event) {
@@ -1169,45 +1497,80 @@ class SfgaReader extends LitElement {
         out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
         continue;
       }
+      // <sec sec-type="figures"> gets a special compact-list
+      // rendering: its <fig>/<table-wrap> children become clickable
+      // list entries labeled with their extracted "Figure N" or
+      // "Table N" label. Actual content (caption, image, table
+      // structure) lives in the modal that opens on click — the
+      // list itself stays scannable without cluttering the reader
+      // with full captions. Non-figures secs render normally.
       if (local === "sec") {
+        if (node.getAttribute("sec-type") === "figures") {
+          out.push(this._renderFiguresList(node));
+          continue;
+        }
         out.push(html`<section>${this._renderNodes(node.childNodes)}</section>`);
         continue;
       }
-      // <fig> gets an explicit rendering: caption text stays as
-      // block passthrough (chips inside caption prose remain
-      // visible), but a "→ jump to page N" affordance is emitted
-      // before the caption when the figure carries gn:pdf-page
-      // (from GROBID's coords). The jump-affordance is what
-      // curators actually click to reach the PDF — sparse inline
-      // xrefs in body prose are easy to miss, so making the fig
-      // itself clickable is the reliable discovery path.
-      if (local === "fig") {
+      // <fig> and <table-wrap> are only rendered inline when they
+      // appear OUTSIDE the trailing "Figures and tables" sec.
+      // Inside that sec, _renderFiguresList handles them as list
+      // items; the modal shows the full content on click. Inline
+      // appearances (rare — GROBID could theoretically put a fig
+      // mid-paragraph) still get a "click to open" affordance
+      // that opens the modal.
+      if (local === "fig" || local === "table-wrap") {
         const figID = node.getAttribute("id") || "";
-        const page =
-          node.getAttributeNS(GN_NS, "pdf-page") ||
-          node.getAttribute("gn:pdf-page") ||
-          "";
-        out.push(html`
-          <div class="passthrough fig-block">
-            ${page
-              ? html`<a
-                  class="fig-jump"
-                  href="#${figID}"
-                  @click=${(e) => this._jumpToFig(e, figID, page)}
-                  title="Open the source PDF at this figure's page"
-                  >Open in PDF — page ${page}</a>`
-              : nothing}
-            ${this._renderNodes(node.childNodes)}
-          </div>
-        `);
+        const label = this._figLabelFromCaption(node) || figID;
+        out.push(html`<a
+          class="fig-inline-link"
+          role="button"
+          tabindex="0"
+          @click=${(e) => this._openFigModal(e, figID)}
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") this._openFigModal(e, figID);
+          }}
+          >${label}</a>`);
         continue;
       }
-      // Captions and table wrappers pass through as blocks so
-      // their internal text (which often carries taxon chips)
-      // stays legible instead of collapsing into an inline run
-      // alongside siblings.
-      if (local === "caption" || local === "table-wrap") {
+      if (local === "caption") {
         out.push(html`<div class="passthrough">${this._renderNodes(node.childNodes)}</div>`);
+        continue;
+      }
+      // JATS table structure passes through to HTML equivalents.
+      // Only reached via _renderTableWrap (inside the modal); the
+      // top-level <table-wrap> renders as a compact link in the
+      // main reader body.
+      if (local === "thead") {
+        out.push(html`<thead>${this._renderNodes(node.childNodes)}</thead>`);
+        continue;
+      }
+      if (local === "tbody") {
+        out.push(html`<tbody>${this._renderNodes(node.childNodes)}</tbody>`);
+        continue;
+      }
+      if (local === "tr") {
+        out.push(html`<tr>${this._renderNodes(node.childNodes)}</tr>`);
+        continue;
+      }
+      if (local === "th") {
+        out.push(html`<th>${this._renderNodes(node.childNodes)}</th>`);
+        continue;
+      }
+      if (local === "td") {
+        // JATS <td> may carry align="char" (decimal-alignment
+        // signal from jatsconv). Pass through as a CSS class the
+        // reader stylesheet can act on since <td align> is a
+        // deprecated HTML attribute.
+        const align = node.getAttribute("align") || "";
+        const cls = align === "char" ? "num" : "";
+        out.push(html`<td class=${cls}>${this._renderNodes(node.childNodes)}</td>`);
+        continue;
+      }
+      if (local === "colgroup" || local === "col") {
+        // Column-group hints are advisory only; browser default
+        // table layout ignores them without CSS. Emit as-is so a
+        // custom stylesheet could still target them.
         continue;
       }
       if (local === "list") {
@@ -1235,7 +1598,7 @@ class SfgaReader extends LitElement {
       // clickable link that posts a message to the parent frame
       // asking to switch to the Digitize tab and scroll the PDF
       // pane to the figure's source page (from GROBID's coords,
-      // stored as gn:pdf-page). Non-fig xrefs (bibliography
+      // stored as hive:pdf-page). Non-fig xrefs (bibliography
       // references, other in-doc targets) render as inline styled
       // text — same behavior as before.
       if (local === "xref") {
@@ -1243,36 +1606,26 @@ class SfgaReader extends LitElement {
         // querySelector, not getElementById — for XML documents
         // (which DOMParser produces for application/xml), id-based
         // lookup only works when the DTD declares "id" as an
-        // ID-type attribute. Our JATS ships without a DTD load, so
-        // getElementById returns null on every rid → every fig-xref
-        // fell through to the non-clickable branch. querySelector
-        // does attribute-value matching directly and works
-        // regardless of DTD. CSS.escape guards against rids that
-        // contain selector-special characters (colons, dots, etc.).
+        // ID-type attribute. querySelector does attribute-value
+        // matching directly, no DTD dependency. CSS.escape guards
+        // against rids with selector-special characters.
         const target = rid
           ? this._doc.querySelector(`[id="${CSS.escape(rid)}"]`)
           : null;
-        if (target && target.localName === "fig") {
-          const page =
-            target.getAttributeNS(GN_NS, "pdf-page") ||
-            target.getAttribute("gn:pdf-page") ||
-            "";
-          // No href — we don't want the browser to scroll the
-          // reader iframe to the fig anchor in the trailing
-          // "Figures" sec. The click handler is the ONLY thing
-          // that fires: posts a message to the parent, which
-          // switches to Digitize and jumps the PDF pane to the
-          // figure's source page. role=button + tabindex keep it
-          // keyboard-accessible without navigation semantics.
+        if (target && (target.localName === "fig" || target.localName === "table-wrap")) {
+          // Fig/table xref opens the modal (shows the extracted
+          // image + caption + link to source PDF page). Modal
+          // approach preserves narrative reading flow — no tab
+          // switch, no page turn. role=button + keydown handler
+          // keep it keyboard-accessible.
           out.push(html`<span
             class="cite fig-xref"
             role="button"
             tabindex="0"
-            @click=${(e) => this._jumpToFig(e, rid, page)}
+            @click=${(e) => this._openFigModal(e, rid)}
             @keydown=${(e) => {
               if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                this._jumpToFig(e, rid, page);
+                this._openFigModal(e, rid);
               }
             }}
             >${this._renderNodes(node.childNodes)}</span>`);
@@ -1308,6 +1661,397 @@ class SfgaReader extends LitElement {
       out.push(html`<span>${this._renderNodes(node.childNodes)}</span>`);
     }
     return out;
+  }
+
+  // _renderFiguresList renders the trailing "Figures and tables"
+  // sec as a compact list of clickable entries. Each item shows
+  // the fig/table label ("Figure 1", "Table 2") and opens the
+  // modal on click. Keeps the reader body uncluttered — the modal
+  // is where the actual caption + image + PDF-jump live.
+  //
+  // Two-pass labeling:
+  //   Pass 1 — extract "Figure N" / "Table N" from each caption
+  //            where the prefix is present; record used numbers
+  //            per kind.
+  //   Pass 2 — for elements whose caption dropped the label prefix
+  //            (a common GROBID extractor gap when the source
+  //            paper has bilingual captions or unusual layouts),
+  //            fill in the smallest unused number per kind.
+  //
+  // This gives the list a coherent "Figure 1, Figure 2, ..." /
+  // "Table 1, Table 2, ..." sequence even when individual captions
+  // are broken, without the raw JATS id ("tab_1") leaking through.
+  _renderFiguresList(secNode) {
+    const nodes = [];
+    for (const child of secNode.children) {
+      if (child.localName === "fig" || child.localName === "table-wrap") {
+        nodes.push(child);
+      }
+    }
+    // Sort by source PDF page (from hive:pdf-page) so the list
+    // reads in the paper's reading order. Curator additions
+    // inserted mid-paper (e.g., a missed Table 1 on page 3) end
+    // up in the right spot instead of at the end of the list.
+    // Elements with no pdf-page attribute sort last, preserving
+    // document order among themselves.
+    nodes.sort((a, b) => {
+      const pa = this._pdfPageOf(a);
+      const pb = this._pdfPageOf(b);
+      if (pa === 0 && pb === 0) return 0;
+      if (pa === 0) return 1;
+      if (pb === 0) return -1;
+      return pa - pb;
+    });
+    // Pass 1 — collect caption-extracted labels + track used
+    // numbers per kind for the gap-fill pass.
+    const usedFigures = new Set();
+    const usedTables = new Set();
+    const labels = nodes.map((n) => {
+      const extracted = this._figLabelFromCaption(n);
+      if (!extracted) return "";
+      const m = /^(figure|table)\s+(\d+)$/i.exec(extracted);
+      if (m) {
+        const num = Number(m[2]);
+        if (m[1].toLowerCase() === "table") usedTables.add(num);
+        else usedFigures.add(num);
+      }
+      return extracted;
+    });
+    // Pass 2 — assign the smallest unused number per kind to
+    // elements whose caption lacked the prefix.
+    let nextFigure = 1;
+    let nextTable = 1;
+    const nextUnused = (used, cursorRef) => {
+      while (used.has(cursorRef.n)) cursorRef.n++;
+      const n = cursorRef.n;
+      used.add(n);
+      cursorRef.n++;
+      return n;
+    };
+    const figCursor = { n: 1 };
+    const tabCursor = { n: 1 };
+    for (let i = 0; i < nodes.length; i++) {
+      if (labels[i]) continue;
+      const kind = nodes[i].localName === "table-wrap" ? "table" : "figure";
+      const n = kind === "table"
+        ? nextUnused(usedTables, tabCursor)
+        : nextUnused(usedFigures, figCursor);
+      labels[i] = (kind === "table" ? "Table " : "Figure ") + n;
+    }
+    // Silence unused let-hoist lint by referencing (nextFigure /
+    // nextTable are declared for future reuse if the algorithm
+    // ever needs a different cursor model).
+    void nextFigure; void nextTable;
+
+    const items = nodes.map((child, i) => {
+      const figID = child.getAttribute("id") || "";
+      const label = labels[i];
+      const kindHint = child.localName === "table-wrap" ? "table" : "figure";
+      return html`<li>
+        <a
+          class="fig-list-link"
+          role="button"
+          tabindex="0"
+          @click=${(e) => this._openFigModal(e, figID)}
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") this._openFigModal(e, figID);
+          }}
+          title="Open ${kindHint} in modal"
+          >${label}</a>
+      </li>`;
+    });
+    return html`
+      <section class="figures-list">
+        <h2>Figures and tables</h2>
+        <ol>${items}</ol>
+      </section>
+    `;
+  }
+
+  // _gapFillLabelForTarget returns the "Figure N" / "Table N"
+  // label that _renderFiguresList would assign to the given
+  // fig/table-wrap element via its gap-fill pass. Called from the
+  // modal so its header shows the same number the list shows,
+  // even when the element's caption dropped its label prefix.
+  //
+  // Cheap: walks the trailing figures sec once. Called only on
+  // modal open, not per render.
+  _gapFillLabelForTarget(target) {
+    if (!this._doc) return "";
+    const trailingSec = this._doc.querySelector('sec[sec-type="figures"]');
+    if (!trailingSec) return "";
+    const nodes = [];
+    for (const child of trailingSec.children) {
+      if (child.localName === "fig" || child.localName === "table-wrap") {
+        nodes.push(child);
+      }
+    }
+    // Match _renderFiguresList's page-order sort so gap-fill
+    // numbering mirrors what the list shows.
+    nodes.sort((a, b) => {
+      const pa = this._pdfPageOf(a);
+      const pb = this._pdfPageOf(b);
+      if (pa === 0 && pb === 0) return 0;
+      if (pa === 0) return 1;
+      if (pb === 0) return -1;
+      return pa - pb;
+    });
+    const usedFigures = new Set();
+    const usedTables = new Set();
+    const labels = nodes.map((n) => {
+      const extracted = this._figLabelFromCaption(n);
+      if (!extracted) return "";
+      const m = /^(figure|table)\s+(\d+)$/i.exec(extracted);
+      if (m) {
+        const num = Number(m[2]);
+        if (m[1].toLowerCase() === "table") usedTables.add(num);
+        else usedFigures.add(num);
+      }
+      return extracted;
+    });
+    const figCursor = { n: 1 };
+    const tabCursor = { n: 1 };
+    const nextUnused = (used, cursorRef) => {
+      while (used.has(cursorRef.n)) cursorRef.n++;
+      const n = cursorRef.n;
+      used.add(n);
+      cursorRef.n++;
+      return n;
+    };
+    for (let i = 0; i < nodes.length; i++) {
+      if (labels[i]) continue;
+      const kind = nodes[i].localName === "table-wrap" ? "table" : "figure";
+      const n = kind === "table"
+        ? nextUnused(usedTables, tabCursor)
+        : nextUnused(usedFigures, figCursor);
+      labels[i] = (kind === "table" ? "Table " : "Figure ") + n;
+    }
+    const idx = nodes.indexOf(target);
+    return idx >= 0 ? labels[idx] : "";
+  }
+
+  // _pdfPageOf reads the hive:pdf-page attribute off a fig or
+  // table-wrap element and returns the parsed page number.
+  // Returns 0 when the attribute is missing or unparseable so
+  // sort routines can treat "no page" consistently.
+  _pdfPageOf(el) {
+    if (!el) return 0;
+    const raw =
+      el.getAttributeNS(HIVE_NS, "pdf-page") ||
+      el.getAttribute("hive:pdf-page") ||
+      "";
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  // _figLabelFromCaption extracts "Figure N" / "Table N" from a
+  // fig/table-wrap's caption text. GROBID's caption always starts
+  // with the label; the extractFigLabel logic in jatsconv follows
+  // the same convention on the emit side.
+  _figLabelFromCaption(figNode) {
+    const caption = this._directChild(figNode, "caption");
+    if (!caption) return "";
+    const text = (caption.textContent || "").trim();
+    const m = /^(fig(?:ure)?|tab(?:le)?)\.?\s*(\d+)/i.exec(text);
+    if (!m) return "";
+    const kind = m[1].toLowerCase();
+    const num = m[2];
+    if (kind.startsWith("tab")) return `Table ${num}`;
+    return `Figure ${num}`;
+  }
+
+  // _missingFigTableLabels computes the set of Figure/Table labels
+  // cited in body prose that don't have a matching extracted <fig>
+  // or <table-wrap>. Mirrors pkg/citation_coverage_validator.go so
+  // both surfaces (server-side Issues dashboard + this in-reader
+  // banner) show the same list from the same JATS bytes.
+  _missingFigTableLabels() {
+    if (!this._doc) return [];
+    const labelRe = /\b(fig(?:ure)?|tab(?:le)?)\.?\s*(\d+)\b/gi;
+    const canon = (kind, num) =>
+      kind.toLowerCase().startsWith("tab") ? `Table ${num}` : `Figure ${num}`;
+    // Present set: scan each fig/table-wrap caption for its label.
+    const present = new Set();
+    const blocks = this._doc.querySelectorAll("fig, table-wrap");
+    for (const b of blocks) {
+      const cap = b.querySelector("caption");
+      if (!cap) continue;
+      const m = labelRe.exec(cap.textContent || "");
+      labelRe.lastIndex = 0;
+      if (m) present.add(canon(m[1], m[2]));
+    }
+    // Cited set: scan body text with fig/table-wrap blocks removed
+    // so a fig's own caption doesn't count as a citation of itself.
+    const body = this._doc.querySelector("body");
+    if (!body) return [];
+    const clone = body.cloneNode(true);
+    for (const b of clone.querySelectorAll("fig, table-wrap")) b.remove();
+    const cited = new Set();
+    const text = clone.textContent || "";
+    let m;
+    while ((m = labelRe.exec(text)) !== null) {
+      cited.add(canon(m[1], m[2]));
+    }
+    // Diff — sorted for stable banner text.
+    const missing = [];
+    for (const label of cited) if (!present.has(label)) missing.push(label);
+    return missing.sort();
+  }
+
+  // _renderExtractionWarning renders the citation-coverage banner
+  // at the top of the reader. Shown by default (curators should see
+  // extraction gaps on load); a toggle collapses it to a one-line
+  // hint that still surfaces the count so nothing is truly hidden.
+  // Renders nothing when there are no missing labels.
+  _renderExtractionWarning() {
+    if (!this._doc) return nothing;
+    const missing = this._missingFigTableLabels();
+    if (missing.length === 0) return nothing;
+    if (!this._showExtractionWarning) {
+      return html`<div
+        class="extract-warn collapsed"
+        role="status"
+      >
+        <span
+          >Extraction missed ${missing.length} cited
+          ${missing.length === 1 ? "label" : "labels"}.</span
+        >
+        <button
+          class="extract-warn-toggle"
+          type="button"
+          @click=${() => (this._showExtractionWarning = true)}
+        >Show</button>
+      </div>`;
+    }
+    return html`<div class="extract-warn" role="status">
+      <div class="extract-warn-body">
+        <div class="extract-warn-title">
+          Extraction missed labels cited in the text
+        </div>
+        <ul class="extract-warn-list">
+          ${missing.map((l) => html`<li>${l}</li>`)}
+        </ul>
+      </div>
+      <button
+        class="extract-warn-toggle"
+        type="button"
+        aria-label="Hide extraction warning"
+        @click=${() => (this._showExtractionWarning = false)}
+      >Hide</button>
+    </div>`;
+  }
+
+  // _renderFigModal renders the currently-open figure/table modal.
+  // Two content tabs when both views are available:
+  //   - Digitized — structured HTML (rendered table for
+  //     table-wraps; SVG for figures once tracing lands)
+  //   - Original — extracted PNG crop from the source PDF
+  //
+  // Tables get both tabs (Digitized is the default for the
+  // structured, searchable, decimal-aligned view). Figures today
+  // get only Original since we have no structured version; once
+  // SVG tracing arrives figures will grow a Digitized tab.
+  //
+  // Also emits caption + "Open in PDF" link below the content
+  // regardless of active tab. Close via X, Esc, backdrop click.
+  _renderFigModal() {
+    if (!this._modalFigID) return nothing;
+    const target = this._doc.querySelector(`[id="${CSS.escape(this._modalFigID)}"]`);
+    if (!target) return nothing;
+    const isTable = target.localName === "table-wrap";
+    // Prefer caption-extracted label; when a caption dropped its
+    // "Figure N" / "Table N" prefix (a GROBID gap on some layouts)
+    // reuse the same two-pass gap-fill logic that _renderFiguresList
+    // applies so the modal header matches what the list shows.
+    const label =
+      this._figLabelFromCaption(target) ||
+      this._gapFillLabelForTarget(target) ||
+      this._modalFigID;
+    const page =
+      target.getAttributeNS(HIVE_NS, "pdf-page") ||
+      target.getAttribute("hive:pdf-page") ||
+      "";
+    const caption = this._directChild(target, "caption");
+    const imgURL = this._sha
+      ? `/api/reference/library/${encodeURIComponent(this._sha)}/figures/${encodeURIComponent(this._modalFigID)}`
+      : "";
+    const pdfURL = page && this._sha
+      ? `/api/reference/library/${encodeURIComponent(this._sha)}/source#page=${page}`
+      : "";
+    // Digitized tab requires structured content: a table-wrap with
+    // a real <table> child (rendered as HTML in _renderTableWrap).
+    // Curator-added regions (added via the Digitize-tab bbox tool)
+    // are table-wraps *without* a <table> child — they only carry
+    // a bbox + caption placeholder, so there's no structured view
+    // to render yet. Default to Original for those.
+    const hasDigitized = isTable && !!this._directChild(target, "table");
+    const hasOriginal = !!imgURL;
+    const activeTab = this._modalTab || (hasDigitized ? "digitized" : "original");
+    return html`
+      <div
+        class="fig-modal-backdrop"
+        @click=${(e) => {
+          if (e.target === e.currentTarget) this._closeFigModal();
+        }}
+      >
+        <div class="fig-modal" role="dialog" aria-modal="true" aria-labelledby="fig-modal-title">
+          <header class="fig-modal-header">
+            <h2 id="fig-modal-title">${label}</h2>
+            <button
+              class="fig-modal-close"
+              type="button"
+              aria-label="Close"
+              @click=${() => this._closeFigModal()}
+            >✕</button>
+          </header>
+          ${hasDigitized && hasOriginal
+            ? html`<div class="fig-modal-tabs" role="tablist">
+                <button
+                  role="tab"
+                  class=${"fig-modal-tab" + (activeTab === "digitized" ? " active" : "")}
+                  aria-selected=${activeTab === "digitized"}
+                  @click=${() => (this._modalTab = "digitized")}
+                >Digitized</button>
+                <button
+                  role="tab"
+                  class=${"fig-modal-tab" + (activeTab === "original" ? " active" : "")}
+                  aria-selected=${activeTab === "original"}
+                  @click=${() => (this._modalTab = "original")}
+                >Original</button>
+              </div>`
+            : nothing}
+          <div class="fig-modal-body">
+            ${activeTab === "digitized" && isTable
+              ? html`<div class="fig-modal-table">${this._renderTableWrap(target)}</div>`
+              : nothing}
+            ${activeTab === "original" && hasOriginal
+              ? html`<img class="fig-modal-img" src=${imgURL} alt=${label}
+                  @error=${(e) => (e.target.style.display = "none")}
+                />`
+              : nothing}
+            ${caption
+              ? html`<div class="fig-modal-caption">${this._renderNodes(caption.childNodes)}</div>`
+              : nothing}
+            ${page
+              ? html`<a
+                  class="fig-modal-pdf-link"
+                  href=${pdfURL}
+                  @click=${(e) => this._jumpToFig(e, this._modalFigID, page)}
+                >Open in source PDF — page ${page}</a>`
+              : nothing}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // _renderTableWrap renders a <table-wrap>'s inner <table> as
+  // HTML for modal display. Recurses via _renderNodes so cell
+  // contents (including nested tp:taxon-name chips) survive.
+  _renderTableWrap(tableWrap) {
+    const table = this._directChild(tableWrap, "table");
+    if (!table) return nothing;
+    return html`<table>${this._renderNodes(table.childNodes)}</table>`;
   }
 
   // _renderTaxonName renders a <tp:taxon-name> as a styled chip.

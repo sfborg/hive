@@ -9,8 +9,17 @@
          the wider TaxPub ecosystem.
 
     gn:  GN metadata (https://hive.sfborg.org/ns/gn/1.0)
-         hive-native extraction metadata attached to tp: elements
-         (verifier source, verifier score, alternative candidates).
+         Scientific-name extraction metadata attached to tp:
+         elements — verifier source, verifier score, and alternative
+         candidates. Scoped to GN-toolchain (gnfinder / gnverifier)
+         provenance, nothing broader.
+
+    hive: hive-native annotations (https://hive.sfborg.org/ns/1.0)
+         hive-specific metadata that isn't GN-toolchain-scoped.
+         Currently: PDF coord attributes on <fig> and <table-wrap>
+         so the reader can jump the PDF pane / crop image regions.
+         Grows as hive adds annotations that aren't naturally
+         another namespace's concern.
 
   The overlay adds tp:taxon-name to JATS's `p-elements` inline
   content model — the annotator only emits taxon-name markup inside
@@ -29,6 +38,7 @@
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
          xmlns:tp="http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
          xmlns:gn="https://hive.sfborg.org/ns/gn/1.0"
+         xmlns:hive="https://hive.sfborg.org/ns/1.0"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
   <include href="vendor/JATS-journalpublishing1-3.rng"/>
@@ -80,19 +90,32 @@
     </element>
   </define>
 
-  <!-- Widen <fig>'s attribute set with gn:pdf-page + gn:pdf-bbox.
+  <!-- Widen <fig>'s attribute set with hive:pdf-page + hive:pdf-bbox.
        jatsconv preserves GROBID's per-figure page + bounding-box
        coord from the source PDF so the reader can jump the PDF
        pane to the referenced page when a curator clicks a figure
-       xref. Both attributes are optional — they're absent when the
-       upstream GROBID pass didn't produce coord metadata (older
-       archives or coord-tracking disabled). -->
+       xref, and figextract can crop the region to PNG. Both
+       attributes are optional — they're absent when the upstream
+       GROBID pass didn't produce coord metadata (older archives or
+       coord-tracking disabled). -->
   <define name="fig-atts" combine="interleave">
     <optional>
-      <attribute name="gn:pdf-page"/>
+      <attribute name="hive:pdf-page"/>
     </optional>
     <optional>
-      <attribute name="gn:pdf-bbox"/>
+      <attribute name="hive:pdf-bbox"/>
+    </optional>
+  </define>
+
+  <!-- Same coord preservation on <table-wrap> for tables that
+       GROBID extracts as <figure type="table">. Enables the same
+       jump-to-PDF click affordance and image cropping on tables. -->
+  <define name="table-wrap-atts" combine="interleave">
+    <optional>
+      <attribute name="hive:pdf-page"/>
+    </optional>
+    <optional>
+      <attribute name="hive:pdf-bbox"/>
     </optional>
   </define>
 

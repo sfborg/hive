@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,176 @@ CREATE TABLE IF NOT EXISTS hive__reference_pdf (
 
 CREATE INDEX IF NOT EXISTS idx_hive__reference_pdf_sha
 	ON hive__reference_pdf (sha512);
+
+-- hive__reference_assertion is the staging table for structured
+-- claims extracted from a reference's attached-PDF JATS sidecar,
+-- awaiting curator review before landing in the archive proper.
+-- Each row represents one claim the paper makes (a taxon
+-- appearance, a distribution statement, a vernacular name, a
+-- type-material designation, an interaction observation, ...) that
+-- a model or curator authored.
+--
+-- Called "assertion" rather than "fact" because taxonomic claims
+-- are hypotheses in a scientific sense: a species identification
+-- can be revised, an interaction observation could reflect a
+-- misidentification, a nomenclatural act could be superseded. Even
+-- direct observations ("we saw species A eating species B") are
+-- assertions about the world that later work can challenge. The
+-- staging table records what a reference *asserts*; downstream
+-- users decide what weight to give the assertion.
+--
+-- Columns:
+--   assertion_id   UUID for the staged row
+--   reference_id   which reference the assertion belongs to
+--   assertion_type kind of assertion (taxon / distribution /
+--                  vernacular / type_material / synonym /
+--                  interaction / ...); free-form so new extractor
+--                  targets don't require a schema change
+--   payload        JSON — assertion-type-specific structured
+--                  content; mirrors the corresponding sflib/coldp
+--                  type where one exists
+--   source_ptr     JSON — where in the JATS sidecar the assertion
+--                  came from: {sidecar_sha, element_id, text_start,
+--                  text_end}; lets the reader jump-and-highlight
+--                  on click
+--   origin         'model' (extractor output) or 'curator'
+--                  (manually added). Model re-runs delete
+--                  origin='model' rows for the reference and
+--                  re-populate; curator rows are durable across
+--                  re-runs.
+--   status         'pending' (awaiting review) / 'accepted' /
+--                  'rejected' / 'edited' (curator modified before
+--                  accepting)
+--   reject_reason  free-text or picklist value when rejected —
+--                  feeds the training-signal loop (see
+--                  MODEL_FEEDBACK_LOOP_PLAN)
+--   imported_at    set when the assertion has been written into
+--                  the archive proper as a real coldp row; NULL
+--                  while still staged
+--   created_at / updated_at / created_by  standard audit fields;
+--                  created_by is an ORCID iD for curator rows and
+--                  'model:<version>' for extractor runs
+--
+-- Indexes support the two hot query paths: "list assertions for
+-- reference X" (per-reference review screen) and "count pending vs
+-- imported for reference X" (dashboard step-3 / step-4 detection).
+CREATE TABLE IF NOT EXISTS hive__reference_assertion (
+	assertion_id   TEXT PRIMARY KEY,
+	reference_id   TEXT NOT NULL,
+	assertion_type TEXT NOT NULL,
+	payload        TEXT NOT NULL,
+	source_ptr     TEXT NOT NULL DEFAULT '',
+	origin         TEXT NOT NULL CHECK (origin IN ('model', 'curator')),
+	status         TEXT NOT NULL DEFAULT 'pending'
+	                 CHECK (status IN ('pending', 'accepted', 'rejected', 'edited')),
+	reject_reason  TEXT,
+	imported_at    TEXT,
+	created_at     TEXT NOT NULL,
+	updated_at     TEXT NOT NULL,
+	created_by     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_ref
+	ON hive__reference_assertion (reference_id);
+
+CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_status
+	ON hive__reference_assertion (reference_id, status);
+
+-- hive__extraction_correction records curator corrections to the
+-- attached-PDF extraction pipeline (GROBID → jatsconv → JATS).
+-- Each row is one durable, re-applicable correction: draw a bbox
+-- over a missed figure, tag a range of text as junk, fix a broken
+-- xref rid, or feed back a rejected/reclassified GNfinder chip.
+--
+-- Corrections mutate the JATS sidecar so the digitized view
+-- immediately reflects the fix, but the correction records
+-- themselves are the authoritative artifact. On re-digitize (fresh
+-- GROBID pass), active corrections re-apply on top of the new JATS
+-- so curator work isn't lost when the model updates.
+--
+-- Every correction is also a labeled training example fed into the
+-- model-feedback loop (see MODEL_FEEDBACK_LOOP_PLAN.md) — bbox-add
+-- rows label under-detection, text-tag rows label false-positive
+-- extraction, xref-fix rows label reference-resolver misses,
+-- chip-feedback rows label GNfinder decisions.
+--
+-- Columns:
+--   correction_id   UUID
+--   reference_id    which reference owns the correction
+--   sidecar_sha     which attached-PDF sidecar the correction
+--                   applies to (a ref can have multiple PDFs)
+--   correction_kind how the correction changes the JATS:
+--                     'bbox-add'      — new fig/table/abstract/... region
+--                     'text-tag'      — remove or reclassify body text
+--                     'xref-fix'      — repoint an <xref>'s rid
+--                     'chip-feedback' — reject/edit/reclassify a
+--                                       tp:taxon-name chip
+--   content_type    free-form string identifying what kind of
+--                   content the correction concerns (figure /
+--                   table / abstract / section / paragraph /
+--                   page-number / junk / bib-field / ...). New
+--                   types add by appending — no enum, no schema
+--                   change needed for the training corpus to grow.
+--   bbox_page       1-indexed PDF page for bbox-carrying kinds;
+--                   NULL for text-only corrections
+--   bbox_json       JSON {x, y, w, h} in PDF points for
+--                   bbox-carrying kinds; NULL otherwise
+--   label           curator-visible label ("abstract-2",
+--                   "figure-3-fixed"). Auto-suggested by the UI
+--                   from content_type + ordinal; curator override
+--                   sticks.
+--   anchor_ptr      JSON JATS pointer for cross-surface placement:
+--                   {element_id, position: 'before'|'after'|'inside-end'}.
+--                   NULL when correction has no destination anchor
+--                   (fig/table default to trailing sec).
+--   payload         correction-kind-specific JSON. For bbox-add
+--                   it's usually {} (text extracted at apply time);
+--                   for text-tag it's {selection_start,
+--                   selection_end, tag_reason}; for xref-fix it's
+--                   {xref_element_id, old_rid, new_rid,
+--                   xref_text}; for chip-feedback it's {action,
+--                   chip_element_id, old_source, new_source,
+--                   old_full_name, new_full_name}.
+--   status          'active' (applied on next regen) or 'reverted'
+--                   (skipped because a re-digitize left the
+--                   correction unanchorable)
+--   reverted_reason populated when status transitions to
+--                   'reverted' so curator sees why
+--   created_at / updated_at / created_by  audit fields; created_by
+--                   is the ORCID iD of the curator who authored
+--                   the correction
+CREATE TABLE IF NOT EXISTS hive__extraction_correction (
+	correction_id      TEXT PRIMARY KEY,
+	reference_id       TEXT NOT NULL,
+	sidecar_sha        TEXT NOT NULL,
+	correction_kind    TEXT NOT NULL
+	                     CHECK (correction_kind IN
+	                       ('bbox-add', 'bbox-modify', 'bbox-remove',
+	                        'text-tag', 'xref-fix', 'chip-feedback')),
+	content_type       TEXT NOT NULL,
+	bbox_page          INTEGER,
+	bbox_json          TEXT,
+	label              TEXT NOT NULL DEFAULT '',
+	anchor_ptr         TEXT,
+	-- target_element_id points at the JATS element (fig / table-wrap)
+	-- the correction modifies. Populated for bbox-modify kind so
+	-- ApplyBBoxModifyToJATS can find and patch the target; NULL for
+	-- additive kinds (bbox-add) that create a new element.
+	target_element_id  TEXT,
+	payload            TEXT NOT NULL DEFAULT '',
+	status             TEXT NOT NULL DEFAULT 'active'
+	                     CHECK (status IN ('active', 'reverted')),
+	reverted_reason    TEXT,
+	created_at         TEXT NOT NULL,
+	updated_at         TEXT NOT NULL,
+	created_by         TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__extraction_correction_ref
+	ON hive__extraction_correction (reference_id);
+
+CREATE INDEX IF NOT EXISTS idx_hive__extraction_correction_sha
+	ON hive__extraction_correction (sidecar_sha);
 
 -- hive__config_rules holds per-rule overrides of enabled state and
 -- severity. Missing row (or NULL columns) means "use the ruleset
@@ -466,6 +637,9 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 	if err := migrateNameFTSSchema(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateExtractionCorrectionForModify(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -524,6 +698,157 @@ func ftsHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, 
 		)
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
 			return false, fmt.Errorf("core: scan table_info %s: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateExtractionCorrectionForModify brings a pre-1e
+// hive__extraction_correction table up to the current shape by:
+//   - Adding target_element_id (nullable) via ALTER TABLE.
+//   - Widening the correction_kind CHECK constraint from
+//     {bbox-add, text-tag, xref-fix, chip-feedback} to also allow
+//     bbox-modify, via SQLite's rebuild-table pattern.
+//
+// Idempotent: skips when the column already exists AND the check
+// already accepts bbox-modify. Fresh archives get the current
+// shape directly from CREATE TABLE IF NOT EXISTS.
+func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error {
+	exists, err := tableExists(ctx, db, "hive__extraction_correction")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	// Add the target_element_id column if missing. Nullable — old
+	// rows are all additive kinds and don't need a target.
+	hasTargetCol, err := columnExists(ctx, db, "hive__extraction_correction", "target_element_id")
+	if err != nil {
+		return err
+	}
+	if !hasTargetCol {
+		if _, err := db.ExecContext(ctx,
+			`ALTER TABLE hive__extraction_correction
+			   ADD COLUMN target_element_id TEXT`,
+		); err != nil {
+			return fmt.Errorf("core: add target_element_id: %w", err)
+		}
+	}
+	// Widen the CHECK constraint. SQLite doesn't support altering
+	// CHECK constraints directly; the accepted pattern is
+	// rename → create-new → copy → drop-old. Only run when the
+	// current constraint doesn't yet accept the newest kind
+	// (probed by attempting a dummy insert; rolled back either
+	// way).
+	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "bbox-remove")
+	if err != nil {
+		return err
+	}
+	if needsRebuild {
+		stmts := []string{
+			`ALTER TABLE hive__extraction_correction
+			   RENAME TO hive__extraction_correction_old`,
+			`CREATE TABLE hive__extraction_correction (
+				correction_id      TEXT PRIMARY KEY,
+				reference_id       TEXT NOT NULL,
+				sidecar_sha        TEXT NOT NULL,
+				correction_kind    TEXT NOT NULL
+				                     CHECK (correction_kind IN
+				                       ('bbox-add', 'bbox-modify', 'bbox-remove',
+				                        'text-tag', 'xref-fix', 'chip-feedback')),
+				content_type       TEXT NOT NULL,
+				bbox_page          INTEGER,
+				bbox_json          TEXT,
+				label              TEXT NOT NULL DEFAULT '',
+				anchor_ptr         TEXT,
+				target_element_id  TEXT,
+				payload            TEXT NOT NULL DEFAULT '',
+				status             TEXT NOT NULL DEFAULT 'active'
+				                     CHECK (status IN ('active', 'reverted')),
+				reverted_reason    TEXT,
+				created_at         TEXT NOT NULL,
+				updated_at         TEXT NOT NULL,
+				created_by         TEXT NOT NULL DEFAULT ''
+			)`,
+			`INSERT INTO hive__extraction_correction
+				(correction_id, reference_id, sidecar_sha, correction_kind,
+				 content_type, bbox_page, bbox_json, label, anchor_ptr,
+				 target_element_id, payload, status, reverted_reason,
+				 created_at, updated_at, created_by)
+			 SELECT
+				correction_id, reference_id, sidecar_sha, correction_kind,
+				content_type, bbox_page, bbox_json, label, anchor_ptr,
+				target_element_id, payload, status, reverted_reason,
+				created_at, updated_at, created_by
+			 FROM hive__extraction_correction_old`,
+			`DROP TABLE hive__extraction_correction_old`,
+		}
+		for _, s := range stmts {
+			if _, err := db.ExecContext(ctx, s); err != nil {
+				return fmt.Errorf("core: rebuild hive__extraction_correction: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// checkAcceptsCorrectionKind probes whether the current CHECK
+// constraint on hive__extraction_correction accepts the given
+// kind. Returns true when the table needs to be rebuilt with the
+// wider constraint.
+func checkAcceptsCorrectionKind(ctx context.Context, db *sql.DB, kind string) (needsRebuild bool, err error) {
+	// SAVEPOINT + rollback keeps the probe side-effect-free even
+	// if the insert succeeds. Named savepoint so we can roll
+	// back precisely regardless of an outer transaction.
+	if _, err = db.ExecContext(ctx, "SAVEPOINT probe_correction_kind"); err != nil {
+		return false, fmt.Errorf("probe savepoint: %w", err)
+	}
+	defer func() {
+		_, rbErr := db.ExecContext(ctx, "ROLLBACK TO SAVEPOINT probe_correction_kind")
+		if rbErr == nil {
+			_, _ = db.ExecContext(ctx, "RELEASE SAVEPOINT probe_correction_kind")
+		}
+	}()
+	_, insErr := db.ExecContext(ctx,
+		`INSERT INTO hive__extraction_correction
+		 (correction_id, reference_id, sidecar_sha, correction_kind,
+		  content_type, created_at, updated_at)
+		 VALUES ('probe', 'probe-ref', 'probe-sha', ?,
+		         'figure', '', '')`,
+		kind,
+	)
+	if insErr == nil {
+		return false, nil
+	}
+	if strings.Contains(insErr.Error(), "CHECK constraint") ||
+		strings.Contains(insErr.Error(), "constraint failed") {
+		return true, nil
+	}
+	return false, fmt.Errorf("probe insert: %w", insErr)
+}
+
+// columnExists returns true when the given table has a column of
+// the given name. Uses PRAGMA table_info which is cheap and does
+// not require any migration lock.
+func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, fmt.Errorf("pragma table_info: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid                        int
+			name, ctype                string
+			notnull, pk                int
+			dfltValue                  sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return false, err
 		}
 		if name == column {
 			return true, nil

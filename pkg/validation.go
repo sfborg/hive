@@ -152,6 +152,13 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	// Issues dashboard tells us where to look for the bug. Silent-
 	// skip on hosts without xmllint (docker ships it).
 	registry.Register(newJATSValidationValidator(archivePath))
+	// Hive-native: warn when the JATS sidecar's body prose cites
+	// figure/table labels that don't have a matching extracted
+	// <fig> or <table-wrap>. Signals that GROBID under-detected
+	// the paper's figures/tables — curator can use the bbox tool
+	// to add each missed region, and the missing-label list feeds
+	// the extractor-training corpus (see MODEL_FEEDBACK_LOOP_PLAN).
+	registry.Register(newCitationCoverageValidator(archivePath))
 	// Hive-native: soft-warn when an infraspecific name lacks its
 	// rank marker (var., f., subsp., subvar., subf.) in the scientific
 	// name string. Code-aware: skips ICZN + SUBSPECIES (marker is
@@ -298,6 +305,21 @@ func (a *Archive) ValidateName(ctx context.Context, nameID string) ([]*domain.Re
 		return nil, nil
 	}
 	return a.validator.Execute(ctx, "name", nameID)
+}
+
+// SyncReferenceIssues re-runs every reference-scoped validator
+// against the given reference row and refreshes __gsvalidator_results
+// so read paths see the new state. Called from the corrections
+// handler after a JATS-mutating operation so validators that read
+// the sidecar (hive_citation_coverage, hive_jats_validation) reflect
+// the current sidecar state without waiting for the next reindex.
+//
+// No-op when the archive has no validator wired.
+func (a *Archive) SyncReferenceIssues(ctx context.Context, referenceID string) error {
+	if a.validator == nil {
+		return nil
+	}
+	return a.syncReferenceIssues(ctx, referenceID)
 }
 
 // ValidationWarning is the frontend-facing shape of a non-blocking

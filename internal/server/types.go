@@ -1069,6 +1069,21 @@ type apiReferenceUpload struct {
 	// "already_exists".
 	AnnotationStatus    string `json:"annotation_status,omitempty"`
 	AnnotationNameCount int    `json:"annotation_name_count,omitempty"`
+	// AttachedReferences lists reference rows that already have
+	// this sha attached via hive__reference_pdf. Populated when
+	// the sidecar dedupes so the WUI can offer to jump to an
+	// existing reference instead of walking the curator through
+	// a fresh bibliographic-entry flow they'd end up discarding.
+	AttachedReferences []apiAttachedReference `json:"attached_references,omitempty"`
+}
+
+// apiAttachedReference is a compact reference summary — enough to
+// render "This PDF is already attached to reference X" in the
+// dedupe modal without a follow-up round-trip.
+type apiAttachedReference struct {
+	ID       string `json:"id"`
+	Citation string `json:"citation,omitempty"`
+	Title    string `json:"title,omitempty"`
 }
 
 // apiUploadBibHeader mirrors grobid.BibHeader on the wire — the

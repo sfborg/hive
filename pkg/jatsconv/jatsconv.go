@@ -74,7 +74,22 @@ const TEINamespace = "http://www.tei-c.org/ns/1.0"
 // here as a string literal to avoid an import cycle if annotator
 // ever depends on jatsconv.
 const taxPubNamespace = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
+
+// gnNamespace scopes attributes about GN-toolchain output —
+// verifier match source, verifier score, alternative candidates.
+// These belong on tp:taxon-name chips (added by pkg/annotator).
+// gn: is intentionally narrow to the GN-tooling domain; hive-
+// specific metadata that isn't about scientific-name verification
+// lives under hiveNamespace instead.
 const gnNamespace = "https://hive.sfborg.org/ns/gn/1.0"
+
+// hiveNamespace scopes hive-native metadata that isn't part of
+// JATS core, TaxPub, or GN-toolchain output — currently the
+// hive:pdf-page + hive:pdf-bbox attributes that record where a
+// figure/table came from in the source PDF. Separated from gn:
+// so the two namespaces stay cleanly domain-scoped: gn: for GN
+// tooling, hive: for hive's own machinery.
+const hiveNamespace = "https://hive.sfborg.org/ns/1.0"
 
 // TEIToJATS converts a GROBID TEI document into a JATS + TaxPub
 // document. Deterministic: same TEI in → same JATS out.
@@ -124,6 +139,7 @@ func (c *converter) emitPreamble() {
 	c.writeString(` xml:lang="en"`)
 	c.writeString(` xmlns:tp="` + taxPubNamespace + `"`)
 	c.writeString(` xmlns:gn="` + gnNamespace + `"`)
+	c.writeString(` xmlns:hive="` + hiveNamespace + `"`)
 	c.writeString(">\n")
 }
 
@@ -524,16 +540,20 @@ func (c *converter) emitBodyItems(items []bodyItem, leadingChars []byte) {
 	for _, it := range items {
 		if it.kind == "para" {
 			body := correctFigXrefRids(it.bytes, labelToID)
+			body = attachMissingFigXrefRids(body, labelToID)
 			c.out.Write(reconstructFigXrefs(body, labelToID))
 		}
 	}
 	// Emit secs in source order — first correct any existing xref
 	// rids whose text label doesn't match their current target
-	// (GROBID off-by-one on sub-panel refs like "1 A2"), then wrap
+	// (GROBID off-by-one on sub-panel refs like "1 A2"), then attach
+	// rids to xrefs GROBID emitted without one (sub-panel refs like
+	// "1 A1" often lose the target attribute entirely), then wrap
 	// unwrapped plain-text mentions.
 	for _, it := range items {
 		if it.kind == "sec" {
 			body := correctFigXrefRids(it.bytes, labelToID)
+			body = attachMissingFigXrefRids(body, labelToID)
 			c.out.Write(reconstructFigXrefs(body, labelToID))
 		}
 	}
@@ -547,7 +567,11 @@ func (c *converter) emitBodyItems(items []bodyItem, leadingChars []byte) {
 		}
 	}
 	if hasFigs {
-		c.writeString(`<sec sec-type="figures"><title>Figures</title>` + "\n")
+		// The trailing sec holds both <fig> and <table-wrap>
+		// elements — both come from TEI <figure> (tables use
+		// type="table"). Title reflects the mixed content; each
+		// entry stays clickable via the reader's modal-open logic.
+		c.writeString(`<sec sec-type="figures"><title>Figures and tables</title>` + "\n")
 		for _, it := range items {
 			if it.kind == "fig" {
 				c.out.Write(it.bytes)
@@ -653,6 +677,49 @@ func correctFigXrefRids(src []byte, labelToID map[string]string) []byte {
 		}
 		// Rewrite the rid to the correct target.
 		return []byte(`<xref rid="` + targetID + `"` + otherAttrs + `>` + inner + `</xref>`)
+	})
+}
+
+// missingRidXrefRegex matches an <xref> element with NO attributes
+// (specifically, no rid) whose text starts with a digit. GROBID
+// sometimes emits sub-panel figure references like `<ref>1 A1</ref>`
+// with no target — the sub-panel indicator confuses its
+// ref-resolver enough to drop the target attribute entirely, not
+// just mislabel it. attachMissingFigXrefRids repairs these.
+var missingRidXrefRegex = regexp.MustCompile(`<xref>(\s*\d[^<]*)</xref>`)
+
+// attachMissingFigXrefRids scans body bytes for existing <xref>
+// elements with no rid attribute and attaches one by mapping the
+// text's leading digit to a Figure N / Table N label. Curator
+// intent: even a sub-panel reference ("1 A1") is asking about the
+// parent figure — the modal doesn't scope to sub-panels, so
+// clicking "1 A1" opens Figure 1 exactly as clicking "Figure 1"
+// would. Preference order is Figure first, then Table: figure refs
+// dominate in body prose. When neither label resolves, the xref is
+// left untouched (no rid, no fig-xref click affordance).
+func attachMissingFigXrefRids(src []byte, labelToID map[string]string) []byte {
+	if len(labelToID) == 0 {
+		return src
+	}
+	return missingRidXrefRegex.ReplaceAllFunc(src, func(match []byte) []byte {
+		m := missingRidXrefRegex.FindSubmatch(match)
+		if m == nil {
+			return match
+		}
+		inner := string(m[1])
+		digitMatch := figXrefLeadingDigit.FindStringSubmatch(inner)
+		if digitMatch == nil {
+			return match
+		}
+		num := digitMatch[1]
+		targetID, ok := labelToID["Figure "+num]
+		if !ok {
+			targetID, ok = labelToID["Table "+num]
+		}
+		if !ok {
+			return match
+		}
+		return []byte(`<xref rid="` + targetID + `">` + inner + `</xref>`)
 	})
 }
 
@@ -968,18 +1035,34 @@ func (c *converter) emitOpenTagPreservePrefix(se xml.StartElement) {
 	c.writeByte('>')
 }
 
-// emitFigure writes a JATS <fig> wrapper for a TEI <figure>. JATS
+// emitFigure dispatches a TEI <figure> to the appropriate JATS
+// emitter based on the type attribute: type="table" becomes a
+// JATS <table-wrap>, everything else becomes a <fig>. GROBID
+// represents both figures and tables using its <figure> element
+// (with type distinguishing them), but JATS has separate elements
+// for each with different content models.
+func (c *converter) emitFigure(dec *xml.Decoder, se xml.StartElement) error {
+	for _, a := range se.Attr {
+		if a.Name.Local == "type" && strings.EqualFold(a.Value, "table") {
+			return c.emitTableWrap(dec, se)
+		}
+	}
+	return c.emitFig(dec, se)
+}
+
+// emitFig writes a JATS <fig> wrapper for a TEI <figure>. JATS
 // <fig> allows at most one <caption>; GROBID often emits both a
 // <head> (short label like "FIGURE 1.") and a <figDesc> (the full
-// caption). We concatenate them into a single caption, preferring
-// the head as a title-like prefix followed by the description.
+// caption). figDesc is the full text (typically bilingual on
+// multi-language journals), so head is dropped when figDesc is
+// present to avoid duplication.
 //
 // GROBID also emits a <graphic coords="page,x,y,w,h"> child on
 // each figure when coord-tracking is enabled. Preserve those as
-// gn:pdf-page + gn:pdf-bbox attributes on the JATS <fig> so the
+// hive:pdf-page + hive:pdf-bbox attributes on the JATS <fig> so the
 // reader can jump the PDF pane to the source page when a curator
 // clicks a figure xref.
-func (c *converter) emitFigure(dec *xml.Decoder, se xml.StartElement) error {
+func (c *converter) emitFig(dec *xml.Decoder, se xml.StartElement) error {
 	var idAttr string
 	for _, a := range se.Attr {
 		if a.Name.Local == "id" {
@@ -1011,10 +1094,6 @@ func (c *converter) emitFigure(dec *xml.Decoder, se xml.StartElement) error {
 				}
 				descText = strings.TrimSpace(text)
 			case "graphic":
-				// GROBID's <graphic coords="page,x,y,w,h"> carries
-				// the figure's source-page location. Preserve for
-				// jump-to-PDF; only the first graphic's coords are
-				// kept (rare for a figure to have more than one).
 				for _, a := range t.Attr {
 					if a.Name.Local == "coords" && coordsAttr == "" {
 						coordsAttr = a.Value
@@ -1034,25 +1113,16 @@ func (c *converter) emitFigure(dec *xml.Decoder, se xml.StartElement) error {
 					c.writeString(`"`)
 				}
 				if page != "" {
-					c.writeString(` gn:pdf-page="`)
+					c.writeString(` hive:pdf-page="`)
 					c.writeString(escapeAttr(page))
 					c.writeString(`"`)
 				}
 				if bbox != "" {
-					c.writeString(` gn:pdf-bbox="`)
+					c.writeString(` hive:pdf-bbox="`)
 					c.writeString(escapeAttr(bbox))
 					c.writeString(`"`)
 				}
 				c.writeString(">\n")
-				// figDesc is the full caption (typically bilingual
-				// on multi-language journals — two "Figure N." /
-				// "Figura N." runs in one figDesc). Head is just a
-				// short bilingual-label duplicate; concatenating
-				// both produces "Figure 1 . Figura 1 . Figure 1.
-				// Dynamics... Figura 1. Dinámica..." with the label
-				// appearing 3-4 times. Prefer figDesc alone; head is
-				// only used when figDesc is absent (rare — some
-				// GROBID configurations emit head-only figures).
 				captionText := descText
 				if captionText == "" {
 					captionText = headText
@@ -1068,6 +1138,255 @@ func (c *converter) emitFigure(dec *xml.Decoder, se xml.StartElement) error {
 		}
 	}
 	return nil
+}
+
+// emitTableWrap writes a JATS <table-wrap> for a TEI
+// <figure type="table">. Preserves caption + coords the same way
+// <fig> does, and converts GROBID's <table><row><cell> subtree
+// into JATS's XHTML-shaped <table><thead>/<tbody>/<tr><th>/<td>
+// structure. First row becomes the header row (JATS convention;
+// virtually always correct for scientific tables). Numeric-column
+// detection sets a col-group with char="." so JATS-aware renderers
+// can decimal-align those columns; the reader also applies CSS
+// text-align rules based on the same signal.
+func (c *converter) emitTableWrap(dec *xml.Decoder, se xml.StartElement) error {
+	var idAttr, coordsAttr string
+	for _, a := range se.Attr {
+		switch a.Name.Local {
+		case "id":
+			idAttr = a.Value
+		case "coords":
+			// GROBID emits coords directly on <figure type="table">
+			// when teiCoordinates includes "table" — unlike figures
+			// which nest coords on a child <graphic>. Capture here
+			// so tables get hive:pdf-page + hive:pdf-bbox the same way
+			// figures do, enabling image extraction and jump-to-PDF.
+			coordsAttr = a.Value
+		}
+	}
+	var headText, descText string
+	var rows [][]string
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("jatsconv: walk table figure: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "head":
+				text, err := readElementText(dec, "head")
+				if err != nil {
+					return err
+				}
+				headText = strings.TrimSpace(text)
+			case "figDesc":
+				text, err := readElementText(dec, "figDesc")
+				if err != nil {
+					return err
+				}
+				descText = strings.TrimSpace(text)
+			case "graphic":
+				for _, a := range t.Attr {
+					if a.Name.Local == "coords" && coordsAttr == "" {
+						coordsAttr = a.Value
+					}
+				}
+				_ = skipElement(dec, "graphic")
+			case "table":
+				parsed, err := parseTableRows(dec)
+				if err != nil {
+					return err
+				}
+				rows = parsed
+			default:
+				_ = skipElement(dec, t.Name.Local)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "figure" {
+				page, bbox := splitCoords(coordsAttr)
+				c.writeString("<table-wrap")
+				if idAttr != "" {
+					c.writeString(` id="`)
+					c.writeString(escapeAttr(idAttr))
+					c.writeString(`"`)
+				}
+				if page != "" {
+					c.writeString(` hive:pdf-page="`)
+					c.writeString(escapeAttr(page))
+					c.writeString(`"`)
+				}
+				if bbox != "" {
+					c.writeString(` hive:pdf-bbox="`)
+					c.writeString(escapeAttr(bbox))
+					c.writeString(`"`)
+				}
+				c.writeString(">\n")
+				captionText := descText
+				if captionText == "" {
+					captionText = headText
+				}
+				if captionText != "" {
+					c.writeString("  <caption><p>")
+					c.writeString(escapeText(captionText))
+					c.writeString("</p></caption>\n")
+				}
+				emitJATSTable(&c.out, rows)
+				c.writeString("</table-wrap>\n")
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// parseTableRows walks a TEI <table> subtree and returns its
+// content as a [][]string (rows × cells). GROBID's structure is
+// <table><row><cell>text</cell>...</row>...</table>. Preserves
+// text content only — nested formatting (bold, italic) is
+// flattened because scientific-table cells are almost always
+// plain text or numbers.
+func parseTableRows(dec *xml.Decoder) ([][]string, error) {
+	var rows [][]string
+	var currentRow []string
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return rows, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("jatsconv: parse table: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "row":
+				currentRow = nil
+			case "cell":
+				text, err := readElementText(dec, "cell")
+				if err != nil {
+					return nil, err
+				}
+				currentRow = append(currentRow, strings.TrimSpace(text))
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "row":
+				if currentRow != nil {
+					rows = append(rows, currentRow)
+					currentRow = nil
+				}
+			case "table":
+				return rows, nil
+			}
+		}
+	}
+}
+
+// emitJATSTable writes the row/cell data as a JATS-XHTML table:
+// <table><colgroup> (with char="." on numeric cols) + <thead>
+// (first row as header) + <tbody>. Empty tables emit nothing.
+func emitJATSTable(out *bytes.Buffer, rows [][]string) {
+	if len(rows) == 0 {
+		return
+	}
+	numCols := 0
+	for _, r := range rows {
+		if len(r) > numCols {
+			numCols = len(r)
+		}
+	}
+	if numCols == 0 {
+		return
+	}
+	numericCol := detectNumericColumns(rows, numCols)
+	out.WriteString("  <table>\n")
+	if numCols > 0 {
+		out.WriteString("    <colgroup>\n")
+		for i := 0; i < numCols; i++ {
+			out.WriteString("      <col")
+			if numericCol[i] {
+				// JATS uses align="char" + char="." for decimal
+				// alignment; some renderers respect it, others need
+				// the reader's CSS rules to match.
+				out.WriteString(` align="char" char="."`)
+			}
+			out.WriteString("/>\n")
+		}
+		out.WriteString("    </colgroup>\n")
+	}
+	// First row is header. If there's only one row, treat as body
+	// (weird table but preserves the content).
+	headerRow := 0
+	if len(rows) > 1 {
+		out.WriteString("    <thead>\n")
+		emitTableRow(out, rows[0], "th", numCols)
+		out.WriteString("    </thead>\n")
+		headerRow = 1
+	}
+	out.WriteString("    <tbody>\n")
+	for _, r := range rows[headerRow:] {
+		emitTableRow(out, r, "td", numCols)
+	}
+	out.WriteString("    </tbody>\n")
+	out.WriteString("  </table>\n")
+}
+
+// emitTableRow writes one <tr> with numCols <th> or <td> cells.
+// Short rows are padded with empty cells so column alignment
+// stays consistent across the table.
+func emitTableRow(out *bytes.Buffer, cells []string, cellTag string, numCols int) {
+	out.WriteString("      <tr>")
+	for i := 0; i < numCols; i++ {
+		out.WriteByte('<')
+		out.WriteString(cellTag)
+		out.WriteByte('>')
+		if i < len(cells) {
+			out.WriteString(escapeText(cells[i]))
+		}
+		out.WriteString("</")
+		out.WriteString(cellTag)
+		out.WriteByte('>')
+	}
+	out.WriteString("</tr>\n")
+}
+
+// numericCellRegex matches a cell value that's a plain number
+// (int, decimal, optional sign, optional thousands separators).
+// Used by detectNumericColumns; broad enough to accept "3.4x10⁷"
+// style scientific notation because the leading numeric part is
+// what column-alignment looks at.
+var numericCellRegex = regexp.MustCompile(`^-?\d[\d,]*(\.\d+)?`)
+
+// detectNumericColumns returns a bool per column indicating
+// whether the majority of non-empty cells in that column parse
+// as numeric. Used to decide which columns get decimal alignment.
+// The first row (header) is excluded from the vote — headers are
+// almost always text even when the column below is numeric.
+func detectNumericColumns(rows [][]string, numCols int) []bool {
+	out := make([]bool, numCols)
+	if len(rows) <= 1 {
+		return out
+	}
+	for col := 0; col < numCols; col++ {
+		numeric, nonEmpty := 0, 0
+		for _, r := range rows[1:] {
+			if col >= len(r) || r[col] == "" {
+				continue
+			}
+			nonEmpty++
+			if numericCellRegex.MatchString(r[col]) {
+				numeric++
+			}
+		}
+		if nonEmpty > 0 && numeric*2 >= nonEmpty {
+			out[col] = true
+		}
+	}
+	return out
 }
 
 // splitCoords parses GROBID's coord string "page,x,y,w,h" into

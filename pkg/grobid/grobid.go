@@ -108,6 +108,23 @@ func (c *Client) ProcessFulltextDocument(ctx context.Context, pdf io.Reader, fil
 	if _, err := io.Copy(part, pdf); err != nil {
 		return nil, fmt.Errorf("grobid: copy pdf to multipart: %w", err)
 	}
+	// teiCoordinates asks GROBID to emit source-PDF coord attrs
+	// (page + bounding box) on the named element types. Passed as
+	// separate multipart fields with the same name — GROBID's API
+	// parses repeated fields as a list, not comma-joined values.
+	// Downstream jatsconv preserves the coords as hive:pdf-page +
+	// hive:pdf-bbox on <fig> and <table-wrap>, which figextract uses
+	// to render per-figure/table PNG crops via pdftocairo.
+	//
+	// Element list is intentionally minimal — coord annotations
+	// add output size, so we only ask for the types we actually
+	// crop. Additional types (persName, formula, biblStruct, p)
+	// become worthwhile once we build features that need them.
+	for _, elem := range []string{"figure", "table", "head", "biblStruct"} {
+		if err := mw.WriteField("teiCoordinates", elem); err != nil {
+			return nil, fmt.Errorf("grobid: write teiCoordinates: %w", err)
+		}
+	}
 	if err := mw.Close(); err != nil {
 		return nil, fmt.Errorf("grobid: close multipart writer: %w", err)
 	}

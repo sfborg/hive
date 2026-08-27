@@ -192,3 +192,26 @@ body {
 a {
   color: var(--accent);
 }
+
+/* File-drop UX. body[data-drop-active] is set by SfgaReferences
+ * while a file drag is in flight. Two effects:
+ *   1. Viewport-wide green border shows curators that the whole
+ *      window is a valid drop target — no need to hunt for a
+ *      specific input.
+ *   2. Iframes are pointer-events:none so drops on top of them
+ *      (reader iframe, PDF pane iframes) route to the outer
+ *      document instead of being swallowed by same-origin
+ *      iframe content and treated as a browser file:// nav.
+ *
+ * Both effects clear as soon as the drag ends. */
+body[data-drop-active]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  border: 4px dashed color-mix(in oklab, var(--sev-info, #4a90e2) 70%, transparent);
+  pointer-events: none;
+  z-index: 999;
+}
+body[data-drop-active] iframe {
+  pointer-events: none;
+}

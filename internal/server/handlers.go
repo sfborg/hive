@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -18,9 +19,11 @@ import (
 
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
+	"github.com/sfborg/hive/pkg/figextract"
 	"github.com/sfborg/hive/pkg/grobid"
 	"github.com/sfborg/hive/pkg/jatsconv"
 	"github.com/sfborg/hive/pkg/ocr"
+	"github.com/sfborg/hive/pkg/pdftext"
 	"github.com/sfborg/hive/pkg/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
@@ -130,10 +133,19 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/name/{id}", s.handleGetName)
 
 	mux.HandleFunc("GET /api/reference", s.handleReferences)
+	mux.HandleFunc("GET /api/reference/dashboard", s.handleReferenceDashboard)
 	mux.HandleFunc("GET /api/reference/search", s.handleReferenceSearch)
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
 	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
 	mux.HandleFunc("POST /api/reference/{id}/attach-pdf", s.handleAttachReferencePDF)
+	mux.HandleFunc("DELETE /api/reference/{id}/attached-pdf/{sha}", s.handleDetachReferencePDF)
+	// Corrections — bbox-add, text-tag, xref-fix, chip-feedback.
+	// Slice 1 supports bbox-add for figures/tables only. See
+	// DIGITIZE_CORRECTIONS_PLAN.md § Slicing.
+	mux.HandleFunc("POST /api/reference/correction", s.handleCreateCorrection)
+	mux.HandleFunc("POST /api/reference/correction/preview", s.handlePreviewCorrection)
+	mux.HandleFunc("DELETE /api/reference/correction/{id}", s.handleDeleteCorrection)
+	mux.HandleFunc("GET /api/reference/{id}/corrections", s.handleListCorrections)
 	// Add-reference modal helpers. All three return *unsaved* previews
 	// — the modal shows a form the curator confirms, then POSTs to
 	// /api/reference to actually write.
@@ -159,6 +171,8 @@ func (s *server) routes() *http.ServeMux {
 	// the sidecar's meta.json.
 	mux.HandleFunc("GET /api/reference/library/{sha}/source", s.handleReferenceLibrarySource)
 	mux.HandleFunc("GET /api/reference/library/{sha}/taxpub", s.handleReferenceLibraryTaxpub)
+	mux.HandleFunc("GET /api/reference/library/{sha}/figures/{id}", s.handleReferenceLibraryFigure)
+	mux.HandleFunc("GET /api/reference/library/{sha}/regions", s.handleReferenceLibraryRegions)
 
 	mux.HandleFunc("PATCH /api/taxon/{id}", s.handlePatchTaxon)
 	mux.HandleFunc("PATCH /api/name/{id}", s.handlePatchName)
@@ -2478,6 +2492,87 @@ func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"reference_id": id, "sha512": body.SHA512})
 }
 
+// handleDetachReferencePDF removes the (reference, sha) association
+// and cascades cleanup:
+//
+//   1. Delete the hive__reference_pdf row.
+//   2. Delete correction rows attached to this (reference, sha) —
+//      keeping them would silently re-apply on re-attach later.
+//   3. If no other reference still points at this sha (IsOrphanSHA),
+//      delete every correction row still targeting the sha across
+//      the archive and remove sidecar files on disk
+//      (pdf, tei.xml, jats.xml, figures/, meta.json).
+//
+// Shared PDFs (rare — same content-addressed sha attached to
+// multiple references): the sidecar stays, other references keep
+// working. Only the calling reference's association is severed.
+func (s *server) handleDetachReferencePDF(w http.ResponseWriter, r *http.Request) {
+	refID := r.PathValue("id")
+	sha := r.PathValue("sha")
+	if refID == "" || sha == "" {
+		writeBadRequest(w, r, "reference id and sha required in path")
+		return
+	}
+	if err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DetachReferencePDF(refID, sha)
+	}); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	orphan, err := s.a.IsOrphanSHA(r.Context(), sha)
+	if err != nil {
+		// Detach itself succeeded — surface the orphan-check error
+		// as a warning rather than a hard failure. The DB rows are
+		// gone; on-disk cleanup can be retried later.
+		writeJSON(w, http.StatusOK, apiDetachPDFResponse{
+			Deleted:      true,
+			Warnings:     []string{"orphan check: " + err.Error()},
+			SidecarWiped: false,
+		})
+		return
+	}
+	if !orphan {
+		writeJSON(w, http.StatusOK, apiDetachPDFResponse{
+			Deleted:      true,
+			SidecarWiped: false,
+		})
+		return
+	}
+	// True orphan — cascade delete correction rows for this sha
+	// across the archive (should be zero after the per-ref delete
+	// above, but this handles multi-ref-shared cases where another
+	// reference's corrections still lingered), then wipe sidecar
+	// files on disk.
+	var warnings []string
+	if err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteCorrectionsForSHA(sha)
+	}); err != nil {
+		warnings = append(warnings, "cascade corrections: "+err.Error())
+	}
+	sidecarDir := sidecar.Dir(s.archivePath)
+	for _, ext := range []string{"pdf", "tei.xml", "jats.xml", "meta.json"} {
+		path := filepath.Join(sidecarDir, sha+"."+ext)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			warnings = append(warnings, "remove "+ext+": "+err.Error())
+		}
+	}
+	figuresDir := filepath.Join(sidecarDir, sha+".figures")
+	if err := os.RemoveAll(figuresDir); err != nil {
+		warnings = append(warnings, "remove figures/: "+err.Error())
+	}
+	writeJSON(w, http.StatusOK, apiDetachPDFResponse{
+		Deleted:      true,
+		SidecarWiped: true,
+		Warnings:     warnings,
+	})
+}
+
+type apiDetachPDFResponse struct {
+	Deleted      bool     `json:"deleted"`
+	SidecarWiped bool     `json:"sidecar_wiped"`
+	Warnings     []string `json:"warnings,omitempty"`
+}
+
 // handleDeleteReference removes a reference row. Fails with 409
 // when downstream aggregates still cite the reference — DeleteReference
 // refuses rather than orphaning them. Curator's UI shows the error
@@ -2496,6 +2591,645 @@ func (s *server) handleDeleteReference(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleReferenceDashboard returns the aggregated progress view
+// shown as the landing pane of the references section: per-step
+// done/total counts across the 4-step ingest workflow and a hot
+// list of the next-action buckets. See REFERENCES_DASHBOARD_PLAN
+// for the workflow definition and JSON shape.
+//
+// One SQL round-trip. Cheap to call on every landing; no caching.
+func (s *server) handleReferenceDashboard(w http.ResponseWriter, r *http.Request) {
+	d, err := s.a.ReferenceDashboard(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := apiReferenceDashboard{
+		Total: d.Total,
+		Steps: apiReferenceDashboardSteps{
+			Bibliographic:       apiStepCount{Done: d.Steps.Bibliographic.Done, Total: d.Steps.Bibliographic.Total},
+			Digitized:           apiStepCount{Done: d.Steps.Digitized.Done, Total: d.Steps.Digitized.Total},
+			AssertionsExtracted: apiStepCount{Done: d.Steps.AssertionsExtracted.Done, Total: d.Steps.AssertionsExtracted.Total},
+			Imported:            apiStepCount{Done: d.Steps.Imported.Done, Total: d.Steps.Imported.Total},
+		},
+	}
+	out.Attention = make([]apiAttentionRow, len(d.Attention))
+	for i, a := range d.Attention {
+		out.Attention[i] = apiAttentionRow{
+			Step:        a.Step,
+			Description: a.Description,
+			Count:       a.Count,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// apiReferenceDashboard mirrors the JSON shape documented in
+// REFERENCES_DASHBOARD_PLAN § Step counters. Keys use snake_case
+// to match the rest of hive's API surface.
+type apiReferenceDashboard struct {
+	Total     int                       `json:"total"`
+	Steps     apiReferenceDashboardSteps `json:"steps"`
+	Attention []apiAttentionRow          `json:"attention"`
+}
+
+type apiReferenceDashboardSteps struct {
+	Bibliographic       apiStepCount `json:"bibliographic"`
+	Digitized           apiStepCount `json:"digitized"`
+	AssertionsExtracted apiStepCount `json:"assertions_extracted"`
+	Imported            apiStepCount `json:"imported"`
+}
+
+type apiStepCount struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
+type apiAttentionRow struct {
+	Step        int    `json:"step"`
+	Description string `json:"description"`
+	Count       int    `json:"count"`
+}
+
+// handleCreateCorrection accepts a new bbox-add correction, writes
+// the row inside a transaction, applies the mutation to the JATS
+// sidecar, and re-runs figextract on the new region so the PNG is
+// ready when the reader re-fetches. Body shape: apiCorrection.
+//
+// Slice 1 supports content_type = 'figure' | 'table' only. Other
+// content types (abstract, section, paragraph) land in slice 3
+// (cross-surface placement) with their own apply paths.
+//
+// Returns 201 + the created correction (with server-assigned id and
+// timestamps). On JATS mutation or figextract failure the DB row
+// stays (so the training-signal record isn't lost) but the response
+// carries a warning field so the UI can surface the partial success.
+func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) {
+	var body apiCorrection
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if body.ReferenceID == "" || body.SidecarSHA == "" {
+		writeBadRequest(w, r, "reference_id and sidecar_sha required")
+		return
+	}
+	if body.Kind == "" {
+		body.Kind = string(hive.CorrectionKindBBoxAdd)
+	}
+	// Slice 1 scope: bbox-add + bbox-modify + bbox-remove for
+	// figure or table content types.
+	if body.Kind != string(hive.CorrectionKindBBoxAdd) &&
+		body.Kind != string(hive.CorrectionKindBBoxModify) &&
+		body.Kind != string(hive.CorrectionKindBBoxRemove) {
+		writeBadRequest(w, r, "only bbox-add, bbox-modify, and bbox-remove corrections supported in slice 1")
+		return
+	}
+	if body.ContentType != "figure" && body.ContentType != "table" {
+		writeBadRequest(w, r, "content_type must be 'figure' or 'table' in slice 1")
+		return
+	}
+	if body.Kind == string(hive.CorrectionKindBBoxAdd) {
+		if body.BBox == nil || body.BBoxPage <= 0 {
+			writeBadRequest(w, r, "bbox and bbox_page > 0 required for bbox-add")
+			return
+		}
+	}
+	if body.Kind == string(hive.CorrectionKindBBoxModify) {
+		if body.TargetElementID == "" {
+			writeBadRequest(w, r, "target_element_id required for bbox-modify")
+			return
+		}
+		if body.Payload == "" {
+			writeBadRequest(w, r, "payload with original+corrected required for bbox-modify")
+			return
+		}
+	}
+	if body.Kind == string(hive.CorrectionKindBBoxRemove) {
+		if body.TargetElementID == "" {
+			writeBadRequest(w, r, "target_element_id required for bbox-remove")
+			return
+		}
+		// Snapshot the current GROBID state of the target element
+		// so the training-corpus export has the false-positive
+		// example even after re-derive drops the element. Without
+		// this, the correction records only "this id doesn't
+		// exist" — useless for training a better extractor.
+		if body.Payload == "" || body.Payload == "{}" {
+			if jats, err := sidecar.Read(s.archivePath, body.SidecarSHA, "jats.xml"); err == nil && jats != nil {
+				if regions, err := hive.ExtractRegionsFromJATS(jats); err == nil {
+					for _, rg := range regions {
+						if rg.ID == body.TargetElementID {
+							snapshot := map[string]any{
+								"original": map[string]any{
+									"kind":  rg.Kind,
+									"label": rg.Label,
+									"page":  rg.Page,
+								},
+							}
+							if rg.BBox != nil {
+								snapshot["original"].(map[string]any)["bbox"] = map[string]float64{
+									"x": rg.BBox.X, "y": rg.BBox.Y,
+									"w": rg.BBox.W, "h": rg.BBox.H,
+								}
+							}
+							if b, err := json.Marshal(snapshot); err == nil {
+								body.Payload = string(b)
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	c := &hive.Correction{
+		ReferenceID:     body.ReferenceID,
+		SidecarSHA:      body.SidecarSHA,
+		Kind:            hive.CorrectionKind(body.Kind),
+		ContentType:     body.ContentType,
+		BBoxPage:        body.BBoxPage,
+		Label:           body.Label,
+		TargetElementID: body.TargetElementID,
+		Payload:         body.Payload,
+	}
+	if body.BBox != nil {
+		c.BBox = &hive.BBox{X: body.BBox.X, Y: body.BBox.Y, W: body.BBox.W, H: body.BBox.H}
+	}
+	// For bbox-add of a table, extract the region's text with
+	// pdftotext -layout and parse into rows/columns. Populates the
+	// payload so BBoxAddFigureJATSElement emits a real <table>
+	// child, which lets the reader modal show structured HTML in
+	// the Digitized tab instead of a PNG-only view.
+	//
+	// Heuristic parsing only — works well for simple tables like
+	// column-aligned data; a proper table-structuring UI (Pattern B
+	// from DIGITIZE_CORRECTIONS_PLAN.md) is deferred.
+	if c.Kind == hive.CorrectionKindBBoxAdd && c.ContentType == "table" && c.BBox != nil {
+		pdfPath := sidecar.Path(s.archivePath, c.SidecarSHA, "pdf")
+		if _, err := os.Stat(pdfPath); err == nil {
+			rows, err := pdftext.ExtractTable(pdfPath, c.BBoxPage,
+				c.BBox.X, c.BBox.Y, c.BBox.W, c.BBox.H)
+			if err == nil && len(rows) > 0 {
+				payload := hive.BBoxAddPayload{TableRows: rows}
+				if b, err := json.Marshal(payload); err == nil {
+					c.Payload = string(b)
+				}
+			}
+		}
+	}
+	if c.Payload == "" {
+		c.Payload = "{}"
+	}
+	if err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.CreateCorrection(c)
+	}); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+
+	// Apply to the sidecar. Failures don't roll the DB back — the
+	// correction is still a valid training signal; the UI shows
+	// warnings if the JATS didn't mutate cleanly and a retry can
+	// re-attempt the apply.
+	warnings := s.applyBBoxCorrectionToSidecar(c)
+
+	// Re-run reference-scoped validators so hive_citation_coverage
+	// et al. reflect the mutated sidecar — a bbox-add for the
+	// missing Table 1 should drop the "cited Figure/Table not
+	// extracted" warning immediately, not on the next reindex.
+	_ = s.a.SyncReferenceIssues(r.Context(), c.ReferenceID)
+
+	writeJSON(w, http.StatusCreated, apiCorrectionResponse{
+		Correction: apiCorrectionFromCore(c),
+		Warnings:   warnings,
+	})
+}
+
+// applyBBoxCorrectionToSidecar reads the current JATS sidecar,
+// applies the correction to it (splice a new element for bbox-add,
+// patch an existing element for bbox-modify), writes it back, then
+// re-runs figextract so PNG crops stay in sync. Best-effort: each
+// step returns a warning string on failure rather than aborting.
+func (s *server) applyBBoxCorrectionToSidecar(c *hive.Correction) []string {
+	var warnings []string
+	jats, err := sidecar.Read(s.archivePath, c.SidecarSHA, "jats.xml")
+	if err != nil || jats == nil {
+		return []string{"jats sidecar not found for sha " + c.SidecarSHA}
+	}
+	var mutated []byte
+	switch c.Kind {
+	case hive.CorrectionKindBBoxAdd:
+		mutated, err = hive.ApplyBBoxAddToJATS(jats, c)
+		if err != nil {
+			return []string{"apply bbox-add: " + err.Error()}
+		}
+	case hive.CorrectionKindBBoxModify:
+		mutated, err = hive.ApplyBBoxModifyToJATS(jats, c)
+		if err != nil {
+			return []string{"apply bbox-modify: " + err.Error()}
+		}
+	case hive.CorrectionKindBBoxRemove:
+		mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
+		if err != nil {
+			return []string{"apply bbox-remove: " + err.Error()}
+		}
+	default:
+		return []string{"unsupported correction kind: " + string(c.Kind)}
+	}
+	if err := sidecar.Store(s.archivePath, c.SidecarSHA, "jats.xml", mutated); err != nil {
+		return []string{"write jats sidecar: " + err.Error()}
+	}
+	// Figure extraction: pdftocairo cropping the new region. Only
+	// runs when the source PDF is on disk (the common case; a
+	// reference could in principle have lost its PDF after upload).
+	pdfPath := sidecar.Path(s.archivePath, c.SidecarSHA, "pdf")
+	if _, err := os.Stat(pdfPath); err != nil {
+		warnings = append(warnings, "source pdf missing; skipped figextract")
+		return warnings
+	}
+	outDir := filepath.Join(sidecar.Dir(s.archivePath), c.SidecarSHA+".figures")
+	if _, err := figextract.Extract(mutated, pdfPath, outDir); err != nil {
+		warnings = append(warnings, "figextract: "+err.Error())
+	}
+	return warnings
+}
+
+// handlePreviewCorrection dry-runs a bbox: crops the region to
+// PNG, extracts text from it via pdftotext, and returns both the
+// PNG (as a data URL) and any recognized "Figure N" / "Table N"
+// hint from the extracted text. Nothing is persisted — this is
+// the form's "what will I get if I save this bbox?" preview.
+//
+// Body: {sidecar_sha, page, bbox: {x, y, w, h}} in PDF points.
+// Response: {png_data_url, extracted_text, detected_type,
+//            detected_label, existing_labels: [{label, page, kind, id}]}.
+//
+// existing_labels is returned inline so the form only needs one
+// round-trip after the bbox is drawn.
+func (s *server) handlePreviewCorrection(w http.ResponseWriter, r *http.Request) {
+	var body apiPreviewCorrectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body: "+err.Error())
+		return
+	}
+	if body.SidecarSHA == "" {
+		writeBadRequest(w, r, "sidecar_sha required")
+		return
+	}
+	if body.BBox == nil || body.Page <= 0 {
+		writeBadRequest(w, r, "bbox and page > 0 required")
+		return
+	}
+	pdfPath := sidecar.Path(s.archivePath, body.SidecarSHA, "pdf")
+	if _, err := os.Stat(pdfPath); err != nil {
+		writeBadRequest(w, r, "source pdf not found for sha")
+		return
+	}
+	// PNG crop for the visual preview. Absent bytes are OK (means
+	// pdftocairo not installed) — form still shows the detected
+	// text and existing labels.
+	png, err := figextract.PreviewRegion(pdfPath, body.Page,
+		body.BBox.X, body.BBox.Y, body.BBox.W, body.BBox.H)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := apiPreviewCorrectionResponse{}
+	if png != nil {
+		out.PNGDataURL = "data:image/png;base64," +
+			base64.StdEncoding.EncodeToString(png)
+	}
+	// Text extraction + fig/table detection. Silent skip when
+	// pdftotext isn't installed OR the PDF is image-only — form
+	// falls back to curator-typed values.
+	det, err := pdftext.ExtractRegion(pdfPath, body.Page,
+		body.BBox.X, body.BBox.Y, body.BBox.W, body.BBox.H)
+	if err == nil && det != nil {
+		out.ExtractedText = det.FullText
+		out.DetectedType = det.ContentType
+		out.DetectedLabel = det.Label
+	}
+	// Existing labels from the JATS sidecar so the form can show
+	// what figs/tables the paper already has, ordered by page.
+	if jats, err := sidecar.Read(s.archivePath, body.SidecarSHA, "jats.xml"); err == nil && jats != nil {
+		if labels, err := hive.ExtractLabelsFromJATS(jats); err == nil {
+			out.ExistingLabels = make([]apiExtractedLabel, len(labels))
+			for i, l := range labels {
+				out.ExistingLabels[i] = apiExtractedLabel{
+					Label: l.Label,
+					Kind:  l.Kind,
+					Page:  l.Page,
+					ID:    l.ID,
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleReferenceLibraryRegions returns every fig/table-wrap
+// region in the sidecar's JATS with bbox coords, so the PDF
+// viewer can render all detected regions as overlays — GROBID-
+// extracted ones in one color, curator-added ones in another.
+// Powers the "see everything the extractor found" affordance on
+// the Digitize tab.
+func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha")
+	if sha == "" {
+		writeBadRequest(w, r, "sha required")
+		return
+	}
+	jats, err := sidecar.Read(s.archivePath, sha, "jats.xml")
+	if err != nil || jats == nil {
+		http.NotFound(w, r)
+		return
+	}
+	regions, err := hive.ExtractRegionsFromJATS(jats)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := apiRegionList{Items: make([]apiRegion, 0, len(regions))}
+	for _, rg := range regions {
+		item := apiRegion{
+			ID:     rg.ID,
+			Label:  rg.Label,
+			Kind:   rg.Kind,
+			Page:   rg.Page,
+			Origin: rg.Origin,
+		}
+		if rg.BBox != nil {
+			item.BBox = &apiBBox{X: rg.BBox.X, Y: rg.BBox.Y, W: rg.BBox.W, H: rg.BBox.H}
+		}
+		out.Items = append(out.Items, item)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type apiRegionList struct {
+	Items []apiRegion `json:"items"`
+}
+
+type apiRegion struct {
+	ID     string   `json:"id"`
+	Label  string   `json:"label,omitempty"`
+	Kind   string   `json:"kind"`
+	Page   int      `json:"page,omitempty"`
+	Origin string   `json:"origin"`
+	BBox   *apiBBox `json:"bbox,omitempty"`
+}
+
+// apiPreviewCorrectionRequest is the wire shape for a dry-run
+// bbox preview.
+type apiPreviewCorrectionRequest struct {
+	SidecarSHA string   `json:"sidecar_sha"`
+	Page       int      `json:"page"`
+	BBox       *apiBBox `json:"bbox"`
+}
+
+type apiPreviewCorrectionResponse struct {
+	PNGDataURL     string              `json:"png_data_url,omitempty"`
+	ExtractedText  string              `json:"extracted_text,omitempty"`
+	DetectedType   string              `json:"detected_type,omitempty"`
+	DetectedLabel  string              `json:"detected_label,omitempty"`
+	ExistingLabels []apiExtractedLabel `json:"existing_labels,omitempty"`
+}
+
+type apiExtractedLabel struct {
+	Label string `json:"label"`
+	Kind  string `json:"kind"`
+	Page  int    `json:"page,omitempty"`
+	ID    string `json:"id,omitempty"`
+}
+
+// handleListCorrections returns every correction attached to the
+// given reference, both active and reverted. Used by the Digitize
+// tab's chip strip on load.
+func (s *server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
+	refID := r.PathValue("id")
+	if refID == "" {
+		writeBadRequest(w, r, "reference id required")
+		return
+	}
+	list, err := s.a.ListCorrectionsForReference(r.Context(), refID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiCorrection, len(list))
+	for i, c := range list {
+		items[i] = apiCorrectionFromCore(&c)
+	}
+	writeJSON(w, http.StatusOK, apiCorrectionList{Items: items})
+}
+
+// handleDeleteCorrection removes the correction row and re-derives
+// the sidecar JATS from the remaining active corrections. Slice 1
+// simplification: since bbox-add is additive, deletion re-applies
+// every remaining active correction on top of the pre-correction
+// baseline. Later slices with non-additive corrections may need a
+// more sophisticated re-derive path.
+//
+// For slice 1 we take the simple approach: delete the row, then
+// re-run jatsconv from the source TEI and re-apply every remaining
+// active correction. Baseline is always regenerable, so no data
+// loss risk.
+func (s *server) handleDeleteCorrection(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeBadRequest(w, r, "correction id required")
+		return
+	}
+	c, err := s.a.GetCorrection(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	if err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.DeleteCorrection(id)
+	}); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	warnings := s.redoBBoxCorrectionsForReference(c.ReferenceID, c.SidecarSHA)
+	// Same re-validation trigger as the create path — sidecar
+	// mutation from a delete could re-introduce a citation-coverage
+	// warning (removed the only Table 1 → cited Table 1 no longer
+	// exists in the JATS).
+	_ = s.a.SyncReferenceIssues(r.Context(), c.ReferenceID)
+	writeJSON(w, http.StatusOK, apiCorrectionDeleteResponse{
+		Deleted:  true,
+		Warnings: warnings,
+	})
+}
+
+// redoBBoxCorrectionsForReference rebuilds the JATS from the
+// original TEI, then re-applies every remaining active bbox-add
+// correction. Used after a correction deletion.
+//
+// TEI-based baseline: hive keeps the raw GROBID TEI on disk
+// alongside the JATS, so re-deriving is (a) safe and (b) doesn't
+// require another GROBID call. jatsconv is fast (microseconds per
+// paragraph); the whole re-derive completes in tens of ms.
+func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
+	var warnings []string
+	tei, err := sidecar.Read(s.archivePath, sha, "tei.xml")
+	if err != nil || tei == nil {
+		return []string{"tei sidecar missing; skip re-derive"}
+	}
+	jats, err := jatsconv.TEIToJATS(tei)
+	if err != nil {
+		return []string{"re-derive jats: " + err.Error()}
+	}
+	// Re-run the annotator so tp:taxon-name chips (GNfinder /
+	// GNverifier output) survive the delete + re-derive cycle.
+	// Skipping this step here was silently stripping every chip
+	// from the sidecar whenever a curator deleted a correction.
+	if s.annotator != nil {
+		if augmented, annErr := s.annotator.Annotate(context.Background(), jats); annErr == nil {
+			jats = augmented
+		} else {
+			warnings = append(warnings, "annotate: "+annErr.Error())
+		}
+	}
+	remaining, err := s.a.ListCorrectionsForReference(context.Background(), refID)
+	if err != nil {
+		return []string{"list remaining corrections: " + err.Error()}
+	}
+	for i := range remaining {
+		c := &remaining[i]
+		if c.Status != hive.CorrectionStatusActive {
+			continue
+		}
+		if c.ContentType != "figure" && c.ContentType != "table" {
+			continue
+		}
+		var mutated []byte
+		var err error
+		switch c.Kind {
+		case hive.CorrectionKindBBoxAdd:
+			mutated, err = hive.ApplyBBoxAddToJATS(jats, c)
+		case hive.CorrectionKindBBoxModify:
+			mutated, err = hive.ApplyBBoxModifyToJATS(jats, c)
+		case hive.CorrectionKindBBoxRemove:
+			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
+		default:
+			continue
+		}
+		if err != nil {
+			warnings = append(warnings, "reapply "+c.ID+": "+err.Error())
+			continue
+		}
+		jats = mutated
+	}
+	if err := sidecar.Store(s.archivePath, sha, "jats.xml", jats); err != nil {
+		warnings = append(warnings, "write sidecar: "+err.Error())
+		return warnings
+	}
+	// Re-run figextract so PNGs for remaining corrections stay in sync.
+	pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
+	if _, err := os.Stat(pdfPath); err == nil {
+		outDir := filepath.Join(sidecar.Dir(s.archivePath), sha+".figures")
+		if _, err := figextract.Extract(jats, pdfPath, outDir); err != nil {
+			warnings = append(warnings, "figextract: "+err.Error())
+		}
+	}
+	return warnings
+}
+
+// apiCorrection is the wire shape of a correction row. Optional
+// fields use pointers so the JSON round-trips distinguish "empty"
+// from "not present".
+type apiCorrection struct {
+	ID              string     `json:"id,omitempty"`
+	ReferenceID     string     `json:"reference_id"`
+	SidecarSHA      string     `json:"sidecar_sha"`
+	Kind            string     `json:"kind"`
+	ContentType     string     `json:"content_type"`
+	BBoxPage        int        `json:"bbox_page,omitempty"`
+	BBox            *apiBBox   `json:"bbox,omitempty"`
+	Label           string     `json:"label,omitempty"`
+	AnchorPtr       *apiAnchor `json:"anchor_ptr,omitempty"`
+	TargetElementID string     `json:"target_element_id,omitempty"`
+	Payload         string     `json:"payload,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	RevertedReason  string     `json:"reverted_reason,omitempty"`
+	CreatedAt       string     `json:"created_at,omitempty"`
+	CreatedBy       string     `json:"created_by,omitempty"`
+	// FigureID is the JATS element id the correction's fig/table
+	// element ends up with — used by the client to build the PNG
+	// URL (/api/reference/library/<sha>/figures/<id>).
+	FigureID string `json:"figure_id,omitempty"`
+}
+
+type apiBBox struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
+}
+
+type apiAnchor struct {
+	ElementID string `json:"element_id"`
+	Position  string `json:"position"`
+}
+
+type apiCorrectionResponse struct {
+	Correction apiCorrection `json:"correction"`
+	Warnings   []string      `json:"warnings,omitempty"`
+}
+
+type apiCorrectionList struct {
+	Items []apiCorrection `json:"items"`
+}
+
+type apiCorrectionDeleteResponse struct {
+	Deleted  bool     `json:"deleted"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// apiCorrectionFromCore maps a core Correction to the wire shape.
+// Populates FigureID for bbox-add corrections of figure/table type
+// so the client can construct the extracted-PNG URL.
+func apiCorrectionFromCore(c *hive.Correction) apiCorrection {
+	out := apiCorrection{
+		ID:              c.ID,
+		ReferenceID:     c.ReferenceID,
+		SidecarSHA:      c.SidecarSHA,
+		Kind:            string(c.Kind),
+		ContentType:     c.ContentType,
+		BBoxPage:        c.BBoxPage,
+		Label:           c.Label,
+		TargetElementID: c.TargetElementID,
+		Payload:         c.Payload,
+		Status:          string(c.Status),
+		RevertedReason:  c.RevertedReason,
+		CreatedBy:       c.CreatedBy,
+	}
+	if !c.CreatedAt.IsZero() {
+		out.CreatedAt = c.CreatedAt.Format(time.RFC3339)
+	}
+	if c.BBox != nil {
+		out.BBox = &apiBBox{X: c.BBox.X, Y: c.BBox.Y, W: c.BBox.W, H: c.BBox.H}
+	}
+	if c.AnchorPtr != nil {
+		out.AnchorPtr = &apiAnchor{
+			ElementID: c.AnchorPtr.ElementID,
+			Position:  c.AnchorPtr.Position,
+		}
+	}
+	if c.Kind == hive.CorrectionKindBBoxAdd &&
+		(c.ContentType == "figure" || c.ContentType == "table") {
+		out.FigureID = hive.CurationElementID(c.ID)
+	}
+	if c.Kind == hive.CorrectionKindBBoxModify {
+		out.FigureID = c.TargetElementID
+	}
+	return out
 }
 
 // handleRegenerateCitations rewrites col__citation on reference
@@ -2878,6 +3612,12 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	teiStatus, doi, meta := s.tryGrobidConvert(r.Context(), res, ext)
 	annotStatus, annotCount := s.tryAnnotate(r.Context(), res, teiStatus)
 
+	// Enumerate any references already attached to this sha so
+	// the WUI can short-circuit the bibliographic-entry flow with
+	// a "you already have this PDF" prompt instead of letting the
+	// curator waste time filling out fields.
+	attached := s.attachedReferencesForSHA(r.Context(), res.SHA512)
+
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
 		SHA512:              res.SHA512,
 		Ext:                 res.Ext,
@@ -2888,7 +3628,38 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		Metadata:            meta,
 		AnnotationStatus:    annotStatus,
 		AnnotationNameCount: annotCount,
+		AttachedReferences:  attached,
 	})
+}
+
+// attachedReferencesForSHA returns compact summaries of every
+// reference row currently linked to the given sha via
+// hive__reference_pdf. Empty slice when nothing points at the sha
+// (fresh upload, orphan sidecar from a prior detach, etc.).
+func (s *server) attachedReferencesForSHA(ctx context.Context, sha string) []apiAttachedReference {
+	rows, err := s.a.DB().QueryContext(ctx,
+		`SELECT r.col__id,
+		        COALESCE(r.col__citation, ''),
+		        COALESCE(r.col__title, '')
+		 FROM hive__reference_pdf p
+		 JOIN reference r ON r.col__id = p.reference_id
+		 WHERE p.sha512 = ?
+		 ORDER BY p.attached_at`,
+		sha,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []apiAttachedReference
+	for rows.Next() {
+		var item apiAttachedReference
+		if err := rows.Scan(&item.ID, &item.Citation, &item.Title); err != nil {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // tryAnnotate converts the just-generated (or previously-cached)
@@ -2927,10 +3698,89 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	if err != nil {
 		return "failed", 0
 	}
+	// Re-apply active bbox-add corrections attached to this sha
+	// before writing the sidecar. This preserves curator additions
+	// (missed figures/tables drawn via the Digitize-tab bbox tool)
+	// across a re-import + re-annotate cycle — otherwise the fresh
+	// GROBID JATS overwrites the curator work with a clean slate.
+	augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
 	if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
 		return "failed", 0
 	}
+	// Extract figure/table image crops opportunistically. Failures
+	// don't affect the annotation status — the JATS is still valid
+	// without the images, curator just won't have visual crops in
+	// the reader modal for figures/tables. Silent on missing
+	// pdftocairo (Docker ships it; local Go-native runs skip).
+	s.tryExtractFigures(res.SHA512, augmented)
 	return "annotated", countTaxonNameElements(augmented)
+}
+
+// reapplyCorrectionsForSHA finds every active bbox-add correction
+// attached to the given sidecar sha (across all references that
+// might share that sha) and re-splices each into the freshly
+// generated JATS. Called from tryAnnotate so curator-added
+// figures/tables survive a re-import + re-annotate cycle.
+//
+// Non-fatal: any correction that fails to apply is skipped
+// silently, matching the tryAnnotate best-effort tolerance model.
+// A more visible failure path lands with slice 6 (re-digitize
+// with per-correction status reporting).
+func (s *server) reapplyCorrectionsForSHA(ctx context.Context, sha string, jats []byte) []byte {
+	rows, err := s.a.DB().QueryContext(ctx,
+		`SELECT DISTINCT correction_id
+		 FROM hive__extraction_correction
+		 WHERE sidecar_sha = ? AND status = 'active'
+		 ORDER BY created_at`,
+		sha,
+	)
+	if err != nil {
+		return jats
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		c, err := s.a.GetCorrection(ctx, id)
+		if err != nil || c == nil {
+			continue
+		}
+		if c.ContentType != "figure" && c.ContentType != "table" {
+			continue
+		}
+		var mutated []byte
+		switch c.Kind {
+		case hive.CorrectionKindBBoxAdd:
+			mutated, err = hive.ApplyBBoxAddToJATS(jats, c)
+		case hive.CorrectionKindBBoxModify:
+			mutated, err = hive.ApplyBBoxModifyToJATS(jats, c)
+		case hive.CorrectionKindBBoxRemove:
+			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
+		default:
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		jats = mutated
+	}
+	return jats
+}
+
+// tryExtractFigures renders each fig/table-wrap with usable coord
+// attributes to a PNG sidecar under <sha>.figures/<id>.png.
+// Non-fatal — same tolerance model as tryAnnotate. Runs
+// synchronously after annotation; the pdftocairo call is fast
+// (~200ms per figure on the typical scientific PDF).
+func (s *server) tryExtractFigures(sha string, jats []byte) {
+	pdfPath := filepath.Join(sidecar.Dir(s.archivePath), sha+".pdf")
+	outDir := filepath.Join(sidecar.Dir(s.archivePath), sha+".figures")
+	_, _ = figextract.Extract(jats, pdfPath, outDir)
 }
 
 // countTaxonNameElements returns the number of <tp:taxon-name>
@@ -3183,6 +4033,73 @@ func (s *server) handleReferenceLibraryTaxpub(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.Write(data)
+}
+
+// handleReferenceLibraryFigure streams a per-figure PNG crop
+// rendered by figextract from the source PDF via GROBID's coord
+// attributes. Path is /api/reference/library/{sha}/figures/{id}
+// where {id} matches a JATS <fig>/<table-wrap>'s id attribute
+// (fig_0, tab_1, etc.). Reader modal fetches these on demand
+// when the curator clicks a figure or table.
+//
+// Returns 404 when the crop isn't on disk — either coord metadata
+// was missing so figextract skipped that fig, or the extraction
+// hasn't run yet. Client should degrade gracefully (show caption
+// only, offer "Open in PDF" as fallback).
+func (s *server) handleReferenceLibraryFigure(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha")
+	id := r.PathValue("id")
+	if sha == "" || id == "" {
+		writeBadRequest(w, r, "sha and id required")
+		return
+	}
+	// Path traversal guard: id comes straight from the URL, so any
+	// "../" or absolute path would escape the figures dir. Restrict
+	// to alphanumerics + underscore, which covers every id
+	// jatsconv emits (fig_0, tab_1, ...).
+	if !safeIDForFilename(id) {
+		writeBadRequest(w, r, "invalid figure id")
+		return
+	}
+	path := filepath.Join(sidecar.Dir(s.archivePath), sha+".figures", id+".png")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		writeProblem(w, r, err)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// safeIDForFilename accepts only the character set jatsconv emits
+// for fig/table ids: ASCII letters, digits, underscore, hyphen.
+// Rejects anything else so a URL-path fig id can't traverse into
+// a parent directory or reach unintended files.
+func safeIDForFilename(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // handleParseName runs gnparser on a verbatim scientific name and returns

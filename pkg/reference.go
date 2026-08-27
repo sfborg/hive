@@ -554,6 +554,70 @@ func (t *Tx) AttachReferencePDF(referenceID, sha512 string) error {
 	return nil
 }
 
+// DetachReferencePDF removes the (reference_id, sha512) row from
+// hive__reference_pdf. Idempotent — detaching an already-absent
+// association returns nil. Also deletes every extraction correction
+// attached to the same sha for the given reference so the DB and
+// the sidecar-derived JATS don't drift out of sync when a curator
+// deletes their PDF and re-attaches later.
+//
+// Does not touch sidecar files — the caller is responsible for
+// filesystem cleanup once it verifies no other reference still
+// points at the sha (see IsOrphanSHA).
+func (t *Tx) DetachReferencePDF(referenceID, sha512 string) error {
+	if referenceID == "" || sha512 == "" {
+		return fmt.Errorf("core: DetachReferencePDF: both reference_id and sha512 required")
+	}
+	if _, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM hive__reference_pdf
+		 WHERE reference_id = ? AND sha512 = ?`,
+		referenceID, sha512,
+	); err != nil {
+		return fmt.Errorf("core: detach pdf %s from %s: %w", sha512, referenceID, err)
+	}
+	// Also drop this reference's correction rows for that sha —
+	// keeping them would silently re-apply the corrections onto
+	// any future re-attach, which is not what "delete this PDF"
+	// implies.
+	if _, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM hive__extraction_correction
+		 WHERE reference_id = ? AND sidecar_sha = ?`,
+		referenceID, sha512,
+	); err != nil {
+		return fmt.Errorf("core: cascade delete corrections: %w", err)
+	}
+	return nil
+}
+
+// IsOrphanSHA returns true when no reference row still has a
+// hive__reference_pdf row for the given sha. Callers use this
+// after a detach to decide whether to delete sidecar files (safe
+// only when no other reference still uses the content).
+func (a *Archive) IsOrphanSHA(ctx context.Context, sha512 string) (bool, error) {
+	var n int
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM hive__reference_pdf WHERE sha512 = ?`,
+		sha512,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("core: count sha references: %w", err)
+	}
+	return n == 0, nil
+}
+
+// DeleteCorrectionsForSHA drops every correction row targeting
+// the given sha across all references. Called after detach when
+// IsOrphanSHA returns true so orphaned correction data doesn't
+// linger and re-apply if the same PDF is later re-uploaded.
+func (t *Tx) DeleteCorrectionsForSHA(sha512 string) error {
+	if _, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM hive__extraction_correction WHERE sidecar_sha = ?`,
+		sha512,
+	); err != nil {
+		return fmt.Errorf("core: delete corrections for sha %s: %w", sha512, err)
+	}
+	return nil
+}
+
 // ReferencePDFs returns every sha512 attached to the given
 // reference, in attach order. Empty slice when nothing is attached.
 func (a *Archive) ReferencePDFs(ctx context.Context, referenceID string) ([]string, error) {
