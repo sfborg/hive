@@ -53,6 +53,41 @@
     <ref name="tp.taxon-name"/>
   </define>
 
+  <!-- hive:page-break — milestone marker for source-PDF page
+       boundaries. Emitted by jatsconv (via TEIToJATSOpts with a
+       pdftext.WordPages stream) at the exact word boundary where
+       the source PDF transitions from one page to the next. The
+       reader renders the marker as a horizontal divider with the
+       journal-labeled page number so curators can cite source
+       pages for ZooBank / ICZN references directly from the
+       reader without opening the PDF. Wrapped in a dedicated
+       <p class="hive-page-break"> at emit time so p-elements is
+       the only extension point needed — the marker never appears
+       in section titles, captions, or other phrase.class contexts.
+       (libxml2's RelaxNG implementation refuses combine="choice"
+       additions of a second element ref to phrase.class, so this
+       narrower extension is also the one that actually validates.) -->
+  <define name="p-elements" combine="choice">
+    <element name="hive:page-break">
+      <attribute name="page">
+        <data type="positiveInteger"/>
+      </attribute>
+      <optional>
+        <!-- placement="approximate" tells the reader to prefix the
+             page number with "~" — used when the transition was
+             detected at a section-title boundary rather than mid-
+             paragraph, so the exact word offset is uncertain. -->
+        <attribute name="placement">
+          <choice>
+            <value>exact</value>
+            <value>approximate</value>
+          </choice>
+        </attribute>
+      </optional>
+      <empty/>
+    </element>
+  </define>
+
   <!-- TaxPub scientific-name markup with hive's gn:* attributes.
        full-name is mandatory (every chip carries it); gn:source,
        gn:score, and gn:candidates are optional and only populated
@@ -116,6 +151,19 @@
     </optional>
     <optional>
       <attribute name="hive:pdf-bbox"/>
+    </optional>
+  </define>
+
+  <!-- hive:pdf-page-offset on <article> tells the reader how to
+       translate raw PDF-index pages (as stored in hive:pdf-page on
+       fig / table-wrap) into journal-labeled pages for display.
+       journal = pdf-index + offset. Absent when the offset couldn't
+       be detected from the source PDF's page-1 running header. -->
+  <define name="article-atts" combine="interleave">
+    <optional>
+      <attribute name="hive:pdf-page-offset">
+        <data type="integer"/>
+      </attribute>
     </optional>
   </define>
 

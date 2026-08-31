@@ -47,7 +47,48 @@ import (
 	"strings"
 
 	"github.com/sfborg/hive/pkg/grobid"
+	"github.com/sfborg/hive/pkg/pdftext"
 )
+
+// Options carries per-conversion tunables. Kept minimal — old
+// callers use TEIToJATS with defaults; new callers that have PDF
+// word-page ground truth use TEIToJATSOpts to opt into precise
+// page-break markers.
+type Options struct {
+	// WordPages is the per-word (word, page) stream extracted from
+	// the source PDF via pdftotext -bbox. Enables precise mid-
+	// paragraph page-break marker placement. When nil, no markers
+	// are emitted (paragraph-boundary approximation was worse
+	// than nothing per curator feedback).
+	WordPages []pdftext.WordPage
+	// PageOffset is added to raw PDF-index page numbers when
+	// emitting markers, translating them to journal-labeled pages
+	// curators actually cite. Compute as (journal_page_of_pdf_page_1 - 1).
+	// Zero means "display PDF-index pages as-is."
+	PageOffset int
+}
+
+// TEIToJATSOpts is the option-taking counterpart of TEIToJATS.
+// TEIToJATS(tei) is equivalent to TEIToJATSOpts(tei, Options{}).
+func TEIToJATSOpts(tei []byte, opts Options) ([]byte, error) {
+	header, err := grobid.ParseHeader(tei)
+	if err != nil {
+		return nil, fmt.Errorf("jatsconv: parse header: %w", err)
+	}
+	c := &converter{
+		src:        tei,
+		wordPages:  opts.WordPages,
+		pageOffset: opts.PageOffset,
+		state:      &convState{},
+	}
+	c.emitPreamble()
+	c.emitFront(header)
+	if err := c.convertTextSubtree(); err != nil {
+		return nil, err
+	}
+	c.emitPostamble()
+	return c.out.Bytes(), nil
+}
 
 // bodyItem is one categorized child of <body> collected during
 // emitBody's buffer pass. Kind determines the JATS placement rules
@@ -116,10 +157,47 @@ func TEIToJATS(tei []byte) ([]byte, error) {
 // Reused across the front-matter and body passes; the body pass
 // creates its own xml.Decoder because the front pass consumes the
 // stream through the teiHeader subtree.
+//
+// wordPages drives precise page-break placement — see
+// emitParagraph for how paragraph text gets aligned against the
+// pdftotext word stream to find exact word-boundary page
+// transitions. The state pointer is shared with sub-converters so
+// alignment stays monotonic when the walk descends into nested
+// <div> sections.
 type converter struct {
-	src []byte
-	out bytes.Buffer
+	src        []byte
+	out        bytes.Buffer
+	wordPages  []pdftext.WordPage
+	pageOffset int
+	state      *convState
+	// pendingHoists carries page-break transitions detected while
+	// aligning a section title — the markers can't sit inside
+	// <sec> before <title> (sec-model forbids that), so
+	// emitSection splices them just after the title. A slice
+	// (not a single value) so multi-page fan-out at a section
+	// boundary can hoist every missing page in one shot. Consumed
+	// and cleared by emitSection.
+	pendingHoists []pageTransition
 }
+
+// convState is shared via pointer across a converter and every
+// sub-converter it spawns (see emitSection). Isolating the
+// mutable fields keeps sub-converter construction obvious about
+// which state gets inherited vs. reset per subtree.
+type convState struct {
+	wordCursor int // position in wordPages the next paragraph should resume from
+	lastPage   int // last aligned page — seeds page-transition detection for the next paragraph
+	// maxMarkerPage is the highest page number that has been
+	// emitted as a marker so far. Used as a monotone floor for
+	// fan-out: even if lastPage regresses due to an alignment
+	// blip (e.g., a word briefly matching a running header on a
+	// figure page), we still fill any pages strictly between
+	// maxMarkerPage and the current page as approximate markers.
+	// Guarantees curators see every page in order regardless of
+	// whether GROBID captured any body text from it.
+	maxMarkerPage int
+}
+
 
 func (c *converter) writeString(s string) { c.out.WriteString(s) }
 func (c *converter) writeByte(b byte)     { c.out.WriteByte(b) }
@@ -140,6 +218,15 @@ func (c *converter) emitPreamble() {
 	c.writeString(` xmlns:tp="` + taxPubNamespace + `"`)
 	c.writeString(` xmlns:gn="` + gnNamespace + `"`)
 	c.writeString(` xmlns:hive="` + hiveNamespace + `"`)
+	// hive:pdf-page-offset lets the reader translate any element
+	// carrying hive:pdf-page (fig, table-wrap, ...) into a journal-
+	// labeled page number for display. Persisted at emit time so
+	// downstream consumers don't need to re-derive from the source
+	// PDF. Absent when the offset couldn't be detected (no page
+	// range in the running header on page 1).
+	if c.pageOffset != 0 {
+		c.writeString(fmt.Sprintf(` hive:pdf-page-offset="%d"`, c.pageOffset))
+	}
 	c.writeString(">\n")
 }
 
@@ -266,6 +353,26 @@ func (c *converter) emitFront(h *grobid.BibHeader) {
 			c.writeString("        <p>")
 			c.writeString(escapeText(p))
 			c.writeString("</p>\n")
+			// Align the abstract text against the PDF word stream
+			// so state.lastPage / wordCursor reflect where the
+			// abstract ends. Without this the first body-section
+			// title has no prior aligned page and its own
+			// transition-hoist can't fire (floor stays 0). Cheap
+			// side effect: signature-anchoring skips past any
+			// running headers between title page and body start.
+			if c.wordPages != nil && c.state != nil {
+				aw := pdftext.ParaWords(p)
+				if len(aw) > 0 {
+					r := pdftext.AlignParagraphPages(aw, c.wordPages, c.state.wordCursor)
+					c.state.wordCursor = r.NextIndex
+					for i := len(r.Pages) - 1; i >= 0; i-- {
+						if r.Pages[i] > 0 {
+							c.state.lastPage = r.Pages[i]
+							break
+						}
+					}
+				}
+			}
 		}
 		c.writeString("      </abstract>\n")
 	}
@@ -454,7 +561,12 @@ func (c *converter) emitBody(dec *xml.Decoder) error {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			sub := &converter{src: c.src}
+			sub := &converter{
+				src:        c.src,
+				wordPages:  c.wordPages,
+				pageOffset: c.pageOffset,
+				state:      c.state,
+			}
 			if err := sub.handleStart(dec, t); err != nil {
 				return err
 			}
@@ -902,10 +1014,23 @@ func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 			attrs.WriteString(`"`)
 		}
 	}
-	sub := &converter{src: c.src}
+	sub := &converter{
+		src:        c.src,
+		wordPages:  c.wordPages,
+		pageOffset: c.pageOffset,
+		state:      c.state,
+	}
 	if err := sub.convertContainer(dec, "div"); err != nil {
 		return err
 	}
+	// The section's title may have triggered a page transition
+	// (recorded as sub.pendingHoist by emitTitle). JATS structure
+	// forbids <p> between sec siblings and disallows <p> at body
+	// level entirely, so the marker can't be hoisted above <sec>
+	// in the emitted XML. Emit it as the first block-level child
+	// after the title — the reader visually promotes markers that
+	// appear immediately after a section title so they render
+	// above the header where the actual page break is.
 	content := sub.out.String()
 	c.writeString("<sec")
 	c.writeString(attrs.String())
@@ -913,20 +1038,115 @@ func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 	if !strings.HasPrefix(strings.TrimSpace(content), "<title>") {
 		c.writeString("<title>Section</title>")
 	}
-	c.writeString(content)
+	if len(sub.pendingHoists) > 0 {
+		// Splice the marker(s) between the title's closing tag
+		// and the rest of the section content. sec-model requires
+		// title first, so any hoisted transition (whether one
+		// marker for the section starting on a new page or many
+		// for a fan-out across figures-only pages) goes right
+		// after </title>. All markers here carry
+		// placement="approximate" because the exact break sits
+		// somewhere around the title boundary — the reader
+		// renders them with a leading "~" and visually promotes
+		// the run above the section header.
+		var markers strings.Builder
+		for _, t := range sub.pendingHoists {
+			var attrs string
+			if t.Approximate {
+				attrs = ` placement="approximate"`
+			}
+			markers.WriteString(fmt.Sprintf(
+				`<p content-type="hive-page-break"><hive:page-break page="%d"%s/></p>`+"\n",
+				t.Page, attrs,
+			))
+		}
+		trimmed := strings.TrimLeft(content, " \t\n\r")
+		if strings.HasPrefix(trimmed, "<title>") {
+			end := strings.Index(trimmed, "</title>")
+			if end >= 0 {
+				after := trimmed[end+len("</title>"):]
+				c.writeString(trimmed[:end+len("</title>")])
+				c.writeString("\n")
+				c.writeString(markers.String())
+				c.writeString(after)
+			} else {
+				c.writeString(content)
+			}
+		} else {
+			// No title at start — synthesized <title>Section</title>
+			// was already emitted above, so the marker goes right
+			// after it.
+			c.writeString(markers.String())
+			c.writeString(content)
+		}
+		sub.pendingHoists = nil
+	} else {
+		c.writeString(content)
+	}
 	c.writeString("</sec>\n")
 	return nil
 }
 
 // emitTitle writes a <title> element for a TEI <head>. Content is
 // pass-through text (GROBID heads rarely contain nested markup).
+//
+// When wordPages ground truth is available, the title's words are
+// aligned against the source-PDF word stream so state.wordCursor /
+// state.lastPage stay accurate across the section boundary. If the
+// title's first word starts a new page relative to the pre-title
+// lastPage, a pageTransition is recorded on the converter's
+// pendingHoist field — the caller (emitSection) lifts it above the
+// <sec> wrapper so the divider renders visually before the section
+// header, not tucked between title and content.
 func (c *converter) emitTitle(dec *xml.Decoder) error {
 	text, err := readElementText(dec, "head")
 	if err != nil {
 		return err
 	}
+	trimmed := strings.TrimSpace(text)
+	if c.wordPages != nil && c.state != nil && trimmed != "" {
+		titleWords := pdftext.ParaWords(trimmed)
+		if len(titleWords) > 0 {
+			preLastPage := c.state.lastPage
+			result := pdftext.AlignParagraphPages(titleWords, c.wordPages, c.state.wordCursor)
+			c.state.wordCursor = result.NextIndex
+			for i := len(result.Pages) - 1; i >= 0; i-- {
+				if result.Pages[i] > 0 {
+					c.state.lastPage = result.Pages[i]
+					break
+				}
+			}
+			if len(result.Pages) > 0 && result.Pages[0] > 0 {
+				floor := preLastPage
+				floorMarker := c.state.maxMarkerPage - c.pageOffset
+				if floorMarker > floor {
+					floor = floorMarker
+				}
+				if floor > 0 && result.Pages[0] > floor && len(c.pendingHoists) == 0 {
+					// Fan-out across every page from floor+1 to
+					// title's first-word page. emitSection walks
+					// them in order when it splices the markers
+					// after <title>. maxMarkerPage advances only
+					// for pages we actually enqueue as markers —
+					// unlike state.lastPage, which tracks the
+					// last aligned page whether we emitted or not.
+					for p := floor + 1; p <= result.Pages[0]; p++ {
+						c.pendingHoists = append(c.pendingHoists, pageTransition{
+							WordIndex:   0,
+							Page:        p + c.pageOffset,
+							Approximate: true,
+						})
+						jp := p + c.pageOffset
+						if jp > c.state.maxMarkerPage {
+							c.state.maxMarkerPage = jp
+						}
+					}
+				}
+			}
+		}
+	}
 	c.writeString("<title>")
-	c.writeString(escapeText(strings.TrimSpace(text)))
+	c.writeString(escapeText(trimmed))
 	c.writeString("</title>\n")
 	return nil
 }
@@ -936,12 +1156,248 @@ func (c *converter) emitTitle(dec *xml.Decoder) error {
 // is preserved and any inline markup (tp:taxon-name from a prior
 // annotator run) passes through by attribute copy.
 func (c *converter) emitParagraph(dec *xml.Decoder, _ xml.StartElement) error {
-	c.writeString("<p>")
-	if err := c.convertInline(dec, "p"); err != nil {
+	if c.wordPages == nil {
+		// No word-page ground truth — emit paragraph unmodified.
+		// Simple path also handles callers that opted out of
+		// TEIToJATSOpts (Options{}) or PDFs without pdftotext.
+		c.writeString("<p>")
+		if err := c.convertInline(dec, "p"); err != nil {
+			return err
+		}
+		c.writeString("</p>\n")
+		return nil
+	}
+	// Word-aware path: emit paragraph into a scratch buffer, align
+	// its plain-text words against pdftotext's per-word page stream,
+	// and if the paragraph spans multiple pages, splice
+	// hive:page-break markers at the exact word boundaries. Uses
+	// scratch-then-splice (instead of interleaved emit + word count)
+	// so convertInline's inline-markup handling stays untouched.
+	sub := &converter{src: c.src}
+	sub.writeString("<p>")
+	if err := sub.convertInline(dec, "p"); err != nil {
 		return err
 	}
-	c.writeString("</p>\n")
+	sub.writeString("</p>")
+	xmlBytes := sub.out.Bytes()
+
+	plainText := stripXMLTags(xmlBytes)
+	paraWords := pdftext.ParaWords(plainText)
+	if len(paraWords) == 0 {
+		c.out.Write(xmlBytes)
+		c.writeString("\n")
+		return nil
+	}
+	result := pdftext.AlignParagraphPages(paraWords, c.wordPages, c.state.wordCursor)
+	c.state.wordCursor = result.NextIndex
+
+	// Find page-boundary transitions in the aligned word pages.
+	// A transition is a place where the aligned page differs from
+	// the previous word's page. First-transition uses state.lastPage
+	// as the "previous" so paragraph-boundary transitions also
+	// count (marker between two paragraphs on different pages).
+	//
+	// Multi-page jumps (prevPage=88, current=91 — the two body
+	// paragraphs surround a figures-only page pair) emit one marker
+	// per intermediate page at the same word boundary. That way
+	// curators see the run "88 89 90 91" and can cite the right
+	// page even if caption text later slips through as body text.
+	// Fan-out uses max(prevPage, maxMarkerPage) as the floor so
+	// pages that were briefly touched during alignment (e.g., a
+	// figure-page running header) still get a marker if no earlier
+	// paragraph emitted one for them.
+	// All page arithmetic below is in RAW PDF pages (0-indexed +1
+	// as returned by pdftext). The +c.pageOffset conversion to
+	// journal pages happens only when we build the marker.
+	//
+	// Fan-out floor is max(prevPage, maxMarkerRaw): prevPage
+	// covers normal paragraph-to-paragraph transitions;
+	// maxMarkerRaw is a monotone floor that catches gaps
+	// introduced when a prior title alignment silently advanced
+	// lastPage to a figures-only page without emitting a marker
+	// there. When a transition fires with a jump of more than one
+	// page, filler markers get emitted for every intermediate
+	// page at the same word boundary as the triggering marker —
+	// no body word landed on those pages, so they carry
+	// placement="approximate" and render as "~N".
+	var transitions []pageTransition
+	prevPage := c.state.lastPage
+	maxMarkerRaw := c.state.maxMarkerPage - c.pageOffset
+	for i, page := range result.Pages {
+		if page > 0 {
+			floor := prevPage
+			if maxMarkerRaw > floor {
+				floor = maxMarkerRaw
+			}
+			if floor > 0 && page > floor {
+				for p := floor + 1; p <= page; p++ {
+					transitions = append(transitions, pageTransition{
+						WordIndex:   i,
+						Page:        p + c.pageOffset,
+						Approximate: p < page,
+					})
+					if p > maxMarkerRaw {
+						maxMarkerRaw = p
+					}
+				}
+			}
+			prevPage = page
+		}
+	}
+	c.state.maxMarkerPage = maxMarkerRaw + c.pageOffset
+	// Track the paragraph's ending page so the next paragraph's
+	// alignment can detect a same-page continuation vs. a break.
+	for i := len(result.Pages) - 1; i >= 0; i-- {
+		if result.Pages[i] > 0 {
+			c.state.lastPage = result.Pages[i]
+			break
+		}
+	}
+
+	if len(transitions) == 0 {
+		c.out.Write(xmlBytes)
+		c.writeString("\n")
+		return nil
+	}
+	spliced := insertPageBreakMarkers(xmlBytes, transitions)
+	// Two cleanup passes:
+	//   1. A transition at word 0 leaves an empty leading <p></p>
+	//      in the splice.
+	//   2. Adjacent transitions at the same word boundary (the
+	//      multi-page-jump case for figures-only pages) leave an
+	//      empty <p></p> between each pair of markers.
+	// Both are JATS-valid but render as stray blank lines. One
+	// substring replace handles both — after the substitution the
+	// markers sit back-to-back and the surrounding paragraph
+	// content flows cleanly on either side.
+	spliced = bytes.ReplaceAll(spliced,
+		[]byte(`<p></p><p content-type="hive-page-break"`),
+		[]byte(`<p content-type="hive-page-break"`))
+	c.out.Write(spliced)
+	c.writeString("\n")
 	return nil
+}
+
+// pageTransition names a spot in a paragraph's word sequence where
+// a new source-PDF page starts. WordIndex is 0-based into the
+// paragraph's whitespace-tokenized words; Page is the journal-
+// labeled page number (already adjusted by pageOffset).
+type pageTransition struct {
+	WordIndex int
+	Page      int
+	// Approximate is true when the transition wasn't anchored to a
+	// body word on this page — used for filler markers between
+	// two body-text pages that surround one or more figures-only
+	// pages, and for section-title hoists. Rendered as "~N" in
+	// the reader so curators know the placement is bounded, not
+	// word-precise.
+	Approximate bool
+}
+
+// stripXMLTags returns the character-data portions of an XML
+// byte sequence with all tags removed. Used to pull the plain
+// text out of an already-emitted paragraph for alignment against
+// pdftotext's word stream.
+func stripXMLTags(src []byte) string {
+	var b strings.Builder
+	b.Grow(len(src))
+	inTag := false
+	for _, ch := range src {
+		if ch == '<' {
+			inTag = true
+			continue
+		}
+		if ch == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
+}
+
+// insertPageBreakMarkers walks the XML bytes and, at the word
+// boundary corresponding to each transition, splices in a
+// hive:page-break paragraph. Word tracking uses the same
+// whitespace convention as strings.Fields so the index passed in
+// aligns with the paragraph's stripXMLTags output.
+//
+// The splice closes the current <p>, emits the marker <p>, then
+// reopens a fresh <p> so the paragraph stays JATS-valid on both
+// sides of every insertion.
+func insertPageBreakMarkers(src []byte, transitions []pageTransition) []byte {
+	if len(transitions) == 0 {
+		return src
+	}
+	var out bytes.Buffer
+	out.Grow(len(src) + len(transitions)*100)
+	wordIndex := 0
+	inTag := false
+	inWord := false
+	transIdx := 0
+	for i := 0; i < len(src); i++ {
+		b := src[i]
+		if b == '<' {
+			inTag = true
+			out.WriteByte(b)
+			continue
+		}
+		if b == '>' {
+			inTag = false
+			out.WriteByte(b)
+			continue
+		}
+		if inTag {
+			out.WriteByte(b)
+			continue
+		}
+		// Character data — walk word by word using the same
+		// convention as strings.Fields: only whitespace splits
+		// words. Inline tags (e.g. <xref>, <italic>, <tp:*>) do
+		// NOT split a word, so "evaluated<xref>(21)</xref>." is
+		// counted as one word — matching stripXMLTags +
+		// ParaWords, which is what AlignParagraphPages runs on.
+		isWS := b == ' ' || b == '\t' || b == '\n' || b == '\r'
+		if !isWS {
+			if !inWord {
+				// Starting a new word — check for a pending
+				// transition at this index and splice before it.
+				for transIdx < len(transitions) &&
+					transitions[transIdx].WordIndex == wordIndex {
+					// content-type is the JATS-valid wrapper-role
+					// attribute on <p>; class isn't part of p-atts.
+					// placement="approximate" is emitted only when
+					// the transition wasn't anchored to a body word
+					// on that page — see pageTransition.Approximate.
+					t := transitions[transIdx]
+					var attrs string
+					if t.Approximate {
+						attrs = ` placement="approximate"`
+					}
+					marker := fmt.Sprintf(
+						`</p><p content-type="hive-page-break"><hive:page-break page="%d"%s/></p><p>`,
+						t.Page, attrs,
+					)
+					out.WriteString(marker)
+					transIdx++
+				}
+				inWord = true
+			}
+		} else if inWord {
+			inWord = false
+			wordIndex++
+		}
+		out.WriteByte(b)
+	}
+	if inWord {
+		wordIndex++
+	}
+	// Handle any trailing transitions (rare — would mean the
+	// last word triggers a break we haven't hit yet in the walk).
+	// Skip; nothing meaningful to append at document end.
+	return out.Bytes()
 }
 
 // convertInline is the inline-content counterpart of convertContainer.

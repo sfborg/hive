@@ -11631,6 +11631,12 @@ class SfgaAddReferenceModal extends LitElement {
     }
     e.preventDefault();
     this._dragActive = false;
+    // Belt-and-braces: also clear the document-level drop overlay
+    // in case the window-level drop handler on References didn't
+    // fire (some browsers stop bubbling when the topmost target
+    // preventDefault-s a drop). Owned by SfgaReferences but safe
+    // to clear from here — the attribute is document-global.
+    document.body.removeAttribute("data-drop-active");
     const file = e.dataTransfer.files[0];
     // Route to the file tab so the progress + result render there,
     // then upload.
@@ -14654,15 +14660,39 @@ class SfgaReferences extends LitElement {
     // dragover; global CSS then applies `pointer-events: none` to
     // iframes so the browser routes the drop event to the underlying
     // body element instead of into the iframe's document.
-    this._dragCounter = 0;
+    // Drag state uses two independent signals to stay in sync with
+    // reality even when browser events fire unevenly (a common
+    // symptom of iframes + pointer-events flipping mid-drag):
+    //   1. relatedTarget === null on dragleave — fires exactly
+    //      once when the pointer leaves the window entirely, so
+    //      no accumulator drift like the enter/leave counter has.
+    //   2. Watchdog timer, refreshed on every dragover — if
+    //      dragover stops firing for 400 ms the drag ended
+    //      without a leave/drop we caught (browser bug, iframe
+    //      swallowed it, whatever). Clear the state.
+    const clearDropActive = () => {
+      if (this._dropActive) {
+        this._dropActive = false;
+        document.body.removeAttribute("data-drop-active");
+      }
+      if (this._dropWatchdog) {
+        clearTimeout(this._dropWatchdog);
+        this._dropWatchdog = null;
+      }
+    };
+    this._clearDropActive = clearDropActive;
+    const armWatchdog = () => {
+      if (this._dropWatchdog) clearTimeout(this._dropWatchdog);
+      this._dropWatchdog = setTimeout(clearDropActive, 400);
+    };
     this._onWinDragEnter = (e) => {
       if (!e.dataTransfer) return;
       if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
-      this._dragCounter++;
       if (!this._dropActive) {
         this._dropActive = true;
         document.body.setAttribute("data-drop-active", "");
       }
+      armWatchdog();
     };
     this._onWinDragOver = (e) => {
       if (!e.dataTransfer) return;
@@ -14670,13 +14700,15 @@ class SfgaReferences extends LitElement {
       // preventDefault on both dragover AND drop is required to
       // suppress the browser's default file:/// navigation.
       e.preventDefault();
+      armWatchdog();
     };
     this._onWinDragLeave = (e) => {
       if (!e.dataTransfer) return;
-      this._dragCounter = Math.max(0, this._dragCounter - 1);
-      if (this._dragCounter === 0) {
-        this._dropActive = false;
-        document.body.removeAttribute("data-drop-active");
+      // relatedTarget is null when the pointer actually left the
+      // window; non-null for internal element crossings which we
+      // want to ignore.
+      if (e.relatedTarget === null) {
+        clearDropActive();
       }
     };
     this._onWinDrop = (e) => {
@@ -14684,9 +14716,7 @@ class SfgaReferences extends LitElement {
       // preventDefault regardless of whether we actually process
       // the drop — otherwise a stray drop navigates to file:///.
       e.preventDefault();
-      this._dragCounter = 0;
-      this._dropActive = false;
-      document.body.removeAttribute("data-drop-active");
+      clearDropActive();
       const file = e.dataTransfer.files && e.dataTransfer.files[0];
       if (!file) return;
       this._pendingDropFile = file;
@@ -14710,6 +14740,10 @@ class SfgaReferences extends LitElement {
       window.removeEventListener("dragleave", this._onWinDragLeave);
       window.removeEventListener("drop", this._onWinDrop);
       document.body.removeAttribute("data-drop-active");
+    }
+    if (this._dropWatchdog) {
+      clearTimeout(this._dropWatchdog);
+      this._dropWatchdog = null;
     }
     super.disconnectedCallback();
   }

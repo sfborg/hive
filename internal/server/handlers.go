@@ -3081,7 +3081,19 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 	if err != nil || tei == nil {
 		return []string{"tei sidecar missing; skip re-derive"}
 	}
-	jats, err := jatsconv.TEIToJATS(tei)
+	// Same word-page extraction as tryAnnotate so re-derived JATS
+	// keeps its page-break markers after a correction delete.
+	var jatsOpts jatsconv.Options
+	pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
+	if _, statErr := os.Stat(pdfPath); statErr == nil {
+		if words, err := pdftext.WordPages(pdfPath); err == nil && len(words) > 0 {
+			jatsOpts.WordPages = words
+			if journalPage1 := pdftext.JournalPageOfPDFPage1(words); journalPage1 > 1 {
+				jatsOpts.PageOffset = journalPage1 - 1
+			}
+		}
+	}
+	jats, err := jatsconv.TEIToJATSOpts(tei, jatsOpts)
 	if err != nil {
 		return []string{"re-derive jats: " + err.Error()}
 	}
@@ -3131,7 +3143,6 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 		return warnings
 	}
 	// Re-run figextract so PNGs for remaining corrections stay in sync.
-	pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
 	if _, err := os.Stat(pdfPath); err == nil {
 		outDir := filepath.Join(sidecar.Dir(s.archivePath), sha+".figures")
 		if _, err := figextract.Extract(jats, pdfPath, outDir); err != nil {
@@ -3690,7 +3701,29 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	if err != nil || tei == nil {
 		return "failed", 0
 	}
-	jats, err := jatsconv.TEIToJATS(tei)
+	// Extract per-word (word, page) tuples from the source PDF so
+	// jatsconv can splice page-break markers at the exact word
+	// boundary where the source transitions from one page to the
+	// next — enables citation-accurate page annotations for
+	// nomenclatural acts (ZooBank, ICZN).
+	//
+	// Also extract the journal-labeled page number of PDF page 1
+	// (e.g., "83" from a "83-93." page range in the running
+	// header) so markers show journal pages, not PDF-index pages.
+	//
+	// Silent fall-through when pdftotext isn't installed or the
+	// PDF isn't available — markers just don't appear in that case.
+	var jatsOpts jatsconv.Options
+	pdfPath := sidecar.Path(s.archivePath, res.SHA512, "pdf")
+	if _, statErr := os.Stat(pdfPath); statErr == nil {
+		if words, err := pdftext.WordPages(pdfPath); err == nil && len(words) > 0 {
+			jatsOpts.WordPages = words
+			if journalPage1 := pdftext.JournalPageOfPDFPage1(words); journalPage1 > 1 {
+				jatsOpts.PageOffset = journalPage1 - 1
+			}
+		}
+	}
+	jats, err := jatsconv.TEIToJATSOpts(tei, jatsOpts)
 	if err != nil {
 		return "failed", 0
 	}

@@ -277,6 +277,33 @@ class SfgaReader extends LitElement {
     article p {
       margin: var(--sp-2) 0;
     }
+    /* Page-break divider — horizontal dashed line with the
+       journal-labeled source-PDF page number sitting mid-line.
+       Curators cite by that page for ZooBank / ICZN references.
+       Uses two flex spacers with border-top around a page-num
+       label so the label sits mid-line without escape. */
+    article .page-break {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      margin: var(--sp-3) 0;
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      break-inside: avoid;
+    }
+    article .page-break::before,
+    article .page-break::after {
+      content: "";
+      flex: 1;
+      border-top: 1px dashed var(--border);
+    }
+    article .page-break-num {
+      font-family: var(--font-mono);
+      letter-spacing: 0.02em;
+      background: var(--bg);
+      padding: 0 var(--sp-2);
+      border-radius: var(--radius-xs);
+    }
     /* Fallback wrapper for JATS block elements without a specific
        renderer (fig, table-wrap, unknown). Gives content basic
        block layout so it doesn't collapse into an inline run beside
@@ -1459,6 +1486,95 @@ class SfgaReader extends LitElement {
     return "";
   }
 
+  // _extractLeadingPageBreaks returns rendered page-break dividers
+  // for every hive-page-break <p> that appears as the leading
+  // block-level content of a <sec> (after any <label>/<title>
+  // headers) before the first non-marker block. Used to visually
+  // hoist section-first markers above the section header — see
+  // the sec renderer for why the emit-side JATS can't place them
+  // there directly. Multiple consecutive markers arise from
+  // multi-page fan-outs (e.g., a figures-only page 89 followed by
+  // the section body starting on page 90 → both markers hoist).
+  _extractLeadingPageBreaks(secNode) {
+    const out = [];
+    for (const c of secNode.children) {
+      const local = c.localName;
+      if (local === "title" || local === "label") {
+        continue;
+      }
+      if (
+        local === "p" &&
+        c.getAttribute("content-type") === "hive-page-break"
+      ) {
+        let pageNum = "";
+        let approx = false;
+        for (const gc of c.children) {
+          if (gc.localName === "page-break") {
+            pageNum = gc.getAttribute("page") || "";
+            approx = gc.getAttribute("placement") === "approximate";
+            break;
+          }
+        }
+        if (pageNum) {
+          const label = (approx ? "~" : "") + pageNum;
+          const aria = approx
+            ? "Source PDF page approximately " + pageNum + " begins"
+            : "Source PDF page " + pageNum + " begins";
+          out.push(html`<div
+            class="page-break"
+            role="separator"
+            aria-label=${aria}
+          >
+            <span class="page-break-num">page ${label}</span>
+          </div>`);
+          continue;
+        }
+      }
+      // Reached the first non-marker block — stop hoisting.
+      break;
+    }
+    return out;
+  }
+
+  // _childNodesSkippingLeadingPageBreaks returns the sec's
+  // childNodes with the leading hive-page-break <p> elements
+  // removed, so the hoisted markers don't render a second time
+  // inside the section. Only strips markers that appear before
+  // the first non-marker block — mid-section markers stay put.
+  _childNodesSkippingLeadingPageBreaks(secNode) {
+    const kept = [];
+    let stillStripping = true;
+    for (const n of secNode.childNodes) {
+      if (stillStripping && n.nodeType === Node.ELEMENT_NODE) {
+        const local = n.localName;
+        if (local === "title" || local === "label") {
+          kept.push(n);
+          continue;
+        }
+        if (
+          local === "p" &&
+          n.getAttribute &&
+          n.getAttribute("content-type") === "hive-page-break"
+        ) {
+          continue;
+        }
+        stillStripping = false;
+      } else if (
+        stillStripping &&
+        n.nodeType === Node.TEXT_NODE &&
+        !n.textContent.trim()
+      ) {
+        // Whitespace between the title/markers — skip while
+        // still in the leading run so we don't leak stray text.
+        continue;
+      } else if (stillStripping) {
+        stillStripping = false;
+      }
+      kept.push(n);
+    }
+    return kept;
+  }
+
   // _renderNodes converts a NodeList into Lit-html templates,
   // dispatching per element/text kind. Recursive: element children
   // render via the same function so nested content (sec > p > span)
@@ -1494,6 +1610,36 @@ class SfgaReader extends LitElement {
         continue;
       }
       if (local === "p") {
+        // Page-break marker paragraphs (content-type="hive-page-break")
+        // are jatsconv's word-boundary milestones — rendered as a
+        // full-width divider with the journal-labeled source-PDF
+        // page number so curators can cite pages for ZooBank /
+        // ICZN references without leaving the reader.
+        //
+        // The child element is <hive:page-break>, a namespaced tag.
+        // querySelector doesn't cross the namespace-prefix boundary
+        // cleanly in XML docs, so scan children by localName and
+        // read the `page` attribute directly.
+        if (node.getAttribute("content-type") === "hive-page-break") {
+          let pageNum = "";
+          let approx = false;
+          for (const c of node.children) {
+            if (c.localName === "page-break") {
+              pageNum = c.getAttribute("page") || "";
+              approx = c.getAttribute("placement") === "approximate";
+              break;
+            }
+          }
+          const label = (approx ? "~" : "") + pageNum;
+          const aria = approx
+            ? "Source PDF page approximately " + pageNum + " begins"
+            : "Source PDF page " + pageNum + " begins";
+          out.push(html`<div class="page-break" role="separator"
+            aria-label=${aria}>
+            <span class="page-break-num">page ${label}</span>
+          </div>`);
+          continue;
+        }
         out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
         continue;
       }
@@ -1509,7 +1655,20 @@ class SfgaReader extends LitElement {
           out.push(this._renderFiguresList(node));
           continue;
         }
-        out.push(html`<section>${this._renderNodes(node.childNodes)}</section>`);
+        // Visual hoist for page-break markers that emit as the
+        // leading blocks after <title>. JATS forbids <p> at body /
+        // sec-boundary level (body-model is para-level*, sec-level*),
+        // so the JATS-legal place to attach "this section starts on
+        // page N" markers is inside the section right after its
+        // title. Rendering them above the title matches curators'
+        // visual expectation — the page break sits above that
+        // header in the source PDF. Multiple consecutive markers
+        // arise from figures-only-page fan-outs (e.g., ~89 + ~90
+        // both hoist above a section that starts on page 90).
+        const hoisted = this._extractLeadingPageBreaks(node);
+        out.push(html`${hoisted}<section>${this._renderNodes(
+          hoisted.length ? this._childNodesSkippingLeadingPageBreaks(node) : node.childNodes,
+        )}</section>`);
         continue;
       }
       // <fig> and <table-wrap> are only rendered inline when they
@@ -1844,6 +2003,23 @@ class SfgaReader extends LitElement {
     return Number.isFinite(n) ? n : 0;
   }
 
+  // _pdfPageOffset returns the hive:pdf-page-offset attribute on
+  // <article> (added by jatsconv when a journal-labeled page
+  // number could be inferred from the source PDF). Adding it to a
+  // raw pdf-page yields the journal-labeled page curators cite.
+  // Returns 0 when unset — callers should show the raw pdf-page
+  // unchanged in that case.
+  _pdfPageOffset() {
+    if (!this._doc || !this._doc.documentElement) return 0;
+    const root = this._doc.documentElement;
+    const raw =
+      root.getAttributeNS(HIVE_NS, "pdf-page-offset") ||
+      root.getAttribute("hive:pdf-page-offset") ||
+      "";
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   // _figLabelFromCaption extracts "Figure N" / "Table N" from a
   // fig/table-wrap's caption text. GROBID's caption always starts
   // with the label; the extractFigLabel logic in jatsconv follows
@@ -1971,6 +2147,17 @@ class SfgaReader extends LitElement {
       target.getAttributeNS(HIVE_NS, "pdf-page") ||
       target.getAttribute("hive:pdf-page") ||
       "";
+    // pdf-page is a raw PDF index; the journal-labeled page
+    // curators cite is pdf-page + offset (offset persisted on
+    // <article> by jatsconv). Display uses journal page when we
+    // have the offset; the PDF-jump URL still uses raw pdf-page
+    // because pdf.js indexes pages from 1 without knowing about
+    // journal labels.
+    const offset = this._pdfPageOffset();
+    const journalPage = page
+      ? String((Number.parseInt(page, 10) || 0) + offset)
+      : "";
+    const displayPage = offset && journalPage ? journalPage : page;
     const caption = this._directChild(target, "caption");
     const imgURL = this._sha
       ? `/api/reference/library/${encodeURIComponent(this._sha)}/figures/${encodeURIComponent(this._modalFigID)}`
@@ -2037,7 +2224,7 @@ class SfgaReader extends LitElement {
                   class="fig-modal-pdf-link"
                   href=${pdfURL}
                   @click=${(e) => this._jumpToFig(e, this._modalFigID, page)}
-                >Open in source PDF — page ${page}</a>`
+                >Open in source PDF — page ${displayPage}</a>`
               : nothing}
           </div>
         </div>
