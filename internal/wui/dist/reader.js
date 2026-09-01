@@ -82,6 +82,7 @@ class SfgaReader extends LitElement {
     // curators see extraction gaps on load; hide-away is opt-in
     // for readers who want the reading pane back at full height.
     _showExtractionWarning: { state: true },
+    _showRefWarning: { state: true },
   };
 
   static styles = css`
@@ -340,7 +341,8 @@ class SfgaReader extends LitElement {
        immediately see which numeric spans are figure references
        vs. plain-text digits (mortality percentages, sample sizes,
        etc.). Cursor: pointer telegraphs the click affordance. */
-    article .fig-xref {
+    article .fig-xref,
+    article .ref-xref {
       color: var(--accent);
       text-decoration: underline;
       text-decoration-thickness: 1px;
@@ -348,13 +350,35 @@ class SfgaReader extends LitElement {
       font-weight: 500;
       cursor: pointer;
     }
-    article .fig-xref:hover {
+    article .fig-xref:hover,
+    article .ref-xref:hover {
       text-decoration-thickness: 2px;
     }
-    article .fig-xref:focus-visible {
+    article .fig-xref:focus-visible,
+    article .ref-xref:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
       border-radius: 2px;
+    }
+    /* Ref-jump highlight — 1.5-second pulse on the target <li>
+       after jumping so the reader visually confirms where the
+       citation landed. Keyframes fade a background wash so text
+       stays readable throughout. */
+    article ol.references li.ref-flash {
+      animation: refFlash 1.5s ease-out;
+    }
+    /* Trailing "[merged: …]" fragment appended to a <ref> when a
+       curator merged a spurious sibling ref into it. Dimmed +
+       italicized to read as annotation rather than structured
+       citation data — the field boundaries were lost during
+       GROBID's split, so we don't pretend otherwise. */
+    article ol.references .ref-merged {
+      color: var(--dim);
+      font-style: italic;
+    }
+    @keyframes refFlash {
+      0% { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+      100% { background: transparent; }
     }
     /* Figure-jump affordance: a small "Open in PDF — page N" link
        above each figure's caption in the trailing "Figures" sec.
@@ -427,14 +451,32 @@ class SfgaReader extends LitElement {
     }
     .fig-modal-header {
       display: flex;
-      align-items: center;
+      align-items: baseline;
       justify-content: space-between;
       padding: var(--sp-2) var(--sp-3);
       border-bottom: 1px solid var(--border);
+      gap: var(--sp-2);
     }
     .fig-modal-header h2 {
       margin: 0;
       font-size: var(--fs-lg);
+    }
+    .fig-modal-title-group {
+      display: flex;
+      align-items: baseline;
+      gap: var(--sp-2);
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .fig-modal-header-page {
+      color: color-mix(in oklab, var(--fg) 65%, var(--bg));
+      text-decoration: none;
+      font-size: var(--fs-sm);
+      white-space: nowrap;
+    }
+    .fig-modal-header-page:hover {
+      color: var(--accent);
+      text-decoration: underline;
     }
     .fig-modal-close {
       background: transparent;
@@ -506,15 +548,6 @@ class SfgaReader extends LitElement {
       font-size: var(--fs-sm);
       color: color-mix(in oklab, var(--fg) 80%, var(--bg));
       line-height: 1.5;
-    }
-    .fig-modal-pdf-link {
-      color: var(--accent);
-      text-decoration: none;
-      font-size: var(--fs-sm);
-      align-self: flex-start;
-    }
-    .fig-modal-pdf-link:hover {
-      text-decoration: underline;
     }
     /* Chip styling per gn:source. Verified is the confident state
        (accent-tinted); ambiguous / unverified sit in the middle
@@ -640,6 +673,42 @@ class SfgaReader extends LitElement {
     .extract-warn-toggle:hover {
       background: color-mix(in oklab, var(--fg) 8%, transparent);
     }
+    /* Suspect-ref chips inside the ref-warning banner are
+       clickable — clicking scrolls the ref list to the flagged
+       entry (same _jumpToRef used by citation clicks). Cursor +
+       accent underline on the leading id telegraph the affordance
+       without cluttering the reason text. */
+    .extract-warn-list li.suspect-ref {
+      cursor: pointer;
+      display: inline-flex;
+      align-items: baseline;
+      gap: var(--sp-1);
+    }
+    .extract-warn-list li.suspect-ref .suspect-ref-id {
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+      font-weight: 500;
+    }
+    .extract-warn-list li.suspect-ref:hover .suspect-ref-id {
+      text-decoration-thickness: 2px;
+    }
+    .extract-warn-list li.suspect-ref .suspect-ref-reason {
+      color: var(--dim);
+    }
+    .extract-warn-list li.suspect-ref .suspect-ref-merge {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 0 var(--sp-1);
+      font-size: var(--fs-xs);
+      cursor: pointer;
+      color: var(--fg);
+    }
+    .extract-warn-list li.suspect-ref .suspect-ref-merge:hover {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
   `;
 
   constructor() {
@@ -659,6 +728,7 @@ class SfgaReader extends LitElement {
     this._pageCount = 1;
     this._pageWidth = 0;
     this._showExtractionWarning = true;
+    this._showRefWarning = true;
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -1018,6 +1088,7 @@ class SfgaReader extends LitElement {
         ? html`<p class="error" role="alert">${this._error}</p>`
         : nothing}
       ${this._renderExtractionWarning()}
+      ${this._renderRefWarning()}
       ${this._doc
         ? this._showPDF
           ? html`<iframe
@@ -1172,6 +1243,85 @@ class SfgaReader extends LitElement {
         "_blank",
       );
     }
+  }
+
+  // _refPreviewText returns a compact plain-text formatted
+  // citation for the given <ref> node — used as the `title`
+  // attribute on inline citation spans so a hover surfaces the
+  // reference without a jump. Same field-selection logic as
+  // _renderRef, just flattened to a single string with punctuation.
+  _refPreviewText(refNode) {
+    const ec =
+      this._directChild(refNode, "element-citation") ||
+      this._directChild(refNode, "mixed-citation");
+    if (!ec) {
+      return (refNode.textContent || "").trim().slice(0, 400);
+    }
+    const d = this._elementCitationToData(ec);
+    const parts = [];
+    if (d.authors.length) parts.push(d.authors.join(", "));
+    if (d.year) parts.push(` (${d.year}).`);
+    else if (d.authors.length) parts.push(".");
+    if (d.articleTitle) parts.push(` ${(d.articleTitle.textContent || "").trim()}.`);
+    if (d.source) parts.push(` ${(d.source.textContent || "").trim()}`);
+    if (d.volume) {
+      let v = ` ${d.volume}`;
+      if (d.issue) v += `(${d.issue})`;
+      parts.push(v);
+    }
+    if (d.page) parts.push(`: ${d.page}`);
+    parts.push(".");
+    if (d.doi) parts.push(` doi:${d.doi}`);
+    return parts.join("").replace(/\s+/g, " ").trim();
+  }
+
+  // _jumpToRef scrolls the referenced <ref> entry into view and
+  // pulses a background flash so the curator sees where the
+  // citation landed. In paginated (columned) mode the layout is
+  // transform-based, so scrollIntoView doesn't move the visible
+  // page — compute the target column from offsetLeft and set
+  // _page directly instead.
+  _jumpToRef(rid) {
+    if (!rid) return;
+    const target = this._doc.querySelector(`[id="${CSS.escape(rid)}"]`);
+    if (!target) return;
+    // The rendered document lives in the shadow root, keyed on
+    // matching id — mirror the parser's target back to the rendered
+    // element via querySelector on renderRoot.
+    const rendered = this.renderRoot.querySelector(
+      `article ol.references li[data-ref-id="${CSS.escape(rid)}"]`,
+    );
+    if (!rendered) {
+      // No rendered target yet — most likely the ref-list hasn't
+      // been walked because the doc is huge and we're in an
+      // out-of-viewport column. Fall back to nothing; a later
+      // render pass will bind the id when the list mounts.
+      return;
+    }
+    if (this._paginated && this._pageWidth) {
+      const article = this.renderRoot.querySelector(".layout.paginated article");
+      if (article) {
+        // The article is CSS-transform-translated for pagination.
+        // getBoundingClientRect() returns transformed coordinates
+        // for BOTH the article and its descendants, so the delta
+        // (target.left - article.left) is already the target's
+        // offset in the article's own coordinate system — no need
+        // to add the current shift back in.
+        const articleLeft = article.getBoundingClientRect().left;
+        const targetLeft = rendered.getBoundingClientRect().left;
+        const untransformedOffset = targetLeft - articleLeft;
+        const page = Math.floor(untransformedOffset / this._pageWidth);
+        this._page = Math.max(0, Math.min(page, this._pageCount - 1));
+      }
+    } else {
+      rendered.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    // Restart the CSS animation by removing + re-adding the class
+    // in a rAF — otherwise re-clicking the same citation doesn't
+    // re-trigger the flash.
+    rendered.classList.remove("ref-flash");
+    void rendered.offsetWidth;
+    rendered.classList.add("ref-flash");
   }
 
   // _openFigModal opens the figure/table modal on a given fig id.
@@ -1749,7 +1899,10 @@ class SfgaReader extends LitElement {
         continue;
       }
       if (local === "ref") {
-        out.push(html`<li>${this._renderRef(node)}</li>`);
+        const refID = node.getAttribute("id") || "";
+        out.push(
+          html`<li data-ref-id=${refID}>${this._renderRef(node)}</li>`,
+        );
         continue;
       }
       // Cited-reference anchor inside body text — JATS <xref>.
@@ -1785,6 +1938,32 @@ class SfgaReader extends LitElement {
             @keydown=${(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 this._openFigModal(e, rid);
+              }
+            }}
+            >${this._renderNodes(node.childNodes)}</span>`);
+          continue;
+        }
+        if (target && target.localName === "ref") {
+          // Bibliography xref — click jumps to the referenced
+          // entry in the ref-list; hover shows a formatted
+          // preview so curators don't have to jump for a quick
+          // check. stopPropagation prevents the click from
+          // bubbling to _onPageClick, which otherwise flips the
+          // page based on x-coordinate.
+          const preview = this._refPreviewText(target);
+          out.push(html`<span
+            class="cite ref-xref"
+            role="button"
+            tabindex="0"
+            title=${preview}
+            @click=${(e) => {
+              e.stopPropagation();
+              this._jumpToRef(rid);
+            }}
+            @keydown=${(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                this._jumpToRef(rid);
               }
             }}
             >${this._renderNodes(node.childNodes)}</span>`);
@@ -2117,6 +2296,168 @@ class SfgaReader extends LitElement {
     </div>`;
   }
 
+  // _suspectRefs scans the parsed <ref-list> for entries that look
+  // like GROBID reference-tokenizer glitches. Returns an array of
+  // {id, reason} for the banner. Detection is intentionally
+  // heuristic — we're flagging things that DESERVE a curator look,
+  // not making structural claims about the archive. Reasons are
+  // human-readable so the banner is self-explanatory without a
+  // separate docs page.
+  //
+  // Kept field-agnostic (nothing taxonomy-specific) so this logic
+  // rides along when the reference-manager module extracts out.
+  _suspectRefs() {
+    if (!this._doc) return [];
+    const refs = this._doc.querySelectorAll("ref-list ref");
+    const out = [];
+    for (const ref of refs) {
+      const id = ref.getAttribute("id") || "";
+      const ec =
+        this._directChild(ref, "element-citation") ||
+        this._directChild(ref, "mixed-citation");
+      if (!ec) continue;
+      const d = this._elementCitationToData(ec);
+      const titleText = (d.articleTitle?.textContent || "").trim();
+      const sourceText = (d.source?.textContent || "").trim();
+      // Heuristic 1 — URL-encoded fragment as the article title.
+      // "%B3n%20", "%20previo" and friends are unambiguous — no
+      // real title starts with a percent-escape triplet.
+      if (/^%[0-9A-Fa-f]{2}/.test(titleText)) {
+        out.push({
+          id,
+          reason: "URL fragment as title",
+        });
+        continue;
+      }
+      // Heuristic 2 — empty shell (no authors, no title, no source).
+      // A ref with none of the identifying fields is almost always
+      // a tokenizer split residue.
+      if (d.authors.length === 0 && !titleText && !sourceText) {
+        out.push({
+          id,
+          reason: "empty reference",
+        });
+        continue;
+      }
+      // Heuristic 3 — every "author" is a single-word surname with
+      // no given-names and looks like a place fragment (short, all-
+      // letters, could be a country / state / city). GROBID
+      // sometimes tokenizes an address tail as a new reference
+      // whose authors are ["Cary", "N C", "Usa"] — the address
+      // lines from a publisher location that got detached.
+      if (d.authors.length > 0 && !titleText && !sourceText) {
+        const looksLikePlaces = d.authors.every((a) => {
+          const bare = a.split(/\s+/)[0] || "";
+          return (
+            bare.length > 0 &&
+            bare.length <= 12 &&
+            /^[A-Za-z][A-Za-z.\-']*$/.test(bare)
+          );
+        });
+        if (looksLikePlaces) {
+          out.push({
+            id,
+            reason: "address-only, no title or source",
+          });
+          continue;
+        }
+      }
+    }
+    return out;
+  }
+
+  // _renderRefWarning renders the ref-fragmentation banner.
+  // Same shape as the extraction-missed-labels banner so curators
+  // recognize it as another "extraction-quality" prompt rather
+  // than a hard failure. Each chip is clickable — jumps to the
+  // flagged ref in the ref-list so the curator can inspect it in
+  // full and (eventually) apply the merge-ref correction.
+  _renderRefWarning() {
+    if (!this._doc) return nothing;
+    const suspects = this._suspectRefs();
+    if (suspects.length === 0) return nothing;
+    if (!this._showRefWarning) {
+      return html`<div class="extract-warn collapsed" role="status">
+        <span
+          >Suspect ${suspects.length}
+          ${suspects.length === 1 ? "reference" : "references"} — the
+          citation numbering may be off.</span
+        >
+        <button
+          class="extract-warn-toggle"
+          type="button"
+          @click=${() => (this._showRefWarning = true)}
+        >Show</button>
+      </div>`;
+    }
+    return html`<div class="extract-warn" role="status">
+      <div class="extract-warn-body">
+        <div class="extract-warn-title">
+          Suspect references — citation numbering may be off
+        </div>
+        <ul class="extract-warn-list">
+          ${suspects.map(
+            (s) => html`<li class="suspect-ref">
+              <span
+                class="suspect-ref-id"
+                role="button"
+                tabindex="0"
+                title="Jump to ${s.id} in the reference list"
+                @click=${() => this._jumpToRef(s.id)}
+                @keydown=${(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    this._jumpToRef(s.id);
+                  }
+                }}
+                >${s.id}</span
+              >
+              <span class="suspect-ref-reason">${s.reason}</span>
+              <button
+                class="suspect-ref-merge"
+                type="button"
+                title="Merge ${s.id} into the previous reference"
+                @click=${() => this._mergeRef(s.id)}
+              >
+                Merge into previous
+              </button>
+            </li>`,
+          )}
+        </ul>
+      </div>
+      <button
+        class="extract-warn-toggle"
+        type="button"
+        aria-label="Hide reference warning"
+        @click=${() => (this._showRefWarning = false)}
+      >Hide</button>
+    </div>`;
+  }
+
+  // _mergeRef asks the parent frame (References component) to
+  // POST a ref-merge correction for the given ref id. The parent
+  // owns the sha + reference id context and the fetch call so the
+  // reader stays a pure viewer — same postMessage split as
+  // hive:jump-to-pdf. Standalone reader (no parent iframe): no-op
+  // with a console warning, since a correction needs the archive
+  // context the shell holds.
+  _mergeRef(refID) {
+    if (!refID) return;
+    if (!(window.parent && window.parent !== window)) {
+      // eslint-disable-next-line no-console
+      console.warn("merge-ref requires the shell — open via References tab");
+      return;
+    }
+    window.parent.postMessage(
+      {
+        type: "hive:merge-ref",
+        sha: this._sha,
+        refID: refID,
+      },
+      "*",
+    );
+  }
+
   // _renderFigModal renders the currently-open figure/table modal.
   // Two content tabs when both views are available:
   //   - Digitized — structured HTML (rendered table for
@@ -2183,7 +2524,17 @@ class SfgaReader extends LitElement {
       >
         <div class="fig-modal" role="dialog" aria-modal="true" aria-labelledby="fig-modal-title">
           <header class="fig-modal-header">
-            <h2 id="fig-modal-title">${label}</h2>
+            <div class="fig-modal-title-group">
+              <h2 id="fig-modal-title">${label}</h2>
+              ${page
+                ? html`<a
+                    class="fig-modal-header-page"
+                    href=${pdfURL}
+                    title="Open source PDF at page ${displayPage}"
+                    @click=${(e) => this._jumpToFig(e, this._modalFigID, page)}
+                  >page ${displayPage}</a>`
+                : nothing}
+            </div>
             <button
               class="fig-modal-close"
               type="button"
@@ -2218,13 +2569,6 @@ class SfgaReader extends LitElement {
               : nothing}
             ${caption
               ? html`<div class="fig-modal-caption">${this._renderNodes(caption.childNodes)}</div>`
-              : nothing}
-            ${page
-              ? html`<a
-                  class="fig-modal-pdf-link"
-                  href=${pdfURL}
-                  @click=${(e) => this._jumpToFig(e, this._modalFigID, page)}
-                >Open in source PDF — page ${displayPage}</a>`
               : nothing}
           </div>
         </div>
@@ -2343,6 +2687,17 @@ class SfgaReader extends LitElement {
     if (d.doi) {
       const doiURL = `https://doi.org/${d.doi}`;
       parts.push(html` <a href=${doiURL} target="_blank" rel="noopener">doi:${d.doi}</a>`);
+    }
+    // Trailing <comment> children carry text merged in from a
+    // ref-merge correction — the fragment GROBID had originally
+    // tokenized as its own ref. Show it in a distinct visual
+    // register (dimmed + prefixed) so curators can see what was
+    // absorbed without mistaking it for structured citation data.
+    for (const child of el.querySelectorAll("comment")) {
+      const t = (child.textContent || "").trim();
+      if (t) {
+        parts.push(html` <span class="ref-merged"> [merged: ${t}]</span>`);
+      }
     }
     return html`${parts}`;
   }

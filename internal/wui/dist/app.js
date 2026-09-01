@@ -14613,18 +14613,26 @@ class SfgaReferences extends LitElement {
     // Bound handler stored so disconnectedCallback can remove it.
     this._onReaderMessage = (e) => {
       const d = e.data;
-      if (!d || typeof d !== "object" || d.type !== "hive:jump-to-pdf") return;
-      // Ignore messages for a different reference — a stale iframe
-      // from a previous _current shouldn't hijack our current view.
+      if (!d || typeof d !== "object") return;
+      // Stale-iframe guard shared across message types — a leftover
+      // iframe from a prior _current shouldn't hijack the current
+      // view.
       const currentSha =
         this._current &&
         this._current.attached_pdf_shas &&
         this._current.attached_pdf_shas[0];
       if (d.sha && currentSha && d.sha !== currentSha) return;
-      if (d.page && Number.isFinite(d.page)) {
-        this._pdfPage = d.page;
+      if (d.type === "hive:jump-to-pdf") {
+        if (d.page && Number.isFinite(d.page)) {
+          this._pdfPage = d.page;
+        }
+        this._workspaceTab = "digitize";
+        return;
       }
-      this._workspaceTab = "digitize";
+      if (d.type === "hive:merge-ref" && d.refID && this._current) {
+        this._postRefMergeCorrection(d.refID, d.sha || currentSha);
+        return;
+      }
     };
     window.addEventListener("message", this._onReaderMessage);
     await this._fetchPage(true);
@@ -15031,14 +15039,17 @@ class SfgaReferences extends LitElement {
       });
     }
     // GROBID regions, tagged as auto or modified based on whether
-    // an active bbox-modify targets them. The label for modified
-    // regions comes from the corrected payload when available so
-    // the label shown on the bbox matches the curator's fix.
+    // an active bbox-modify targets them. The label and bbox for
+    // modified regions come from the corrected payload when
+    // available so both the rectangle and its label match the
+    // curator's fix immediately, rather than only after the sidecar
+    // reapply pass.
     for (const g of this._grobidRegions || []) {
       if (!g.bbox || !g.page) continue;
       if (removedTargets.has(g.id)) continue;
       const isModified = modifiedTargets.has(g.id);
       let label = g.label;
+      let bbox = g.bbox;
       if (isModified) {
         const mod = (this._corrections || []).find(
           (c) => c.kind === "bbox-modify" && c.target_element_id === g.id,
@@ -15047,15 +15058,16 @@ class SfgaReferences extends LitElement {
           try {
             const p = JSON.parse(mod.payload);
             if (p.corrected && p.corrected.label) label = p.corrected.label;
+            if (p.corrected && p.corrected.bbox) bbox = p.corrected.bbox;
           } catch (err) {
-            // ignore — keep grobid label
+            // ignore — keep grobid label + bbox
           }
         }
       }
       out.push({
         id: g.id,
         page: g.page,
-        bbox: g.bbox,
+        bbox,
         label,
         origin: "grobid",
         state: isModified ? "modified" : "auto",
@@ -15425,6 +15437,171 @@ class SfgaReferences extends LitElement {
       this._corrections = before;
     } finally {
       this._pendingDeletes.delete(id);
+    }
+  }
+
+  // _onBBoxResize persists a new bbox rectangle after a curator
+  // drags a corner handle. Two paths mirror the edit-form save
+  // logic — the resize is just an edit that changes bbox coords
+  // instead of label/content-type/caption.
+  //
+  //   - "curator" origin — the id is a bbox-add correction row.
+  //     Delete + recreate with the new coords, preserving the
+  //     original content_type + label so downstream JATS references
+  //     to the region survive the id change.
+  //
+  //   - "grobid" origin — the id is a JATS element id. Create or
+  //     replace a bbox-modify correction whose payload.corrected.bbox
+  //     records the new coords; apply-to-JATS rewrites the
+  //     element's hive:pdf-bbox attribute.
+  //
+  // Re-extraction of the content under the new bbox (figure PNG
+  // re-crop, table row re-parse) is deferred — this pass only
+  // persists coord changes so the visible rectangle stays put
+  // across reloads.
+  async _onBBoxResize(detail) {
+    if (!detail || !detail.id || !this._current) return;
+    const sha =
+      this._current.attached_pdf_shas && this._current.attached_pdf_shas[0];
+    if (!sha) return;
+    const { id, origin, page, bbox } = detail;
+    if (origin === "curator") {
+      const existing = (this._corrections || []).find((c) => c.id === id);
+      if (!existing) return;
+      try {
+        await fetch(
+          `/api/reference/correction/${encodeURIComponent(id)}`,
+          { method: "DELETE" },
+        );
+        const body = {
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "bbox-add",
+          content_type: existing.content_type || "figure",
+          bbox_page: page,
+          bbox,
+          label: existing.label || "",
+        };
+        const r = await fetch("/api/reference/correction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (r.ok) {
+          await this._fetchCorrections(this._current.id);
+          this._fetchGrobidRegions(sha);
+          this._reloadReaderIframe();
+        }
+      } catch (err) {
+        // Best-effort — the viewer will re-sync from the current
+        // corrections list on the next _mergedBBoxes render.
+      }
+      return;
+    }
+    // grobid origin
+    const grobid = (this._grobidRegions || []).find((g) => g.id === id);
+    if (!grobid) return;
+    const existingMod = (this._corrections || []).find(
+      (c) => c.kind === "bbox-modify" && c.target_element_id === id,
+    );
+    let contentType = grobid.kind || "figure";
+    let label = grobid.label || "";
+    let caption = "";
+    // page travels alongside bbox so the server can drive
+    // pdftext.ExtractTable without a JATS lookup. Resize stays on
+    // the same page today; the field exists so a future
+    // reposition-across-pages flow doesn't need a schema change.
+    const corrected = { bbox, page };
+    if (existingMod) {
+      // Preserve any prior content_type / label / caption edits
+      // rather than silently reverting them on resize.
+      try {
+        const prior = JSON.parse(existingMod.payload || "{}");
+        if (prior.corrected) {
+          if (prior.corrected.content_type)
+            corrected.content_type = prior.corrected.content_type;
+          if (prior.corrected.label) corrected.label = prior.corrected.label;
+          if (prior.corrected.caption) corrected.caption = prior.corrected.caption;
+        }
+      } catch (err) {
+        // Malformed prior payload — treat as no prior edits.
+      }
+      try {
+        await fetch(
+          `/api/reference/correction/${encodeURIComponent(existingMod.id)}`,
+          { method: "DELETE" },
+        );
+      } catch (err) {
+        // Ignore — POST below still runs; a stale row would just
+        // shadow the new one until re-derive drops it.
+      }
+    }
+    const payload = {
+      original: {
+        content_type: grobid.kind || "figure",
+        label: grobid.label || "",
+        caption: "",
+        bbox: grobid.bbox,
+        page: grobid.page,
+      },
+      corrected,
+    };
+    const body = {
+      reference_id: this._current.id,
+      sidecar_sha: sha,
+      kind: "bbox-modify",
+      content_type: contentType,
+      target_element_id: id,
+      label: corrected.label || label,
+      payload: JSON.stringify(payload),
+    };
+    try {
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        await this._fetchCorrections(this._current.id);
+        this._fetchGrobidRegions(sha);
+        this._reloadReaderIframe();
+      }
+    } catch (err) {
+      // Best-effort — see curator branch.
+    }
+  }
+
+  // _postRefMergeCorrection posts a ref-merge correction for the
+  // given <ref> id. Triggered by a hive:merge-ref postMessage from
+  // the reader's suspect-refs banner. On success reloads the reader
+  // iframe so the JATS with the merged ref becomes visible.
+  //
+  // Idempotency: the button is enabled per-render; a duplicate
+  // click that fires while a merge is in-flight lands another row.
+  // That's benign — ApplyRefMergeToJATS is idempotent (missing
+  // target returns the JATS unchanged), so a second row is a no-op
+  // on regen. Guarding here would need a per-ref pending set; not
+  // worth the state until we see it happen.
+  async _postRefMergeCorrection(refID, sha) {
+    if (!refID || !sha || !this._current) return;
+    try {
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "ref-merge",
+          content_type: "reference",
+          target_element_id: refID,
+        }),
+      });
+      if (r.ok) {
+        await this._fetchCorrections(this._current.id);
+        this._reloadReaderIframe();
+      }
+    } catch (err) {
+      // Swallow; the user will re-click if the network hiccupped.
     }
   }
 
@@ -15941,6 +16118,7 @@ class SfgaReferences extends LitElement {
                     @bbox-drawn=${(e) => this._onBBoxDrawn(e)}
                     @bbox-delete=${(e) => this._deleteCorrection(e.detail.id, e.detail.origin)}
                     @bbox-edit=${(e) => this._onBBoxEdit(e.detail.id, e.detail.origin)}
+                    @bbox-resize=${(e) => this._onBBoxResize(e.detail)}
                   ></sfga-pdf-viewer>
                 </div>
               </div>
@@ -19023,6 +19201,31 @@ class SfgaPdfViewer extends LitElement {
     }
     /* Hover reveal + always-on for touch consolidated with the
        .bbox-delete rule above (uses inline-flex for icon center). */
+    /* Corner resize handles. Hover-revealed on pointer devices,
+       always visible on touch (mirrors the delete-button pattern).
+       Sit slightly outside the bbox border so they're easy to grab
+       without occluding the region under the box. */
+    .bbox-resize-handle {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: white;
+      border: 1px solid var(--border, #555);
+      pointer-events: auto;
+      display: none;
+      z-index: 2;
+      box-sizing: border-box;
+    }
+    .bbox-existing:hover .bbox-resize-handle {
+      display: block;
+    }
+    @media (hover: none) {
+      .bbox-resize-handle { display: block; }
+    }
+    .bbox-resize-handle.nw { top: -6px; left: -6px; cursor: nw-resize; }
+    .bbox-resize-handle.ne { top: -6px; right: -6px; cursor: ne-resize; }
+    .bbox-resize-handle.sw { bottom: -6px; left: -6px; cursor: sw-resize; }
+    .bbox-resize-handle.se { bottom: -6px; right: -6px; cursor: se-resize; }
     .empty,
     .loading,
     .error {
@@ -19215,6 +19418,8 @@ class SfgaPdfViewer extends LitElement {
       const state = b.state || (origin === "curator" ? "curator" : "auto");
       el.className = "bbox-existing bbox-state-" + state;
       el.dataset.correctionId = b.id || "";
+      el.dataset.origin = origin;
+      el.dataset.page = String(page);
       el.style.left = rect.left + "px";
       el.style.top = rect.top + "px";
       el.style.width = rect.width + "px";
@@ -19283,6 +19488,26 @@ class SfgaPdfViewer extends LitElement {
           );
         });
         el.appendChild(delBtn);
+      }
+      // Corner resize handles. Attached to any bbox with an id so
+      // both curator additions and GROBID regions can be reshaped;
+      // the parent decides how to persist the new coords (delete +
+      // recreate for curator, bbox-modify for GROBID).
+      if (b.id) {
+        for (const corner of ["nw", "ne", "sw", "se"]) {
+          const handle = document.createElement("div");
+          handle.className = "bbox-resize-handle " + corner;
+          handle.dataset.corner = corner;
+          handle.setAttribute("aria-hidden", "true");
+          handle.addEventListener("pointerdown", (e) =>
+            this._onResizeStart(e, el, corner, page, b.id, origin),
+          );
+          // Suppress the bbox-existing click (edit) when the pointer
+          // lands on a handle — dragging a corner is not a request
+          // to open the edit form.
+          handle.addEventListener("click", (e) => e.stopPropagation());
+          el.appendChild(handle);
+        }
       }
       overlay.appendChild(el);
     }
@@ -19415,6 +19640,132 @@ class SfgaPdfViewer extends LitElement {
     this._drag.overlay.removeEventListener("pointerup", this._onDragEnd);
     this._drag.overlay.removeEventListener("pointercancel", this._onDragCancel);
     this._drag = null;
+  };
+
+  // Resize lifecycle. Handle pointerdown captures the pointer on
+  // the handle itself so the drag survives leaving the handle's
+  // 12x12 hit region. Coordinates stay in CSS pixels during the
+  // interactive phase (fast, no rounding drift) and convert to PDF
+  // points only on release when the bbox-resize event is emitted.
+  //
+  // stopPropagation on pointerdown keeps the overlay's draw-a-new-
+  // bbox pointerdown handler out of the picture even when mode is
+  // "bbox" — a curator resizing an existing box shouldn't
+  // accidentally start drawing a new one on top of it.
+  _onResizeStart(e, bboxEl, corner, pageNum, correctionID, origin) {
+    e.preventDefault();
+    e.stopPropagation();
+    const overlay = bboxEl.parentElement;
+    const canvas = overlay.parentElement.querySelector("canvas");
+    const overlayRect = overlay.getBoundingClientRect();
+    const scaleX = canvas.width / overlayRect.width;
+    const scaleY = canvas.height / overlayRect.height;
+    const startBBox = {
+      left: parseFloat(bboxEl.style.left) || 0,
+      top: parseFloat(bboxEl.style.top) || 0,
+      width: parseFloat(bboxEl.style.width) || 0,
+      height: parseFloat(bboxEl.style.height) || 0,
+    };
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    this._resize = {
+      bboxEl,
+      handle,
+      corner,
+      pageNum,
+      correctionID,
+      origin,
+      overlay,
+      overlayRect,
+      scaleX,
+      scaleY,
+      startBBox,
+      startPointer: { x: e.clientX, y: e.clientY },
+      pointerId: e.pointerId,
+    };
+    handle.addEventListener("pointermove", this._onResizeMove);
+    handle.addEventListener("pointerup", this._onResizeEnd);
+    handle.addEventListener("pointercancel", this._onResizeCancel);
+  }
+
+  _onResizeMove = (e) => {
+    if (!this._resize) return;
+    const r = this._resize;
+    // Overlay rect can shift if the viewer scrolled during the
+    // drag; recompute so cursor tracking stays honest.
+    const overlayRect = r.overlay.getBoundingClientRect();
+    const dx = e.clientX - r.startPointer.x;
+    const dy = e.clientY - r.startPointer.y;
+    let left = r.startBBox.left;
+    let top = r.startBBox.top;
+    let right = r.startBBox.left + r.startBBox.width;
+    let bottom = r.startBBox.top + r.startBBox.height;
+    if (r.corner === "nw" || r.corner === "sw") left = r.startBBox.left + dx;
+    if (r.corner === "ne" || r.corner === "se") right = r.startBBox.left + r.startBBox.width + dx;
+    if (r.corner === "nw" || r.corner === "ne") top = r.startBBox.top + dy;
+    if (r.corner === "sw" || r.corner === "se") bottom = r.startBBox.top + r.startBBox.height + dy;
+    // Normalize so a drag past the opposite edge flips corner
+    // ownership cleanly rather than producing negative width/height.
+    const cssLeft = Math.max(0, Math.min(left, right));
+    const cssRight = Math.min(overlayRect.width, Math.max(left, right));
+    const cssTop = Math.max(0, Math.min(top, bottom));
+    const cssBottom = Math.min(overlayRect.height, Math.max(top, bottom));
+    r.bboxEl.style.left = cssLeft + "px";
+    r.bboxEl.style.top = cssTop + "px";
+    r.bboxEl.style.width = Math.max(0, cssRight - cssLeft) + "px";
+    r.bboxEl.style.height = Math.max(0, cssBottom - cssTop) + "px";
+  };
+
+  _onResizeEnd = (e) => {
+    if (!this._resize) return;
+    const r = this._resize;
+    r.handle.removeEventListener("pointermove", this._onResizeMove);
+    r.handle.removeEventListener("pointerup", this._onResizeEnd);
+    r.handle.removeEventListener("pointercancel", this._onResizeCancel);
+    try { r.handle.releasePointerCapture(r.pointerId); } catch (_) {}
+    // Convert the final CSS-pixel rect back to PDF points.
+    const cssLeft = parseFloat(r.bboxEl.style.left) || 0;
+    const cssTop = parseFloat(r.bboxEl.style.top) || 0;
+    const cssWidth = parseFloat(r.bboxEl.style.width) || 0;
+    const cssHeight = parseFloat(r.bboxEl.style.height) || 0;
+    // Reject a resize that collapsed the box below the same 10px
+    // threshold used for new draws — treat it as a misdrag and let
+    // the parent re-sync from the unchanged server state.
+    if (cssWidth < 10 || cssHeight < 10) {
+      this._resize = null;
+      this._syncBboxes();
+      return;
+    }
+    const pxLeft = cssLeft * r.scaleX;
+    const pxTop = cssTop * r.scaleY;
+    const pxWidth = cssWidth * r.scaleX;
+    const pxHeight = cssHeight * r.scaleY;
+    const pdfBBox = {
+      x: pxLeft / PDF_RENDER_SCALE,
+      y: pxTop / PDF_RENDER_SCALE,
+      w: pxWidth / PDF_RENDER_SCALE,
+      h: pxHeight / PDF_RENDER_SCALE,
+    };
+    const { pageNum, correctionID, origin } = r;
+    this._resize = null;
+    this.dispatchEvent(
+      new CustomEvent("bbox-resize", {
+        detail: { id: correctionID, origin, page: pageNum, bbox: pdfBBox },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  };
+
+  _onResizeCancel = () => {
+    if (!this._resize) return;
+    const r = this._resize;
+    r.handle.removeEventListener("pointermove", this._onResizeMove);
+    r.handle.removeEventListener("pointerup", this._onResizeEnd);
+    r.handle.removeEventListener("pointercancel", this._onResizeCancel);
+    this._resize = null;
+    // Restore visual state from the server-known bboxes.
+    this._syncBboxes();
   };
 
   render() {

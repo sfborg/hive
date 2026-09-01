@@ -23,11 +23,25 @@ type BBoxModifyState struct {
 	ContentType string `json:"content_type,omitempty"`
 	Label       string `json:"label,omitempty"`
 	Caption     string `json:"caption,omitempty"`
+	// BBox carries a curator-adjusted rectangle in PDF points.
+	// Nil means "coord change not part of this correction" — the
+	// element's existing hive:pdf-bbox stays untouched.
+	BBox *BBox `json:"bbox,omitempty"`
+	// Page is the 1-indexed PDF page hosting the bbox. Carried so
+	// server-side re-extraction (e.g. pdftext.ExtractTable) has the
+	// page without a separate JATS lookup. Zero means "unchanged".
+	Page int `json:"page,omitempty"`
+	// TableRows carries a fresh heuristic parse of the region for
+	// content_type='table'. Populated by the handler at save time
+	// via pdftext.ExtractTable when the bbox changed, then read by
+	// ApplyBBoxModifyToJATS to replace the &lt;table&gt; block inside
+	// the target &lt;table-wrap&gt;. Empty means "no row change".
+	TableRows [][]string `json:"table_rows,omitempty"`
 }
 
 // ApplyBBoxModifyToJATS patches the element identified by
 // c.TargetElementID with the curator's changes from the
-// bbox-modify payload. Handles three edit axes:
+// bbox-modify payload. Edit axes:
 //
 //   - Content-type swap (figure ↔ table): replaces the element
 //     name from <fig> to <table-wrap> or vice versa. All
@@ -35,11 +49,15 @@ type BBoxModifyState struct {
 //   - Label / caption text: replaces the inner text of the
 //     element's <caption><p>...</p></caption> block. Curator's
 //     new caption text goes in verbatim.
-//
-// If BBox coordinate changes are stored in the payload, they
-// should be reflected on the element's hive:pdf-bbox attribute.
-// Slice 1e doesn't support coord editing yet (no resize handles
-// in the viewer) so this path is a no-op on the bbox coord front.
+//   - BBox coordinates: rewrites the element's hive:pdf-bbox
+//     attribute to the curator's resized rectangle. Figure PNG
+//     re-crop lands automatically on the trailing figextract pass
+//     that runs after every apply. Table row re-parse is handled
+//     here: when the payload carries fresh TableRows (populated by
+//     the handler via pdftext.ExtractTable), the <table> block
+//     inside the target <table-wrap> is replaced with a fresh
+//     render so a resize that uncovers missing rows makes them
+//     visible in the reader without a manual reparse.
 //
 // Returns the mutated JATS on success. Returns an error when the
 // target element isn't found in the JATS (either it was never
@@ -91,6 +109,18 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 		newBytes = renameElementTags(newBytes, elemName, newElemName)
 	}
 
+	// Rewrite hive:pdf-bbox on the opening tag if the corrected
+	// payload carries new coordinates. Same "%.2f,%.2f,%.2f,%.2f"
+	// format that BBoxAddFigureJATSElement and jatsconv both emit so
+	// downstream parsers (labels.parseBBoxAttr, figextract) see a
+	// consistent representation.
+	if payload.Corrected.BBox != nil {
+		newBBoxAttr := fmt.Sprintf("%.2f,%.2f,%.2f,%.2f",
+			payload.Corrected.BBox.X, payload.Corrected.BBox.Y,
+			payload.Corrected.BBox.W, payload.Corrected.BBox.H)
+		newBytes = replacePdfBBoxAttr(newBytes, newBBoxAttr)
+	}
+
 	// Replace caption content if new caption is provided.
 	if payload.Corrected.Caption != "" {
 		safeCaption := xmlEscape(payload.Corrected.Caption)
@@ -103,6 +133,20 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 		safeLabel := xmlEscape(payload.Corrected.Label)
 		newCaption := "<caption><p>" + safeLabel + "</p></caption>"
 		newBytes = replaceCaptionBlock(newBytes, newCaption)
+	}
+
+	// Splice a fresh <table> block when the payload carries newly
+	// parsed rows (populated by the handler after a table resize via
+	// pdftext.ExtractTable). Replaces any existing <table> or inserts
+	// one after the caption if none is present. Same
+	// renderJATSTableFromRows shape used by bbox-add so the
+	// downstream reader sees consistent structure regardless of how
+	// the region originated.
+	if len(payload.Corrected.TableRows) > 0 {
+		newTable := renderJATSTableFromRows(payload.Corrected.TableRows)
+		if newTable != "" {
+			newBytes = replaceTableBlock(newBytes, newTable)
+		}
 	}
 
 	var out bytes.Buffer
@@ -138,6 +182,165 @@ func ApplyBBoxRemoveToJATS(jats []byte, c *Correction) ([]byte, error) {
 	out.Write(jats[:openIdx])
 	out.Write(jats[closeIdx:])
 	return out.Bytes(), nil
+}
+
+// ApplyRefMergeToJATS merges the <ref> named by c.TargetElementID
+// into the preceding <ref> in the same <ref-list>. Used to repair
+// GROBID's ref-tokenizer glitches — a messy inline URL or an
+// address tail that gets parsed as a new author list, splitting a
+// single citation into two rows.
+//
+// Merge strategy: take the target ref's element-citation textContent
+// (everything after the leading author/year fields that GROBID gave
+// it), append it as a trailing <comment> child on the previous
+// ref's element-citation, then delete the target ref. Using
+// <comment> keeps the merged text visible to curators without
+// pretending it's structured data — the split lost the field
+// boundaries and we're not going to reinvent them from a fragment.
+//
+// Idempotent: returns the JATS unchanged when the target ref is
+// absent (already merged by a prior apply pass, or a re-import
+// happened to produce a cleaner tokenization).
+func ApplyRefMergeToJATS(jats []byte, c *Correction) ([]byte, error) {
+	if c.Kind != CorrectionKindRefMerge {
+		return nil, fmt.Errorf("apply ref-merge: expected ref-merge kind, got %s", c.Kind)
+	}
+	if c.TargetElementID == "" {
+		return nil, fmt.Errorf("apply ref-merge: target_element_id required")
+	}
+	targetOpen, targetClose, ok := findRefByID(jats, c.TargetElementID)
+	if !ok {
+		return jats, nil
+	}
+	// Walk backward from targetOpen to find the previous <ref>.
+	prevOpen, prevClose, ok := findPreviousRef(jats, targetOpen)
+	if !ok {
+		// No prior ref — nothing to merge into. Keep the JATS as
+		// is; the curator can revert the correction if they meant
+		// a different target.
+		return jats, nil
+	}
+	// Extract the target's plain-text content and its element-citation
+	// wrapper (if present, to know where the field-level content sits).
+	target := jats[targetOpen:targetClose]
+	fragment := extractRefTextForMerge(target)
+	// Splice the fragment as a trailing <comment> into the previous
+	// ref's element-citation (or mixed-citation) block, then remove
+	// the target ref entirely.
+	prev := jats[prevOpen:prevClose]
+	mergedPrev := appendCommentToCitation(prev, fragment)
+
+	var out bytes.Buffer
+	out.Grow(len(jats) - (targetClose - targetOpen))
+	out.Write(jats[:prevOpen])
+	out.Write(mergedPrev)
+	// Skip any whitespace + the target ref itself.
+	out.Write(trimLeadingWhitespaceBetween(jats[prevClose:targetOpen]))
+	out.Write(jats[targetClose:])
+	return out.Bytes(), nil
+}
+
+// findRefByID locates the byte range of a <ref id="target">...</ref>
+// element within a JATS document. Distinct from findElementByID
+// because we're matching on the <ref> element name specifically —
+// its ids look like "b23", "b24" and could collide with other id
+// attributes if we didn't scope by element name.
+func findRefByID(src []byte, targetID string) (openIdx, closeIdx int, ok bool) {
+	pattern := `<ref\b[^>]*\bid="` + regexp.QuoteMeta(targetID) + `"[^>]*>`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return 0, 0, false
+	}
+	loc := re.FindIndex(src)
+	if loc == nil {
+		return 0, 0, false
+	}
+	closeTag := []byte("</ref>")
+	closeStart := bytes.Index(src[loc[0]:], closeTag)
+	if closeStart < 0 {
+		return 0, 0, false
+	}
+	return loc[0], loc[0] + closeStart + len(closeTag), true
+}
+
+// findPreviousRef finds the <ref>…</ref> whose closing tag ends
+// closest to (but before) the given cursor position. Used by
+// ApplyRefMergeToJATS to identify the merge target's predecessor.
+func findPreviousRef(src []byte, cursor int) (openIdx, closeIdx int, ok bool) {
+	if cursor <= 0 {
+		return 0, 0, false
+	}
+	closeTag := []byte("</ref>")
+	prevClose := bytes.LastIndex(src[:cursor], closeTag)
+	if prevClose < 0 {
+		return 0, 0, false
+	}
+	closeIdx = prevClose + len(closeTag)
+	// Find the matching <ref … > opening tag. Scan backward for
+	// the last "<ref " or "<ref>" before prevClose.
+	openPattern := regexp.MustCompile(`<ref\b[^>]*>`)
+	locs := openPattern.FindAllIndex(src[:prevClose], -1)
+	if len(locs) == 0 {
+		return 0, 0, false
+	}
+	openIdx = locs[len(locs)-1][0]
+	return openIdx, closeIdx, true
+}
+
+// extractRefTextForMerge pulls the human-readable text out of a
+// spurious <ref>…</ref> block to append as a trailing comment on
+// the merge target's predecessor. Strips XML tags and collapses
+// runs of whitespace so the merged output reads naturally.
+func extractRefTextForMerge(refElem []byte) string {
+	// Strip all tags.
+	tagRe := regexp.MustCompile(`<[^>]+>`)
+	plain := tagRe.ReplaceAllString(string(refElem), " ")
+	// Collapse whitespace.
+	wsRe := regexp.MustCompile(`\s+`)
+	plain = strings.TrimSpace(wsRe.ReplaceAllString(plain, " "))
+	return plain
+}
+
+// appendCommentToCitation splices a <comment> child holding the
+// merged-in text into the previous ref's element-citation (or
+// mixed-citation, or the ref itself when neither is present). The
+// <comment> element is a JATS-native structured slot for
+// annotator commentary on a citation — a reasonable home for
+// text that got tokenized as its own row but really belongs to
+// this citation.
+func appendCommentToCitation(refElem []byte, fragment string) []byte {
+	if fragment == "" {
+		return refElem
+	}
+	comment := "<comment>" + xmlEscape(fragment) + "</comment>"
+	// Prefer inserting before </element-citation> or </mixed-citation>.
+	// Falls back to inserting before </ref> when neither wrapper
+	// exists (rare — jatsconv always wraps).
+	for _, closer := range []string{"</element-citation>", "</mixed-citation>", "</ref>"} {
+		idx := bytes.LastIndex(refElem, []byte(closer))
+		if idx < 0 {
+			continue
+		}
+		var out bytes.Buffer
+		out.Grow(len(refElem) + len(comment))
+		out.Write(refElem[:idx])
+		out.WriteString(comment)
+		out.Write(refElem[idx:])
+		return out.Bytes()
+	}
+	return refElem
+}
+
+// trimLeadingWhitespaceBetween strips leading whitespace from a
+// slice used as the gap between two spliced regions. Prevents the
+// merge from leaving a doubled blank line where the removed <ref>
+// used to sit.
+func trimLeadingWhitespaceBetween(gap []byte) []byte {
+	i := 0
+	for i < len(gap) && (gap[i] == ' ' || gap[i] == '\t' || gap[i] == '\n' || gap[i] == '\r') {
+		i++
+	}
+	return gap[i:]
 }
 
 // findElementByID locates the byte range of the <name id="target"
@@ -185,6 +388,63 @@ func renameElementTags(elem []byte, oldName, newName string) []byte {
 		s = s[:lastIdx] + closeNew + s[lastIdx+len(closeOld):]
 	}
 	return []byte(s)
+}
+
+// pdfBBoxAttrRegex matches the hive:pdf-bbox="..." attribute on
+// the element's opening tag. Anchored to the first '<' so we only
+// touch the outer element, not any nested markup that could
+// theoretically carry the same attribute.
+var pdfBBoxAttrRegex = regexp.MustCompile(`(<[^>]*\bhive:pdf-bbox=")[^"]*(")`)
+
+// replacePdfBBoxAttr rewrites the hive:pdf-bbox="..." value on the
+// element's opening tag. Adds the attribute just before the tag's
+// closing '>' when no existing attribute is present so a resize
+// promotes a bbox-less element into one figextract can crop.
+func replacePdfBBoxAttr(elem []byte, newValue string) []byte {
+	if pdfBBoxAttrRegex.Match(elem) {
+		return pdfBBoxAttrRegex.ReplaceAll(elem, []byte("${1}"+newValue+"${2}"))
+	}
+	gt := bytes.IndexByte(elem, '>')
+	if gt < 0 {
+		return elem
+	}
+	var out bytes.Buffer
+	out.Grow(len(elem) + len(newValue) + 20)
+	out.Write(elem[:gt])
+	out.WriteString(` hive:pdf-bbox="`)
+	out.WriteString(newValue)
+	out.WriteString(`"`)
+	out.Write(elem[gt:])
+	return out.Bytes()
+}
+
+// replaceTableBlock swaps the first <table>...</table> block in
+// the element for the given replacement. When no <table> is
+// present, inserts one after the caption; when there's no caption
+// either, appends before the element's closing tag. Mirrors the
+// caption-block helper's shape for consistency.
+func replaceTableBlock(elem []byte, newTable string) []byte {
+	s := string(elem)
+	tabOpen := strings.Index(s, "<table>")
+	if tabOpen >= 0 {
+		tabClose := strings.Index(s[tabOpen:], "</table>")
+		if tabClose < 0 {
+			return elem
+		}
+		end := tabOpen + tabClose + len("</table>")
+		return []byte(s[:tabOpen] + newTable + s[end:])
+	}
+	// No existing table — insert after the caption block if
+	// present; otherwise before the closing tag.
+	if capClose := strings.Index(s, "</caption>"); capClose >= 0 {
+		insertAt := capClose + len("</caption>")
+		return []byte(s[:insertAt] + newTable + s[insertAt:])
+	}
+	lastLT := strings.LastIndex(s, "</")
+	if lastLT < 0 {
+		return elem
+	}
+	return []byte(s[:lastLT] + newTable + s[lastLT:])
 }
 
 // replaceCaptionBlock swaps the first <caption>...</caption>

@@ -2679,16 +2679,28 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	if body.Kind == "" {
 		body.Kind = string(hive.CorrectionKindBBoxAdd)
 	}
-	// Slice 1 scope: bbox-add + bbox-modify + bbox-remove for
-	// figure or table content types.
-	if body.Kind != string(hive.CorrectionKindBBoxAdd) &&
-		body.Kind != string(hive.CorrectionKindBBoxModify) &&
-		body.Kind != string(hive.CorrectionKindBBoxRemove) {
-		writeBadRequest(w, r, "only bbox-add, bbox-modify, and bbox-remove corrections supported in slice 1")
-		return
-	}
-	if body.ContentType != "figure" && body.ContentType != "table" {
-		writeBadRequest(w, r, "content_type must be 'figure' or 'table' in slice 1")
+	// Kind-scoped validation: bbox-* kinds require figure/table
+	// content types; ref-merge scopes to references (content_type
+	// = "reference") and needs only a target_element_id (a <ref>
+	// id in the JATS ref-list — no bbox involved).
+	switch body.Kind {
+	case string(hive.CorrectionKindBBoxAdd),
+		string(hive.CorrectionKindBBoxModify),
+		string(hive.CorrectionKindBBoxRemove):
+		if body.ContentType != "figure" && body.ContentType != "table" {
+			writeBadRequest(w, r, "content_type must be 'figure' or 'table' for bbox-* corrections")
+			return
+		}
+	case string(hive.CorrectionKindRefMerge):
+		if body.TargetElementID == "" {
+			writeBadRequest(w, r, "target_element_id required for ref-merge")
+			return
+		}
+		if body.ContentType == "" {
+			body.ContentType = "reference"
+		}
+	default:
+		writeBadRequest(w, r, "unsupported correction kind: "+body.Kind)
 		return
 	}
 	if body.Kind == string(hive.CorrectionKindBBoxAdd) {
@@ -2781,6 +2793,37 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+	// Same table re-parse for bbox-modify on a table region — a
+	// resize can uncover missing rows, so the row grid needs
+	// re-extraction over the new bbox. Row output is merged into
+	// payload.corrected.table_rows so ApplyBBoxModifyToJATS can
+	// splice a fresh <table> into the target <table-wrap>.
+	if c.Kind == hive.CorrectionKindBBoxModify && c.ContentType == "table" {
+		var mp hive.BBoxModifyPayload
+		if c.Payload != "" && c.Payload != "{}" {
+			_ = json.Unmarshal([]byte(c.Payload), &mp)
+		}
+		if mp.Corrected.BBox != nil {
+			page := mp.Corrected.Page
+			if page == 0 {
+				page = mp.Original.Page
+			}
+			if page > 0 {
+				pdfPath := sidecar.Path(s.archivePath, c.SidecarSHA, "pdf")
+				if _, err := os.Stat(pdfPath); err == nil {
+					rows, err := pdftext.ExtractTable(pdfPath, page,
+						mp.Corrected.BBox.X, mp.Corrected.BBox.Y,
+						mp.Corrected.BBox.W, mp.Corrected.BBox.H)
+					if err == nil && len(rows) > 0 {
+						mp.Corrected.TableRows = rows
+						if b, err := json.Marshal(mp); err == nil {
+							c.Payload = string(b)
+						}
+					}
+				}
+			}
+		}
+	}
 	if c.Payload == "" {
 		c.Payload = "{}"
 	}
@@ -2836,6 +2879,11 @@ func (s *server) applyBBoxCorrectionToSidecar(c *hive.Correction) []string {
 		mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
 		if err != nil {
 			return []string{"apply bbox-remove: " + err.Error()}
+		}
+	case hive.CorrectionKindRefMerge:
+		mutated, err = hive.ApplyRefMergeToJATS(jats, c)
+		if err != nil {
+			return []string{"apply ref-merge: " + err.Error()}
 		}
 	default:
 		return []string{"unsupported correction kind: " + string(c.Kind)}
@@ -3117,18 +3165,30 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 		if c.Status != hive.CorrectionStatusActive {
 			continue
 		}
-		if c.ContentType != "figure" && c.ContentType != "table" {
-			continue
-		}
+		// Kind dispatch decides both eligibility and apply function.
+		// bbox-* kinds additionally scope to figure/table content;
+		// ref-merge and future non-bbox kinds don't share that
+		// filter, so the content-type check lives inside each case.
 		var mutated []byte
 		var err error
 		switch c.Kind {
 		case hive.CorrectionKindBBoxAdd:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxAddToJATS(jats, c)
 		case hive.CorrectionKindBBoxModify:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxModifyToJATS(jats, c)
 		case hive.CorrectionKindBBoxRemove:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
+		case hive.CorrectionKindRefMerge:
+			mutated, err = hive.ApplyRefMergeToJATS(jats, c)
 		default:
 			continue
 		}
@@ -3783,17 +3843,29 @@ func (s *server) reapplyCorrectionsForSHA(ctx context.Context, sha string, jats 
 		if err != nil || c == nil {
 			continue
 		}
-		if c.ContentType != "figure" && c.ContentType != "table" {
-			continue
-		}
+		// Kind dispatch decides both eligibility and apply function.
+		// bbox-* kinds additionally scope to figure/table content;
+		// ref-merge and future non-bbox kinds don't share that
+		// filter, so the content-type check lives inside each case.
 		var mutated []byte
 		switch c.Kind {
 		case hive.CorrectionKindBBoxAdd:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxAddToJATS(jats, c)
 		case hive.CorrectionKindBBoxModify:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxModifyToJATS(jats, c)
 		case hive.CorrectionKindBBoxRemove:
+			if c.ContentType != "figure" && c.ContentType != "table" {
+				continue
+			}
 			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
+		case hive.CorrectionKindRefMerge:
+			mutated, err = hive.ApplyRefMergeToJATS(jats, c)
 		default:
 			continue
 		}

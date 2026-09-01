@@ -49,6 +49,14 @@ const (
 	CorrectionKindTextTag      CorrectionKind = "text-tag"
 	CorrectionKindXrefFix      CorrectionKind = "xref-fix"
 	CorrectionKindChipFeedback CorrectionKind = "chip-feedback"
+	// CorrectionKindRefMerge merges a spurious <ref> into the
+	// previous one. Fires when GROBID's ref tokenizer splits a
+	// single citation into two rows (typical trigger: an inline
+	// URL fragment, or an address tail parsed as a new author
+	// list). TargetElementID names the row to be absorbed;
+	// applying the correction concatenates its textContent into
+	// the previous <ref> and deletes the target row.
+	CorrectionKindRefMerge CorrectionKind = "ref-merge"
 )
 
 // CorrectionStatus tracks whether a correction still applies to
