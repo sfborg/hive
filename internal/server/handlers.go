@@ -18,7 +18,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/annotator"
+	"github.com/sfborg/hive/pkg/taxonomy/annotator"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"

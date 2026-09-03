@@ -11,7 +11,7 @@ import (
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gdower/gsvalidator/usecase/joins"
 	"github.com/gdower/gsvalidator/usecase/validator"
-	"github.com/sfborg/hive/pkg/sfgarules"
+	"github.com/sfborg/hive/pkg/taxonomy/sfgarules"
 )
 
 //go:embed hive_rules.json

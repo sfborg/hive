@@ -1,6 +1,6 @@
 package hive
 
-import "github.com/sfborg/hive/pkg/bhlnames"
+import "github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 
 // Type aliases so existing callers of core.BHLnameHit /
 // core.BHLnameLookupOpts keep compiling without an import change.
