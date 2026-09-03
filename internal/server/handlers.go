@@ -2699,6 +2699,18 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		if body.ContentType == "" {
 			body.ContentType = "reference"
 		}
+	case string(hive.CorrectionKindRefEdit):
+		if body.TargetElementID == "" {
+			writeBadRequest(w, r, "target_element_id required for ref-edit")
+			return
+		}
+		if body.Payload == "" || body.Payload == "{}" {
+			writeBadRequest(w, r, "payload with corrected fields required for ref-edit")
+			return
+		}
+		if body.ContentType == "" {
+			body.ContentType = "reference"
+		}
 	default:
 		writeBadRequest(w, r, "unsupported correction kind: "+body.Kind)
 		return
@@ -2884,6 +2896,11 @@ func (s *server) applyBBoxCorrectionToSidecar(c *hive.Correction) []string {
 		mutated, err = hive.ApplyRefMergeToJATS(jats, c)
 		if err != nil {
 			return []string{"apply ref-merge: " + err.Error()}
+		}
+	case hive.CorrectionKindRefEdit:
+		mutated, err = hive.ApplyRefEditToJATS(jats, c)
+		if err != nil {
+			return []string{"apply ref-edit: " + err.Error()}
 		}
 	default:
 		return []string{"unsupported correction kind: " + string(c.Kind)}
@@ -3189,6 +3206,8 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
 		case hive.CorrectionKindRefMerge:
 			mutated, err = hive.ApplyRefMergeToJATS(jats, c)
+		case hive.CorrectionKindRefEdit:
+			mutated, err = hive.ApplyRefEditToJATS(jats, c)
 		default:
 			continue
 		}
@@ -3866,6 +3885,8 @@ func (s *server) reapplyCorrectionsForSHA(ctx context.Context, sha string, jats 
 			mutated, err = hive.ApplyBBoxRemoveToJATS(jats, c)
 		case hive.CorrectionKindRefMerge:
 			mutated, err = hive.ApplyRefMergeToJATS(jats, c)
+		case hive.CorrectionKindRefEdit:
+			mutated, err = hive.ApplyRefEditToJATS(jats, c)
 		default:
 			continue
 		}

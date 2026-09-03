@@ -27,7 +27,7 @@
  * dragging the main SPA along.
  */
 
-import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
+import { LitElement, html, css, nothing, svg } from "/vendor/lit-3.x.x.min.js";
 
 // TaxPub + GN + hive namespaces from pkg/annotator and pkg/jatsconv.
 // Kept in sync manually since Go and JS can't share constants — if
@@ -40,6 +40,28 @@ import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
 const TAXPUB_NS = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0";
 const GN_NS = "https://hive.sfborg.org/ns/gn/1.0";
 const HIVE_NS = "https://hive.sfborg.org/ns/1.0";
+
+// Lucide "pencil" — same glyph the shell uses for its edit buttons
+// (see renderIcon("pencil", …) in app.js). Inlined here so the
+// reader stays a standalone module without importing from the shell.
+// currentColor lets the CSS context pick up light/dark theme accent.
+function pencilIcon(size = 14) {
+  return svg`<svg
+    xmlns="http://www.w3.org/2000/svg"
+    width=${size}
+    height=${size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+    <path d="m15 5 4 4" />
+  </svg>`;
+}
 
 class SfgaReader extends LitElement {
   static properties = {
@@ -376,6 +398,63 @@ class SfgaReader extends LitElement {
       color: var(--dim);
       font-style: italic;
     }
+    /* Per-ref row layout: warning-icon gutter on the left, body in
+       the middle, edit pencil pinned to the right on hover. Grid
+       lives on an inner wrapper so the outer <li> keeps its
+       list-item display and the ol's decimal marker still renders.
+       Setting display: grid directly on the <li> would suppress
+       the marker in every browser. */
+    article ol.references li.ref-row {
+      position: relative;
+    }
+    article ol.references .ref-row-inner {
+      display: grid;
+      grid-template-columns: 1.25rem 1fr auto;
+      column-gap: var(--sp-1);
+      align-items: baseline;
+    }
+    article ol.references .ref-warn-icon,
+    article ol.references .ref-warn-icon-placeholder {
+      display: inline-block;
+      width: 1.25rem;
+      text-align: center;
+    }
+    article ol.references .ref-warn-icon {
+      color: var(--sev-warn);
+      cursor: pointer;
+      font-size: var(--fs-sm);
+    }
+    article ol.references .ref-warn-icon:hover {
+      transform: scale(1.15);
+    }
+    article ol.references .ref-warn-icon:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: var(--radius-xs);
+    }
+    /* Edit pencil hidden until the row is hovered or focused; keeps
+       the ref list from looking like a spreadsheet at rest. Sized
+       so click target is comfortable but the icon doesn't shout. */
+    article ol.references .ref-edit-pencil {
+      background: none;
+      border: 1px solid transparent;
+      border-radius: var(--radius-xs);
+      padding: 0 var(--sp-1);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+    article ol.references .ref-row-inner:hover .ref-edit-pencil,
+    article ol.references .ref-row-inner:focus-within .ref-edit-pencil {
+      opacity: 1;
+    }
+    article ol.references .ref-edit-pencil:hover {
+      color: var(--fg);
+      border-color: var(--border);
+      background: color-mix(in oklab, var(--fg) 4%, transparent);
+    }
     @keyframes refFlash {
       0% { background: color-mix(in srgb, var(--accent) 35%, transparent); }
       100% { background: transparent; }
@@ -473,10 +552,18 @@ class SfgaReader extends LitElement {
       text-decoration: none;
       font-size: var(--fs-sm);
       white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
     .fig-modal-header-page:hover {
       color: var(--accent);
       text-decoration: underline;
+    }
+    .fig-modal-header-page svg {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
     }
     .fig-modal-close {
       background: transparent;
@@ -1900,8 +1987,50 @@ class SfgaReader extends LitElement {
       }
       if (local === "ref") {
         const refID = node.getAttribute("id") || "";
+        // Warning icon shows on the left edge when the ref is on
+        // the suspect list (URL fragment, address-only, empty, ...).
+        // Edit pencil shows on the right on hover — clicking either
+        // opens the shell's ref-edit modal via postMessage. Keeping
+        // the affordances at the row edges avoids collision with
+        // citation body links inside the ref text.
+        const suspect = this._suspectRefIDs().has(refID);
         out.push(
-          html`<li data-ref-id=${refID}>${this._renderRef(node)}</li>`,
+          html`<li
+            class="ref-row${suspect ? " ref-row-suspect" : ""}"
+            data-ref-id=${refID}
+          >
+            <div class="ref-row-inner">
+              ${suspect
+                ? html`<span
+                    class="ref-warn-icon"
+                    title="Suspect reference — click to edit"
+                    aria-label="Suspect reference"
+                    role="button"
+                    tabindex="0"
+                    @click=${() => this._editRef(refID)}
+                    @keydown=${(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        this._editRef(refID);
+                      }
+                    }}
+                    >⚠</span
+                  >`
+                : html`<span class="ref-warn-icon-placeholder"
+                    aria-hidden="true"
+                  ></span>`}
+              <span class="ref-body">${this._renderRef(node)}</span>
+              <button
+                class="ref-edit-pencil"
+                type="button"
+                title="Edit this reference"
+                aria-label="Edit reference ${refID}"
+                @click=${() => this._editRef(refID)}
+              >
+                ${pencilIcon(14)}
+              </button>
+            </div>
+          </li>`,
         );
         continue;
       }
@@ -2458,6 +2587,108 @@ class SfgaReader extends LitElement {
     );
   }
 
+  // _suspectRefIDs returns a Set of ref ids currently flagged by
+  // _suspectRefs. Recomputed per render — cheap because there are
+  // usually only a few dozen refs per paper and the heuristics are
+  // O(1) per ref. Cached in _suspectRefsMemo when the doc reference
+  // hasn't changed so per-row rendering doesn't rescan the whole
+  // ref-list on every ref.
+  _suspectRefIDs() {
+    if (
+      !this._suspectRefsMemo ||
+      this._suspectRefsMemoDoc !== this._doc
+    ) {
+      const set = new Set();
+      for (const s of this._suspectRefs()) set.add(s.id);
+      this._suspectRefsMemo = set;
+      this._suspectRefsMemoDoc = this._doc;
+    }
+    return this._suspectRefsMemo;
+  }
+
+  // _editRef asks the parent frame to open the ref-edit modal for
+  // the given ref id. Sends the ref's structured fields inline so
+  // the shell can seed the modal without re-parsing the JATS. Same
+  // postMessage split as _mergeRef.
+  _editRef(refID) {
+    if (!refID) return;
+    if (!(window.parent && window.parent !== window)) {
+      // eslint-disable-next-line no-console
+      console.warn("edit-ref requires the shell — open via References tab");
+      return;
+    }
+    const target = this._doc.querySelector(`[id="${CSS.escape(refID)}"]`);
+    if (!target) return;
+    const fields = this._refToManualFields(target);
+    window.parent.postMessage(
+      {
+        type: "hive:edit-ref",
+        sha: this._sha,
+        refID: refID,
+        fields: fields,
+        suspect: this._suspectRefIDs().has(refID),
+      },
+      "*",
+    );
+  }
+
+  // _refToManualFields shapes a JATS <ref>'s element-citation into
+  // the manualReference field set the shell's ref-edit modal
+  // consumes. Same keys as emptyManualReference in app.js so the
+  // modal can populate its form directly. Missing fields default
+  // to "" so the form doesn't render "undefined".
+  _refToManualFields(refNode) {
+    const empty = {
+      author: "",
+      editor: "",
+      title: "",
+      title_short: "",
+      container_title: "",
+      container_title_short: "",
+      container_author: "",
+      issued: "",
+      volume: "",
+      issue: "",
+      edition: "",
+      page: "",
+      publisher: "",
+      publisher_place: "",
+      isbn: "",
+      issn: "",
+      doi: "",
+      link: "",
+      type: "",
+      remarks: "",
+      citation: "",
+    };
+    const ec =
+      this._directChild(refNode, "element-citation") ||
+      this._directChild(refNode, "mixed-citation");
+    if (!ec) {
+      empty.citation = (refNode.textContent || "").trim();
+      return empty;
+    }
+    const d = this._elementCitationToData(ec);
+    return {
+      ...empty,
+      author: d.authors.join(", "),
+      title: d.articleTitle
+        ? (d.articleTitle.textContent || "").trim()
+        : "",
+      container_title: d.source
+        ? (d.source.textContent || "").trim()
+        : "",
+      issued: d.year || "",
+      volume: d.volume || "",
+      issue: d.issue || "",
+      page: d.page || "",
+      publisher: d.publisher || "",
+      publisher_place: d.publisherLoc || "",
+      doi: d.doi || "",
+      citation: this._refPreviewText(refNode),
+    };
+  }
+
   // _renderFigModal renders the currently-open figure/table modal.
   // Two content tabs when both views are available:
   //   - Digitized — structured HTML (rendered table for
@@ -2532,7 +2763,17 @@ class SfgaReader extends LitElement {
                     href=${pdfURL}
                     title="Open source PDF at page ${displayPage}"
                     @click=${(e) => this._jumpToFig(e, this._modalFigID, page)}
-                  >page ${displayPage}</a>`
+                  ><svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    ><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path
+                      d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+                    /></svg>Page ${displayPage}</a>`
                 : nothing}
             </div>
             <button

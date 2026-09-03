@@ -1002,6 +1002,7 @@ func (c *converter) handleStart(dec *xml.Decoder, se xml.StartElement) error {
 // source didn't provide one.
 func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 	var attrs strings.Builder
+	var secType string
 	for _, a := range se.Attr {
 		switch a.Name.Local {
 		case "id":
@@ -1012,6 +1013,7 @@ func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 			attrs.WriteString(` sec-type="`)
 			attrs.WriteString(escapeAttr(a.Value))
 			attrs.WriteString(`"`)
+			secType = a.Value
 		}
 	}
 	sub := &converter{
@@ -1036,7 +1038,15 @@ func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 	c.writeString(attrs.String())
 	c.writeString(">")
 	if !strings.HasPrefix(strings.TrimSpace(content), "<title>") {
-		c.writeString("<title>Section</title>")
+		// Placeholder title — JATS sec-model requires one. When the
+		// section has a sec-type we can produce something the reader
+		// won't display as generic "Section" (which reads like a
+		// jatsconv bug rather than a real heading). GROBID typically
+		// leaves the outer references / acknowledgement wrappers
+		// title-less because the actual heading is on a child block.
+		c.writeString("<title>")
+		c.writeString(placeholderSectionTitle(secType))
+		c.writeString("</title>")
 	}
 	if len(sub.pendingHoists) > 0 {
 		// Splice the marker(s) between the title's closing tag
@@ -1085,6 +1095,31 @@ func (c *converter) emitSection(dec *xml.Decoder, se xml.StartElement) error {
 	}
 	c.writeString("</sec>\n")
 	return nil
+}
+
+// placeholderSectionTitle returns the fallback heading used when
+// GROBID's TEI div has no <head>. Uses the sec-type attribute
+// (references / acknowledgement / …) as a hint so the reader
+// shows curator-recognizable headings instead of a generic
+// "Section" label. Unknown sec-types (including "") get the
+// generic fallback — that behavior stays visible so any missing
+// heading pops out in the reader as a signal to add extraction
+// coverage for the mapping.
+func placeholderSectionTitle(secType string) string {
+	switch secType {
+	case "references":
+		return "References"
+	case "acknowledgement", "acknowledgements":
+		return "Acknowledgments"
+	case "annex":
+		return "Appendix"
+	case "figures":
+		// Handled via a dedicated emit path; a placeholder shouldn't
+		// normally fire here, but if it does the label matches the
+		// dedicated section's own title.
+		return "Figures and tables"
+	}
+	return "Section"
 }
 
 // emitTitle writes a <title> element for a TEI <head>. Content is

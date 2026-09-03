@@ -57,6 +57,16 @@ const (
 	// applying the correction concatenates its textContent into
 	// the previous <ref> and deletes the target row.
 	CorrectionKindRefMerge CorrectionKind = "ref-merge"
+	// CorrectionKindRefEdit rewrites individual fields on a
+	// bibliography <ref>'s element-citation — the curator-driven
+	// counterpart to the extractor's automated output. Used when
+	// GROBID parsed the ref but got a field wrong (misread year,
+	// dropped an author, garbled a title, wrong DOI). TargetElementID
+	// names the ref; Payload carries a RefEditPayload whose
+	// Corrected map holds only the changed fields — untouched
+	// fields stay as GROBID had them, so a re-import that improves
+	// extraction still benefits.
+	CorrectionKindRefEdit CorrectionKind = "ref-edit"
 )
 
 // CorrectionStatus tracks whether a correction still applies to

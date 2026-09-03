@@ -10007,6 +10007,13 @@ class SfgaAddReferenceModal extends LitElement {
     // still POST-create rather than PATCH-replace — Slice 2 wires
     // those. See REFERENCE_PDF_PLAN.md.
     editID: { attribute: false },
+    // jatsRef, when set, puts the modal in "edit a JATS bibliography
+    // reference" mode: seeds the Manual tab from the given fields
+    // (no api.reference.get), routes save to POST a ref-edit
+    // correction, and emits a "jats-ref-saved" event on success
+    // instead of "reference-updated". Shape: { sha, refID, fields
+    // (manualReference-like), suspect }.
+    jatsRef: { attribute: false },
     // initialFile lets a caller (SfgaReferences drop handler)
     // hand a File object to the modal so the curator doesn't have
     // to re-pick it. Auto-uploaded in firstUpdated when set.
@@ -10545,6 +10552,7 @@ class SfgaAddReferenceModal extends LitElement {
     this.contextYear = 0;
     this.defaultTab = "project";
     this.editID = "";
+    this.jatsRef = null;
     this._tab = 0;
     this._busy = false;
     this._error = "";
@@ -10709,6 +10717,17 @@ class SfgaAddReferenceModal extends LitElement {
       this._showAllFields = true;
       this._tab = SfgaAddReferenceModal._tabIndex("manual");
       this._loadForEdit(this.editID);
+    } else if (this.jatsRef) {
+      // JATS-ref edit mode: seed the Manual tab from the fields
+      // the reader sent inline. No fetch — the reader already
+      // has the parsed JATS ref data. All fields visible for the
+      // same "curator can see everything at once" reason.
+      this._showAllFields = true;
+      this._tab = SfgaAddReferenceModal._tabIndex("manual");
+      this._manual = { ...emptyManualReference(), ...(this.jatsRef.fields || {}) };
+      // Store the original snapshot so _saveManual's diff logic
+      // reuses the same code path as the sfga-reference edit case.
+      this._manualOriginal = { ...this._manual };
     } else {
       this._tab = SfgaAddReferenceModal._tabIndex(this.defaultTab);
     }
@@ -12138,6 +12157,13 @@ class SfgaAddReferenceModal extends LitElement {
     this._manualBusy = true;
     this._manualError = "";
     try {
+      if (this.jatsRef) {
+        // JATS-ref edit mode: POST a ref-edit correction with the
+        // fields the curator changed. The correction row persists
+        // through re-imports so the fix survives GROBID re-parses.
+        await this._saveJATSRefEdit();
+        return;
+      }
       if (this.editID) {
         // Edit mode: PATCH the existing reference. Only send fields
         // the curator actually changed (compared against the loaded
@@ -12186,6 +12212,100 @@ class SfgaAddReferenceModal extends LitElement {
     } finally {
       this._manualBusy = false;
     }
+  }
+
+  // _saveJATSRefEdit posts a ref-edit correction with the diff of
+  // the curator's form against the original JATS-ref fields. Only
+  // changed fields go into the Corrected payload so the apply pass
+  // touches only what the curator actually edited — untouched
+  // fields stay as GROBID had them and benefit from any future
+  // re-import that improves extraction.
+  //
+  // Emits a "jats-ref-saved" event on success so the shell can
+  // refresh the reader iframe + corrections list.
+  async _saveJATSRefEdit() {
+    const desc = this.jatsRef;
+    if (!desc) return;
+    const original = this._manualOriginal || {};
+    const corrected = {};
+    for (const [k, v] of Object.entries(this._manual)) {
+      if ((original[k] || "") !== v) {
+        corrected[k] = v;
+      }
+    }
+    if (Object.keys(corrected).length === 0) {
+      // Nothing changed — just close.
+      this._close();
+      return;
+    }
+    // Build payload in the RefEditPayload shape the backend expects.
+    // Backend keys are snake_case matching the RefEditFields Go struct.
+    const payload = {
+      original: this._toRefEditFields(original),
+      corrected: this._toRefEditFields(corrected),
+    };
+    const referenceID = desc.referenceID || "";
+    if (!referenceID) {
+      this._manualError =
+        "cannot save: missing reference context — close and reopen";
+      this._manualBusy = false;
+      return;
+    }
+    try {
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reference_id: referenceID,
+          sidecar_sha: desc.sha,
+          kind: "ref-edit",
+          content_type: "reference",
+          target_element_id: desc.refID,
+          payload: JSON.stringify(payload),
+        }),
+      });
+      if (!r.ok) {
+        throw new Error(`ref-edit save failed: HTTP ${r.status}`);
+      }
+      this.dispatchEvent(
+        new CustomEvent("jats-ref-saved", {
+          detail: { refID: desc.refID, sha: desc.sha },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      this._close();
+    } catch (err) {
+      this._manualError =
+        err instanceof Problem
+          ? `${err.title}: ${err.detail || err.message}`
+          : String(err);
+    } finally {
+      this._manualBusy = false;
+    }
+  }
+
+  // _toRefEditFields maps a manualReference-shaped object to the
+  // RefEditFields JSON the Go apply function expects. Only the
+  // subset of fields ref-edit knows how to rewrite is included —
+  // fields like editor, isbn, issn have no JATS element-citation
+  // counterpart in our current mapping and are silently dropped
+  // to keep the payload small.
+  _toRefEditFields(src) {
+    const out = {};
+    if ("author" in src) out.author = src.author;
+    if ("title" in src) out.title = src.title;
+    if ("container_title" in src) out.container_title = src.container_title;
+    if ("container_title_short" in src) out.container_title_short = src.container_title_short;
+    if ("issued" in src) out.issued = src.issued;
+    if ("volume" in src) out.volume = src.volume;
+    if ("issue" in src) out.issue = src.issue;
+    if ("page" in src) out.page = src.page;
+    if ("publisher" in src) out.publisher = src.publisher;
+    if ("publisher_place" in src) out.publisher_place = src.publisher_place;
+    if ("doi" in src) out.doi = src.doi;
+    if ("citation" in src) out.citation = src.citation;
+    return out;
   }
 
   // Persistent issues banner between the modal header and the tab
@@ -13843,6 +13963,13 @@ class SfgaReferences extends LitElement {
     // button). Separate from _editRefID because the modal keys off
     // the presence of editID to switch between edit and add flows.
     _addingNew: { state: true },
+    // _jatsRefEdit holds the descriptor sent by the reader's hover
+    // pencil / warning icon on a JATS <ref>. When non-null, the
+    // add-reference modal opens in a special jats-ref mode: seeds
+    // from these fields (not api.reference.get), and its save path
+    // POSTs a ref-edit correction (not api.reference.patch).
+    // Shape: { sha, refID, fields, suspect }.
+    _jatsRefEdit: { state: true },
     // True when the host is wide enough (~1300px+) for a 3-column
     // layout (list | detail | reader). Narrow viewports collapse
     // the reader into the detail pane below the structured info,
@@ -14568,6 +14695,7 @@ class SfgaReferences extends LitElement {
     this._query = "";
     this._editRefID = "";
     this._addingNew = false;
+    this._jatsRefEdit = null;
     this._wide = false;
     this._readerExpanded = false;
     this._workspaceTab = "bibliography";
@@ -14631,6 +14759,16 @@ class SfgaReferences extends LitElement {
       }
       if (d.type === "hive:merge-ref" && d.refID && this._current) {
         this._postRefMergeCorrection(d.refID, d.sha || currentSha);
+        return;
+      }
+      if (d.type === "hive:edit-ref" && d.refID && this._current) {
+        this._openJATSRefEditModal({
+          sha: d.sha || currentSha,
+          referenceID: this._current.id,
+          refID: d.refID,
+          fields: d.fields || {},
+          suspect: !!d.suspect,
+        });
         return;
       }
     };
@@ -15946,17 +16084,21 @@ class SfgaReferences extends LitElement {
               `}
       </aside>
       ${this._renderRightPanes()}
-      ${this._editRefID || this._addingNew
+      ${this._editRefID || this._addingNew || this._jatsRefEdit
         ? html`<sfga-add-reference-modal
             .editID=${this._editRefID}
+            .jatsRef=${this._jatsRefEdit}
             .defaultTab=${this._pendingDropFile
               ? "file"
-              : this._addingNew
-                ? "project"
-                : "manual"}
+              : this._jatsRefEdit
+                ? "manual"
+                : this._addingNew
+                  ? "project"
+                  : "manual"}
             .initialFile=${this._pendingDropFile}
             @reference-updated=${(e) => this._onEditSaved(e)}
             @reference-picked=${(e) => this._onReferenceAdded(e)}
+            @jats-ref-saved=${() => this._onJATSRefEditSaved()}
             @close=${() => this._closeModal()}
           ></sfga-add-reference-modal>`
         : nothing}
@@ -15968,6 +16110,29 @@ class SfgaReferences extends LitElement {
     this._editRefID = "";
     this._addingNew = false;
     this._pendingDropFile = null;
+    this._jatsRefEdit = null;
+  }
+
+  // _openJATSRefEditModal reveals the ref-edit modal with the JATS
+  // ref descriptor sent by the reader iframe. Reuses the same
+  // add-reference modal component; the modal switches into
+  // jats-ref mode when the .jatsRef prop is non-null. Reload of
+  // the reader after save happens in _onJATSRefEditSaved.
+  _openJATSRefEditModal(desc) {
+    if (!desc || !desc.refID) return;
+    this._jatsRefEdit = desc;
+  }
+
+  // _onJATSRefEditSaved closes the modal and refreshes the reader
+  // iframe so the JATS mutation from the ref-edit correction shows
+  // up immediately. Also refreshes the corrections list so the new
+  // row appears if the curator opens the corrections view.
+  async _onJATSRefEditSaved() {
+    this._closeModal();
+    if (this._current) {
+      await this._fetchCorrections(this._current.id);
+    }
+    this._reloadReaderIframe();
   }
 
   async _onReferenceAdded(e) {

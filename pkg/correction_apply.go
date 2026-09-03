@@ -343,6 +343,315 @@ func trimLeadingWhitespaceBetween(gap []byte) []byte {
 	return gap[i:]
 }
 
+// RefEditPayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'ref-edit'. Same shape both directions: Original captures the
+// pre-edit JATS field values (for the training corpus and for
+// diffing at apply time), Corrected holds only the field values
+// the curator changed. Empty-string values in Corrected mean the
+// curator explicitly cleared that field.
+//
+// Field names mirror hive's manualReference form (author, title,
+// issued, volume, ...) so the WUI can serialize its form state
+// directly into this struct without an intermediate mapping.
+type RefEditPayload struct {
+	Original  RefEditFields `json:"original"`
+	Corrected RefEditFields `json:"corrected"`
+}
+
+// RefEditFields collects the field slots an element-citation carries
+// in the JATS shape jatsconv emits. Pointer strings distinguish
+// "not touched by this correction" (nil) from "cleared by curator"
+// (non-nil pointing at ""). Callers construct the struct from the
+// curator form's diff — only fields that differ from Original get
+// populated on Corrected.
+type RefEditFields struct {
+	Author              *string `json:"author,omitempty"`
+	Title               *string `json:"title,omitempty"`
+	ContainerTitle      *string `json:"container_title,omitempty"`
+	ContainerTitleShort *string `json:"container_title_short,omitempty"`
+	Issued              *string `json:"issued,omitempty"`
+	Volume              *string `json:"volume,omitempty"`
+	Issue               *string `json:"issue,omitempty"`
+	Page                *string `json:"page,omitempty"`
+	Publisher           *string `json:"publisher,omitempty"`
+	PublisherPlace      *string `json:"publisher_place,omitempty"`
+	DOI                 *string `json:"doi,omitempty"`
+	Citation            *string `json:"citation,omitempty"`
+}
+
+// ApplyRefEditToJATS rewrites individual fields on the target
+// <ref>'s <element-citation>, one per Corrected field pointer that
+// is non-nil. Untouched fields (nil pointers) stay as GROBID had
+// them — a re-import with better extraction still benefits.
+//
+// Each field maps to a specific JATS child of element-citation:
+//
+//	Author          -> person-group/name/* — rebuilt from a
+//	                   comma-separated list
+//	Title           -> article-title
+//	ContainerTitle  -> source
+//	Issued          -> year (4-digit token when the curator's value
+//	                   contains one; otherwise the raw string)
+//	Volume/Issue    -> volume / issue
+//	Page            -> fpage/lpage (split on '-'), or fpage alone
+//	Publisher       -> publisher-name
+//	PublisherPlace  -> publisher-loc
+//	DOI             -> pub-id[pub-id-type="doi"]
+//	Citation        -> attached as a trailing <comment> when the
+//	                   curator overrode the verbatim citation string
+//	                   without touching structured fields
+//
+// Idempotent: returns the JATS unchanged when the target ref is
+// absent (rare — usually means a prior ref-merge absorbed it).
+func ApplyRefEditToJATS(jats []byte, c *Correction) ([]byte, error) {
+	if c.Kind != CorrectionKindRefEdit {
+		return nil, fmt.Errorf("apply ref-edit: expected ref-edit kind, got %s", c.Kind)
+	}
+	if c.TargetElementID == "" {
+		return nil, fmt.Errorf("apply ref-edit: target_element_id required")
+	}
+	if c.Payload == "" || c.Payload == "{}" {
+		return jats, nil
+	}
+	var payload RefEditPayload
+	if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
+		return nil, fmt.Errorf("apply ref-edit: parse payload: %w", err)
+	}
+	openIdx, closeIdx, ok := findRefByID(jats, c.TargetElementID)
+	if !ok {
+		return jats, nil
+	}
+	refElem := jats[openIdx:closeIdx]
+	updated := applyRefEditFields(refElem, &payload.Corrected)
+	if bytes.Equal(updated, refElem) {
+		return jats, nil
+	}
+	var out bytes.Buffer
+	out.Grow(len(jats) + len(updated) - len(refElem))
+	out.Write(jats[:openIdx])
+	out.Write(updated)
+	out.Write(jats[closeIdx:])
+	return out.Bytes(), nil
+}
+
+// applyRefEditFields rewrites element-citation children on a single
+// <ref>...</ref> blob per the non-nil pointers in `fields`.
+// Kept private because the field-to-JATS mapping isn't reusable
+// outside the ref-edit apply path.
+func applyRefEditFields(refElem []byte, fields *RefEditFields) []byte {
+	out := refElem
+	if fields.Author != nil {
+		out = replacePersonGroup(out, *fields.Author)
+	}
+	if fields.Title != nil {
+		out = replaceCitationChild(out, "article-title", *fields.Title)
+	}
+	if fields.ContainerTitle != nil {
+		out = replaceCitationChild(out, "source", *fields.ContainerTitle)
+	}
+	if fields.Issued != nil {
+		out = replaceCitationChild(out, "year", extractYear(*fields.Issued))
+	}
+	if fields.Volume != nil {
+		out = replaceCitationChild(out, "volume", *fields.Volume)
+	}
+	if fields.Issue != nil {
+		out = replaceCitationChild(out, "issue", *fields.Issue)
+	}
+	if fields.Page != nil {
+		out = replacePageRange(out, *fields.Page)
+	}
+	if fields.Publisher != nil {
+		out = replaceCitationChild(out, "publisher-name", *fields.Publisher)
+	}
+	if fields.PublisherPlace != nil {
+		out = replaceCitationChild(out, "publisher-loc", *fields.PublisherPlace)
+	}
+	if fields.DOI != nil {
+		out = replacePubIDDOI(out, *fields.DOI)
+	}
+	if fields.Citation != nil && *fields.Citation != "" {
+		// Verbatim-citation override — attach as a trailing
+		// <comment> so the reader can surface it alongside the
+		// structured fields. Reuses the ref-merge comment splicer.
+		out = appendCommentToCitation(out, "verbatim: "+*fields.Citation)
+	}
+	return out
+}
+
+// replaceCitationChild rewrites (or inserts) the first direct child
+// of element-citation with the given local name. Empty newValue
+// removes the child entirely — curator explicitly cleared the
+// field, so downstream renderers shouldn't fall back to the old
+// GROBID value.
+func replaceCitationChild(refElem []byte, localName, newValue string) []byte {
+	s := string(refElem)
+	openTag := "<" + localName + ">"
+	closeTag := "</" + localName + ">"
+	openIdx := strings.Index(s, openTag)
+	if openIdx >= 0 {
+		closeIdx := strings.Index(s[openIdx:], closeTag)
+		if closeIdx < 0 {
+			return refElem
+		}
+		end := openIdx + closeIdx + len(closeTag)
+		if newValue == "" {
+			// Also strip any trailing whitespace/newline the
+			// element used to end with, so removing a field
+			// doesn't leave visible blank space in the output.
+			return []byte(s[:openIdx] + strings.TrimLeft(s[end:], " \t\n\r"))
+		}
+		return []byte(s[:openIdx] + openTag + xmlEscape(newValue) + closeTag + s[end:])
+	}
+	if newValue == "" {
+		return refElem
+	}
+	// No existing child — insert before the closing element-citation
+	// (or mixed-citation, or ref) tag.
+	replacement := openTag + xmlEscape(newValue) + closeTag
+	for _, closer := range []string{"</element-citation>", "</mixed-citation>", "</ref>"} {
+		idx := strings.LastIndex(s, closer)
+		if idx < 0 {
+			continue
+		}
+		return []byte(s[:idx] + replacement + s[idx:])
+	}
+	return refElem
+}
+
+// replacePersonGroup rewrites the <person-group person-group-type="author">
+// element with names parsed from a comma-separated author string
+// ("Smith J, Doe A B" → two <name> children). Splits each entry on
+// the first whitespace: everything before is the surname, the
+// remainder becomes given-names. Empty author string removes the
+// person-group entirely.
+func replacePersonGroup(refElem []byte, authorList string) []byte {
+	s := string(refElem)
+	// Find <person-group person-group-type="author"> ... </person-group>
+	pgRe := regexp.MustCompile(`<person-group[^>]*person-group-type="author"[^>]*>[\s\S]*?</person-group>`)
+	loc := pgRe.FindStringIndex(s)
+	newPG := buildPersonGroup(authorList)
+	if loc != nil {
+		if newPG == "" {
+			return []byte(s[:loc[0]] + strings.TrimLeft(s[loc[1]:], " \t\n\r"))
+		}
+		return []byte(s[:loc[0]] + newPG + s[loc[1]:])
+	}
+	if newPG == "" {
+		return refElem
+	}
+	// No existing person-group — insert right after <element-citation ...>
+	ecRe := regexp.MustCompile(`<element-citation[^>]*>|<mixed-citation[^>]*>`)
+	ecLoc := ecRe.FindStringIndex(s)
+	if ecLoc == nil {
+		return refElem
+	}
+	return []byte(s[:ecLoc[1]] + newPG + s[ecLoc[1]:])
+}
+
+// buildPersonGroup constructs a <person-group person-group-type="author">
+// element from a comma-separated author list. Each name splits into
+// surname + given-names by taking the first whitespace-delimited
+// token as the surname and the rest as given-names. Returns empty
+// string when the list has no usable entries.
+func buildPersonGroup(list string) string {
+	list = strings.TrimSpace(list)
+	if list == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<person-group person-group-type="author">`)
+	any := false
+	for _, raw := range strings.Split(list, ",") {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		any = true
+		parts := strings.SplitN(s, " ", 2)
+		surname := strings.TrimSpace(parts[0])
+		given := ""
+		if len(parts) == 2 {
+			given = strings.TrimSpace(parts[1])
+		}
+		b.WriteString("<name><surname>")
+		b.WriteString(xmlEscape(surname))
+		b.WriteString("</surname>")
+		if given != "" {
+			b.WriteString("<given-names>")
+			b.WriteString(xmlEscape(given))
+			b.WriteString("</given-names>")
+		}
+		b.WriteString("</name>")
+	}
+	b.WriteString("</person-group>")
+	if !any {
+		return ""
+	}
+	return b.String()
+}
+
+// replacePageRange rewrites the <fpage>/<lpage> pair on an
+// element-citation from a "start-end" (or "start") string. Handles
+// three shapes: "12-34" (both), "12" (fpage only), "" (clear both).
+func replacePageRange(refElem []byte, pageRange string) []byte {
+	pageRange = strings.TrimSpace(pageRange)
+	var fpage, lpage string
+	if pageRange != "" {
+		if idx := strings.IndexAny(pageRange, "-–—"); idx >= 0 {
+			fpage = strings.TrimSpace(pageRange[:idx])
+			lpage = strings.TrimSpace(pageRange[idx+1:])
+		} else {
+			fpage = pageRange
+		}
+	}
+	out := replaceCitationChild(refElem, "fpage", fpage)
+	out = replaceCitationChild(out, "lpage", lpage)
+	return out
+}
+
+// replacePubIDDOI rewrites (or inserts) the DOI pub-id on an
+// element-citation. Empty newDOI removes the element. Distinct
+// from replaceCitationChild because <pub-id> takes an attribute.
+func replacePubIDDOI(refElem []byte, newDOI string) []byte {
+	s := string(refElem)
+	pubRe := regexp.MustCompile(`<pub-id\b[^>]*pub-id-type="doi"[^>]*>[\s\S]*?</pub-id>`)
+	loc := pubRe.FindStringIndex(s)
+	newDOI = strings.TrimSpace(newDOI)
+	if loc != nil {
+		if newDOI == "" {
+			return []byte(s[:loc[0]] + strings.TrimLeft(s[loc[1]:], " \t\n\r"))
+		}
+		replacement := `<pub-id pub-id-type="doi">` + xmlEscape(newDOI) + `</pub-id>`
+		return []byte(s[:loc[0]] + replacement + s[loc[1]:])
+	}
+	if newDOI == "" {
+		return refElem
+	}
+	replacement := `<pub-id pub-id-type="doi">` + xmlEscape(newDOI) + `</pub-id>`
+	for _, closer := range []string{"</element-citation>", "</mixed-citation>", "</ref>"} {
+		idx := strings.LastIndex(s, closer)
+		if idx < 0 {
+			continue
+		}
+		return []byte(s[:idx] + replacement + s[idx:])
+	}
+	return refElem
+}
+
+// extractYear pulls the first 4-digit year token from a free-form
+// date string ("2020", "2020-06-15", "June 2020", "in press 2020").
+// Falls back to the raw string when no 4-digit run is found so
+// non-year "issued" values (e.g. "in press") still land in the JATS.
+func extractYear(issued string) string {
+	m := regexp.MustCompile(`\b(1[6-9]\d{2}|20\d{2}|21\d{2})\b`).FindString(issued)
+	if m != "" {
+		return m
+	}
+	return strings.TrimSpace(issued)
+}
+
 // findElementByID locates the byte range of the <name id="target"
 // ...>...</name> element and returns the range plus the element
 // name. Returns ok=false when the id doesn't appear in a
