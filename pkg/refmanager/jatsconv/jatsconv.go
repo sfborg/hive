@@ -46,8 +46,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sfborg/hive/pkg/grobid"
-	"github.com/sfborg/hive/pkg/pdftext"
+	"github.com/sfborg/hive/pkg/refmanager/grobid"
+	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 )
 
 // Options carries per-conversion tunables. Kept minimal — old

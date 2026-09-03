@@ -1,7 +1,7 @@
 package hive
 
 import (
-	"github.com/sfborg/hive/pkg/bibtex"
+	"github.com/sfborg/hive/pkg/refmanager/bibtex"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 

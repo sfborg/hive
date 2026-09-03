@@ -19,12 +19,12 @@ import (
 
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
-	"github.com/sfborg/hive/pkg/figextract"
-	"github.com/sfborg/hive/pkg/grobid"
-	"github.com/sfborg/hive/pkg/jatsconv"
-	"github.com/sfborg/hive/pkg/ocr"
-	"github.com/sfborg/hive/pkg/pdftext"
-	"github.com/sfborg/hive/pkg/sidecar"
+	"github.com/sfborg/hive/pkg/refmanager/figextract"
+	"github.com/sfborg/hive/pkg/refmanager/grobid"
+	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
+	"github.com/sfborg/hive/pkg/refmanager/ocr"
+	"github.com/sfborg/hive/pkg/refmanager/pdftext"
+	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )

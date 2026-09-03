@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sfborg/hive/pkg/orcid/config"
+	"github.com/sfborg/hive/pkg/refmanager/orcid/config"
 )
 
 func TestNormalize(t *testing.T) {

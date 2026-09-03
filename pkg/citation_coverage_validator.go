@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gdower/gsvalidator/domain"
-	"github.com/sfborg/hive/pkg/sidecar"
+	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )
 
 // citationCoverageValidator flags references whose attached-PDF

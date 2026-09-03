@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/gdower/gsvalidator/domain"
-	"github.com/sfborg/hive/pkg/jatsconv"
-	"github.com/sfborg/hive/pkg/sidecar"
+	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
+	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )
 
 // jatsValidationValidator runs xmllint against each attached

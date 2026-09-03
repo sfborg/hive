@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sfborg/hive/pkg/sidecar"
+	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )
 
 // TestJATSValidationRule covers the developer-telemetry rule that

@@ -13,7 +13,7 @@ import (
 	"os"
 
 	"github.com/sfborg/hive/pkg/annotator"
-	"github.com/sfborg/hive/pkg/jatsconv"
+	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
 )
 
 func main() {

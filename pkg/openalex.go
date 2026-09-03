@@ -2,7 +2,7 @@ package hive
 
 import (
 	"github.com/sfborg/hive/pkg/config"
-	"github.com/sfborg/hive/pkg/openalex"
+	"github.com/sfborg/hive/pkg/refmanager/openalex"
 )
 
 // ErrOpenAlexNotFound is re-exported so existing callers keep compiling

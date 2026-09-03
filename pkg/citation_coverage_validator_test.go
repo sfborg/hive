@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sfborg/hive/pkg/sidecar"
+	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )
 
 // TestFindMissingFigTableLabels exercises the pure body-vs-caption

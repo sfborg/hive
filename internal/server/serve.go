@@ -22,8 +22,8 @@ import (
 
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/annotator"
-	"github.com/sfborg/hive/pkg/grobid"
-	"github.com/sfborg/hive/pkg/ocr"
+	"github.com/sfborg/hive/pkg/refmanager/grobid"
+	"github.com/sfborg/hive/pkg/refmanager/ocr"
 	"github.com/sfborg/hive/internal/wui"
 )
 

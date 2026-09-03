@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sfborg/hive/pkg/orcid/config"
+	"github.com/sfborg/hive/pkg/refmanager/orcid/config"
 )
 
 // Client is the ORCID client. Concurrent-safe. Instantiate with [New].
