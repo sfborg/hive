@@ -8,6 +8,49 @@ import (
 	"strings"
 )
 
+// ApplyCorrection dispatches a correction to its kind-specific
+// Apply* function and returns the mutated JATS + any error.
+// Single entry point so callers don't have to maintain their own
+// switch statement — adding a new correction kind only requires
+// updating this dispatch table.
+//
+// Callers that need to filter kinds by content-type (defensive
+// figure/table check for bbox-* kinds) or status (skip reverted
+// corrections) should do so BEFORE calling. See IsBBoxKind for
+// the content-type filter helper.
+func ApplyCorrection(jats []byte, c *Correction) ([]byte, error) {
+	switch c.Kind {
+	case CorrectionKindBBoxAdd:
+		return ApplyBBoxAddToJATS(jats, c)
+	case CorrectionKindBBoxModify:
+		return ApplyBBoxModifyToJATS(jats, c)
+	case CorrectionKindBBoxRemove:
+		return ApplyBBoxRemoveToJATS(jats, c)
+	case CorrectionKindRefMerge:
+		return ApplyRefMergeToJATS(jats, c)
+	case CorrectionKindRefEdit:
+		return ApplyRefEditToJATS(jats, c)
+	default:
+		return nil, fmt.Errorf("apply correction: unsupported kind: %s", c.Kind)
+	}
+}
+
+// IsBBoxKind returns true for correction kinds that mutate a JATS
+// fig or table-wrap element and therefore require content_type
+// in {"figure","table"}. Used by callers that reapply a stored
+// batch of corrections and want to defensively skip rows with a
+// mismatched content_type (shouldn't happen post-validation, but
+// old rows may exist).
+func IsBBoxKind(k CorrectionKind) bool {
+	switch k {
+	case CorrectionKindBBoxAdd,
+		CorrectionKindBBoxModify,
+		CorrectionKindBBoxRemove:
+		return true
+	}
+	return false
+}
+
 // BBoxModifyPayload is the JSON stored in
 // hive__extraction_correction.payload when correction_kind =
 // 'bbox-modify'. Captures both the original element state and the
