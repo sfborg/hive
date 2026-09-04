@@ -1,4 +1,4 @@
-package hive
+package taxonomy
 
 import (
 	"fmt"

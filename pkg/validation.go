@@ -11,6 +11,7 @@ import (
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gdower/gsvalidator/usecase/joins"
 	"github.com/gdower/gsvalidator/usecase/validator"
+	"github.com/sfborg/hive/pkg/hiveext"
 	"github.com/sfborg/hive/pkg/taxonomy"
 	"github.com/sfborg/hive/pkg/taxonomy/sfgarules"
 )
@@ -130,15 +131,6 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	// Check-digit verification for common identifier formats
 	// (orcid, issn, isbn10, isbn13, luhn).
 	registry.Register(validator.NewCheckDigitValidator())
-	// Hive-native: re-parse the name at rule-eval time and flag any
-	// unparsed tail gnparser rejected. Not a generic validator — owns
-	// its own gnparser instance because the registry has no Archive
-	// reference to borrow the shared parser.
-	registry.Register(newParseTailValidator())
-	// Hive-native: soft-warn when the atomized combination_* pair
-	// exactly matches the basionym_* pair on the same row — almost
-	// always a data-entry mistake. See DEFERRED.md → moved-here-now.
-	registry.Register(newCombinationMatchesBasionymValidator())
 	// Hive-native: soft-warn when a reference has a free-text
 	// citation but is missing structured author or issued (year).
 	// Surfaces the data-quality gap that breaks the WUI citation-pick
@@ -160,33 +152,23 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	// to add each missed region, and the missing-label list feeds
 	// the extractor-training corpus (see MODEL_FEEDBACK_LOOP_PLAN).
 	registry.Register(newCitationCoverageValidator(archivePath))
-	// Hive-native: soft-warn when an infraspecific name lacks its
-	// rank marker (var., f., subsp., subvar., subf.) in the scientific
-	// name string. Code-aware: skips ICZN + SUBSPECIES (marker is
-	// optional under ICZN) and ICVCN (no formal subspecies rank).
-	// Fires for ICN / ICNP / empty-code on any covered infraspecific
-	// rank and for ICZN on variety/subvariety/form/subform ranks
-	// (historical rows in synonymy).
-	registry.Register(newInfraspecificMarkerValidator())
-	// Hive-native: hard-error when a species_interaction row has
-	// neither a related_taxon_id FK nor a free-text related-taxon
-	// scientific name. Backstops rows planted with foreign_keys=OFF
-	// during bulk imports (3i.db pattern) that leave both fields
-	// empty — the interaction identifies no counterpart at all.
-	registry.Register(newSpeciesInteractionNeedsRelatedValidator())
-	// Hive-native: hard-error when a species_interaction row has no
-	// interaction type set. Companion to needs_related — one
-	// enforces "who is the counterpart," this enforces "what is the
-	// relationship." Backstops bulk imports that plant type-less
-	// rows via foreign_keys=OFF.
-	registry.Register(newSpeciesInteractionNeedsTypeValidator())
 	// Hive-native: info-severity when a reference row has no
 	// citations across any citation table. Not broken data — kept
 	// in the archive for future use — just surfaces the row so a
 	// curator can decide whether to delete it. See
-	// referenceCitationTables in pkg/reference.go for the
-	// authoritative list.
+	// taxonomy.ReferenceFKSites for the authoritative site list.
 	registry.Register(newReferenceUncitedValidator(taxonomy.ReferenceFKSites()))
+
+	// Taxonomy-specific validators come from pkg/taxonomy, which owns
+	// the rank/code/synonym vocabulary these rules reason over.
+	taxCfg := hiveext.ValidatorConfig{
+		DB:               db,
+		ArchivePath:      archivePath,
+		ReferenceFKSites: taxonomy.ReferenceFKSites(),
+	}
+	for _, v := range taxonomy.Validators(taxCfg) {
+		registry.Register(v)
+	}
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)
