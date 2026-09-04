@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sfborg/hive/pkg/taxonomy"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -343,34 +344,10 @@ func (a *Archive) GetReference(ctx context.Context, id string) (*coldp.Reference
 	return &r, nil
 }
 
-// referenceCitationTables lists every table whose FK constraint points
-// at reference(col__id). DeleteReference walks this list to refuse
-// deletion of a reference that any downstream row still depends on —
-// same "safe by default" policy as DeleteTaxon's "has children" check.
-// The comma-separated free-form lists on name.col__reference_id and
-// name.col__alternative_id are NOT FK-enforced and thus not checked
-// here; scrubbing those is a data-hygiene concern out of scope for
-// the delete operation.
-var referenceCitationTables = []struct {
-	table, col string
-}{
-	// name.col__reference_id is the primary citation path (a name's
-	// publication reference). Missing it here meant DeleteReference
-	// could silently delete a reference still cited by a name — a
-	// latent bug hidden by SQLite's FK check while FKs were on, now
-	// exposed as FKs are off and hive owns integrity via validators.
-	{"name", "col__reference_id"},
-	{"taxon", "col__according_to_id"},
-	{"synonym", "col__according_to_id"},
-	{"vernacular", "col__reference_id"},
-	{"name_relation", "col__reference_id"},
-	{"type_material", "col__reference_id"},
-	{"distribution", "col__reference_id"},
-	{"species_estimate", "col__reference_id"},
-	{"taxon_property", "col__reference_id"},
-	{"species_interaction", "col__reference_id"},
-	{"taxon_concept_relation", "col__reference_id"},
-}
+// The reference-citation FK-site list moved to pkg/taxonomy — see
+// taxonomy.ReferenceFKSites for the current entries and the rationale
+// for keeping name first. DeleteReference and the uncited-reference
+// validator both consume that function so the two stay in lockstep.
 
 // CreateReference inserts a new reference row.
 //
@@ -527,8 +504,8 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 }
 
 // DeleteReference removes a reference. Refuses if any downstream row
-// still points at it via one of the FK columns in
-// referenceCitationTables — safer than silently NULLing those refs.
+// still points at it via one of the FK sites returned by
+// taxonomy.ReferenceFKSites — safer than silently NULLing those refs.
 // Curator must reassign the dependents (or delete them) first.
 //
 //   - Missing reference → ErrNotFound.
@@ -728,16 +705,16 @@ func (t *Tx) DeleteReference(id string) error {
 	// Refuse if any dependent row exists. First-match reporting keeps
 	// the error message actionable ("dependency in vernacular") without
 	// enumerating every table.
-	for _, dep := range referenceCitationTables {
+	for _, dep := range taxonomy.ReferenceFKSites() {
 		var count int
-		q := "SELECT COUNT(*) FROM " + dep.table + " WHERE " + dep.col + " = ?"
+		q := "SELECT COUNT(*) FROM " + dep.Table + " WHERE " + dep.Column + " = ?"
 		if err := t.tx.QueryRowContext(t.ctx, q, id).Scan(&count); err != nil {
-			return fmt.Errorf("core: check %s.%s for %s: %w", dep.table, dep.col, id, err)
+			return fmt.Errorf("core: check %s.%s for %s: %w", dep.Table, dep.Column, id, err)
 		}
 		if count > 0 {
 			return fmt.Errorf(
 				"core: delete reference %s: %w: %d %s row(s) still cite it (reassign or delete first)",
-				id, ErrConflict, count, dep.table,
+				id, ErrConflict, count, dep.Table,
 			)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gdower/gsvalidator/usecase/joins"
 	"github.com/gdower/gsvalidator/usecase/validator"
+	"github.com/sfborg/hive/pkg/taxonomy"
 	"github.com/sfborg/hive/pkg/taxonomy/sfgarules"
 )
 
@@ -185,7 +186,7 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	// curator can decide whether to delete it. See
 	// referenceCitationTables in pkg/reference.go for the
 	// authoritative list.
-	registry.Register(newReferenceUncitedValidator())
+	registry.Register(newReferenceUncitedValidator(taxonomy.ReferenceFKSites()))
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)

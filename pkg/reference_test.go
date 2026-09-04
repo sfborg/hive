@@ -99,7 +99,7 @@ func TestReferenceDeleteRefusesDependents(t *testing.T) {
 	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
 
 	// Create a reference + a taxon that cites it via col__according_to_id
-	// (one of the 10 FK columns in referenceCitationTables).
+	// (one of the FK sites returned by taxonomy.ReferenceFKSites).
 	var refID, taxonID string
 	err := a.WithTx(ctx, func(tx *Tx) error {
 		var err error
