@@ -12,6 +12,7 @@ import (
 	"github.com/gdower/gsvalidator/usecase/joins"
 	"github.com/gdower/gsvalidator/usecase/validator"
 	"github.com/sfborg/hive/pkg/hiveext"
+	"github.com/sfborg/hive/pkg/refmanager"
 	"github.com/sfborg/hive/pkg/taxonomy"
 	"github.com/sfborg/hive/pkg/taxonomy/sfgarules"
 )
@@ -131,42 +132,21 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	// Check-digit verification for common identifier formats
 	// (orcid, issn, isbn10, isbn13, luhn).
 	registry.Register(validator.NewCheckDigitValidator())
-	// Hive-native: soft-warn when a reference has a free-text
-	// citation but is missing structured author or issued (year).
-	// Surfaces the data-quality gap that breaks the WUI citation-pick
-	// backfill on CoL-derived data. See feedback_no_side_quests for
-	// the inline-quick-fix UX that resolves flagged rows without a
-	// side quest to the References screen.
-	registry.Register(newReferenceMetadataValidator())
-	// Hive-native: warn when an attached PDF's augmented-JATS
-	// sidecar fails schema validation against hive-jats.rng.
-	// Developer-facing telemetry — a curator can't fix a bad
-	// jatsconv output by editing anything, but the row in the
-	// Issues dashboard tells us where to look for the bug. Silent-
-	// skip on hosts without xmllint (docker ships it).
-	registry.Register(newJATSValidationValidator(archivePath))
-	// Hive-native: warn when the JATS sidecar's body prose cites
-	// figure/table labels that don't have a matching extracted
-	// <fig> or <table-wrap>. Signals that GROBID under-detected
-	// the paper's figures/tables — curator can use the bbox tool
-	// to add each missed region, and the missing-label list feeds
-	// the extractor-training corpus (see MODEL_FEEDBACK_LOOP_PLAN).
-	registry.Register(newCitationCoverageValidator(archivePath))
-	// Hive-native: info-severity when a reference row has no
-	// citations across any citation table. Not broken data — kept
-	// in the archive for future use — just surfaces the row so a
-	// curator can decide whether to delete it. See
-	// taxonomy.ReferenceFKSites for the authoritative site list.
-	registry.Register(newReferenceUncitedValidator(taxonomy.ReferenceFKSites()))
-
-	// Taxonomy-specific validators come from pkg/taxonomy, which owns
-	// the rank/code/synonym vocabulary these rules reason over.
-	taxCfg := hiveext.ValidatorConfig{
+	// Extension-package validators. Field-agnostic reference-manager
+	// rules come from pkg/refmanager (reference metadata, JATS sidecar
+	// validation, citation coverage, uncited-reference detection).
+	// Taxonomy-specific rules come from pkg/taxonomy (rank/code/synonym
+	// vocabulary). Each package owns its own constructors; the pkg root
+	// only sees the returned slice.
+	cfg := hiveext.ValidatorConfig{
 		DB:               db,
 		ArchivePath:      archivePath,
 		ReferenceFKSites: taxonomy.ReferenceFKSites(),
 	}
-	for _, v := range taxonomy.Validators(taxCfg) {
+	for _, v := range refmanager.Validators(cfg) {
+		registry.Register(v)
+	}
+	for _, v := range taxonomy.Validators(cfg) {
 		registry.Register(v)
 	}
 

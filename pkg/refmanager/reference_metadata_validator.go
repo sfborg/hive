@@ -1,4 +1,4 @@
-package hive
+package refmanager
 
 import (
 	"github.com/gdower/gsvalidator/domain"
