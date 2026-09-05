@@ -312,16 +312,25 @@ class SfgaReader extends LitElement {
        Skips the paper header, references list, figure captions, and
        already-wrapped hive:noise elements so curators can only click
        actual body paragraphs. */
-    .tool-text-remove article > p:not(.page-break):not(.hive-noise-preview):hover {
+    .tool-text-remove article :is(p, h1, h2, h3, h4, h5, h6):not(.page-break):hover {
       outline: 2px dashed color-mix(in oklab, var(--sev-warn) 60%, transparent);
       outline-offset: 2px;
       cursor: pointer;
       background: color-mix(in oklab, var(--sev-warn) 8%, transparent);
     }
-    .tool-text-remove article > p:not(.page-break):not(.hive-noise-preview):hover::before {
+    .tool-text-remove article :is(p, h1, h2, h3, h4, h5, h6):not(.page-break):hover::before {
       content: "✕ ";
       color: var(--sev-warn);
       font-weight: bold;
+    }
+    /* Paper header stays untouchable — metadata is not body noise. */
+    .tool-text-remove article .paper-header :is(p, h1, h2, h3, h4, h5, h6):hover {
+      outline: none;
+      background: transparent;
+      cursor: default;
+    }
+    .tool-text-remove article .paper-header :is(p, h1, h2, h3, h4, h5, h6):hover::before {
+      content: "";
     }
     /* Inline marker for an applied text-remove correction. Compact
        red dot the curator can hover to see the removed text
@@ -1009,27 +1018,32 @@ class SfgaReader extends LitElement {
   }
 
   // _handleTextRemoveClick walks up from the click target to find a
-  // <p> child of the article body (the only element the text-remove
-  // tool targets). Refuses matches inside back-matter references,
-  // figure captions, section titles, page-break wrappers, or
-  // already-wrapped hive:noise elements — those aren't running
-  // headers/footers the tool is meant for. Standalone reader (no
-  // parent shell): warns and no-ops since the correction needs
-  // archive context the shell holds.
+  // removable block element (paragraph or section heading — a JATS
+  // <p> or <title>). Both are common noise carriers: <p> for running
+  // headers/footers GROBID pulled into body prose, <title> for
+  // spurious section headings like "Corresponding author" that ended
+  // up misclassified. Rejects page-break wrappers, hive:noise
+  // markers themselves (already removed), and any target inside the
+  // paper's own <header> block (metadata, not body noise).
+  //
+  // Standalone reader (no parent shell): warns and no-ops since the
+  // correction needs archive context the shell holds.
   _handleTextRemoveClick(e) {
     let el = e.target;
-    // Walk up to the nearest <p>. Bail if we escape the article.
-    while (el && el.tagName !== "P") {
+    // Walk up to the nearest removable block. Bail if we escape the
+    // article.
+    const removable = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
+    while (el && !removable.has(el.tagName)) {
       if (el.tagName === "ARTICLE") return;
       el = el.parentElement;
     }
     if (!el) return;
-    // Reject non-body paragraphs: paper header (h1/h2 preceding),
-    // page-break wrappers, and any ancestor other than the article
-    // itself (captions, references list, footnotes).
+    // Reject infrastructure elements the tool isn't meant for.
     if (el.classList.contains("page-break")) return;
-    const parent = el.parentElement;
-    if (!parent || parent.tagName !== "ARTICLE") return;
+    if (el.classList.contains("hive-noise-marker")) return;
+    // Reject anything inside the paper-header block (title, byline,
+    // abstract) — that's metadata, not body noise.
+    if (el.closest(".paper-header")) return;
     if (!(window.parent && window.parent !== window)) {
       // eslint-disable-next-line no-console
       console.warn("text-remove requires the shell — open via References tab");
@@ -1038,22 +1052,29 @@ class SfgaReader extends LitElement {
     const text = (el.textContent || "").trim();
     if (!text) return;
     // Recover pdf_page from the nearest preceding .page-break
-    // element (rendered from the hive:page-break marker jatsconv
-    // emits at page transitions). Falls back to 0 when no marker
-    // precedes the paragraph — the applier handles that fine, just
-    // without the disambiguation hint.
+    // element in DOM order. Walk previousElementSibling of the
+    // target, then step up to the parent and repeat — so a
+    // paragraph inside a <section> can still find the page-break
+    // that preceded its section.
     let pdfPage = 0;
-    let prev = el.previousElementSibling;
-    while (prev) {
-      if (prev.classList && prev.classList.contains("page-break")) {
-        const n = parseInt(prev.dataset.pdfPage || "", 10);
-        if (Number.isFinite(n) && n > 0) {
-          pdfPage = n;
+    let cursor = el;
+    outer: while (cursor) {
+      let prev = cursor.previousElementSibling;
+      while (prev) {
+        if (prev.classList && prev.classList.contains("page-break")) {
+          const n = parseInt(prev.dataset.pdfPage || "", 10);
+          if (Number.isFinite(n) && n > 0) {
+            pdfPage = n;
+          }
+          break outer;
         }
-        break;
+        prev = prev.previousElementSibling;
       }
-      prev = prev.previousElementSibling;
+      cursor = cursor.parentElement;
+      if (!cursor || cursor.tagName === "ARTICLE") break;
     }
+    // eslint-disable-next-line no-console
+    console.log("hive:remove-text →", { sha: this._sha, text: text.slice(0, 60), pdfPage });
     window.parent.postMessage(
       {
         type: "hive:remove-text",

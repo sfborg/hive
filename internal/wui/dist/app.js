@@ -14790,6 +14790,12 @@ class SfgaReferences extends LitElement {
         return;
       }
       if (d.type === "hive:remove-text" && d.text && this._current) {
+        // eslint-disable-next-line no-console
+        console.log("shell got hive:remove-text", {
+          msgSha: d.sha,
+          currentSha,
+          text: (d.text || "").slice(0, 60),
+        });
         this._postTextRemoveCorrection({
           sha: d.sha || currentSha,
           text: d.text,

@@ -925,7 +925,7 @@ func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 	if strings.TrimSpace(payload.Text) == "" {
 		return nil, fmt.Errorf("apply text-remove: payload.text required")
 	}
-	openIdx, closeIdx, ok := findParagraphByText(jats, payload.Text, payload.PDFPage)
+	openIdx, closeIdx, ok := findBlockByText(jats, payload.Text, payload.PDFPage)
 	if !ok {
 		return jats, nil
 	}
@@ -938,22 +938,24 @@ func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 	return out.Bytes(), nil
 }
 
-// pTagOpenRegex matches the opening <p ...> tag of a body paragraph.
-// Includes any attributes but skips <p> tags that are already hive-
-// namespaced (hive:page-break wrappers have content-type set) so the
-// paragraph scan doesn't mistake infrastructure markup for prose.
-var pTagOpenRegex = regexp.MustCompile(`<p\b([^>]*)>`)
+// blockTagOpenRegex matches the opening tag of a removable body
+// block — <p> or <title>. Reader-side click handler targets the same
+// element set (paragraphs and section headings), so the applier's
+// scan needs to cover both. Excludes hive-namespaced infrastructure
+// (page-break wrappers, noise wrappers) via post-match content
+// checks in findBlockByText.
+var blockTagOpenRegex = regexp.MustCompile(`<(p|title)\b([^>]*)>`)
 
-// findParagraphByText walks every <p>…</p> in the JATS looking for
-// one whose normalized text content equals wantText. When pdfPage is
-// non-zero, the match is filtered to paragraphs whose immediately
-// preceding <hive:page-break page="N"/> marker (or the paragraph's
-// own hive:pdf-page attribute) matches pdfPage — resolves ambiguity
-// when identical noise text appears on multiple pages.
+// findBlockByText walks every <p>…</p> and <title>…</title> in the
+// JATS looking for one whose normalized text content equals wantText.
+// When pdfPage is non-zero, the match is filtered to blocks whose
+// nearest preceding <hive:page-break page="N"/> marker matches
+// pdfPage — resolves ambiguity when identical noise text appears on
+// multiple pages.
 //
 // Returns the byte range of the matched element (opening '<' through
 // closing '>') so the caller can splice in a wrapper.
-func findParagraphByText(jats []byte, wantText string, pdfPage int) (openIdx, closeIdx int, ok bool) {
+func findBlockByText(jats []byte, wantText string, pdfPage int) (openIdx, closeIdx int, ok bool) {
 	wantNormalized := collapseWhitespace(strings.TrimSpace(wantText))
 	if wantNormalized == "" {
 		return 0, 0, false
@@ -961,34 +963,31 @@ func findParagraphByText(jats []byte, wantText string, pdfPage int) (openIdx, cl
 	pageBreakRe := regexp.MustCompile(`<hive:page-break\s+page="(\d+)"`)
 	pos := 0
 	for pos < len(jats) {
-		nextP := pTagOpenRegex.FindIndex(jats[pos:])
-		if nextP == nil {
+		next := blockTagOpenRegex.FindSubmatchIndex(jats[pos:])
+		if next == nil {
 			return 0, 0, false
 		}
-		absStart := pos + nextP[0]
-		absOpenEnd := pos + nextP[1]
-		closeStart := bytes.Index(jats[absOpenEnd:], []byte("</p>"))
+		absStart := pos + next[0]
+		absOpenEnd := pos + next[1]
+		elemName := string(jats[pos+next[2] : pos+next[3]])
+		closeTag := []byte("</" + elemName + ">")
+		closeStart := bytes.Index(jats[absOpenEnd:], closeTag)
 		if closeStart < 0 {
 			return 0, 0, false
 		}
-		absCloseEnd := absOpenEnd + closeStart + len("</p>")
+		absCloseEnd := absOpenEnd + closeStart + len(closeTag)
 		// Skip infrastructure paragraphs (hive:page-break wrappers)
 		// so they don't get scanned as content candidates.
 		if bytes.Contains(jats[absStart:absOpenEnd], []byte(`content-type="hive-page-break"`)) {
 			pos = absCloseEnd
 			continue
 		}
-		content := stripXMLTags(jats[absOpenEnd : absCloseEnd-len("</p>")])
+		content := stripXMLTags(jats[absOpenEnd : absCloseEnd-len(closeTag)])
 		gotNormalized := collapseWhitespace(strings.TrimSpace(content))
 		if gotNormalized == wantNormalized {
 			if pdfPage == 0 {
 				return absStart, absCloseEnd, true
 			}
-			// Recover the current page from the last page-break
-			// marker preceding this paragraph. Cheap for typical
-			// papers (dozens of markers) and avoids threading page
-			// state through the outer loop where infrastructure
-			// paragraph skips would otherwise miss them.
 			currentPage := 0
 			for _, m := range pageBreakRe.FindAllSubmatchIndex(jats[:absStart], -1) {
 				if n, err := strconv.Atoi(string(jats[m[2]:m[3]])); err == nil {
