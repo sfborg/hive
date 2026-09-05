@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/sfborg/hive/pkg/correction"
 )
 
 // ExtractedLabel is one figure or table label found in a JATS
@@ -28,8 +30,8 @@ type ExtractedLabel struct {
 // regions from GROBID-detected ones by their id prefix.
 type ExtractedRegion struct {
 	ExtractedLabel
-	BBox   *BBox  // nil when hive:pdf-bbox missing or unparseable
-	Origin string // "grobid" (default) or "curator" (id starts with "curator_")
+	BBox   *correction.BBox // nil when hive:pdf-bbox missing or unparseable
+	Origin string           // "grobid" (default) or "curator" (id starts with "curator_")
 }
 
 // extractedLabelRegex mirrors the caption prefix jatsconv looks
@@ -160,7 +162,7 @@ func ExtractRegionsFromJATS(jats []byte) ([]ExtractedRegion, error) {
 		currentKind  string
 		currentID    string
 		currentPage  int
-		currentBBox  *BBox
+		currentBBox  *correction.BBox
 		inCaption    int
 		captionBuf   bytes.Buffer
 	)
@@ -256,7 +258,7 @@ func ExtractRegionsFromJATS(jats []byte) ([]ExtractedRegion, error) {
 // wrong component count, non-numeric field) so the caller can
 // treat missing coords as "no bbox" rather than failing the
 // whole region walk.
-func parseBBoxAttr(v string) *BBox {
+func parseBBoxAttr(v string) *correction.BBox {
 	parts := strings.Split(v, ",")
 	if len(parts) != 4 {
 		return nil
@@ -269,7 +271,7 @@ func parseBBoxAttr(v string) *BBox {
 		}
 		vals[i] = n
 	}
-	return &BBox{X: vals[0], Y: vals[1], W: vals[2], H: vals[3]}
+	return &correction.BBox{X: vals[0], Y: vals[1], W: vals[2], H: vals[3]}
 }
 
 func labelSortLess(a, b ExtractedLabel) bool {

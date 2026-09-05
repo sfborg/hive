@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sfborg/hive/pkg/correction"
 )
 
 // TestCorrectionRoundTrip covers Create → List → Get → Delete on
@@ -28,13 +30,13 @@ func TestCorrectionRoundTrip(t *testing.T) {
 		t.Fatalf("insert reference: %v", err)
 	}
 
-	c := &Correction{
+	c := &correction.Correction{
 		ReferenceID: "ref-1",
 		SidecarSHA:  "sha-1",
-		Kind:        CorrectionKindBBoxAdd,
+		Kind:        correction.KindBBoxAdd,
 		ContentType: "table",
 		BBoxPage:    4,
-		BBox:        &BBox{X: 72.0, Y: 100.0, W: 400.0, H: 150.0},
+		BBox:        &correction.BBox{X: 72.0, Y: 100.0, W: 400.0, H: 150.0},
 		Label:       "table-1",
 		Payload:     "{}",
 	}
@@ -60,7 +62,7 @@ func TestCorrectionRoundTrip(t *testing.T) {
 	if got.BBox.W != 400.0 {
 		t.Errorf("BBox.W round-trip = %v, want 400.0", got.BBox.W)
 	}
-	if got.Status != CorrectionStatusActive {
+	if got.Status != correction.StatusActive {
 		t.Errorf("default status = %q, want active", got.Status)
 	}
 
@@ -93,12 +95,12 @@ func TestApplyBBoxAddInsertsIntoExistingFiguresSec(t *testing.T) {
 <fig id="fig_0"><caption><p>Figure 1.</p></caption></fig>
 </sec>
 </body></article>`)
-	c := &Correction{
+	c := &correction.Correction{
 		ID:          "uuid-1234",
-		Kind:        CorrectionKindBBoxAdd,
+		Kind:        correction.KindBBoxAdd,
 		ContentType: "table",
 		BBoxPage:    5,
-		BBox:        &BBox{X: 72, Y: 100, W: 400, H: 150},
+		BBox:        &correction.BBox{X: 72, Y: 100, W: 400, H: 150},
 		Label:       "table-1",
 	}
 	out, err := ApplyBBoxAddToJATS(jats, c)
@@ -132,12 +134,12 @@ func TestApplyBBoxAddCreatesFiguresSecWhenMissing(t *testing.T) {
 	jats := []byte(`<article><body>
 <sec><title>Body</title><p>text</p></sec>
 </body></article>`)
-	c := &Correction{
+	c := &correction.Correction{
 		ID:          "uuid-abcd",
-		Kind:        CorrectionKindBBoxAdd,
+		Kind:        correction.KindBBoxAdd,
 		ContentType: "figure",
 		BBoxPage:    3,
-		BBox:        &BBox{X: 100, Y: 200, W: 300, H: 400},
+		BBox:        &correction.BBox{X: 100, Y: 200, W: 300, H: 400},
 		Label:       "figure-1",
 	}
 	out, err := ApplyBBoxAddToJATS(jats, c)
@@ -165,12 +167,12 @@ func TestApplyBBoxAddCreatesFiguresSecWhenMissing(t *testing.T) {
 // through a different apply path.
 func TestApplyBBoxAddRejectsBadContentType(t *testing.T) {
 	jats := []byte(`<article><body><p>x</p></body></article>`)
-	c := &Correction{
+	c := &correction.Correction{
 		ID:          "uuid-x",
-		Kind:        CorrectionKindBBoxAdd,
+		Kind:        correction.KindBBoxAdd,
 		ContentType: "abstract", // not supported by this apply path
 		BBoxPage:    1,
-		BBox:        &BBox{X: 0, Y: 0, W: 100, H: 100},
+		BBox:        &correction.BBox{X: 0, Y: 0, W: 100, H: 100},
 	}
 	if _, err := ApplyBBoxAddToJATS(jats, c); err == nil {
 		t.Errorf("expected error for content_type=abstract, got nil")

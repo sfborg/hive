@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/sfborg/hive/pkg/correction"
 )
 
 // ApplyCorrection dispatches a correction to its kind-specific
@@ -18,17 +20,17 @@ import (
 // figure/table check for bbox-* kinds) or status (skip reverted
 // corrections) should do so BEFORE calling. See IsBBoxKind for
 // the content-type filter helper.
-func ApplyCorrection(jats []byte, c *Correction) ([]byte, error) {
+func ApplyCorrection(jats []byte, c *correction.Correction) ([]byte, error) {
 	switch c.Kind {
-	case CorrectionKindBBoxAdd:
+	case correction.KindBBoxAdd:
 		return ApplyBBoxAddToJATS(jats, c)
-	case CorrectionKindBBoxModify:
+	case correction.KindBBoxModify:
 		return ApplyBBoxModifyToJATS(jats, c)
-	case CorrectionKindBBoxRemove:
+	case correction.KindBBoxRemove:
 		return ApplyBBoxRemoveToJATS(jats, c)
-	case CorrectionKindRefMerge:
+	case correction.KindRefMerge:
 		return ApplyRefMergeToJATS(jats, c)
-	case CorrectionKindRefEdit:
+	case correction.KindRefEdit:
 		return ApplyRefEditToJATS(jats, c)
 	default:
 		return nil, fmt.Errorf("apply correction: unsupported kind: %s", c.Kind)
@@ -41,45 +43,14 @@ func ApplyCorrection(jats []byte, c *Correction) ([]byte, error) {
 // batch of corrections and want to defensively skip rows with a
 // mismatched content_type (shouldn't happen post-validation, but
 // old rows may exist).
-func IsBBoxKind(k CorrectionKind) bool {
+func IsBBoxKind(k correction.Kind) bool {
 	switch k {
-	case CorrectionKindBBoxAdd,
-		CorrectionKindBBoxModify,
-		CorrectionKindBBoxRemove:
+	case correction.KindBBoxAdd,
+		correction.KindBBoxModify,
+		correction.KindBBoxRemove:
 		return true
 	}
 	return false
-}
-
-// BBoxModifyPayload is the JSON stored in
-// hive__extraction_correction.payload when correction_kind =
-// 'bbox-modify'. Captures both the original element state and the
-// curator's desired changes so training-corpus export can emit
-// labeled deltas. Nil-valued fields in Corrected mean "curator
-// didn't change this axis" (the original stays in effect).
-type BBoxModifyPayload struct {
-	Original  BBoxModifyState `json:"original"`
-	Corrected BBoxModifyState `json:"corrected"`
-}
-
-type BBoxModifyState struct {
-	ContentType string `json:"content_type,omitempty"`
-	Label       string `json:"label,omitempty"`
-	Caption     string `json:"caption,omitempty"`
-	// BBox carries a curator-adjusted rectangle in PDF points.
-	// Nil means "coord change not part of this correction" — the
-	// element's existing hive:pdf-bbox stays untouched.
-	BBox *BBox `json:"bbox,omitempty"`
-	// Page is the 1-indexed PDF page hosting the bbox. Carried so
-	// server-side re-extraction (e.g. pdftext.ExtractTable) has the
-	// page without a separate JATS lookup. Zero means "unchanged".
-	Page int `json:"page,omitempty"`
-	// TableRows carries a fresh heuristic parse of the region for
-	// content_type='table'. Populated by the handler at save time
-	// via pdftext.ExtractTable when the bbox changed, then read by
-	// ApplyBBoxModifyToJATS to replace the &lt;table&gt; block inside
-	// the target &lt;table-wrap&gt;. Empty means "no row change".
-	TableRows [][]string `json:"table_rows,omitempty"`
 }
 
 // ApplyBBoxModifyToJATS patches the element identified by
@@ -106,14 +77,14 @@ type BBoxModifyState struct {
 // target element isn't found in the JATS (either it was never
 // there, or another correction removed it) so the caller can mark
 // the correction as reverted.
-func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
-	if c.Kind != CorrectionKindBBoxModify {
+func ApplyBBoxModifyToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindBBoxModify {
 		return nil, fmt.Errorf("apply bbox-modify: expected bbox-modify kind, got %s", c.Kind)
 	}
 	if c.TargetElementID == "" {
 		return nil, fmt.Errorf("apply bbox-modify: target_element_id required")
 	}
-	var payload BBoxModifyPayload
+	var payload correction.BBoxModifyPayload
 	if c.Payload != "" && c.Payload != "{}" {
 		if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
 			return nil, fmt.Errorf("apply bbox-modify: parse payload: %w", err)
@@ -154,7 +125,7 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 
 	// Rewrite hive:pdf-bbox on the opening tag if the corrected
 	// payload carries new coordinates. Same "%.2f,%.2f,%.2f,%.2f"
-	// format that BBoxAddFigureJATSElement and jatsconv both emit so
+	// format that correction.BBoxAddFigureJATSElement and jatsconv both emit so
 	// downstream parsers (labels.parseBBoxAttr, figextract) see a
 	// consistent representation.
 	if payload.Corrected.BBox != nil {
@@ -166,14 +137,14 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 
 	// Replace caption content if new caption is provided.
 	if payload.Corrected.Caption != "" {
-		safeCaption := xmlEscape(payload.Corrected.Caption)
+		safeCaption := correction.XMLEscape(payload.Corrected.Caption)
 		newCaption := "<caption><p>" + safeCaption + "</p></caption>"
 		newBytes = replaceCaptionBlock(newBytes, newCaption)
 	} else if payload.Corrected.Label != "" {
 		// Caption not overridden but label is — put the label into
 		// the caption placeholder text so the trailing "Figures and
 		// tables" list picks up the corrected label.
-		safeLabel := xmlEscape(payload.Corrected.Label)
+		safeLabel := correction.XMLEscape(payload.Corrected.Label)
 		newCaption := "<caption><p>" + safeLabel + "</p></caption>"
 		newBytes = replaceCaptionBlock(newBytes, newCaption)
 	}
@@ -182,11 +153,11 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 	// parsed rows (populated by the handler after a table resize via
 	// pdftext.ExtractTable). Replaces any existing <table> or inserts
 	// one after the caption if none is present. Same
-	// renderJATSTableFromRows shape used by bbox-add so the
+	// correction.RenderJATSTableFromRows shape used by bbox-add so the
 	// downstream reader sees consistent structure regardless of how
 	// the region originated.
 	if len(payload.Corrected.TableRows) > 0 {
-		newTable := renderJATSTableFromRows(payload.Corrected.TableRows)
+		newTable := correction.RenderJATSTableFromRows(payload.Corrected.TableRows)
 		if newTable != "" {
 			newBytes = replaceTableBlock(newBytes, newTable)
 		}
@@ -209,8 +180,8 @@ func ApplyBBoxModifyToJATS(jats []byte, c *Correction) ([]byte, error) {
 // Idempotent: if the target is already absent (e.g., an earlier
 // re-import already stripped it), returns the JATS unchanged.
 // The correction row stays as a training signal regardless.
-func ApplyBBoxRemoveToJATS(jats []byte, c *Correction) ([]byte, error) {
-	if c.Kind != CorrectionKindBBoxRemove {
+func ApplyBBoxRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindBBoxRemove {
 		return nil, fmt.Errorf("apply bbox-remove: expected bbox-remove kind, got %s", c.Kind)
 	}
 	if c.TargetElementID == "" {
@@ -244,8 +215,8 @@ func ApplyBBoxRemoveToJATS(jats []byte, c *Correction) ([]byte, error) {
 // Idempotent: returns the JATS unchanged when the target ref is
 // absent (already merged by a prior apply pass, or a re-import
 // happened to produce a cleaner tokenization).
-func ApplyRefMergeToJATS(jats []byte, c *Correction) ([]byte, error) {
-	if c.Kind != CorrectionKindRefMerge {
+func ApplyRefMergeToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindRefMerge {
 		return nil, fmt.Errorf("apply ref-merge: expected ref-merge kind, got %s", c.Kind)
 	}
 	if c.TargetElementID == "" {
@@ -355,7 +326,7 @@ func appendCommentToCitation(refElem []byte, fragment string) []byte {
 	if fragment == "" {
 		return refElem
 	}
-	comment := "<comment>" + xmlEscape(fragment) + "</comment>"
+	comment := "<comment>" + correction.XMLEscape(fragment) + "</comment>"
 	// Prefer inserting before </element-citation> or </mixed-citation>.
 	// Falls back to inserting before </ref> when neither wrapper
 	// exists (rare — jatsconv always wraps).
@@ -386,43 +357,6 @@ func trimLeadingWhitespaceBetween(gap []byte) []byte {
 	return gap[i:]
 }
 
-// RefEditPayload is the JSON stored in
-// hive__extraction_correction.payload when correction_kind =
-// 'ref-edit'. Same shape both directions: Original captures the
-// pre-edit JATS field values (for the training corpus and for
-// diffing at apply time), Corrected holds only the field values
-// the curator changed. Empty-string values in Corrected mean the
-// curator explicitly cleared that field.
-//
-// Field names mirror hive's manualReference form (author, title,
-// issued, volume, ...) so the WUI can serialize its form state
-// directly into this struct without an intermediate mapping.
-type RefEditPayload struct {
-	Original  RefEditFields `json:"original"`
-	Corrected RefEditFields `json:"corrected"`
-}
-
-// RefEditFields collects the field slots an element-citation carries
-// in the JATS shape jatsconv emits. Pointer strings distinguish
-// "not touched by this correction" (nil) from "cleared by curator"
-// (non-nil pointing at ""). Callers construct the struct from the
-// curator form's diff — only fields that differ from Original get
-// populated on Corrected.
-type RefEditFields struct {
-	Author              *string `json:"author,omitempty"`
-	Title               *string `json:"title,omitempty"`
-	ContainerTitle      *string `json:"container_title,omitempty"`
-	ContainerTitleShort *string `json:"container_title_short,omitempty"`
-	Issued              *string `json:"issued,omitempty"`
-	Volume              *string `json:"volume,omitempty"`
-	Issue               *string `json:"issue,omitempty"`
-	Page                *string `json:"page,omitempty"`
-	Publisher           *string `json:"publisher,omitempty"`
-	PublisherPlace      *string `json:"publisher_place,omitempty"`
-	DOI                 *string `json:"doi,omitempty"`
-	Citation            *string `json:"citation,omitempty"`
-}
-
 // ApplyRefEditToJATS rewrites individual fields on the target
 // <ref>'s <element-citation>, one per Corrected field pointer that
 // is non-nil. Untouched fields (nil pointers) stay as GROBID had
@@ -447,8 +381,8 @@ type RefEditFields struct {
 //
 // Idempotent: returns the JATS unchanged when the target ref is
 // absent (rare — usually means a prior ref-merge absorbed it).
-func ApplyRefEditToJATS(jats []byte, c *Correction) ([]byte, error) {
-	if c.Kind != CorrectionKindRefEdit {
+func ApplyRefEditToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindRefEdit {
 		return nil, fmt.Errorf("apply ref-edit: expected ref-edit kind, got %s", c.Kind)
 	}
 	if c.TargetElementID == "" {
@@ -457,7 +391,7 @@ func ApplyRefEditToJATS(jats []byte, c *Correction) ([]byte, error) {
 	if c.Payload == "" || c.Payload == "{}" {
 		return jats, nil
 	}
-	var payload RefEditPayload
+	var payload correction.RefEditPayload
 	if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
 		return nil, fmt.Errorf("apply ref-edit: parse payload: %w", err)
 	}
@@ -482,7 +416,7 @@ func ApplyRefEditToJATS(jats []byte, c *Correction) ([]byte, error) {
 // <ref>...</ref> blob per the non-nil pointers in `fields`.
 // Kept private because the field-to-JATS mapping isn't reusable
 // outside the ref-edit apply path.
-func applyRefEditFields(refElem []byte, fields *RefEditFields) []byte {
+func applyRefEditFields(refElem []byte, fields *correction.RefEditFields) []byte {
 	out := refElem
 	if fields.Author != nil {
 		out = replacePersonGroup(out, *fields.Author)
@@ -545,14 +479,14 @@ func replaceCitationChild(refElem []byte, localName, newValue string) []byte {
 			// doesn't leave visible blank space in the output.
 			return []byte(s[:openIdx] + strings.TrimLeft(s[end:], " \t\n\r"))
 		}
-		return []byte(s[:openIdx] + openTag + xmlEscape(newValue) + closeTag + s[end:])
+		return []byte(s[:openIdx] + openTag + correction.XMLEscape(newValue) + closeTag + s[end:])
 	}
 	if newValue == "" {
 		return refElem
 	}
 	// No existing child — insert before the closing element-citation
 	// (or mixed-citation, or ref) tag.
-	replacement := openTag + xmlEscape(newValue) + closeTag
+	replacement := openTag + correction.XMLEscape(newValue) + closeTag
 	for _, closer := range []string{"</element-citation>", "</mixed-citation>", "</ref>"} {
 		idx := strings.LastIndex(s, closer)
 		if idx < 0 {
@@ -619,11 +553,11 @@ func buildPersonGroup(list string) string {
 			given = strings.TrimSpace(parts[1])
 		}
 		b.WriteString("<name><surname>")
-		b.WriteString(xmlEscape(surname))
+		b.WriteString(correction.XMLEscape(surname))
 		b.WriteString("</surname>")
 		if given != "" {
 			b.WriteString("<given-names>")
-			b.WriteString(xmlEscape(given))
+			b.WriteString(correction.XMLEscape(given))
 			b.WriteString("</given-names>")
 		}
 		b.WriteString("</name>")
@@ -666,13 +600,13 @@ func replacePubIDDOI(refElem []byte, newDOI string) []byte {
 		if newDOI == "" {
 			return []byte(s[:loc[0]] + strings.TrimLeft(s[loc[1]:], " \t\n\r"))
 		}
-		replacement := `<pub-id pub-id-type="doi">` + xmlEscape(newDOI) + `</pub-id>`
+		replacement := `<pub-id pub-id-type="doi">` + correction.XMLEscape(newDOI) + `</pub-id>`
 		return []byte(s[:loc[0]] + replacement + s[loc[1]:])
 	}
 	if newDOI == "" {
 		return refElem
 	}
-	replacement := `<pub-id pub-id-type="doi">` + xmlEscape(newDOI) + `</pub-id>`
+	replacement := `<pub-id pub-id-type="doi">` + correction.XMLEscape(newDOI) + `</pub-id>`
 	for _, closer := range []string{"</element-citation>", "</mixed-citation>", "</ref>"} {
 		idx := strings.LastIndex(s, closer)
 		if idx < 0 {
@@ -850,8 +784,8 @@ var closingBodyOrArticleRegex = regexp.MustCompile(`</body>|</article>`)
 // Returns an error only for malformed input (correction rejects,
 // JATS entirely missing the splice points). A well-formed JATS with
 // a valid bbox-add correction always applies.
-func ApplyBBoxAddToJATS(jats []byte, c *Correction) ([]byte, error) {
-	elem, err := BBoxAddFigureJATSElement(c)
+func ApplyBBoxAddToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	elem, err := correction.BBoxAddFigureJATSElement(c)
 	if err != nil {
 		return nil, err
 	}

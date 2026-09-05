@@ -18,13 +18,14 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/taxonomy/annotator"
+	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
+	"github.com/sfborg/hive/pkg/taxonomy/annotator"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -2332,18 +2333,18 @@ func (s *server) handleDeletePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"direct_child_count":            p.DirectChildCount,
-		"descendant_count":              p.DescendantCount,
-		"synonym_count":                 p.SynonymCount,
-		"vernacular_count":              p.VernacularCount,
-		"distribution_count":            p.DistributionCount,
-		"media_count":                   p.MediaCount,
-		"treatment_count":               p.TreatmentCount,
-		"species_estimate_count":        p.SpeciesEstimateCount,
-		"taxon_property_count":          p.TaxonPropertyCount,
-		"species_interaction_count":     p.SpeciesInteractionCount,
-		"taxon_concept_relation_count":  p.TaxonConceptRelationCount,
-		"parent_id":                     p.ParentID,
+		"direct_child_count":           p.DirectChildCount,
+		"descendant_count":             p.DescendantCount,
+		"synonym_count":                p.SynonymCount,
+		"vernacular_count":             p.VernacularCount,
+		"distribution_count":           p.DistributionCount,
+		"media_count":                  p.MediaCount,
+		"treatment_count":              p.TreatmentCount,
+		"species_estimate_count":       p.SpeciesEstimateCount,
+		"taxon_property_count":         p.TaxonPropertyCount,
+		"species_interaction_count":    p.SpeciesInteractionCount,
+		"taxon_concept_relation_count": p.TaxonConceptRelationCount,
+		"parent_id":                    p.ParentID,
 	})
 }
 
@@ -2495,13 +2496,13 @@ func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request
 // handleDetachReferencePDF removes the (reference, sha) association
 // and cascades cleanup:
 //
-//   1. Delete the hive__reference_pdf row.
-//   2. Delete correction rows attached to this (reference, sha) —
-//      keeping them would silently re-apply on re-attach later.
-//   3. If no other reference still points at this sha (IsOrphanSHA),
-//      delete every correction row still targeting the sha across
-//      the archive and remove sidecar files on disk
-//      (pdf, tei.xml, jats.xml, figures/, meta.json).
+//  1. Delete the hive__reference_pdf row.
+//  2. Delete correction rows attached to this (reference, sha) —
+//     keeping them would silently re-apply on re-attach later.
+//  3. If no other reference still points at this sha (IsOrphanSHA),
+//     delete every correction row still targeting the sha across
+//     the archive and remove sidecar files on disk
+//     (pdf, tei.xml, jats.xml, figures/, meta.json).
 //
 // Shared PDFs (rare — same content-addressed sha attached to
 // multiple references): the sidecar stays, other references keep
@@ -2630,7 +2631,7 @@ func (s *server) handleReferenceDashboard(w http.ResponseWriter, r *http.Request
 // REFERENCES_DASHBOARD_PLAN § Step counters. Keys use snake_case
 // to match the rest of hive's API surface.
 type apiReferenceDashboard struct {
-	Total     int                       `json:"total"`
+	Total     int                        `json:"total"`
 	Steps     apiReferenceDashboardSteps `json:"steps"`
 	Attention []apiAttentionRow          `json:"attention"`
 }
@@ -2677,21 +2678,21 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if body.Kind == "" {
-		body.Kind = string(hive.CorrectionKindBBoxAdd)
+		body.Kind = string(correction.KindBBoxAdd)
 	}
 	// Kind-scoped validation: bbox-* kinds require figure/table
 	// content types; ref-merge scopes to references (content_type
 	// = "reference") and needs only a target_element_id (a <ref>
 	// id in the JATS ref-list — no bbox involved).
 	switch body.Kind {
-	case string(hive.CorrectionKindBBoxAdd),
-		string(hive.CorrectionKindBBoxModify),
-		string(hive.CorrectionKindBBoxRemove):
+	case string(correction.KindBBoxAdd),
+		string(correction.KindBBoxModify),
+		string(correction.KindBBoxRemove):
 		if body.ContentType != "figure" && body.ContentType != "table" {
 			writeBadRequest(w, r, "content_type must be 'figure' or 'table' for bbox-* corrections")
 			return
 		}
-	case string(hive.CorrectionKindRefMerge):
+	case string(correction.KindRefMerge):
 		if body.TargetElementID == "" {
 			writeBadRequest(w, r, "target_element_id required for ref-merge")
 			return
@@ -2699,7 +2700,7 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		if body.ContentType == "" {
 			body.ContentType = "reference"
 		}
-	case string(hive.CorrectionKindRefEdit):
+	case string(correction.KindRefEdit):
 		if body.TargetElementID == "" {
 			writeBadRequest(w, r, "target_element_id required for ref-edit")
 			return
@@ -2715,13 +2716,13 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		writeBadRequest(w, r, "unsupported correction kind: "+body.Kind)
 		return
 	}
-	if body.Kind == string(hive.CorrectionKindBBoxAdd) {
+	if body.Kind == string(correction.KindBBoxAdd) {
 		if body.BBox == nil || body.BBoxPage <= 0 {
 			writeBadRequest(w, r, "bbox and bbox_page > 0 required for bbox-add")
 			return
 		}
 	}
-	if body.Kind == string(hive.CorrectionKindBBoxModify) {
+	if body.Kind == string(correction.KindBBoxModify) {
 		if body.TargetElementID == "" {
 			writeBadRequest(w, r, "target_element_id required for bbox-modify")
 			return
@@ -2731,7 +2732,7 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if body.Kind == string(hive.CorrectionKindBBoxRemove) {
+	if body.Kind == string(correction.KindBBoxRemove) {
 		if body.TargetElementID == "" {
 			writeBadRequest(w, r, "target_element_id required for bbox-remove")
 			return
@@ -2770,10 +2771,10 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	c := &hive.Correction{
+	c := &correction.Correction{
 		ReferenceID:     body.ReferenceID,
 		SidecarSHA:      body.SidecarSHA,
-		Kind:            hive.CorrectionKind(body.Kind),
+		Kind:            correction.Kind(body.Kind),
 		ContentType:     body.ContentType,
 		BBoxPage:        body.BBoxPage,
 		Label:           body.Label,
@@ -2781,7 +2782,7 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		Payload:         body.Payload,
 	}
 	if body.BBox != nil {
-		c.BBox = &hive.BBox{X: body.BBox.X, Y: body.BBox.Y, W: body.BBox.W, H: body.BBox.H}
+		c.BBox = &correction.BBox{X: body.BBox.X, Y: body.BBox.Y, W: body.BBox.W, H: body.BBox.H}
 	}
 	// For bbox-add of a table, extract the region's text with
 	// pdftotext -layout and parse into rows/columns. Populates the
@@ -2792,13 +2793,13 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	// Heuristic parsing only — works well for simple tables like
 	// column-aligned data; a proper table-structuring UI (Pattern B
 	// from DIGITIZE_CORRECTIONS_PLAN.md) is deferred.
-	if c.Kind == hive.CorrectionKindBBoxAdd && c.ContentType == "table" && c.BBox != nil {
+	if c.Kind == correction.KindBBoxAdd && c.ContentType == "table" && c.BBox != nil {
 		pdfPath := sidecar.Path(s.archivePath, c.SidecarSHA, "pdf")
 		if _, err := os.Stat(pdfPath); err == nil {
 			rows, err := pdftext.ExtractTable(pdfPath, c.BBoxPage,
 				c.BBox.X, c.BBox.Y, c.BBox.W, c.BBox.H)
 			if err == nil && len(rows) > 0 {
-				payload := hive.BBoxAddPayload{TableRows: rows}
+				payload := correction.BBoxAddPayload{TableRows: rows}
 				if b, err := json.Marshal(payload); err == nil {
 					c.Payload = string(b)
 				}
@@ -2810,8 +2811,8 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	// re-extraction over the new bbox. Row output is merged into
 	// payload.corrected.table_rows so ApplyBBoxModifyToJATS can
 	// splice a fresh <table> into the target <table-wrap>.
-	if c.Kind == hive.CorrectionKindBBoxModify && c.ContentType == "table" {
-		var mp hive.BBoxModifyPayload
+	if c.Kind == correction.KindBBoxModify && c.ContentType == "table" {
+		var mp correction.BBoxModifyPayload
 		if c.Payload != "" && c.Payload != "{}" {
 			_ = json.Unmarshal([]byte(c.Payload), &mp)
 		}
@@ -2869,7 +2870,7 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 // patch an existing element for bbox-modify), writes it back, then
 // re-runs figextract so PNG crops stay in sync. Best-effort: each
 // step returns a warning string on failure rather than aborting.
-func (s *server) applyBBoxCorrectionToSidecar(c *hive.Correction) []string {
+func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) []string {
 	var warnings []string
 	jats, err := sidecar.Read(s.archivePath, c.SidecarSHA, "jats.xml")
 	if err != nil || jats == nil {
@@ -2905,7 +2906,8 @@ func (s *server) applyBBoxCorrectionToSidecar(c *hive.Correction) []string {
 //
 // Body: {sidecar_sha, page, bbox: {x, y, w, h}} in PDF points.
 // Response: {png_data_url, extracted_text, detected_type,
-//            detected_label, existing_labels: [{label, page, kind, id}]}.
+//
+//	detected_label, existing_labels: [{label, page, kind, id}]}.
 //
 // existing_labels is returned inline so the form only needs one
 // round-trip after the bbox is drawn.
@@ -3153,13 +3155,13 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 	}
 	for i := range remaining {
 		c := &remaining[i]
-		if c.Status != hive.CorrectionStatusActive {
+		if c.Status != correction.StatusActive {
 			continue
 		}
 		// Defensive filter: bbox-* kinds require figure/table
 		// content type. Skip rows with mismatched content_type
 		// (shouldn't exist post-validation, but old rows may).
-		if hive.IsBBoxKind(c.Kind) &&
+		if correction.IsBBoxKind(c.Kind) &&
 			c.ContentType != "figure" && c.ContentType != "table" {
 			continue
 		}
@@ -3238,7 +3240,7 @@ type apiCorrectionDeleteResponse struct {
 // apiCorrectionFromCore maps a core Correction to the wire shape.
 // Populates FigureID for bbox-add corrections of figure/table type
 // so the client can construct the extracted-PNG URL.
-func apiCorrectionFromCore(c *hive.Correction) apiCorrection {
+func apiCorrectionFromCore(c *correction.Correction) apiCorrection {
 	out := apiCorrection{
 		ID:              c.ID,
 		ReferenceID:     c.ReferenceID,
@@ -3265,11 +3267,11 @@ func apiCorrectionFromCore(c *hive.Correction) apiCorrection {
 			Position:  c.AnchorPtr.Position,
 		}
 	}
-	if c.Kind == hive.CorrectionKindBBoxAdd &&
+	if c.Kind == correction.KindBBoxAdd &&
 		(c.ContentType == "figure" || c.ContentType == "table") {
-		out.FigureID = hive.CurationElementID(c.ID)
+		out.FigureID = correction.CurationElementID(c.ID)
 	}
-	if c.Kind == hive.CorrectionKindBBoxModify {
+	if c.Kind == correction.KindBBoxModify {
 		out.FigureID = c.TargetElementID
 	}
 	return out
@@ -3817,7 +3819,7 @@ func (s *server) reapplyCorrectionsForSHA(ctx context.Context, sha string, jats 
 		}
 		// Defensive filter: bbox-* kinds require figure/table
 		// content type. Skip rows with mismatched content_type.
-		if hive.IsBBoxKind(c.Kind) &&
+		if correction.IsBBoxKind(c.Kind) &&
 			c.ContentType != "figure" && c.ContentType != "table" {
 			continue
 		}
@@ -4258,8 +4260,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // Concurrency: If-Match on the request is compared against col__modified
 // via hive.UpdateTaxon (the tx propagates it). Callers reading a taxon and
 // wanting a safe update pattern do:
-//   1. GET /api/taxon/{id} → note the response's ETag header
-//   2. PATCH /api/taxon/{id} with `If-Match: <that etag>`
+//  1. GET /api/taxon/{id} → note the response's ETag header
+//  2. PATCH /api/taxon/{id} with `If-Match: <that etag>`
+//
 // A concurrent edit between (1) and (2) causes a 409 conflict and the
 // client re-reads.
 func (s *server) handlePatchTaxon(w http.ResponseWriter, r *http.Request) {
@@ -4510,4 +4513,3 @@ type apiIssue struct {
 	AcknowledgedBy string `json:"acknowledged_by,omitempty"`
 	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
 }
-
