@@ -6,7 +6,7 @@ import (
 
 	"github.com/gnames/gnlib/ent/nomcode"
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
+	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 

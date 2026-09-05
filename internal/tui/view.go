@@ -17,6 +17,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/config"
+	"github.com/sfborg/hive/pkg/refmanager"
 )
 
 // Options configures Run.
@@ -52,7 +54,11 @@ func Run(archivePath string, opts Options) error {
 		}
 	}()
 
-	openOpts := []hive.OpenOption{}
+	openOpts := []hive.OpenOption{
+		hive.WithLookup(refmanager.LookupProviders(refmanager.LookupConfig{
+			OpenAlexEmail: config.CurrentIdentity().OpenAlexEmail,
+		})),
+	}
 	if !opts.Editable {
 		openOpts = append(openOpts, hive.ReadOnly())
 	}

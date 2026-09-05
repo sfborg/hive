@@ -10,10 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/config"
+	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/bibtex"
-	"github.com/sfborg/hive/pkg/refmanager/openalex"
-	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -97,7 +95,6 @@ type refCreatedDone struct {
 // detailModel on Ctrl+A while editing a name.
 type addRefModel struct {
 	a        *hive.Archive
-	openalex *openalex.Client
 	bhlnames *bhlnames.Client
 	actor    string
 	// Context propagated from the current name for the BHLnames tab.
@@ -157,7 +154,6 @@ func newAddRefModel(a *hive.Archive, actor, canonical, authors string, year int)
 
 	return addRefModel{
 		a:            a,
-		openalex:     openalex.New(config.CurrentIdentity().OpenAlexEmail),
 		bhlnames:     bhlnames.New(bhlnames.DefaultBaseURL),
 		actor:        actor,
 		canonical:    canonical,
@@ -434,10 +430,15 @@ func (m addRefModel) updateDOI(msg tea.KeyMsg) (addRefModel, tea.Cmd) {
 		if doi == "" {
 			return m, nil
 		}
+		resolver := m.a.Lookup.DOIResolver()
+		if resolver == nil {
+			m.err = "no DOI resolver configured"
+			return m, nil
+		}
 		m.busy = true
 		m.err = ""
 		return m, func() tea.Msg {
-			ref, err := m.openalex.ResolveDOI(context.Background(), doi)
+			ref, err := resolver.ResolveDOI(context.Background(), doi)
 			return doiResolveDone{ref: ref, err: err}
 		}
 	}

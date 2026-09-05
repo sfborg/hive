@@ -49,6 +49,11 @@ func New(email string) *Client {
 	}
 }
 
+// Name implements hiveext.DOIResolver / FreeTextSearcher. Used in
+// wire responses and logging to identify which provider handled a
+// request.
+func (c *Client) Name() string { return "openalex" }
+
 // ErrNotFound is returned when OpenAlex has no work for the given DOI.
 // Distinct from network failures so calling code can tell "DOI is bad"
 // from "OpenAlex is down."

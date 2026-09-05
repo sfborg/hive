@@ -78,6 +78,13 @@ type Archive struct {
 	// package's Appliers() slice — see buildCorrectionAppliers.
 	// Archive.ApplyCorrection dispatches through it.
 	correctionAppliers map[correction.Kind]hiveext.CorrectionApplier
+
+	// Lookup exposes the archive's registered reference-lookup
+	// providers (DOI resolvers, free-text searchers) to the HTTP and
+	// TUI handlers. Zero-value when the caller didn't pass a
+	// WithLookup OpenOption — handlers can short-circuit with a
+	// 501 or a "no provider configured" message.
+	Lookup hiveext.LookupSet
 }
 
 // OpenOption configures Open. Options are functional; pass them variadically.
@@ -85,11 +92,20 @@ type OpenOption func(*openOpts)
 
 type openOpts struct {
 	readOnly bool
+	lookup   hiveext.LookupSet
 }
 
 // ReadOnly opens the archive in read-only mode. Any WithTx call on a
 // read-only archive returns ErrReadOnly without touching the database.
 func ReadOnly() OpenOption { return func(o *openOpts) { o.readOnly = true } }
+
+// WithLookup registers the reference-lookup providers a caller wants
+// this archive to expose (see hiveext.LookupSet). Typically constructed
+// via refmanager.LookupProviders(cfg). Handlers reach the set through
+// Archive.Lookup.
+func WithLookup(l hiveext.LookupSet) OpenOption {
+	return func(o *openOpts) { o.lookup = l }
+}
 
 // Open opens an existing sfga archive at path.
 func Open(path string, opts ...OpenOption) (*Archive, error) {
@@ -105,12 +121,12 @@ func Open(path string, opts ...OpenOption) (*Archive, error) {
 	}
 
 	if o.readOnly {
-		return openReadOnly(path)
+		return openReadOnly(path, o)
 	}
-	return openReadWrite(path)
+	return openReadWrite(path, o)
 }
 
-func openReadOnly(path string) (*Archive, error) {
+func openReadOnly(path string, o openOpts) (*Archive, error) {
 	dsn := fmt.Sprintf("file:%s?mode=ro", path)
 	db, err := sql.Open(sqliteDriver, dsn)
 	if err != nil {
@@ -138,6 +154,7 @@ func openReadOnly(path string) (*Archive, error) {
 		path:               path,
 		readOnly:           true,
 		correctionAppliers: buildCorrectionAppliers(),
+		Lookup:             o.lookup,
 	}
 	var vErr error
 	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
@@ -148,7 +165,7 @@ func openReadOnly(path string) (*Archive, error) {
 	return a, nil
 }
 
-func openReadWrite(path string) (*Archive, error) {
+func openReadWrite(path string, o openOpts) (*Archive, error) {
 	sf := sflib.NewSfga()
 	sf.SetDb(path)
 	db, err := sf.Connect()
@@ -189,6 +206,7 @@ func openReadWrite(path string) (*Archive, error) {
 		// enough for the col__* structural columns hive fills on write.
 		parser:             gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
 		correctionAppliers: buildCorrectionAppliers(),
+		Lookup:             o.lookup,
 	}
 	var vErr error
 	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
@@ -259,7 +277,7 @@ func Create(path string) (*Archive, error) {
 		os.Remove(path)
 		return nil, fmt.Errorf("core: close after create: %w", err)
 	}
-	return openReadWrite(path)
+	return openReadWrite(path, openOpts{})
 }
 
 // Close releases the underlying database handle.

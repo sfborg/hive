@@ -29,7 +29,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
-	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
+	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -59,16 +59,12 @@ type server struct {
 	// pay the several-MB dictionary + Bayes-weight load cost. One
 	// instance per server (thread-safe under the sync.Once inside).
 	annotator *annotator.Annotator
-	// openalex is the shared HTTP client for the OpenAlex works API.
-	// Constructed once at server startup so ResolveDOI / Search reuse
-	// the same underlying connection pool. Never nil after Run() —
-	// the client is always usable (unauthenticated requests are fine;
-	// a curator-configured email is included as the polite pool
-	// identifier when available).
-	openalex *openalex.Client
 	// bhlnames is the shared HTTP client for the BHLnames service.
-	// Same lifecycle as openalex above; the client hits the public
-	// production endpoint by default.
+	// Constructed once at Run(); hits the public production endpoint
+	// by default. DOI resolution + free-text search go through
+	// s.a.Lookup instead — BHLnames is scientific-name-scoped and
+	// keeps its concrete-typed accessor until the shared name-lookup
+	// interface has more than one implementation to shape it.
 	bhlnames *bhlnames.Client
 }
 
@@ -3383,16 +3379,23 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "query parameter 'doi' is required")
 		return
 	}
-	ref, err := s.openalex.ResolveDOI(r.Context(), doi)
+	resolver := s.a.Lookup.DOIResolver()
+	if resolver == nil {
+		writeProblemDetail(w, r, http.StatusNotImplemented,
+			"urn:hive:error:no-doi-resolver", "no DOI resolver configured",
+			"this archive has no registered DOI resolver")
+		return
+	}
+	ref, err := resolver.ResolveDOI(r.Context(), doi)
 	if err != nil {
 		if errors.Is(err, openalex.ErrNotFound) {
 			writeProblemDetail(w, r, http.StatusNotFound,
-				"urn:hive:error:openalex-not-found", "not found",
-				"OpenAlex has no Work for DOI "+doi)
+				"urn:hive:error:doi-not-found", "not found",
+				resolver.Name()+" has no work for DOI "+doi)
 			return
 		}
 		writeProblemDetail(w, r, http.StatusBadGateway,
-			"urn:hive:error:openalex", "openalex lookup failed", err.Error())
+			"urn:hive:error:doi-lookup", resolver.Name()+" lookup failed", err.Error())
 		return
 	}
 	// Clear the generated UUID from ResolveDOI — this is a preview, not
@@ -3434,10 +3437,17 @@ func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 	if year != "" {
 		q += " " + year
 	}
-	hits, err := s.openalex.Search(r.Context(), q, 5)
+	searcher := s.a.Lookup.FreeTextSearcher()
+	if searcher == nil {
+		writeProblemDetail(w, r, http.StatusNotImplemented,
+			"urn:hive:error:no-free-text-searcher", "no free-text searcher configured",
+			"this archive has no registered free-text reference searcher")
+		return
+	}
+	hits, err := searcher.Search(r.Context(), q, 5)
 	if err != nil {
 		writeProblemDetail(w, r, http.StatusBadGateway,
-			"urn:hive:error:openalex", "openalex lookup failed", err.Error())
+			"urn:hive:error:free-text-search", searcher.Name()+" lookup failed", err.Error())
 		return
 	}
 	items := make([]apiReference, 0, len(hits))

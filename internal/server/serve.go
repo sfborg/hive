@@ -23,11 +23,11 @@ import (
 	"github.com/sfborg/hive/internal/wui"
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/config"
+	"github.com/sfborg/hive/pkg/refmanager"
+	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
-	"github.com/sfborg/hive/pkg/refmanager/openalex"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
-	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 )
 
 const defaultPort = 2365
@@ -60,7 +60,11 @@ type Options struct {
 // Run opens the archive and blocks serving HTTP until the process receives
 // SIGINT/SIGTERM (or the listener errors).
 func Run(archivePath string, opts Options) error {
-	openOpts := []hive.OpenOption{}
+	openOpts := []hive.OpenOption{
+		hive.WithLookup(refmanager.LookupProviders(refmanager.LookupConfig{
+			OpenAlexEmail: config.CurrentIdentity().OpenAlexEmail,
+		})),
+	}
 	if opts.ReadOnly {
 		openOpts = append(openOpts, hive.ReadOnly())
 	}
@@ -87,11 +91,10 @@ func Run(archivePath string, opts Options) error {
 	s := &server{
 		a:           a,
 		archivePath: archivePath,
-		// OpenAlex + BHLnames run against public endpoints; the shared
-		// clients are always constructed so the reference-ingest handlers
-		// can dispatch without a nil-check. OpenAlex passes the curator's
-		// configured email as the polite-pool identifier when set.
-		openalex: openalex.New(config.CurrentIdentity().OpenAlexEmail),
+		// BHLnames stays a per-server field until a second scientific-
+		// name-lookup provider (e.g. ChecklistBank) arrives and its
+		// shape informs the shared interface. DOI + free-text search
+		// already go through Archive.Lookup.
 		bhlnames: bhlnames.New(bhlnames.DefaultBaseURL),
 	}
 	// GROBID client for the reference-ingest pipeline. Env var
