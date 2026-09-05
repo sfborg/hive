@@ -10,12 +10,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/config"
+	"github.com/sfborg/hive/pkg/refmanager/bibtex"
+	"github.com/sfborg/hive/pkg/refmanager/openalex"
+	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
 // The TUI counterpart of the WUI's <sfga-add-reference-modal>. Same four
-// tabs, same in-process backing (hive.OpenAlex / hive.BHLnames /
-// hive.ParseBibTeX / Tx.CreateReference) — the TUI just skips the HTTP
+// tabs, same in-process backing (openalex + bhlnames clients +
+// bibtex.Parse / Tx.CreateReference) — the TUI just skips the HTTP
 // layer entirely because it already holds the *hive.Archive.
 //
 // Tabs, in order:
@@ -72,7 +76,7 @@ type projectSearchDone struct {
 	err   error
 }
 type bhlLookupDone struct {
-	hits []hive.BHLnameHit
+	hits []bhlnames.Hit
 	err  error
 }
 type doiResolveDone struct {
@@ -92,8 +96,10 @@ type refCreatedDone struct {
 // addRefModel owns the modal's state and layout. Instantiated by the
 // detailModel on Ctrl+A while editing a name.
 type addRefModel struct {
-	a     *hive.Archive
-	actor string
+	a        *hive.Archive
+	openalex *openalex.Client
+	bhlnames *bhlnames.Client
+	actor    string
 	// Context propagated from the current name for the BHLnames tab.
 	canonical string
 	authors   string
@@ -110,7 +116,7 @@ type addRefModel struct {
 	projectQuery string // last-fired query (race guard for projectSearchDone)
 
 	// Tab 1
-	bhlHits    []hive.BHLnameHit
+	bhlHits    []bhlnames.Hit
 	bhlLoaded  bool
 	bhlHover   int
 
@@ -151,6 +157,8 @@ func newAddRefModel(a *hive.Archive, actor, canonical, authors string, year int)
 
 	return addRefModel{
 		a:            a,
+		openalex:     openalex.New(config.CurrentIdentity().OpenAlexEmail),
+		bhlnames:     bhlnames.New(bhlnames.DefaultBaseURL),
 		actor:        actor,
 		canonical:    canonical,
 		authors:      authors,
@@ -404,9 +412,9 @@ func (m *addRefModel) runBHLnamesCmd() tea.Cmd {
 	authors := m.authors
 	year := m.year
 	return func() tea.Msg {
-		hits, err := hive.BHLnames().LookupName(context.Background(),
+		hits, err := m.bhlnames.LookupName(context.Background(),
 			canonical, authors, year,
-			hive.BHLnameLookupOpts{
+			bhlnames.LookupOpts{
 				RefsLimit:  5,
 				NomenEvent: true,
 			})
@@ -429,7 +437,7 @@ func (m addRefModel) updateDOI(msg tea.KeyMsg) (addRefModel, tea.Cmd) {
 		m.busy = true
 		m.err = ""
 		return m, func() tea.Msg {
-			ref, err := hive.OpenAlex().ResolveDOI(context.Background(), doi)
+			ref, err := m.openalex.ResolveDOI(context.Background(), doi)
 			return doiResolveDone{ref: ref, err: err}
 		}
 	}
@@ -456,7 +464,7 @@ func (m addRefModel) updateBibTeX(msg tea.KeyMsg) (addRefModel, tea.Cmd) {
 		m.busy = true
 		m.err = ""
 		return m, func() tea.Msg {
-			ref, err := hive.ParseBibTeX(text)
+			ref, err := bibtex.Parse(text)
 			return bibtexParseDone{ref: ref, err: err}
 		}
 	}
@@ -710,7 +718,7 @@ func formatRefHit(h hive.ReferenceHit) string {
 	return label
 }
 
-func formatBHLnameHit(h hive.BHLnameHit) string {
+func formatBHLnameHit(h bhlnames.Hit) string {
 	title := h.Reference.Title
 	if title == "" {
 		title = h.Reference.Citation

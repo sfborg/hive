@@ -19,13 +19,16 @@ import (
 
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/correction"
+	"github.com/sfborg/hive/pkg/refmanager/bibtex"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
+	"github.com/sfborg/hive/pkg/refmanager/openalex"
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
+	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -55,6 +58,17 @@ type server struct {
 	// pay the several-MB dictionary + Bayes-weight load cost. One
 	// instance per server (thread-safe under the sync.Once inside).
 	annotator *annotator.Annotator
+	// openalex is the shared HTTP client for the OpenAlex works API.
+	// Constructed once at server startup so ResolveDOI / Search reuse
+	// the same underlying connection pool. Never nil after Run() —
+	// the client is always usable (unauthenticated requests are fine;
+	// a curator-configured email is included as the polite pool
+	// identifier when available).
+	openalex *openalex.Client
+	// bhlnames is the shared HTTP client for the BHLnames service.
+	// Same lifecycle as openalex above; the client hits the public
+	// production endpoint by default.
+	bhlnames *bhlnames.Client
 }
 
 func (s *server) routes() *http.ServeMux {
@@ -3368,9 +3382,9 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "query parameter 'doi' is required")
 		return
 	}
-	ref, err := hive.OpenAlex().ResolveDOI(r.Context(), doi)
+	ref, err := s.openalex.ResolveDOI(r.Context(), doi)
 	if err != nil {
-		if errors.Is(err, hive.ErrOpenAlexNotFound) {
+		if errors.Is(err, openalex.ErrNotFound) {
 			writeProblemDetail(w, r, http.StatusNotFound,
 				"urn:hive:error:openalex-not-found", "not found",
 				"OpenAlex has no Work for DOI "+doi)
@@ -3419,7 +3433,7 @@ func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 	if year != "" {
 		q += " " + year
 	}
-	hits, err := hive.OpenAlex().Search(r.Context(), q, 5)
+	hits, err := s.openalex.Search(r.Context(), q, 5)
 	if err != nil {
 		writeProblemDetail(w, r, http.StatusBadGateway,
 			"urn:hive:error:openalex", "openalex lookup failed", err.Error())
@@ -3437,7 +3451,7 @@ func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 
 // handleLookupBHLnames runs a BHLnames match for the given scientific
 // name and returns hits ordered as BHLnames returned them (newest-first
-// by default; see hive.BHLnamesClient.LookupName). Each hit carries an
+// by default; see bhlnames.Client.LookupName). Each hit carries an
 // unsaved preview reference plus BHLnames's own quality/score signals so
 // the modal can render "auto-suggest confidently" vs "here if you want
 // it" tiers.
@@ -3461,9 +3475,9 @@ func (s *server) handleLookupBHLnames(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "canonical name is required")
 		return
 	}
-	hits, err := hive.BHLnames().LookupName(r.Context(),
+	hits, err := s.bhlnames.LookupName(r.Context(),
 		body.Canonical, body.Authors, body.Year,
-		hive.BHLnameLookupOpts{
+		bhlnames.LookupOpts{
 			RefsLimit:  body.Limit,
 			NomenEvent: body.NomenEvent,
 		})
@@ -3512,9 +3526,9 @@ func (s *server) handleParseBibTeX(w http.ResponseWriter, r *http.Request) {
 		}
 		text = string(raw)
 	}
-	ref, err := hive.ParseBibTeX(text)
+	ref, err := bibtex.Parse(text)
 	if err != nil {
-		if errors.Is(err, hive.ErrBibTeXParse) {
+		if errors.Is(err, bibtex.ErrParse) {
 			writeProblemDetail(w, r, http.StatusUnprocessableEntity,
 				"urn:hive:error:bibtex", "bibtex parse failed", err.Error())
 			return

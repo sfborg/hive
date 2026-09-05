@@ -6,6 +6,7 @@ import (
 
 	"github.com/gnames/gnlib/ent/nomcode"
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -994,7 +995,7 @@ type apiBHLnameHit struct {
 	MatchedName string       `json:"matched_name,omitempty"`
 }
 
-func bhlnameHitToAPI(h hive.BHLnameHit) apiBHLnameHit {
+func bhlnameHitToAPI(h bhlnames.Hit) apiBHLnameHit {
 	return apiBHLnameHit{
 		Reference:   referenceToAPI(&h.Reference),
 		Quality:     h.Quality,

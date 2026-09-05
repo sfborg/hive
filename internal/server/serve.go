@@ -20,11 +20,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sfborg/hive/internal/wui"
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/taxonomy/annotator"
+	"github.com/sfborg/hive/pkg/config"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
-	"github.com/sfborg/hive/internal/wui"
+	"github.com/sfborg/hive/pkg/refmanager/openalex"
+	"github.com/sfborg/hive/pkg/taxonomy/annotator"
+	"github.com/sfborg/hive/pkg/taxonomy/bhlnames"
 )
 
 const defaultPort = 2365
@@ -81,7 +84,16 @@ func Run(archivePath string, opts Options) error {
 		return err
 	}
 
-	s := &server{a: a, archivePath: archivePath}
+	s := &server{
+		a:           a,
+		archivePath: archivePath,
+		// OpenAlex + BHLnames run against public endpoints; the shared
+		// clients are always constructed so the reference-ingest handlers
+		// can dispatch without a nil-check. OpenAlex passes the curator's
+		// configured email as the polite-pool identifier when set.
+		openalex: openalex.New(config.CurrentIdentity().OpenAlexEmail),
+		bhlnames: bhlnames.New(bhlnames.DefaultBaseURL),
+	}
 	// GROBID client for the reference-ingest pipeline. Env var
 	// HIVE_GROBID_URL activates it; unset means the upload handler
 	// stores raw sources and skips the TEI conversion pass. Set to
