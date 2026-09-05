@@ -14131,22 +14131,31 @@ class SfgaReferences extends LitElement {
       width: 100%;
       height: 100%;
     }
-    /* Digitize tab has an extra row for the correction toolbar
-       and a nested grid so the chip strip can sit above only the
-       PDF pane, not the reader. Overrides the default
-       tab-content 2-column grid inherited from .workspace-panes. */
+    /* Digitize tab drops the default two-column grid because it
+       has its own inner .digitize-grid that owns the reader/pdf
+       split. Toolbars now live inside each column, not in a
+       shared header row above the grid. */
     .workspace-panes .tab-content.digitize {
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: 1fr;
     }
-    .digitize-toolbar {
+    /* Frame-scoped toolbars — each side of the Digitize view has its
+       own row of tool buttons above the pane the tools act on, so
+       curators can see at a glance that (say) BBox is a PDF-side tool
+       and Remove-text is a reader-side tool. Prevents the footgun of
+       trying to draw a bbox on the reader iframe. */
+    .pdf-toolbar,
+    .reader-toolbar {
       display: flex;
       gap: var(--sp-2);
       padding: var(--sp-1) var(--sp-2);
       border-bottom: 1px solid var(--border);
       background: var(--surface);
+      min-height: 2rem;
+      align-items: center;
     }
-    .digitize-toolbar .tool-btn {
+    .pdf-toolbar .tool-btn,
+    .reader-toolbar .tool-btn {
       background: transparent;
       color: var(--fg);
       border: 1px solid var(--border);
@@ -14156,9 +14165,15 @@ class SfgaReferences extends LitElement {
       font-size: var(--fs-sm);
       cursor: pointer;
     }
-    .digitize-toolbar .tool-btn.active {
+    .pdf-toolbar .tool-btn.active,
+    .reader-toolbar .tool-btn.active {
       background: color-mix(in oklab, var(--sev-info) 25%, transparent);
       border-color: color-mix(in oklab, var(--sev-info) 60%, transparent);
+    }
+    .reader-toolbar .toolbar-hint {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-style: italic;
     }
     .digitize-grid {
       display: grid;
@@ -14166,10 +14181,13 @@ class SfgaReferences extends LitElement {
       min-height: 0;
       overflow: hidden;
     }
+    .reader-column,
     .pdf-column {
       display: flex;
       flex-direction: column;
       min-height: 0;
+    }
+    .pdf-column {
       border-left: 1px solid var(--border);
     }
     .chip-strip {
@@ -16255,25 +16273,30 @@ class SfgaReferences extends LitElement {
       >
         ${hasReader
           ? html`
-              <div class="digitize-toolbar" role="toolbar" aria-label="Digitize tools">
-                <button
-                  type="button"
-                  class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
-                  aria-pressed=${this._activeTool === "read"}
-                  title="Read — no active correction tool"
-                  @click=${() => (this._activeTool = "read")}
-                >Read</button>
-                <button
-                  type="button"
-                  class=${"tool-btn" + (this._activeTool === "bbox" ? " active" : "")}
-                  aria-pressed=${this._activeTool === "bbox"}
-                  title="BBox — click and drag on the PDF to mark a missed figure or table"
-                  @click=${() => (this._activeTool = "bbox")}
-                >BBox</button>
-              </div>
               <div class="digitize-grid">
-                <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+                <div class="reader-column">
+                  <div class="reader-toolbar" role="toolbar" aria-label="Reader tools">
+                    <span class="toolbar-hint">Reader tools land here.</span>
+                  </div>
+                  <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+                </div>
                 <div class="pdf-column">
+                  <div class="pdf-toolbar" role="toolbar" aria-label="PDF tools">
+                    <button
+                      type="button"
+                      class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
+                      aria-pressed=${this._activeTool === "read"}
+                      title="Read — no active correction tool"
+                      @click=${() => (this._activeTool = "read")}
+                    >Read</button>
+                    <button
+                      type="button"
+                      class=${"tool-btn" + (this._activeTool === "bbox" ? " active" : "")}
+                      aria-pressed=${this._activeTool === "bbox"}
+                      title="BBox — click and drag on the PDF to mark a missed figure or table"
+                      @click=${() => (this._activeTool = "bbox")}
+                    >BBox</button>
+                  </div>
                   ${this._renderChipStrip()}
                   <sfga-pdf-viewer
                     class="pane pdf"
