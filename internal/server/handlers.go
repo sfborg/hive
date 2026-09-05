@@ -2876,7 +2876,7 @@ func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) []string
 	if err != nil || jats == nil {
 		return []string{"jats sidecar not found for sha " + c.SidecarSHA}
 	}
-	mutated, err := hive.ApplyCorrection(jats, c)
+	mutated, err := s.a.ApplyCorrection(jats, c)
 	if err != nil {
 		return []string{"apply " + string(c.Kind) + ": " + err.Error()}
 	}
@@ -3165,7 +3165,7 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 			c.ContentType != "figure" && c.ContentType != "table" {
 			continue
 		}
-		mutated, err := hive.ApplyCorrection(jats, c)
+		mutated, err := s.a.ApplyCorrection(jats, c)
 		if err != nil {
 			warnings = append(warnings, "reapply "+c.ID+": "+err.Error())
 			continue
@@ -3823,7 +3823,7 @@ func (s *server) reapplyCorrectionsForSHA(ctx context.Context, sha string, jats 
 			c.ContentType != "figure" && c.ContentType != "table" {
 			continue
 		}
-		mutated, err := hive.ApplyCorrection(jats, c)
+		mutated, err := s.a.ApplyCorrection(jats, c)
 		if err != nil {
 			continue
 		}

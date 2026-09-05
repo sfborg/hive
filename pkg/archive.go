@@ -12,6 +12,8 @@ import (
 	"github.com/gdower/gsvalidator/adapter/repository"
 	"github.com/gdower/gsvalidator/usecase"
 	"github.com/gnames/gnparser"
+	"github.com/sfborg/hive/pkg/correction"
+	"github.com/sfborg/hive/pkg/hiveext"
 	"github.com/sfborg/sflib"
 	"github.com/sfborg/sflib/pkg/sfga"
 
@@ -70,6 +72,12 @@ type Archive struct {
 	// Rule metadata (Trigger, RecheckDays) without going through the
 	// use case, which only exposes evaluation.
 	ruleLoader *repository.BundleLoader
+
+	// correctionAppliers maps a correction kind to its extension-
+	// registered applier. Built once at Open() from every extension
+	// package's Appliers() slice — see buildCorrectionAppliers.
+	// Archive.ApplyCorrection dispatches through it.
+	correctionAppliers map[correction.Kind]hiveext.CorrectionApplier
 }
 
 // OpenOption configures Open. Options are functional; pass them variadically.
@@ -125,7 +133,12 @@ func openReadOnly(path string) (*Archive, error) {
 		db.Close()
 		return nil, fmt.Errorf("core: disable foreign_keys: %w", err)
 	}
-	a := &Archive{db: db, path: path, readOnly: true}
+	a := &Archive{
+		db:                 db,
+		path:               path,
+		readOnly:           true,
+		correctionAppliers: buildCorrectionAppliers(),
+	}
 	var vErr error
 	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
 	if vErr != nil {
@@ -174,7 +187,8 @@ func openReadWrite(path string) (*Archive, error) {
 		// only top-level fields (canonical, cardinality, authorship,
 		// authors) come through — enough for the gn__* cache, not
 		// enough for the col__* structural columns hive fills on write.
-		parser: gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
+		parser:             gnparser.New(gnparser.NewConfig(gnparser.OptWithDetails(true))),
+		correctionAppliers: buildCorrectionAppliers(),
 	}
 	var vErr error
 	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)

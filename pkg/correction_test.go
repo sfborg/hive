@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sfborg/hive/pkg/correction"
+	"github.com/sfborg/hive/pkg/refmanager"
 )
 
 // TestCorrectionRoundTrip covers Create → List → Get → Delete on
@@ -103,7 +104,7 @@ func TestApplyBBoxAddInsertsIntoExistingFiguresSec(t *testing.T) {
 		BBox:        &correction.BBox{X: 72, Y: 100, W: 400, H: 150},
 		Label:       "table-1",
 	}
-	out, err := ApplyBBoxAddToJATS(jats, c)
+	out, err := refmanager.ApplyBBoxAddToJATS(jats, c)
 	if err != nil {
 		t.Fatalf("ApplyBBoxAddToJATS: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestApplyBBoxAddCreatesFiguresSecWhenMissing(t *testing.T) {
 		BBox:        &correction.BBox{X: 100, Y: 200, W: 300, H: 400},
 		Label:       "figure-1",
 	}
-	out, err := ApplyBBoxAddToJATS(jats, c)
+	out, err := refmanager.ApplyBBoxAddToJATS(jats, c)
 	if err != nil {
 		t.Fatalf("ApplyBBoxAddToJATS: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestApplyBBoxAddRejectsBadContentType(t *testing.T) {
 		BBoxPage:    1,
 		BBox:        &correction.BBox{X: 0, Y: 0, W: 100, H: 100},
 	}
-	if _, err := ApplyBBoxAddToJATS(jats, c); err == nil {
+	if _, err := refmanager.ApplyBBoxAddToJATS(jats, c); err == nil {
 		t.Errorf("expected error for content_type=abstract, got nil")
 	}
 }
