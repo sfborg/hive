@@ -23,6 +23,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
+	"github.com/sfborg/hive/pkg/refmanager/labels"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
 	"github.com/sfborg/hive/pkg/refmanager/openalex"
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
@@ -2758,13 +2759,13 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		// exist" — useless for training a better extractor.
 		if body.Payload == "" || body.Payload == "{}" {
 			if jats, err := sidecar.Read(s.archivePath, body.SidecarSHA, "jats.xml"); err == nil && jats != nil {
-				if regions, err := hive.ExtractRegionsFromJATS(jats); err == nil {
+				if regions, err := labels.ExtractRegions(jats); err == nil {
 					for _, rg := range regions {
 						if rg.ID == body.TargetElementID {
 							snapshot := map[string]any{
 								"original": map[string]any{
 									"kind":  rg.Kind,
-									"label": rg.Label,
+									"label": rg.Text,
 									"page":  rg.Page,
 								},
 							}
@@ -2971,11 +2972,11 @@ func (s *server) handlePreviewCorrection(w http.ResponseWriter, r *http.Request)
 	// Existing labels from the JATS sidecar so the form can show
 	// what figs/tables the paper already has, ordered by page.
 	if jats, err := sidecar.Read(s.archivePath, body.SidecarSHA, "jats.xml"); err == nil && jats != nil {
-		if labels, err := hive.ExtractLabelsFromJATS(jats); err == nil {
-			out.ExistingLabels = make([]apiExtractedLabel, len(labels))
-			for i, l := range labels {
+		if extracted, err := labels.Extract(jats); err == nil {
+			out.ExistingLabels = make([]apiExtractedLabel, len(extracted))
+			for i, l := range extracted {
 				out.ExistingLabels[i] = apiExtractedLabel{
-					Label: l.Label,
+					Label: l.Text,
 					Kind:  l.Kind,
 					Page:  l.Page,
 					ID:    l.ID,
@@ -3003,7 +3004,7 @@ func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
-	regions, err := hive.ExtractRegionsFromJATS(jats)
+	regions, err := labels.ExtractRegions(jats)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
@@ -3012,7 +3013,7 @@ func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Re
 	for _, rg := range regions {
 		item := apiRegion{
 			ID:     rg.ID,
-			Label:  rg.Label,
+			Label:  rg.Text,
 			Kind:   rg.Kind,
 			Page:   rg.Page,
 			Origin: rg.Origin,

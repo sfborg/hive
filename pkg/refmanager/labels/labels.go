@@ -1,4 +1,15 @@
-package hive
+// Package labels extracts fig/table labels and geometric regions from
+// augmented-JATS sidecars. The correction UI reads the label list to
+// help a curator pick a coherent new label without duplicating an
+// existing number; the PDF viewer reads the region list to draw
+// overlay rectangles for every detected fig/table (curator-added
+// regions distinguished from GROBID-extracted ones by id prefix).
+//
+// Depends only on pkg/correction for the shared BBox shape; no pkg-
+// root dependencies. Lives under pkg/refmanager because JATS sidecar
+// parsing is refmanager territory (all callers are the reference-
+// ingest / correction paths).
+package labels
 
 import (
 	"bytes"
@@ -12,24 +23,24 @@ import (
 	"github.com/sfborg/hive/pkg/correction"
 )
 
-// ExtractedLabel is one figure or table label found in a JATS
+// Label is one figure or table label found in a JATS
 // sidecar — used by the correction-preview form to show a curator
 // which figs/tables already exist in the paper so they can pick a
 // coherent label for a new correction without accidentally
 // duplicating an existing number.
-type ExtractedLabel struct {
-	Label string // "Figure 1", "Table 2" — as extracted from the caption
-	Kind  string // "figure" | "table"
-	Page  int    // source PDF page from hive:pdf-page, 0 when unset
-	ID    string // JATS element id (fig_0, tab_1, curator_abc, ...)
+type Label struct {
+	Text string // "Figure 1", "Table 2" — as extracted from the caption
+	Kind string // "figure" | "table"
+	Page int    // source PDF page from hive:pdf-page, 0 when unset
+	ID   string // JATS element id (fig_0, tab_1, curator_abc, ...)
 }
 
-// ExtractedRegion adds bbox coords to an ExtractedLabel — used by
+// Region adds bbox coords to an Label — used by
 // the Digitize-tab PDF viewer to render every fig/table-wrap in
 // the JATS as an overlay rectangle, distinguishing curator-added
 // regions from GROBID-detected ones by their id prefix.
-type ExtractedRegion struct {
-	ExtractedLabel
+type Region struct {
+	Label
 	BBox   *correction.BBox // nil when hive:pdf-bbox missing or unparseable
 	Origin string           // "grobid" (default) or "curator" (id starts with "curator_")
 }
@@ -39,7 +50,7 @@ type ExtractedRegion struct {
 // usually renders ("Figure 3.", "Table 1", "Fig 4", "Tab. 2").
 var extractedLabelRegex = regexp.MustCompile(`(?i)\b(fig(?:ure)?|tab(?:le)?)\.?\s*(\d+)\b`)
 
-// ExtractLabelsFromJATS walks the JATS bytes and returns every
+// Extract walks the JATS bytes and returns every
 // <fig>/<table-wrap> element's caption-derived label plus its
 // source PDF page (when hive:pdf-page is set). Ordered by source
 // page — same order the curator reads through the paper, so the
@@ -48,8 +59,8 @@ var extractedLabelRegex = regexp.MustCompile(`(?i)\b(fig(?:ure)?|tab(?:le)?)\.?\
 // Returns empty slice when the JATS has no figs/tables. Malformed
 // JATS returns an error so the caller can degrade gracefully
 // (form still opens without the existing-labels hint).
-func ExtractLabelsFromJATS(jats []byte) ([]ExtractedLabel, error) {
-	var out []ExtractedLabel
+func Extract(jats []byte) ([]Label, error) {
+	var out []Label
 	dec := xml.NewDecoder(bytes.NewReader(jats))
 	dec.Strict = false // JATS sidecars occasionally have quirks; be permissive
 	var (
@@ -109,8 +120,8 @@ func ExtractLabelsFromJATS(jats []byte) ([]ExtractedLabel, error) {
 						if strings.HasPrefix(kind, "tab") {
 							label = "Table " + num
 						}
-						out = append(out, ExtractedLabel{
-							Label: label,
+						out = append(out, Label{
+							Text: label,
 							Kind:  currentKind,
 							Page:  currentPage,
 							ID:    currentID,
@@ -143,7 +154,7 @@ func ExtractLabelsFromJATS(jats []byte) ([]ExtractedLabel, error) {
 	return out, nil
 }
 
-// ExtractRegionsFromJATS is a superset of ExtractLabelsFromJATS
+// ExtractRegions is a superset of Extract
 // that also captures the hive:pdf-page + hive:pdf-bbox coord
 // attributes on each fig/table-wrap, plus a synthetic Origin
 // tag ("curator" or "grobid") derived from the element id prefix.
@@ -153,8 +164,8 @@ func ExtractLabelsFromJATS(jats []byte) ([]ExtractedLabel, error) {
 // GROBID-extracted in another) so a curator can see the full set
 // of detected regions at a glance and spot missing / mis-bounded
 // ones for correction.
-func ExtractRegionsFromJATS(jats []byte) ([]ExtractedRegion, error) {
-	var out []ExtractedRegion
+func ExtractRegions(jats []byte) ([]Region, error) {
+	var out []Region
 	dec := xml.NewDecoder(bytes.NewReader(jats))
 	dec.Strict = false
 	var (
@@ -228,9 +239,9 @@ func ExtractRegionsFromJATS(jats []byte) ([]ExtractedRegion, error) {
 				if strings.HasPrefix(currentID, "curator_") {
 					origin = "curator"
 				}
-				out = append(out, ExtractedRegion{
-					ExtractedLabel: ExtractedLabel{
-						Label: label,
+				out = append(out, Region{
+					Label: Label{
+						Text: label,
 						Kind:  currentKind,
 						Page:  currentPage,
 						ID:    currentID,
@@ -274,7 +285,7 @@ func parseBBoxAttr(v string) *correction.BBox {
 	return &correction.BBox{X: vals[0], Y: vals[1], W: vals[2], H: vals[3]}
 }
 
-func labelSortLess(a, b ExtractedLabel) bool {
+func labelSortLess(a, b Label) bool {
 	// Unpaged entries (Page == 0) sort last.
 	if a.Page == 0 && b.Page != 0 {
 		return false
@@ -287,5 +298,5 @@ func labelSortLess(a, b ExtractedLabel) bool {
 	}
 	// Same-page tiebreak on label so figs and tables interleave
 	// predictably.
-	return a.Label < b.Label
+	return a.Text < b.Text
 }
