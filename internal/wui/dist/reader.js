@@ -105,6 +105,12 @@ class SfgaReader extends LitElement {
     // for readers who want the reading pane back at full height.
     _showExtractionWarning: { state: true },
     _showRefWarning: { state: true },
+    // _activeTool tracks the correction tool the shell has activated
+    // via hive:set-tool postMessage. "read" (or empty) means no
+    // interactive mode — the reader is a passive viewer. "text-
+    // remove" toggles hover-highlight + click-to-remove on body
+    // paragraphs. Standalone reader (no parent shell) stays "read".
+    _activeTool: { state: true },
   };
 
   static styles = css`
@@ -299,6 +305,23 @@ class SfgaReader extends LitElement {
     }
     article p {
       margin: var(--sp-2) 0;
+    }
+    /* text-remove tool mode: body paragraphs become click-to-remove
+       targets. Cursor + outline signal hover; a small delete glyph
+       inline-left of the paragraph makes the target unambiguous.
+       Skips the paper header, references list, figure captions, and
+       already-wrapped hive:noise elements so curators can only click
+       actual body paragraphs. */
+    .tool-text-remove article > p:not(.page-break):not(.hive-noise-preview):hover {
+      outline: 2px dashed color-mix(in oklab, var(--sev-warn) 60%, transparent);
+      outline-offset: 2px;
+      cursor: pointer;
+      background: color-mix(in oklab, var(--sev-warn) 8%, transparent);
+    }
+    .tool-text-remove article > p:not(.page-break):not(.hive-noise-preview):hover::before {
+      content: "✕ ";
+      color: var(--sev-warn);
+      font-weight: bold;
     }
     /* Page-break divider — horizontal dashed line with the
        journal-labeled source-PDF page number sitting mid-line.
@@ -816,6 +839,7 @@ class SfgaReader extends LitElement {
     this._pageWidth = 0;
     this._showExtractionWarning = true;
     this._showRefWarning = true;
+    this._activeTool = "read";
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
   }
@@ -836,11 +860,24 @@ class SfgaReader extends LitElement {
     // indicator and page-turn translation stay accurate.
     this._onResize = () => this._recomputePages();
     window.addEventListener("resize", this._onResize);
+    // Shell → reader message channel. The shell sends hive:set-tool
+    // when the curator switches the active correction tool from the
+    // reader-toolbar; the reader updates its interaction mode
+    // (cursor, hover-highlight, click semantics) accordingly.
+    this._onShellMessage = (e) => {
+      const d = e.data;
+      if (!d || typeof d !== "object") return;
+      if (d.type === "hive:set-tool" && typeof d.tool === "string") {
+        this._activeTool = d.tool;
+      }
+    };
+    window.addEventListener("message", this._onShellMessage);
   }
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this._onKeyDown);
     window.removeEventListener("resize", this._onResize);
+    window.removeEventListener("message", this._onShellMessage);
     super.disconnectedCallback();
   }
 
@@ -929,6 +966,77 @@ class SfgaReader extends LitElement {
 
   _pageBack() {
     if (this._page > 0) this._page -= 1;
+  }
+
+  // _onLayoutClick dispatches based on the active correction tool.
+  // In text-remove mode: intercept clicks on body paragraphs and
+  // send a hive:remove-text postMessage; other click behavior
+  // (page-turn, xref jump-to-pdf) is suppressed so a click doesn't
+  // simultaneously turn the page and stage a removal. In "read"
+  // mode: fall through to the paginated page-turn handler.
+  _onLayoutClick(e) {
+    if (this._activeTool === "text-remove") {
+      this._handleTextRemoveClick(e);
+      return;
+    }
+    if (this._paginated) this._onPageClick(e);
+  }
+
+  // _handleTextRemoveClick walks up from the click target to find a
+  // <p> child of the article body (the only element the text-remove
+  // tool targets). Refuses matches inside back-matter references,
+  // figure captions, section titles, page-break wrappers, or
+  // already-wrapped hive:noise elements — those aren't running
+  // headers/footers the tool is meant for. Standalone reader (no
+  // parent shell): warns and no-ops since the correction needs
+  // archive context the shell holds.
+  _handleTextRemoveClick(e) {
+    let el = e.target;
+    // Walk up to the nearest <p>. Bail if we escape the article.
+    while (el && el.tagName !== "P") {
+      if (el.tagName === "ARTICLE") return;
+      el = el.parentElement;
+    }
+    if (!el) return;
+    // Reject non-body paragraphs: paper header (h1/h2 preceding),
+    // page-break wrappers, and any ancestor other than the article
+    // itself (captions, references list, footnotes).
+    if (el.classList.contains("page-break")) return;
+    const parent = el.parentElement;
+    if (!parent || parent.tagName !== "ARTICLE") return;
+    if (!(window.parent && window.parent !== window)) {
+      // eslint-disable-next-line no-console
+      console.warn("text-remove requires the shell — open via References tab");
+      return;
+    }
+    const text = (el.textContent || "").trim();
+    if (!text) return;
+    // Recover pdf_page from the nearest preceding .page-break
+    // element (rendered from the hive:page-break marker jatsconv
+    // emits at page transitions). Falls back to 0 when no marker
+    // precedes the paragraph — the applier handles that fine, just
+    // without the disambiguation hint.
+    let pdfPage = 0;
+    let prev = el.previousElementSibling;
+    while (prev) {
+      if (prev.classList && prev.classList.contains("page-break")) {
+        const n = parseInt(prev.dataset.pdfPage || "", 10);
+        if (Number.isFinite(n) && n > 0) {
+          pdfPage = n;
+        }
+        break;
+      }
+      prev = prev.previousElementSibling;
+    }
+    window.parent.postMessage(
+      {
+        type: "hive:remove-text",
+        sha: this._sha,
+        text,
+        pdfPage,
+      },
+      "*",
+    );
   }
 
   // Click-to-turn: left third goes back, right third goes forward,
@@ -1184,8 +1292,8 @@ class SfgaReader extends LitElement {
               title="Source PDF"
             ></iframe>`
           : html`
-              <div class=${"layout" + (this._paginated ? " paginated" : "")}
-                @click=${(e) => this._paginated && this._onPageClick(e)}
+              <div class=${"layout tool-" + this._activeTool + (this._paginated ? " paginated" : "")}
+                @click=${(e) => this._onLayoutClick(e)}
                 @wheel=${(e) => this._paginated && this._onPageWheel(e)}
               >
                 ${this._renderBody()}
@@ -1761,6 +1869,7 @@ class SfgaReader extends LitElement {
             class="page-break"
             role="separator"
             aria-label=${aria}
+            data-pdf-page=${pageNum}
           >
             <span class="page-break-num">page ${label}</span>
           </div>`);
@@ -1872,7 +1981,7 @@ class SfgaReader extends LitElement {
             ? "Source PDF page approximately " + pageNum + " begins"
             : "Source PDF page " + pageNum + " begins";
           out.push(html`<div class="page-break" role="separator"
-            aria-label=${aria}>
+            aria-label=${aria} data-pdf-page=${pageNum}>
             <span class="page-break-num">page ${label}</span>
           </div>`);
           continue;

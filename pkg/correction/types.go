@@ -48,6 +48,15 @@ const (
 	KindBBoxModify   Kind = "bbox-modify"
 	KindBBoxRemove   Kind = "bbox-remove"
 	KindTextTag      Kind = "text-tag"
+	// KindTextRemove wraps a body element (paragraph, section, title,
+	// …) whose text is GROBID noise (running headers/footers, watermark
+	// captions, editorial artifacts) with <hive:noise correction-id="…">
+	// containing an XML comment holding the original text. Generic
+	// renderers see nothing (comments are parser-erased); hive-aware
+	// tooling correlates the wrapper's correction-id back to the
+	// hive__extraction_correction row for un-remove + training-data
+	// export.
+	KindTextRemove   Kind = "text-remove"
 	KindXrefFix      Kind = "xref-fix"
 	KindChipFeedback Kind = "chip-feedback"
 	// KindRefMerge merges a spurious <ref> into the previous one.
@@ -172,4 +181,29 @@ type RefEditFields struct {
 	PublisherPlace      *string `json:"publisher_place,omitempty"`
 	DOI                 *string `json:"doi,omitempty"`
 	Citation            *string `json:"citation,omitempty"`
+}
+
+// TextRemovePayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'text-remove'. Captures the exact original text bytes so the
+// training corpus retains them even after the applier turns the
+// target element into a hidden <hive:noise> wrapper. PDFPage lets a
+// future re-locate-by-text fallback narrow the search when a re-
+// import produces different element ids.
+type TextRemovePayload struct {
+	// Text is the verbatim body of the removed element (element
+	// text-content with tags stripped). Authoritative source for the
+	// training corpus; the XML comment inside the applied wrapper is
+	// a curator-inspection hint, not the source of truth.
+	Text string `json:"text"`
+	// PDFPage is the source page hosting the removed text (from the
+	// element's hive:pdf-page attribute, when set). Zero means
+	// unknown.
+	PDFPage int `json:"pdf_page,omitempty"`
+	// Reason lets the curator record why the removal was needed
+	// ("running header", "watermark", "editorial artifact"). Feeds
+	// per-cause aggregate stats and future auto-classification
+	// hints for the extraction model. Empty when the curator didn't
+	// pick a reason.
+	Reason string `json:"reason,omitempty"`
 }

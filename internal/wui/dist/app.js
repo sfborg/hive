@@ -14789,6 +14789,14 @@ class SfgaReferences extends LitElement {
         });
         return;
       }
+      if (d.type === "hive:remove-text" && d.text && this._current) {
+        this._postTextRemoveCorrection({
+          sha: d.sha || currentSha,
+          text: d.text,
+          pdfPage: d.pdfPage || 0,
+        });
+        return;
+      }
     };
     window.addEventListener("message", this._onReaderMessage);
     await this._fetchPage(true);
@@ -15761,6 +15769,55 @@ class SfgaReferences extends LitElement {
     }
   }
 
+  // _setActiveTool switches the active correction tool and broadcasts
+  // the new state to the reader iframe so it can activate the
+  // matching interaction mode (e.g. hover-highlight paragraphs when
+  // text-remove goes active, cursor style, click-to-target). The PDF
+  // viewer picks up its own tool state via the .mode property binding
+  // in the render tree — no message needed there.
+  _setActiveTool(tool) {
+    this._activeTool = tool;
+    const iframes = this.renderRoot?.querySelectorAll("iframe.pane.reader") || [];
+    for (const iframe of iframes) {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.postMessage(
+          { type: "hive:set-tool", tool },
+          "*",
+        );
+      }
+    }
+  }
+
+  // _postTextRemoveCorrection posts a text-remove correction for a
+  // paragraph the curator flagged via the reader's remove-text tool.
+  // Payload carries the paragraph's exact text (authoritative training-
+  // data source) and pdf_page hint (disambiguates identical noise text
+  // repeated on multiple pages). Applier finds the matching <p> by
+  // text-content match and wraps it in <hive:noise>.
+  async _postTextRemoveCorrection({ sha, text, pdfPage }) {
+    if (!sha || !text || !this._current) return;
+    try {
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "text-remove",
+          content_type: "text",
+          payload: JSON.stringify({ text, pdf_page: pdfPage || 0 }),
+        }),
+      });
+      if (r.ok) {
+        await this._fetchCorrections(this._current.id);
+        this._reloadReaderIframe();
+      }
+    } catch (err) {
+      // Same swallow pattern as _postRefMergeCorrection — the tool is
+      // one-shot per click, curator can retry.
+    }
+  }
+
   // _reloadReaderIframe forces the reader pane to re-fetch its
   // sidecar so the JATS mutation (new fig/table-wrap added by the
   // just-saved correction) becomes visible. Simplest reliable
@@ -16276,7 +16333,20 @@ class SfgaReferences extends LitElement {
               <div class="digitize-grid">
                 <div class="reader-column">
                   <div class="reader-toolbar" role="toolbar" aria-label="Reader tools">
-                    <span class="toolbar-hint">Reader tools land here.</span>
+                    <button
+                      type="button"
+                      class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
+                      aria-pressed=${this._activeTool === "read"}
+                      title="Read — no active reader-side correction tool"
+                      @click=${() => this._setActiveTool("read")}
+                    >Read</button>
+                    <button
+                      type="button"
+                      class=${"tool-btn" + (this._activeTool === "text-remove" ? " active" : "")}
+                      aria-pressed=${this._activeTool === "text-remove"}
+                      title="Remove noise — click a paragraph in the reader to remove header/footer text GROBID pulled into the body"
+                      @click=${() => this._setActiveTool("text-remove")}
+                    >Remove noise</button>
                   </div>
                   <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
                 </div>
@@ -16287,14 +16357,14 @@ class SfgaReferences extends LitElement {
                       class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
                       aria-pressed=${this._activeTool === "read"}
                       title="Read — no active correction tool"
-                      @click=${() => (this._activeTool = "read")}
+                      @click=${() => this._setActiveTool("read")}
                     >Read</button>
                     <button
                       type="button"
                       class=${"tool-btn" + (this._activeTool === "bbox" ? " active" : "")}
                       aria-pressed=${this._activeTool === "bbox"}
                       title="BBox — click and drag on the PDF to mark a missed figure or table"
-                      @click=${() => (this._activeTool = "bbox")}
+                      @click=${() => this._setActiveTool("bbox")}
                     >BBox</button>
                   </div>
                   ${this._renderChipStrip()}

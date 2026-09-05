@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/sfborg/hive/pkg/correction"
@@ -28,6 +29,7 @@ func Appliers() []hiveext.CorrectionApplier {
 		bboxRemoveApplier{},
 		refMergeApplier{},
 		refEditApplier{},
+		textRemoveApplier{},
 	}
 }
 
@@ -64,6 +66,13 @@ type refEditApplier struct{}
 func (refEditApplier) Kind() correction.Kind { return correction.KindRefEdit }
 func (refEditApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
 	return ApplyRefEditToJATS(jats, c)
+}
+
+type textRemoveApplier struct{}
+
+func (textRemoveApplier) Kind() correction.Kind { return correction.KindTextRemove }
+func (textRemoveApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
+	return ApplyTextRemoveToJATS(jats, c)
 }
 
 // ApplyBBoxModifyToJATS patches the element identified by
@@ -874,4 +883,166 @@ func findMatchingCloseSec(src []byte, start int) int {
 		i = absClose + len(closeTag)
 	}
 	return -1
+}
+
+// ApplyTextRemoveToJATS finds a body element whose text content
+// matches the payload's Text (normalized whitespace) and replaces it
+// with a <hive:noise correction-id="…"> wrapper carrying the same
+// text inside an XML comment. Generic renderers see nothing (comments
+// are parser-erased); hive-aware tools correlate correction-id back
+// to the hive__extraction_correction row.
+//
+// Matching is by content rather than element id because jatsconv
+// doesn't emit ids on body paragraphs today, and text-content match
+// is more re-import-robust anyway: GROBID's noise text (running
+// headers, watermarks) is deterministic across re-runs even when
+// paragraph positions shift. When PDFPage is set in the payload, the
+// match is narrowed to paragraphs near a <hive:page-break page="N"/>
+// marker with the matching page number.
+//
+// Idempotent: skips wrapping when the match is already a
+// <hive:noise> element (a re-apply pass) or when no match is found
+// (a re-import stripped the noise).
+func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindTextRemove {
+		return nil, fmt.Errorf("apply text-remove: expected text-remove kind, got %s", c.Kind)
+	}
+	if c.Payload == "" || c.Payload == "{}" {
+		return nil, fmt.Errorf("apply text-remove: payload with text required")
+	}
+	var payload correction.TextRemovePayload
+	if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
+		return nil, fmt.Errorf("apply text-remove: parse payload: %w", err)
+	}
+	if strings.TrimSpace(payload.Text) == "" {
+		return nil, fmt.Errorf("apply text-remove: payload.text required")
+	}
+	openIdx, closeIdx, ok := findParagraphByText(jats, payload.Text, payload.PDFPage)
+	if !ok {
+		return jats, nil
+	}
+	wrapper := renderNoiseWrapper(c.ID, payload.Text)
+	var out bytes.Buffer
+	out.Grow(len(jats) + len(wrapper) - (closeIdx - openIdx))
+	out.Write(jats[:openIdx])
+	out.WriteString(wrapper)
+	out.Write(jats[closeIdx:])
+	return out.Bytes(), nil
+}
+
+// pTagOpenRegex matches the opening <p ...> tag of a body paragraph.
+// Includes any attributes but skips <p> tags that are already hive-
+// namespaced (hive:page-break wrappers have content-type set) so the
+// paragraph scan doesn't mistake infrastructure markup for prose.
+var pTagOpenRegex = regexp.MustCompile(`<p\b([^>]*)>`)
+
+// findParagraphByText walks every <p>…</p> in the JATS looking for
+// one whose normalized text content equals wantText. When pdfPage is
+// non-zero, the match is filtered to paragraphs whose immediately
+// preceding <hive:page-break page="N"/> marker (or the paragraph's
+// own hive:pdf-page attribute) matches pdfPage — resolves ambiguity
+// when identical noise text appears on multiple pages.
+//
+// Returns the byte range of the matched element (opening '<' through
+// closing '>') so the caller can splice in a wrapper.
+func findParagraphByText(jats []byte, wantText string, pdfPage int) (openIdx, closeIdx int, ok bool) {
+	wantNormalized := collapseWhitespace(strings.TrimSpace(wantText))
+	if wantNormalized == "" {
+		return 0, 0, false
+	}
+	pageBreakRe := regexp.MustCompile(`<hive:page-break\s+page="(\d+)"`)
+	pos := 0
+	for pos < len(jats) {
+		nextP := pTagOpenRegex.FindIndex(jats[pos:])
+		if nextP == nil {
+			return 0, 0, false
+		}
+		absStart := pos + nextP[0]
+		absOpenEnd := pos + nextP[1]
+		closeStart := bytes.Index(jats[absOpenEnd:], []byte("</p>"))
+		if closeStart < 0 {
+			return 0, 0, false
+		}
+		absCloseEnd := absOpenEnd + closeStart + len("</p>")
+		// Skip infrastructure paragraphs (hive:page-break wrappers)
+		// so they don't get scanned as content candidates.
+		if bytes.Contains(jats[absStart:absOpenEnd], []byte(`content-type="hive-page-break"`)) {
+			pos = absCloseEnd
+			continue
+		}
+		content := stripXMLTags(jats[absOpenEnd : absCloseEnd-len("</p>")])
+		gotNormalized := collapseWhitespace(strings.TrimSpace(content))
+		if gotNormalized == wantNormalized {
+			if pdfPage == 0 {
+				return absStart, absCloseEnd, true
+			}
+			// Recover the current page from the last page-break
+			// marker preceding this paragraph. Cheap for typical
+			// papers (dozens of markers) and avoids threading page
+			// state through the outer loop where infrastructure
+			// paragraph skips would otherwise miss them.
+			currentPage := 0
+			for _, m := range pageBreakRe.FindAllSubmatchIndex(jats[:absStart], -1) {
+				if n, err := strconv.Atoi(string(jats[m[2]:m[3]])); err == nil {
+					currentPage = n
+				}
+			}
+			if currentPage == pdfPage {
+				return absStart, absCloseEnd, true
+			}
+		}
+		pos = absCloseEnd
+	}
+	return 0, 0, false
+}
+
+// renderNoiseWrapper produces the <hive:noise correction-id="…">
+// element that replaces a text-remove target. The original text goes
+// inside an XML comment so every generic renderer drops it; hive-aware
+// tools inspect the wrapper by correction-id.
+//
+// XML comments can't contain the "--" sequence. Sanitize by inserting
+// a zero-width space between adjacent hyphens — invisible to human
+// inspection, reversible for any tool that wants exact bytes (though
+// the authoritative source is the correction row's payload).
+func renderNoiseWrapper(correctionID, originalText string) string {
+	// Trim + normalize whitespace for the hint. Long headers get
+	// truncated so the comment doesn't balloon; the full text is
+	// always in the correction row's payload.
+	hint := strings.TrimSpace(originalText)
+	hint = collapseWhitespace(hint)
+	const maxHint = 200
+	if len(hint) > maxHint {
+		hint = hint[:maxHint] + "…"
+	}
+	// Escape "--" per the XML spec's ban on double-hyphen inside
+	// comments. Zero-width space (U+200B) between the two hyphens
+	// leaves the sequence recognizable but no longer a syntax
+	// collision.
+	hint = strings.ReplaceAll(hint, "--", "-​-")
+	// A trailing hyphen would make the closing "-->" a triple-hyphen
+	// sequence; the XML spec bans "---" too when it ends a comment.
+	// Guard by inserting a trailing space when needed.
+	if strings.HasSuffix(hint, "-") {
+		hint += " "
+	}
+	return fmt.Sprintf(`<hive:noise correction-id="%s"><!-- %s --></hive:noise>`,
+		correction.XMLEscape(correctionID), hint)
+}
+
+// stripXMLTags removes all XML tags from a byte slice and returns the
+// text content. Used as a fallback when a text-remove correction
+// arrives without a payload — the applier reads the current element
+// content directly so the wrapper still carries a hint.
+func stripXMLTags(src []byte) string {
+	re := regexp.MustCompile(`<[^>]+>`)
+	return string(re.ReplaceAll(src, []byte("")))
+}
+
+// collapseWhitespace normalizes runs of whitespace to a single space.
+// Keeps the noise-comment hint readable regardless of how the source
+// element wrapped its text.
+func collapseWhitespace(s string) string {
+	re := regexp.MustCompile(`\s+`)
+	return re.ReplaceAllString(s, " ")
 }

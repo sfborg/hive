@@ -2,6 +2,7 @@ package hive
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -177,5 +178,110 @@ func TestApplyBBoxAddRejectsBadContentType(t *testing.T) {
 	}
 	if _, err := refmanager.ApplyBBoxAddToJATS(jats, c); err == nil {
 		t.Errorf("expected error for content_type=abstract, got nil")
+	}
+}
+
+// TestApplyTextRemoveWrapsMatchingParagraph covers the common case:
+// a body paragraph whose text matches the payload gets replaced by a
+// <hive:noise> wrapper carrying the original text inside a comment.
+// Untouched paragraphs stay put.
+func TestApplyTextRemoveWrapsMatchingParagraph(t *testing.T) {
+	jats := []byte(`<article><body>
+<p>Real body content that should stay.</p>
+<p>Journal of Taxonomy Vol. 60</p>
+<p>More real content here.</p>
+</body></article>`)
+	payload, _ := json.Marshal(correction.TextRemovePayload{
+		Text: "Journal of Taxonomy Vol. 60",
+	})
+	c := &correction.Correction{
+		ID:      "c-abc123",
+		Kind:    correction.KindTextRemove,
+		Payload: string(payload),
+	}
+	out, err := refmanager.ApplyTextRemoveToJATS(jats, c)
+	if err != nil {
+		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `<hive:noise correction-id="c-abc123">`) {
+		t.Errorf("missing hive:noise wrapper:\n%s", got)
+	}
+	if !strings.Contains(got, `<!-- Journal of Taxonomy Vol. 60 -->`) {
+		t.Errorf("missing text hint in comment:\n%s", got)
+	}
+	if strings.Contains(got, `<p>Journal of Taxonomy Vol. 60</p>`) {
+		t.Errorf("original <p> should be replaced:\n%s", got)
+	}
+	if !strings.Contains(got, `<p>Real body content that should stay.</p>`) {
+		t.Errorf("unrelated paragraph should be untouched:\n%s", got)
+	}
+}
+
+// TestApplyTextRemoveDisambiguatesByPage covers papers where the
+// same running-header text appears on multiple pages: pdf_page in
+// the payload narrows the match to the intended occurrence.
+func TestApplyTextRemoveDisambiguatesByPage(t *testing.T) {
+	jats := []byte(`<article><body>
+<p content-type="hive-page-break"><hive:page-break page="1"/></p>
+<p>Header text</p>
+<p>Body on page 1.</p>
+<p content-type="hive-page-break"><hive:page-break page="2"/></p>
+<p>Header text</p>
+<p>Body on page 2.</p>
+</body></article>`)
+	payload, _ := json.Marshal(correction.TextRemovePayload{
+		Text:    "Header text",
+		PDFPage: 2,
+	})
+	c := &correction.Correction{
+		ID:      "c-page2",
+		Kind:    correction.KindTextRemove,
+		Payload: string(payload),
+	}
+	out, err := refmanager.ApplyTextRemoveToJATS(jats, c)
+	if err != nil {
+		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
+	}
+	got := string(out)
+	wrapIdx := strings.Index(got, `<hive:noise correction-id="c-page2">`)
+	page2Idx := strings.Index(got, `page="2"`)
+	if wrapIdx < 0 || wrapIdx < page2Idx {
+		t.Errorf("wrapper should appear after page 2 marker:\nwrap=%d page2=%d\n%s",
+			wrapIdx, page2Idx, got)
+	}
+	// The page-1 occurrence should still be a plain <p>.
+	if strings.Count(got, `<p>Header text</p>`) != 1 {
+		t.Errorf("expected page-1 Header text unchanged:\n%s", got)
+	}
+}
+
+// TestApplyTextRemoveSanitizesDoubleHyphenInHint ensures the comment
+// stays valid XML when the removed text contains "--" — sanitized
+// with a zero-width space between the hyphens.
+func TestApplyTextRemoveSanitizesDoubleHyphenInHint(t *testing.T) {
+	jats := []byte(`<article><body>
+<p>Author -- Title -- Journal</p>
+</body></article>`)
+	payload, _ := json.Marshal(correction.TextRemovePayload{
+		Text: "Author -- Title -- Journal",
+	})
+	c := &correction.Correction{
+		ID:      "c-hyphen",
+		Kind:    correction.KindTextRemove,
+		Payload: string(payload),
+	}
+	out, err := refmanager.ApplyTextRemoveToJATS(jats, c)
+	if err != nil {
+		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
+	}
+	got := string(out)
+	// The literal "--" should not appear inside a hive:noise comment
+	// (would produce invalid XML).
+	if strings.Contains(got, `<!-- Author -- Title`) {
+		t.Errorf("literal -- inside comment breaks XML:\n%s", got)
+	}
+	if !strings.Contains(got, `<hive:noise correction-id="c-hyphen">`) {
+		t.Errorf("missing wrapper:\n%s", got)
 	}
 }
