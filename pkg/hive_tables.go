@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS hive__extraction_correction (
 	correction_kind    TEXT NOT NULL
 	                     CHECK (correction_kind IN
 	                       ('bbox-add', 'bbox-modify', 'bbox-remove',
-	                        'text-tag', 'text-remove',
+	                        'text-tag', 'text-remove', 'text-restore',
 	                        'xref-fix', 'chip-feedback',
 	                        'ref-merge', 'ref-edit')),
 	content_type       TEXT NOT NULL,
@@ -749,7 +749,7 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 	// Probe with the newest correction kind — the rebuild target
 	// includes every kind up through today, so any archive whose
 	// CHECK doesn't accept the newest kind needs rebuilding.
-	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "text-remove")
+	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "text-restore")
 	if err != nil {
 		return err
 	}
@@ -764,7 +764,7 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 				correction_kind    TEXT NOT NULL
 				                     CHECK (correction_kind IN
 				                       ('bbox-add', 'bbox-modify', 'bbox-remove',
-				                        'text-tag', 'text-remove',
+				                        'text-tag', 'text-remove', 'text-restore',
 				                        'xref-fix', 'chip-feedback',
 				                        'ref-merge', 'ref-edit')),
 				content_type       TEXT NOT NULL,

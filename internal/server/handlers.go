@@ -2731,6 +2731,14 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		if body.ContentType == "" {
 			body.ContentType = "text"
 		}
+	case string(correction.KindTextRestore):
+		if body.Payload == "" || body.Payload == "{}" {
+			writeBadRequest(w, r, "payload with remove_correction_id required for text-restore")
+			return
+		}
+		if body.ContentType == "" {
+			body.ContentType = "text"
+		}
 	default:
 		writeBadRequest(w, r, "unsupported correction kind: "+body.Kind)
 		return

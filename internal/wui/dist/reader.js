@@ -323,6 +323,32 @@ class SfgaReader extends LitElement {
       color: var(--sev-warn);
       font-weight: bold;
     }
+    /* Inline marker for an applied text-remove correction. Compact
+       red dot the curator can hover to see the removed text
+       (native title tooltip) and click to restore. Kept small so it
+       doesn't disrupt reading flow; interactive affordances only
+       fire on the marker itself, not adjacent text. */
+    .hive-noise-marker {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      line-height: 1em;
+      text-align: center;
+      margin: 0 0.15em;
+      padding: 0 0.1em;
+      border-radius: 50%;
+      background: var(--sev-err);
+      color: var(--bg);
+      font-weight: bold;
+      cursor: pointer;
+      vertical-align: middle;
+      user-select: none;
+    }
+    .hive-noise-marker:hover,
+    .hive-noise-marker:focus-visible {
+      outline: 2px solid color-mix(in oklab, var(--sev-err) 40%, transparent);
+      outline-offset: 2px;
+    }
     /* Page-break divider — horizontal dashed line with the
        journal-labeled source-PDF page number sitting mid-line.
        Curators cite by that page for ZooBank / ICZN references.
@@ -1942,6 +1968,15 @@ class SfgaReader extends LitElement {
         out.push(this._renderTaxonName(node));
         continue;
       }
+      // <hive:noise> — a text-remove correction's applied wrapper.
+      // Renders as a compact red-dot marker sitting where the noise
+      // used to be. Tooltip carries the removed text so curators
+      // can verify without opening anything; click sends a
+      // hive:restore-text postMessage that stages the un-remove.
+      if (node.prefix === "hive" && local === "noise") {
+        out.push(this._renderNoiseMarker(node));
+        continue;
+      }
       // <title> is a section (or ref-list / fig / table-wrap)
       // heading in JATS. Article/journal titles live under
       // <front> and never reach _renderNodes.
@@ -2933,6 +2968,73 @@ class SfgaReader extends LitElement {
     const table = this._directChild(tableWrap, "table");
     if (!table) return nothing;
     return html`<table>${this._renderNodes(table.childNodes)}</table>`;
+  }
+
+  // _renderNoiseMarker renders a <hive:noise correction-id="…">
+  // element as a compact red-dot marker. The marker sits inline
+  // where the removed paragraph used to be, so a curator sees at a
+  // glance that noise was removed at that spot. Tooltip carries the
+  // removed text (recovered from the child XML comment) so the
+  // curator can verify without opening a modal. Click stages an
+  // un-remove by sending hive:restore-text to the shell.
+  //
+  // Standalone reader (no parent shell): the marker still renders
+  // but the click is a no-op with a console warning — restoring a
+  // removal needs the correction context the shell holds.
+  _renderNoiseMarker(el) {
+    const correctionID = el.getAttribute("correction-id") || "";
+    // The child comment is the removed-text hint. commentText is
+    // the plain-text bytes between "<!--" and "-->". Reverse the
+    // hyphen-ZWSP-hyphen sanitize so tooltips read naturally.
+    let removedText = "";
+    for (const child of el.childNodes) {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        removedText = (child.nodeValue || "").trim();
+        removedText = removedText.replace(/-​-/g, "--");
+        break;
+      }
+    }
+    const title = removedText
+      ? "Removed: " + removedText + "\nClick to restore"
+      : "Removed noise — click to restore";
+    return html`<span
+      class="hive-noise-marker"
+      role="button"
+      tabindex="0"
+      title=${title}
+      data-correction-id=${correctionID}
+      @click=${(e) => {
+        e.stopPropagation();
+        this._restoreNoise(correctionID);
+      }}
+      @keydown=${(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          this._restoreNoise(correctionID);
+        }
+      }}
+    >·</span>`;
+  }
+
+  // _restoreNoise asks the shell to post a text-restore correction
+  // for the given remove-correction id. The shell owns the fetch
+  // (it has the archive context + reference id); the reader stays a
+  // pure viewer.
+  _restoreNoise(removeCorrectionID) {
+    if (!removeCorrectionID) return;
+    if (!(window.parent && window.parent !== window)) {
+      // eslint-disable-next-line no-console
+      console.warn("restore-text requires the shell — open via References tab");
+      return;
+    }
+    window.parent.postMessage(
+      {
+        type: "hive:restore-text",
+        sha: this._sha,
+        removeCorrectionID,
+      },
+      "*",
+    );
   }
 
   // _renderTaxonName renders a <tp:taxon-name> as a styled chip.

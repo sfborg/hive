@@ -30,6 +30,7 @@ func Appliers() []hiveext.CorrectionApplier {
 		refMergeApplier{},
 		refEditApplier{},
 		textRemoveApplier{},
+		textRestoreApplier{},
 	}
 }
 
@@ -73,6 +74,13 @@ type textRemoveApplier struct{}
 func (textRemoveApplier) Kind() correction.Kind { return correction.KindTextRemove }
 func (textRemoveApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
 	return ApplyTextRemoveToJATS(jats, c)
+}
+
+type textRestoreApplier struct{}
+
+func (textRestoreApplier) Kind() correction.Kind { return correction.KindTextRestore }
+func (textRestoreApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
+	return ApplyTextRestoreToJATS(jats, c)
 }
 
 // ApplyBBoxModifyToJATS patches the element identified by
@@ -1045,4 +1053,91 @@ func stripXMLTags(src []byte) string {
 func collapseWhitespace(s string) string {
 	re := regexp.MustCompile(`\s+`)
 	return re.ReplaceAllString(s, " ")
+}
+
+// ApplyTextRestoreToJATS reverses a text-remove correction: locates
+// the <hive:noise correction-id="…"> wrapper produced by the referenced
+// text-remove correction and unwraps it back to a <p> containing the
+// original text (recovered from the XML comment inside the wrapper).
+//
+// The two-correction shape ("remove then restore") is deliberate —
+// the pair is preserved as training-corpus signal that the curator
+// changed their mind, which is useful for calibrating the eventual
+// noise-detection model. Callers that want the removal simply gone
+// from the DB should use DeleteCorrection on the text-remove row
+// instead; this applier is for the in-JATS reversal.
+//
+// Idempotent: returns the JATS unchanged when the referenced
+// hive:noise wrapper is absent (either the original text-remove
+// hadn't been applied yet, or a prior restore already unwrapped it).
+func ApplyTextRestoreToJATS(jats []byte, c *correction.Correction) ([]byte, error) {
+	if c.Kind != correction.KindTextRestore {
+		return nil, fmt.Errorf("apply text-restore: expected text-restore kind, got %s", c.Kind)
+	}
+	if c.Payload == "" || c.Payload == "{}" {
+		return nil, fmt.Errorf("apply text-restore: payload with remove_correction_id required")
+	}
+	var payload correction.TextRestorePayload
+	if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
+		return nil, fmt.Errorf("apply text-restore: parse payload: %w", err)
+	}
+	if payload.RemoveCorrectionID == "" {
+		return nil, fmt.Errorf("apply text-restore: payload.remove_correction_id required")
+	}
+	openIdx, closeIdx, original, ok := findNoiseWrapper(jats, payload.RemoveCorrectionID)
+	if !ok {
+		return jats, nil
+	}
+	replacement := "<p>" + correction.XMLEscape(original) + "</p>"
+	var out bytes.Buffer
+	out.Grow(len(jats) + len(replacement) - (closeIdx - openIdx))
+	out.Write(jats[:openIdx])
+	out.WriteString(replacement)
+	out.Write(jats[closeIdx:])
+	return out.Bytes(), nil
+}
+
+// noiseWrapperRegex matches the opening tag of a hive:noise wrapper
+// keyed by correction-id. Capture group 1 is the whole opening tag
+// span (so callers know where the element starts).
+var noiseWrapperRegex = regexp.MustCompile(
+	`<hive:noise\s+correction-id="([^"]+)"\s*>`)
+
+// findNoiseWrapper locates the <hive:noise correction-id="X"> element
+// matching the given correction id, returning its byte range and the
+// original text recovered from the XML comment inside. Reverses the
+// -/ZWSP/- escape renderNoiseWrapper applies so the recovered text is
+// the original bytes (modulo the safe-hint truncation the wrapper's
+// comment carried — which is why callers targeting exact-bytes
+// training-data should read the text-remove correction's payload
+// rather than the wrapper).
+func findNoiseWrapper(jats []byte, removeCorrectionID string) (openIdx, closeIdx int, original string, ok bool) {
+	pattern := `<hive:noise\s+correction-id="` + regexp.QuoteMeta(removeCorrectionID) + `"\s*>`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return 0, 0, "", false
+	}
+	loc := re.FindIndex(jats)
+	if loc == nil {
+		return 0, 0, "", false
+	}
+	closeTag := []byte("</hive:noise>")
+	closeStart := bytes.Index(jats[loc[1]:], closeTag)
+	if closeStart < 0 {
+		return 0, 0, "", false
+	}
+	inner := jats[loc[1] : loc[1]+closeStart]
+	// The wrapper's child is a single XML comment; strip the
+	// "<!--" and "-->" delimiters and the sanitize-escape ZWSP so
+	// the recovered text reads naturally.
+	commentText := ""
+	if commentOpen := bytes.Index(inner, []byte("<!--")); commentOpen >= 0 {
+		commentClose := bytes.Index(inner[commentOpen:], []byte("-->"))
+		if commentClose >= 0 {
+			raw := inner[commentOpen+4 : commentOpen+commentClose]
+			commentText = strings.TrimSpace(string(raw))
+			commentText = strings.ReplaceAll(commentText, "-​-", "--")
+		}
+	}
+	return loc[0], loc[1] + closeStart + len(closeTag), commentText, true
 }

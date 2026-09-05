@@ -56,7 +56,16 @@ const (
 	// tooling correlates the wrapper's correction-id back to the
 	// hive__extraction_correction row for un-remove + training-data
 	// export.
-	KindTextRemove   Kind = "text-remove"
+	KindTextRemove Kind = "text-remove"
+	// KindTextRestore reverses a KindTextRemove: finds the
+	// <hive:noise correction-id="…"> wrapper for the referenced
+	// text-remove correction and unwraps it back to a <p> holding
+	// the original text (recovered from the comment inside). Kept as
+	// a first-class correction rather than a delete-and-regenerate
+	// so the audit trail records "curator marked as noise, then
+	// unmarked" — signal for the training corpus that the removal
+	// was not confidently correct.
+	KindTextRestore  Kind = "text-restore"
 	KindXrefFix      Kind = "xref-fix"
 	KindChipFeedback Kind = "chip-feedback"
 	// KindRefMerge merges a spurious <ref> into the previous one.
@@ -206,4 +215,16 @@ type TextRemovePayload struct {
 	// hints for the extraction model. Empty when the curator didn't
 	// pick a reason.
 	Reason string `json:"reason,omitempty"`
+}
+
+// TextRestorePayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'text-restore'. Points back at the text-remove correction whose
+// wrapper the restore un-wraps.
+type TextRestorePayload struct {
+	// RemoveCorrectionID identifies the text-remove correction the
+	// curator is reversing. The applier finds the corresponding
+	// <hive:noise correction-id="…"> element in the sidecar and
+	// unwraps it.
+	RemoveCorrectionID string `json:"remove_correction_id"`
 }

@@ -1,6 +1,7 @@
 package hive
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
@@ -283,5 +284,75 @@ func TestApplyTextRemoveSanitizesDoubleHyphenInHint(t *testing.T) {
 	}
 	if !strings.Contains(got, `<hive:noise correction-id="c-hyphen">`) {
 		t.Errorf("missing wrapper:\n%s", got)
+	}
+}
+
+// TestApplyTextRestoreRoundTrip covers the remove + restore pair:
+// applying a text-remove wraps the paragraph in <hive:noise>, then
+// applying a text-restore targeting the same correction id unwraps
+// the noise back to a <p> with the original text.
+func TestApplyTextRestoreRoundTrip(t *testing.T) {
+	jats := []byte(`<article><body>
+<p>Journal of Taxonomy Vol. 60</p>
+<p>Real content.</p>
+</body></article>`)
+	rmPayload, _ := json.Marshal(correction.TextRemovePayload{
+		Text: "Journal of Taxonomy Vol. 60",
+	})
+	rm := &correction.Correction{
+		ID:      "c-rm",
+		Kind:    correction.KindTextRemove,
+		Payload: string(rmPayload),
+	}
+	afterRemove, err := refmanager.ApplyTextRemoveToJATS(jats, rm)
+	if err != nil {
+		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
+	}
+	if !strings.Contains(string(afterRemove), `<hive:noise correction-id="c-rm">`) {
+		t.Fatalf("remove didn't wrap:\n%s", afterRemove)
+	}
+	rsPayload, _ := json.Marshal(correction.TextRestorePayload{
+		RemoveCorrectionID: "c-rm",
+	})
+	rs := &correction.Correction{
+		ID:      "c-rs",
+		Kind:    correction.KindTextRestore,
+		Payload: string(rsPayload),
+	}
+	afterRestore, err := refmanager.ApplyTextRestoreToJATS(afterRemove, rs)
+	if err != nil {
+		t.Fatalf("ApplyTextRestoreToJATS: %v", err)
+	}
+	got := string(afterRestore)
+	if strings.Contains(got, "hive:noise") {
+		t.Errorf("restore should have unwrapped the noise element:\n%s", got)
+	}
+	if !strings.Contains(got, `<p>Journal of Taxonomy Vol. 60</p>`) {
+		t.Errorf("restore should have brought back original paragraph:\n%s", got)
+	}
+}
+
+// TestApplyTextRestoreIdempotentWhenAlreadyUnwrapped covers the
+// re-apply case: a text-restore whose target hive:noise is absent
+// (already unwrapped by a prior apply pass, or the text-remove was
+// never applied) returns the JATS unchanged rather than erroring.
+func TestApplyTextRestoreIdempotentWhenAlreadyUnwrapped(t *testing.T) {
+	jats := []byte(`<article><body>
+<p>Nothing wrapped in here.</p>
+</body></article>`)
+	rsPayload, _ := json.Marshal(correction.TextRestorePayload{
+		RemoveCorrectionID: "c-missing",
+	})
+	rs := &correction.Correction{
+		ID:      "c-rs",
+		Kind:    correction.KindTextRestore,
+		Payload: string(rsPayload),
+	}
+	out, err := refmanager.ApplyTextRestoreToJATS(jats, rs)
+	if err != nil {
+		t.Fatalf("ApplyTextRestoreToJATS: %v", err)
+	}
+	if !bytes.Equal(out, jats) {
+		t.Errorf("expected unchanged JATS, got:\n%s", out)
 	}
 }

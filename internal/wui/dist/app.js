@@ -14797,6 +14797,13 @@ class SfgaReferences extends LitElement {
         });
         return;
       }
+      if (d.type === "hive:restore-text" && d.removeCorrectionID && this._current) {
+        this._postTextRestoreCorrection({
+          sha: d.sha || currentSha,
+          removeCorrectionID: d.removeCorrectionID,
+        });
+        return;
+      }
     };
     window.addEventListener("message", this._onReaderMessage);
     await this._fetchPage(true);
@@ -15785,6 +15792,36 @@ class SfgaReferences extends LitElement {
           "*",
         );
       }
+    }
+  }
+
+  // _postTextRestoreCorrection posts a text-restore correction that
+  // reverses a prior text-remove. Triggered by clicking the inline
+  // red-dot marker in the reader. The pair (remove + restore) stays
+  // in the audit log as training-corpus signal that the curator
+  // changed their mind about the removal.
+  async _postTextRestoreCorrection({ sha, removeCorrectionID }) {
+    if (!sha || !removeCorrectionID || !this._current) return;
+    try {
+      const r = await fetch("/api/reference/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "text-restore",
+          content_type: "text",
+          payload: JSON.stringify({
+            remove_correction_id: removeCorrectionID,
+          }),
+        }),
+      });
+      if (r.ok) {
+        await this._fetchCorrections(this._current.id);
+        this._reloadReaderIframe();
+      }
+    } catch (err) {
+      // Same swallow pattern as _postRefMergeCorrection.
     }
   }
 
