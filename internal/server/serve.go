@@ -23,6 +23,8 @@ import (
 	"github.com/sfborg/hive/internal/wui"
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/config"
+	"github.com/sfborg/hive/pkg/llm"
+	"github.com/sfborg/hive/pkg/prompts"
 	"github.com/sfborg/hive/pkg/refmanager"
 	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
@@ -59,6 +61,80 @@ type Options struct {
 
 // Run opens the archive and blocks serving HTTP until the process receives
 // SIGINT/SIGTERM (or the listener errors).
+//
+// @title           hive API
+// @version         0.1
+// @description     REST API for the hive taxonomic editor. Reads and writes
+// @description     an sfga SQLite archive of taxonomic names, references,
+// @description     and supporting data. Regenerate this spec with `just openapi`.
+// @termsOfService  https://github.com/sfborg/hive
+//
+// @contact.name    hive maintainers
+// @contact.url     https://github.com/sfborg/hive
+//
+// @license.name    MIT
+// @license.url     https://github.com/sfborg/hive/blob/main/LICENSE
+//
+// @host            localhost:2365
+// @BasePath        /api
+// @schemes         http
+//
+// @tag.name  system
+// @tag.description  Health, archive metadata, keymap, shared vocabularies.
+//
+// @tag.name  taxa
+// @tag.description  Read + write the taxon tree, ancestors, classifications, moves.
+//
+// @tag.name  names
+// @tag.description  Scientific-name search, parse, patch, relations, dependencies.
+//
+// @tag.name  synonyms
+// @tag.description  Synonym add/move/delete, pro-parte relationships.
+//
+// @tag.name  references
+// @tag.description  Reference CRUD, DOI/OpenAlex/BHLnames/BibTeX lookup, PDF upload/library, JATS conversion, corrections.
+//
+// @tag.name  vernaculars
+// @tag.description  Vernacular-name CRUD scoped to a taxon.
+//
+// @tag.name  distributions
+// @tag.description  Geographic distribution CRUD scoped to a taxon.
+//
+// @tag.name  species-interactions
+// @tag.description  Species-interaction CRUD (predator/host/pollinator/etc).
+//
+// @tag.name  type-materials
+// @tag.description  Type-material CRUD scoped to a name.
+//
+// @tag.name  name-relations
+// @tag.description  Name-relation CRUD (original combination, homonym, etc).
+//
+// @tag.name  agents
+// @tag.description  Role-scoped agent CRUD (creator/contact/editor/contributor/publisher).
+//
+// @tag.name  metadata
+// @tag.description  Archive-level metadata (title, description, license, logo).
+//
+// @tag.name  issues
+// @tag.description  Validation issues (soft warnings) and rule reindex.
+//
+// @tag.name  vocab
+// @tag.description  Controlled vocabularies (rank, code, status, NOMEN, countries, etc).
+//
+// @tag.name  llm
+// @tag.description  Provider management + prompt invocation for LLM-assisted extraction.
+//
+// @tag.name  prompts
+// @tag.description  Prompt library CRUD (system/user prompt templates for LLM runs).
+//
+// @tag.name  assertions
+// @tag.description  Curator review of LLM-extracted assertions staged on references.
+//
+// @tag.name  test-set
+// @tag.description  Gold-standard test-set membership for evaluation runs.
+//
+// @tag.name  docs
+// @tag.description  OpenAPI spec + RapiDoc viewer.
 func Run(archivePath string, opts Options) error {
 	openOpts := []hive.OpenOption{
 		hive.WithLookup(refmanager.LookupProviders(refmanager.LookupConfig{
@@ -116,6 +192,31 @@ func Run(archivePath string, opts Options) error {
 	// annotation call so a hive process that never receives a PDF
 	// upload doesn't pay the cost.
 	s.annotator = annotator.New()
+
+	// LLM invocation runner. Assembled from the user config's
+	// llm_providers entries; each entry becomes a Provider registered
+	// under its declared name. Fails loud on any invalid entry so a
+	// config typo surfaces at startup rather than at first invocation.
+	// When no providers are configured, s.llmRunner stays nil and the
+	// /api/llm/invoke endpoint returns 400 with a clear message.
+	if cfg, cerr := config.Load(); cerr != nil {
+		return fmt.Errorf("load user config: %w", cerr)
+	} else if len(cfg.LLMProviders) > 0 {
+		reg := llm.NewRegistry()
+		for _, pc := range cfg.LLMProviders {
+			p, err := llm.NewProvider(pc)
+			if err != nil {
+				return err
+			}
+			reg.Register(p)
+		}
+		s.llmRunner = &llm.Runner{
+			Providers:  reg,
+			LoadPrompt: prompts.Load,
+		}
+		s.llmProviders = cfg.LLMProviders
+	}
+
 	mux := s.routes()
 
 	// Static WUI served from internal/wui/dist embed. The API routes above

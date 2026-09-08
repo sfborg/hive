@@ -95,6 +95,42 @@ const iconPaths = {
     <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
     <path d="M12 17h.01" />
   `,
+  // sparkles — LLM / AI feature affordance. Opens the LLM providers
+  // modal from the top-nav so curators can add/manage keys without
+  // hand-editing config.yml. Lucide's sparkles.
+  sparkles: svg`
+    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+    <path d="M20 3v4" />
+    <path d="M22 5h-4" />
+    <path d="M4 17v2" />
+    <path d="M5 18H3" />
+  `,
+  // columns-3 — multi-pane comparison affordance for the
+  // Assertions tab (paper + candidate tree A + candidate tree B).
+  // Lucide's columns-3.
+  "columns-3": svg`
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M9 3v18" />
+    <path d="M15 3v18" />
+  `,
+  // combine — Assembly sidebar view. Represents combining an
+  // extracted sector (subtree + attached facts) into the
+  // existing taxonomy tree. Lucide's combine.
+  combine: svg`
+    <path d="M10 18H5a3 3 0 0 1-3-3v-1" />
+    <path d="M14 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" />
+    <path d="M20 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" />
+    <path d="M14 14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z" />
+    <path d="M20 14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z" />
+    <path d="M14 22a2 2 0 0 0 4 0" />
+  `,
+  // flag — Revision sidebar view. Represents curator's WIP
+  // taxonomic work — a revision in progress, not yet cited to a
+  // published paper. Lucide's flag.
+  flag: svg`
+    <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+    <line x1="4" x2="4" y1="22" y2="15" />
+  `,
   // pencil — edit the selected taxon
   pencil: svg`
     <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
@@ -1487,6 +1523,7 @@ class SfgaApp extends LitElement {
     screen: { state: true },
     sidebarCollapsed: { state: true },
     helpOpen: { state: true },
+    llmProvidersOpen: { state: true },
     // Warnings from the most recent create/update, if any. Cleared
     // when the selection moves to a different taxon. See _onMoved.
     _pendingWarnings: { state: true },
@@ -1522,6 +1559,26 @@ class SfgaApp extends LitElement {
     { id: "metadata", label: "Metadata", icon: "info", key: "m" },
     { id: "taxa", label: "Taxa", icon: "network", key: "t" },
     { id: "references", label: "References", icon: "book", key: "r" },
+    // Assembly: curator promotes reviewed extraction assertions
+    // (Assertions-tab compose tree) into canonical SFGA rows.
+    // Task #182 — full implementation deferred; placeholder
+    // screen registered now so routing + keyboard shortcut are
+    // in place from the start.
+    //
+    // NOTE: Assembly moved to a per-reference workspace tab
+    // (alongside Bibliography / Digitize / Assertions) since
+    // assembly is inherently paper-scoped. Curator navigates
+    // to a reference then flips to its Assembly tab. Removed
+    // the top-level sidebar entry to avoid two paths to the
+    // same view. A future dashboard could reoccupy this slot
+    // ("papers ready to assemble") but is deferred.
+    // Revision: curator's WIP taxonomic work — new synonymies,
+    // recombinations, splits, sinkings not yet cited to a paper.
+    // Rows here have hive__source_reference_id = NULL and asserted_by
+    // = <curator ORCID>. Publish flow attaches a citation, moving
+    // the row into the reference-backed tree. See
+    // project_wip_density_prioritization memory. Task #185.
+    { id: "revision", label: "Revise", icon: "flag", key: "r" },
     { id: "issues", label: "Issues", icon: "triangle-alert", key: "i" },
   ];
 
@@ -1685,6 +1742,38 @@ class SfgaApp extends LitElement {
     .screen.references {
       grid-template-columns: 1fr;
     }
+    /* Assembly + Revision stubs share the metadata-screen shape —
+       single grid track with padding — until their real layouts
+       land. Content lives inside a .stub-view centered card. */
+    .screen.assembly,
+    .screen.revision {
+      grid-template-columns: 1fr;
+      padding: var(--sp-5);
+      overflow: auto;
+    }
+    .stub-view {
+      max-width: 40rem;
+      margin: var(--sp-6) auto;
+      padding: var(--sp-5);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+    }
+    .stub-view h2 {
+      margin: 0 0 var(--sp-3);
+      font-size: var(--fs-xl);
+      color: var(--fg);
+    }
+    .stub-view p {
+      margin: 0 0 var(--sp-3);
+      color: var(--fg);
+      line-height: 1.5;
+    }
+    .stub-view p.stub-hint {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      font-style: italic;
+    }
     aside,
     section {
       overflow: auto;
@@ -1728,6 +1817,7 @@ class SfgaApp extends LitElement {
     this.screen = "taxa";
     this.sidebarCollapsed = localStorage.getItem("hive-sidebar") === "collapsed";
     this.helpOpen = false;
+    this.llmProvidersOpen = false;
     this._pendingWarnings = null;
     this._pendingReferenceId = "";
     this._pendingWorkspaceTab = "";
@@ -2052,7 +2142,18 @@ class SfgaApp extends LitElement {
   // Unknown paths fall back to the taxa screen — safer than leaving
   // the UI in a broken state when someone shares an old-schema link.
   _syncFromHash() {
-    const raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+    let raw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+    // Split off any query-string portion (?assertion=X&foo=Y).
+    // Route-scoped params — currently used by the Assertions
+    // workspace tab to jump to a specific NER assertion after a
+    // deep-link click from the taxon-detail row-source badge.
+    let hashQuery = null;
+    const qIdx = raw.indexOf("?");
+    if (qIdx >= 0) {
+      hashQuery = new URLSearchParams(raw.slice(qIdx + 1));
+      raw = raw.slice(0, qIdx);
+    }
+    this._pendingHashQuery = hashQuery;
     const parts = raw.split("/").filter(Boolean);
     this._syncingFromHash = true;
     if (parts.length === 0) {
@@ -2067,7 +2168,10 @@ class SfgaApp extends LitElement {
       // values so a stale link can't put the UI in a broken state.
       const tab = parts[2] || "";
       this._pendingWorkspaceTab =
-        tab === "bibliography" || tab === "digitize" || tab === "assertions"
+        tab === "bibliography" ||
+        tab === "digitize" ||
+        tab === "assertions" ||
+        tab === "assembly"
           ? tab
           : "";
     } else if (SfgaApp.views.some((v) => v.id === parts[0])) {
@@ -2450,6 +2554,14 @@ class SfgaApp extends LitElement {
           ${this._renderScreenActions()}
           <button
             class="icon-btn subtle"
+            @click=${() => (this.llmProvidersOpen = true)}
+            title="LLM providers (add / remove keys)"
+            aria-label="LLM providers"
+          >
+            ${renderIcon("sparkles", 18)}
+          </button>
+          <button
+            class="icon-btn subtle"
             @click=${() => (this.helpOpen = true)}
             title="keyboard shortcuts  (?)"
             aria-label="keyboard shortcuts"
@@ -2474,6 +2586,11 @@ class SfgaApp extends LitElement {
         ? html`<sfga-help-modal
             @close=${() => (this.helpOpen = false)}
           ></sfga-help-modal>`
+        : ""}
+      ${this.llmProvidersOpen
+        ? html`<sfga-llm-provider-modal
+            @close=${() => (this.llmProvidersOpen = false)}
+          ></sfga-llm-provider-modal>`
         : ""}
     `;
   }
@@ -2555,6 +2672,30 @@ class SfgaApp extends LitElement {
             ></sfga-issues>
           </div>
         `;
+      case "revision":
+        return html`
+          <div class="screen revision">
+            <div class="stub-view" role="status">
+              <h2>Revise</h2>
+              <p>
+                Your working taxonomic revision — new synonymies,
+                recombinations, splits, sinkings that don't yet
+                cite a published paper. Rows with no
+                <code>hive__source_reference_id</code> land here,
+                tagged with your ORCID, so the tree renderer can
+                filter Reference-backed vs. Revise vs. Diff
+                independently. Publish flow: pick a WIP, attach a
+                citation, row moves to the reference-backed tree.
+                Anchors the "what taxonomic paper should I write
+                next?" prioritization when WIPs cluster under a
+                clade.
+              </p>
+              <p class="stub-hint">
+                Coming soon. See task #185 for the design.
+              </p>
+            </div>
+          </div>
+        `;
       default:
         return html`
           <div class="screen taxa">
@@ -2631,6 +2772,14 @@ class SfgaTree extends LitElement {
     // archives take a moment for the roots query) doesn't flash the
     // "Add first taxon" affordance before the real roots arrive.
     _loaded: { state: true },
+    // mode selects the affordance set. Default "editor" (Taxa view):
+    // per-row edit / new-child / new-sister / delete buttons + the
+    // "Add first taxon" empty-state CTA. "picker" hides all of those
+    // — used by the Assimilate pane where the tree is a target-picker,
+    // not an editor. Selection + navigation (arrow keys, expand /
+    // collapse, `taxon-selected` event dispatch) still work identically
+    // in both modes.
+    mode: { type: String },
   };
 
   static styles = [
@@ -2805,6 +2954,7 @@ class SfgaTree extends LitElement {
     this.selectedId = "";
     this.error = "";
     this._loaded = false;
+    this.mode = "editor";
     // Page size matches the TUI's treePageSize constant — 200 rows per
     // fetch, sentinel below if more remain. Kept as a field so tests /
     // future config can override.
@@ -3061,6 +3211,18 @@ class SfgaTree extends LitElement {
     if (this.nodes.length === 0) {
       if (!this._loaded) {
         return html`<div class="empty-tree" role="status"><p>Loading…</p></div>`;
+      }
+      // Picker mode has no create affordance — the tree here exists
+      // to pick an EXISTING target, not to bootstrap the archive.
+      // Curator creates roots via the Taxa view (editor mode) first,
+      // then comes back here to assimilate.
+      if (this.mode === "picker") {
+        return html`
+          <div class="empty-tree" role="status">
+            <p>No taxa in this archive yet.</p>
+            <p class="hint">Add a root taxon from the Taxa view first.</p>
+          </div>
+        `;
       }
       return html`
         <div class="empty-tree" role="status">
@@ -3468,7 +3630,7 @@ class SfgaTree extends LitElement {
           ${n.has_children ? (n.expanded ? "▼" : "▶") : " "}
         </span>
         <span class="label">${renderLabel(n.label, n.name)}</span>
-        ${this._renderRowActions(n)}
+        ${this.mode === "picker" ? nothing : this._renderRowActions(n)}
       </li>
     `;
   }
@@ -3557,6 +3719,14 @@ class SfgaDetail extends LitElement {
     // Preferred-first, then by language, then name. Backs the
     // Vernacular names section on the detail page.
     _vernaculars: { state: true },
+    // _rowSources indexes hive__row_source entries by entity_table
+    // then entity_id (SQL rowid as string). Populated from
+    // GET /api/taxon/{id}/row-sources when the taxon loads.
+    // Backs the paper-source badges on extension rows —
+    // curator sees "Zhenyu Jin (2016)" next to each type_material /
+    // distribution / vernacular row that came from an Assimilate
+    // import, and clicks to open the Assertions view for the source.
+    _rowSources: { state: true },
     // Modal state for the vernacular add / edit form. Null when the
     // modal is closed; an object shape {mode: "create" | "edit",
     // draft: {…}, id?: string, error?: string} when open. The draft
@@ -4394,6 +4564,39 @@ class SfgaDetail extends LitElement {
     a.cite:hover {
       text-decoration: underline;
     }
+    /* row-source-badge: small chip next to an extension row's
+       value cell, showing "↳ Author (Year)" when the row was
+       Assimilated from a paper. Click routes to the paper's
+       Assertions view with an anchor hint. Distinct from the
+       .cite superscript (which points at a curator-set
+       reference_id) — this badge is provenance for the whole
+       row, not a bibliographic citation the curator authored. */
+    a.row-source-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25em;
+      margin-left: var(--sp-2);
+      padding: 0 var(--sp-1);
+      border-radius: var(--radius-sm);
+      background: color-mix(in oklab, var(--accent) 12%, transparent);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.72em;
+      line-height: 1.6;
+      vertical-align: baseline;
+      white-space: nowrap;
+      max-width: 20em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    a.row-source-badge:hover {
+      background: color-mix(in oklab, var(--accent) 20%, transparent);
+      text-decoration: none;
+    }
+    a.row-source-badge .ico {
+      font-family: var(--font-mono);
+      opacity: 0.7;
+    }
     /* Numbered References section — final block on the taxon detail
        page. Renders only when at least one row on the page cited a
        reference. Compact rows with the number aligned on the left. */
@@ -4901,6 +5104,7 @@ class SfgaDetail extends LitElement {
     this._vernaculars = [];
     this._vernacularForm = null;
     this._distributions = [];
+    this._rowSources = { type_material: {}, distribution: {}, vernacular: {} };
     this._distributionForm = null;
     this._speciesInteractions = [];
     this._speciesInteractionForm = null;
@@ -5091,6 +5295,7 @@ class SfgaDetail extends LitElement {
       this._distributions = [];
       this._speciesInteractions = [];
       this._classification = [];
+      this._rowSources = { type_material: {}, distribution: {}, vernacular: {} };
       return;
     }
     // Snapshot the requested ID so stale replies are discarded.
@@ -5125,12 +5330,13 @@ class SfgaDetail extends LitElement {
       // on the others and all are needed before the pane finishes
       // rendering. Per-section failure drops that one section; the rest
       // of the taxon still renders.
-      const [nomen, vern, dist, sxi, cls] = await Promise.all([
+      const [nomen, vern, dist, sxi, cls, rowSrcs] = await Promise.all([
         api.taxon.nomenHistory(requested).catch(() => ({ clusters: [] })),
         api.taxon.vernaculars(requested).catch(() => ({ items: [] })),
         api.taxon.distributions(requested).catch(() => ({ items: [] })),
         api.taxon.speciesInteractions(requested).catch(() => ({ items: [] })),
         api.taxon.classification(requested).catch(() => ({ items: [] })),
+        api.taxon.rowSources(requested).catch(() => ({ items: [] })),
       ]);
       if (this.taxonId !== requested) return;
       this._nomenHistory = nomen;
@@ -5138,6 +5344,18 @@ class SfgaDetail extends LitElement {
       this._distributions = dist.items || [];
       this._speciesInteractions = sxi.items || [];
       this._classification = cls.items || [];
+      // Build a two-level index (entity_table → entity_id → source
+      // record) so per-row renders can look up their badge data
+      // in O(1). Extension rows without a source (curator-added,
+      // legacy pre-provenance) simply miss the map and render
+      // without a badge.
+      const bySource = { type_material: {}, distribution: {}, vernacular: {} };
+      for (const s of rowSrcs.items || []) {
+        if (bySource[s.entity_table]) {
+          bySource[s.entity_table][s.entity_id] = s;
+        }
+      }
+      this._rowSources = bySource;
     } catch (err) {
       if (this.taxonId !== requested) return;
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
@@ -7845,6 +8063,39 @@ class SfgaDetail extends LitElement {
     >`;
   }
 
+  // _renderRowSourceBadge draws a small "from Paper (Year)" chip
+  // next to an extension row's own reference-citation. entityTable
+  // is "distribution" / "vernacular" / "type_material"; entityID
+  // is the row's SQL rowid as a string (matches apiXxx.ID). Empty
+  // string when no source exists (curator-added row, or legacy
+  // pre-provenance data).
+  //
+  // Click routes to #/reference/{ref_id}/assertions?assertion=
+  // {assertion_id} so the Assertions tab can pick up the anchor
+  // and jump to the source span in the reader.
+  _renderRowSourceBadge(entityTable, entityID) {
+    if (!this._rowSources) return "";
+    const bucket = this._rowSources[entityTable];
+    if (!bucket) return "";
+    const src = bucket[String(entityID)];
+    if (!src) return "";
+    const label = src.reference_citation || src.reference_id.slice(0, 8);
+    const target =
+      `#/reference/${encodeURIComponent(src.reference_id)}/assertions` +
+      (src.assertion_id
+        ? `?assertion=${encodeURIComponent(src.assertion_id)}`
+        : "");
+    return html`<a
+      class="row-source-badge"
+      href=${target}
+      title="Assimilated from ${label} — click to open in the paper's Assertions view"
+      aria-label="source: ${label}"
+    >
+      <span class="ico" aria-hidden="true">↳</span>
+      <span class="label">${label}</span>
+    </a>`;
+  }
+
   // _renderReferences draws the numbered References section at page
   // bottom — one row per distinct reference cited above. Hidden entirely
   // when nothing was cited so pages with no reference-bearing rows
@@ -8832,6 +9083,7 @@ class SfgaDetail extends LitElement {
 
   _renderVernacularRow(v) {
     const cite = this._citeRef(v.reference_id, v.reference_label);
+    const sourceBadge = this._renderRowSourceBadge("vernacular", v.id);
     return html`
       <tr>
         <td class="pref" aria-hidden=${v.preferred ? "false" : "true"}>
@@ -8840,7 +9092,7 @@ class SfgaDetail extends LitElement {
         <td class="name">
           ${v.name}${cite}${v.transliteration
             ? html`<span class="translit">${v.transliteration}</span>`
-            : ""}
+            : ""}${sourceBadge}
         </td>
         <td class="lang">${v.language || ""}</td>
         <td class="country">${v.country || ""}</td>
@@ -9245,6 +9497,7 @@ class SfgaDetail extends LitElement {
 
   _renderDistributionRow(d) {
     const cite = this._citeRef(d.reference_id, d.reference_label);
+    const sourceBadge = this._renderRowSourceBadge("distribution", d.id);
     // Area prefers the human-readable label; falls back to area_id
     // for gazetteers where only the code was populated.
     const areaText = d.area || d.area_id || "(unset)";
@@ -9256,7 +9509,7 @@ class SfgaDetail extends LitElement {
         <td class="area">
           ${areaText}${cite}${showCode
             ? html` <span class="area-code">${d.area_id}</span>`
-            : ""}
+            : ""}${sourceBadge}
         </td>
         <td class="gaz">${d.gazetteer || ""}</td>
         <td class="status">${d.status || ""}</td>
@@ -13954,6 +14207,71 @@ class SfgaReferences extends LitElement {
     // Empty query returns the paginated default list; non-empty
     // hits /api/reference/search via a trailing-edge debounce.
     _query: { state: true },
+    // Test-set membership for the currently-selected reference.
+    // Tri-state: null while status is loading (or no ref selected),
+    // true when the paper is in the evaluation test set, false when
+    // it isn't. Backs the "in test set" checkbox in the detail
+    // header. Toggled via _toggleTestSet → api.reference.addTo/
+    // removeFromTestSet + refetch.
+    _inTestSet: { state: true },
+    // True while the LLM-invocation modal is open for the current
+    // reference. Local to this component so opening on one paper
+    // doesn't wedge the modal state when the curator navigates.
+    _llmInvokeOpen: { state: true },
+    // Assertions loaded for the current reference (via
+    // /api/reference/{id}/assertions). Populated when the
+    // workspace switches to the Assertions tab so the empty
+    // panel gets a call-to-action ("run extraction") when there
+    // are none, and a basic list when there are. Full click-to-
+    // reveal-in-reader tree renderer is a downstream slice.
+    _assertions: { state: true },
+    _editingAssertionID: { state: true },
+    _editInputValue: { state: true },
+    // Assembly workspace state — per-paper name → target UUID
+    // mappings, the current search-picker query for finding drop
+    // targets, and the last import-execute result (counts +
+    // warnings) shown after the curator hits Import.
+    _paperImportMappings: { state: true },
+    // _assemblySelectedKey is the target-taxon UUID currently
+    // staged for binding. Set by clicking a node in the tree or
+    // picking from the search combobox. Cleared after each bind
+    // so the curator has to reselect between mappings.
+    _assemblySelectedKey: { state: true },
+    _assemblyImporting: { state: true },
+    _assemblyImportResult: { state: true },
+    _assertionsLoading: { state: true },
+    // Latest compose run's parsed tree JSON for this reference,
+    // used by the Assertions-tab renderer. When present, we show
+    // the composed taxonomic tree with extension chips; when
+    // absent (only NER runs exist so far, or no runs at all), we
+    // fall back to the raw assertion list.
+    _composeTree: { state: true },
+    _composeRun: { state: true },
+    // All extraction runs for the current reference, kept so the
+    // compare view's run pickers can enumerate what's available.
+    _runs: { state: true },
+    // Compare view state — when _compareMode is true, the
+    // Assertions pane renders two tree columns side-by-side with
+    // per-tree run pickers. Defaults auto-select the two most
+    // recent compose runs (from different providers when possible).
+    _compareMode: { state: true },
+    _compareRunAID: { state: true },
+    _compareRunBID: { state: true },
+    // Which compose run currently drives the reader's tags +
+    // tag_reviews (the "active" run). In single view this is the
+    // one picked in the top run-picker; in compare view it's
+    // determined by which column header the curator clicked
+    // (defaulting to A). Switching runs re-posts to the reader
+    // so tags update to reflect that model's extractions.
+    _activeComposeRunID: { state: true },
+    _activeCompareSide: { state: true },
+    // Latest NER run — carries the tag_reviews array (LLM's
+    // verdicts on GNfinder tags: false_positive / wrong_boundary).
+    // Forwarded to the reader so it can visually flag GN tags the
+    // LLM disagreed with. Not stored in hive__reference_assertion
+    // (tag_reviews aren't per-fact assertions; they're advisory
+    // metadata about GN's own decisions).
+    _nerRun: { state: true },
     // Non-empty when the reference-edit modal is open for the
     // currently-selected reference. Mirrors SfgaDetail's pattern
     // of owning the modal-mount state locally so each screen
@@ -14366,6 +14684,853 @@ class SfgaReferences extends LitElement {
       justify-content: center;
       text-align: center;
     }
+    .workspace-panes .assertions-pane {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    /* Assembly workspace pane — two-column layout inside a
+       single tab-content wrapper. Left column is the target-taxon
+       search picker; right column is the paper's mentions.
+       Toolbar at top with mapping progress + import button. */
+    .tab-content.assembly {
+      grid-template-columns: 1fr;
+      display: grid;
+      min-height: 0;
+    }
+    .assembly-pane {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .assembly-toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      font-size: var(--fs-sm);
+    }
+    .assembly-count {
+      color: var(--dim);
+    }
+    .assembly-toolbar .spacer {
+      flex: 1;
+    }
+    .assembly-import-btn {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: var(--radius-md);
+      padding: var(--sp-1) var(--sp-3);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+    .assembly-import-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .assembly-import-result {
+      padding: var(--sp-2) var(--sp-3);
+      font-size: var(--fs-sm);
+      border-bottom: 1px solid var(--border);
+    }
+    .assembly-import-result.ok {
+      background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+      color: var(--fg);
+    }
+    .assembly-import-result.error {
+      background: color-mix(in oklab, hsl(0, 65%, 50%) 8%, var(--bg));
+      color: hsl(0, 65%, 40%);
+    }
+    .assembly-columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-2);
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .assembly-column {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      padding: var(--sp-2) var(--sp-3);
+    }
+    .assembly-column.left {
+      border-right: 1px solid var(--border);
+      /* Left pane stacks a search combobox at top, the tree
+         scroller in the middle taking remaining space, and the
+         active-target chip pinned at the bottom. Tree needs its
+         own overflow so the combobox and target chip stay in view
+         while curator scrolls through a big archive. */
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: var(--sp-2);
+      min-height: 0;
+    }
+    .assembly-column-title {
+      margin: 0 0 var(--sp-2);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .assembly-tree-scroll {
+      overflow: auto;
+      min-height: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+    }
+    .assembly-active-target {
+      padding: var(--sp-2) var(--sp-3);
+      background: color-mix(in oklab, var(--accent) 10%, var(--bg));
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm);
+      font-size: var(--fs-sm);
+      word-break: break-all;
+    }
+    .assembly-active-target code {
+      font-family: var(--font-mono);
+      font-size: var(--fs-xs);
+    }
+    .assembly-active-target .hint {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-top: var(--sp-1);
+    }
+    .assembly-active-target.hint {
+      /* When the chip itself is the "no selection yet" hint, use
+         a neutral background rather than the accent-tinted one. */
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      border-left-color: var(--border);
+      color: var(--dim);
+      font-style: italic;
+    }
+    .assembly-mentions {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+    }
+    .assembly-mention {
+      padding: var(--sp-2) var(--sp-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--sp-2);
+      font-size: var(--fs-sm);
+      transition: background var(--motion-fast) ease,
+        border-color var(--motion-fast) ease;
+    }
+    .assembly-mention.unmapped {
+      color: var(--fg);
+    }
+    .assembly-mention.mapped {
+      background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+      border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+    }
+    .assembly-mention.can-bind:hover {
+      background: color-mix(in oklab, var(--accent) 15%, transparent);
+      border-color: var(--accent);
+    }
+    .assembly-mention .mention-name .name {
+      font-weight: 500;
+    }
+    .assembly-mention .mention-name .auth {
+      color: var(--dim);
+    }
+    .assembly-mention .mention-name .rank {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-left: var(--sp-2);
+    }
+    .assembly-mention .mention-mapping {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    .mention-unmap {
+      background: transparent;
+      border: none;
+      color: var(--dim);
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 0 var(--sp-1);
+      border-radius: var(--radius-sm);
+    }
+    .mention-unmap:hover {
+      background: color-mix(in oklab, hsl(0, 65%, 50%) 15%, transparent);
+      color: hsl(0, 65%, 50%);
+    }
+    .assertions-toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      font-size: var(--fs-sm);
+    }
+    .assertions-toolbar .count {
+      color: var(--dim);
+    }
+    .assertions-toolbar .spacer {
+      flex: 1;
+    }
+    .assertions-toolbar .icon-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-1);
+      color: var(--fg);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .assertions-toolbar .icon-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .assertions-toolbar .icon-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .assertions-toolbar .icon-btn.active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: color-mix(in oklab, var(--accent) 12%, transparent);
+    }
+    /* Compare view — two tree columns side-by-side inside the
+       assertions pane. Reader iframe stays in its usual spot to
+       the right so curator has all three panes (paper + tree A +
+       tree B) visible. On narrow viewports the columns can
+       scroll independently; the whole compare-panes container
+       overflows the tab content area if needed. */
+    .compare-panes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-2);
+      overflow: hidden;
+      min-height: 0;
+    }
+    .compare-column {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+      /* Inactive columns get dimmed so the accent-bordered active
+         column reads as the one governing the reader. */
+      opacity: 0.62;
+      transition: opacity var(--motion-fast) ease;
+    }
+    .compare-column.active {
+      opacity: 1;
+    }
+    .compare-column:last-child {
+      border-right: none;
+    }
+    .compare-column .tax-tree {
+      flex: 1;
+      overflow: auto;
+    }
+    .compare-header {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      background: color-mix(in oklab, var(--fg) 4%, var(--bg));
+      border-bottom: 1px solid var(--border);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      user-select: none;
+      /* Reserve the accent-bar column even when inactive so the
+         header height doesn't jump when the active pane changes. */
+      border-left: 3px solid transparent;
+    }
+    .compare-header:hover {
+      background: color-mix(in oklab, var(--fg) 6%, var(--bg));
+    }
+    .compare-header:focus-visible {
+      outline: 2px solid var(--focus-ring, var(--accent));
+      outline-offset: -2px;
+    }
+    .compare-column.active .compare-header {
+      background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+      border-left-color: var(--accent);
+    }
+    .compare-header .compare-label {
+      font-weight: 600;
+      color: var(--accent);
+      font-size: var(--fs-md);
+      min-width: 1.25em;
+      text-align: center;
+    }
+    .compare-header select {
+      flex: 1;
+      min-width: 0;
+      font-family: inherit;
+      font-size: var(--fs-sm);
+      padding: var(--sp-1) var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .compare-header .compare-meta {
+      font-family: var(--font-mono);
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      white-space: nowrap;
+    }
+    .compare-column .pane-empty {
+      padding: var(--sp-4);
+      color: var(--dim);
+      font-style: italic;
+      text-align: center;
+    }
+    /* Single-view active-run picker — sits between the pane
+       toolbar and the tree. Hidden when the paper has only one
+       compose run so it doesn't add a stray widget for the
+       single-run case. */
+    .compose-run-picker {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      font-size: var(--fs-sm);
+    }
+    .compose-run-picker label {
+      color: var(--dim);
+      font-weight: 600;
+    }
+    .compose-run-picker select {
+      flex: 1;
+      min-width: 0;
+      font-family: inherit;
+      font-size: var(--fs-sm);
+      padding: var(--sp-1) var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .assertions-empty {
+      padding: var(--sp-5);
+      display: grid;
+      gap: var(--sp-3);
+      max-width: 32rem;
+      margin: var(--sp-5) auto;
+      text-align: center;
+      overflow: auto;
+    }
+    .assertions-empty h3 {
+      margin: 0;
+      font-size: var(--fs-lg);
+      color: var(--fg);
+    }
+    .assertions-empty p {
+      margin: 0;
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      line-height: 1.5;
+    }
+    .assertions-empty p.hint {
+      font-size: var(--fs-xs);
+    }
+    .assertions-empty button.primary {
+      justify-self: center;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: var(--radius-md);
+      padding: var(--sp-2) var(--sp-5);
+      font-family: inherit;
+      font-size: var(--fs-md);
+      cursor: pointer;
+    }
+    .assertions-runs {
+      overflow: auto;
+      padding: var(--sp-2);
+      display: grid;
+      gap: var(--sp-3);
+    }
+    .assertion-run {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .assertion-run .run-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: var(--sp-1) var(--sp-3);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      border-bottom: 1px solid var(--border);
+      font-size: var(--fs-sm);
+    }
+    .assertion-run .run-label {
+      font-family: var(--font-mono);
+      color: var(--dim);
+    }
+    .assertion-run .run-count {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+    }
+    .assertion-rows {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 0;
+    }
+    .assertion-rows li {
+      display: grid;
+      grid-template-columns: 12rem 1fr;
+      gap: var(--sp-3);
+      padding: var(--sp-1) var(--sp-3);
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 40%, var(--bg));
+      font-size: var(--fs-sm);
+    }
+    .assertion-rows li:last-child {
+      border-bottom: none;
+    }
+    .assertion-rows li .atype {
+      font-family: var(--font-mono);
+      color: var(--dim);
+      font-size: var(--fs-xs);
+    }
+    .assertion-rows li .asubject {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .assertion-rows li.status-rejected {
+      opacity: 0.4;
+      text-decoration: line-through;
+    }
+    .assertion-rows li.status-accepted .asubject {
+      font-weight: 600;
+    }
+    .assertion-rows li.more {
+      font-style: italic;
+      color: var(--dim);
+      grid-template-columns: 1fr;
+    }
+    /* Compose-tree renderer — the taxonomic hierarchy with
+       color-coded extension chips. Structure primed for the
+       future Assembly drag-select UX (data-name-id on every
+       node). Chips use hue-varied categorization so a curator
+       comparing two trees can scan for missing colors. */
+    .tax-tree {
+      overflow: auto;
+      padding: var(--sp-3);
+      font-size: var(--fs-sm);
+      line-height: 1.4;
+    }
+    .tax-node {
+      display: grid;
+      gap: var(--sp-1);
+    }
+    .tax-line {
+      display: flex;
+      align-items: baseline;
+      gap: var(--sp-2);
+    }
+    .tax-line .tax-name {
+      font-weight: 600;
+    }
+    .tax-line .tax-name.italic {
+      font-style: italic;
+      font-weight: 500;
+    }
+    .tax-line .tax-auth {
+      color: var(--dim);
+    }
+    .tax-line .tax-rank {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-family: var(--font-mono);
+    }
+    .tax-facts {
+      /* Fact groups stack vertically now that each one expands
+         into per-field sub-rows. Horizontal wrap was fine when
+         every chip was one pill; a two-level structure needs its
+         own row for each specimen / locality / vernacular. */
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+      margin-bottom: var(--sp-1);
+    }
+    .fact-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 var(--sp-2);
+      border-radius: var(--radius-pill);
+      font-size: var(--fs-xs);
+      line-height: 1.6;
+      white-space: nowrap;
+      max-width: 32rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      transition: box-shadow var(--transition-fast);
+    }
+    .fact-chip:hover,
+    .fact-chip:focus-visible {
+      box-shadow: 0 0 0 2px var(--accent);
+      outline: none;
+    }
+    .fact-chip[draggable="true"] {
+      cursor: grab;
+    }
+    .fact-chip[draggable="true"]:active {
+      cursor: grabbing;
+    }
+    /* Drop-target highlight — the tax-line lights up with an
+       accent ring when a chip is dragged over it. Curator sees
+       exactly which taxon will receive the chip. Class toggled
+       via dragover / dragleave handlers on the .tax-line. */
+    .tax-line.drop-target {
+      background: color-mix(in oklab, var(--accent) 15%, transparent);
+      outline: 2px dashed var(--accent);
+      outline-offset: -2px;
+      border-radius: var(--radius-sm);
+    }
+    /* Rainbow-adjacent category palette. Consistent across
+       compare views so missing categories jump out visually.
+       Backgrounds tinted at ~15% saturation over the theme bg
+       so chip text stays high-contrast in both light and dark
+       themes; text uses the full hue color. */
+    .fact-chip.nom {
+      color: hsl(280, 55%, 45%);
+      background: color-mix(in oklab, hsl(280, 55%, 45%) 15%, var(--bg));
+    }
+    .fact-chip.type {
+      color: hsl(210, 60%, 42%);
+      background: color-mix(in oklab, hsl(210, 60%, 42%) 15%, var(--bg));
+    }
+    .fact-chip.dist {
+      color: hsl(140, 50%, 35%);
+      background: color-mix(in oklab, hsl(140, 50%, 35%) 15%, var(--bg));
+    }
+    .fact-chip.vern {
+      color: hsl(35, 70%, 40%);
+      background: color-mix(in oklab, hsl(35, 70%, 40%) 15%, var(--bg));
+    }
+    @media (prefers-color-scheme: dark) {
+      .fact-chip.nom {
+        color: hsl(280, 65%, 75%);
+      }
+      .fact-chip.type {
+        color: hsl(210, 65%, 70%);
+      }
+      .fact-chip.dist {
+        color: hsl(140, 55%, 65%);
+      }
+      .fact-chip.vern {
+        color: hsl(45, 75%, 65%);
+      }
+    }
+    /* fact-group is the new expanded shape — a header with the
+       kind badge + summary + group-level verify checkbox, and a
+       block of per-field sub-rows each with its own checkbox.
+       Colored left border encodes the category so curators can
+       scan a tree at a glance without reading each label. */
+    .fact-group {
+      display: flex;
+      flex-direction: column;
+      border-left: 3px solid transparent;
+      border-radius: var(--radius-sm);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+    }
+    .fact-group.nom {
+      border-left-color: hsl(280, 55%, 45%);
+    }
+    .fact-group.type {
+      border-left-color: hsl(210, 60%, 42%);
+    }
+    .fact-group.dist {
+      border-left-color: hsl(140, 50%, 35%);
+    }
+    .fact-group.vern {
+      border-left-color: hsl(35, 70%, 40%);
+    }
+    .fact-group[draggable="true"] {
+      cursor: grab;
+    }
+    .fact-group[draggable="true"]:active {
+      cursor: grabbing;
+    }
+    .fact-group-header {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+      padding: 0 var(--sp-2);
+      cursor: pointer;
+      user-select: none;
+      font-size: var(--fs-xs);
+      line-height: 1.8;
+    }
+    .fact-group-header:hover {
+      background: color-mix(in oklab, var(--fg) 5%, transparent);
+    }
+    .fact-group-header:focus-visible {
+      outline: 2px solid var(--focus-ring, var(--accent));
+      outline-offset: -2px;
+    }
+    .fact-kind-badge {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 0 var(--sp-1);
+      border-radius: var(--radius-sm);
+      opacity: 0.85;
+    }
+    .fact-group.nom .fact-kind-badge {
+      color: hsl(280, 55%, 45%);
+      background: color-mix(in oklab, hsl(280, 55%, 45%) 12%, transparent);
+    }
+    .fact-group.type .fact-kind-badge {
+      color: hsl(210, 60%, 42%);
+      background: color-mix(in oklab, hsl(210, 60%, 42%) 12%, transparent);
+    }
+    .fact-group.dist .fact-kind-badge {
+      color: hsl(140, 50%, 35%);
+      background: color-mix(in oklab, hsl(140, 50%, 35%) 12%, transparent);
+    }
+    .fact-group.vern .fact-kind-badge {
+      color: hsl(35, 70%, 40%);
+      background: color-mix(in oklab, hsl(35, 70%, 40%) 12%, transparent);
+    }
+    @media (prefers-color-scheme: dark) {
+      .fact-group.nom .fact-kind-badge {
+        color: hsl(280, 65%, 75%);
+      }
+      .fact-group.type .fact-kind-badge {
+        color: hsl(210, 65%, 70%);
+      }
+      .fact-group.dist .fact-kind-badge {
+        color: hsl(140, 55%, 65%);
+      }
+      .fact-group.vern .fact-kind-badge {
+        color: hsl(45, 75%, 65%);
+      }
+    }
+    .fact-summary {
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .fact-fields {
+      display: flex;
+      flex-direction: column;
+      padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) + 1.5rem);
+    }
+    .fact-field {
+      display: grid;
+      grid-template-columns: auto 8rem 1fr auto;
+      gap: var(--sp-2);
+      align-items: center;
+      padding: 0 var(--sp-1);
+      border-radius: var(--radius-sm);
+      font-size: var(--fs-xs);
+      line-height: 1.7;
+      cursor: pointer;
+    }
+    .fact-field:hover {
+      background: color-mix(in oklab, var(--fg) 5%, transparent);
+    }
+    .fact-field:focus-visible {
+      outline: 2px solid var(--focus-ring, var(--accent));
+      outline-offset: -2px;
+    }
+    .fact-field-label {
+      font-family: var(--font-mono);
+      color: var(--dim);
+      font-size: 0.7rem;
+      text-transform: lowercase;
+    }
+    .fact-field-value {
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: baseline;
+      gap: var(--sp-2);
+    }
+    /* was:-annotation is hidden by default; the field-row reveals
+       it on hover so the tree stays visually calm when just
+       reviewing but the model's original prediction is one hover
+       away for auditing / training-data review. */
+    .was-annotation {
+      display: none;
+      color: var(--dim);
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+    }
+    .was-value {
+      text-decoration: line-through;
+    }
+    .fact-field.corrected:hover .was-annotation,
+    .fact-field.corrected:focus-within .was-annotation {
+      display: inline;
+    }
+    .fact-field.corrected .fact-field-value {
+      /* A subtle underline signals "this value has an audit
+         trail" even without the hover reveal, so a curator
+         scanning the tree can spot corrected rows at a glance. */
+      text-decoration: underline;
+      text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent);
+      text-decoration-style: dotted;
+      text-underline-offset: 3px;
+    }
+    /* Pencil is hidden by default; the field-row reveals it on
+       hover so the tree stays visually clean when just reviewing.
+       Keyboard focus also reveals so tab-navigation users can
+       reach the edit affordance without hover. */
+    .edit-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px;
+      margin: 0;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      color: var(--dim);
+      opacity: 0;
+      transition: opacity var(--motion-fast) ease,
+        color var(--motion-fast) ease,
+        background var(--motion-fast) ease;
+    }
+    .fact-field:hover .edit-btn,
+    .fact-field:focus-within .edit-btn {
+      opacity: 1;
+    }
+    .edit-btn:hover {
+      color: var(--fg);
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+    }
+    .edit-btn:focus-visible {
+      opacity: 1;
+      outline: 2px solid var(--focus-ring, var(--accent));
+      outline-offset: 1px;
+    }
+    /* Inline edit mode — input replaces the value cell, save /
+       cancel buttons sit in the trailing pencil-column slot. */
+    .fact-field-edit {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      grid-column: 3 / span 2;
+    }
+    .fact-field-edit input {
+      flex: 1;
+      min-width: 0;
+      font-family: inherit;
+      font-size: var(--fs-xs);
+      padding: 2px var(--sp-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .fact-field-edit .edit-save,
+    .fact-field-edit .edit-cancel {
+      font-family: inherit;
+      font-size: 0.7rem;
+      padding: 2px var(--sp-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .fact-field-edit .edit-save {
+      background: color-mix(in oklab, var(--accent) 15%, var(--bg));
+      border-color: var(--accent);
+    }
+    /* Rejected field: dim + strike, but stay readable — the
+       rejection is training data, and curators still need to see
+       what the model claimed. */
+    .fact-field.rejected .fact-field-value,
+    .fact-field.rejected .fact-field-label {
+      color: var(--dim);
+      text-decoration: line-through;
+    }
+    .fact-field.accepted {
+      background: color-mix(in oklab, var(--accent) 6%, transparent);
+    }
+    /* Verify checkbox — shared shape for all levels (per-field,
+       group header, taxon-node name). Button wraps the SVG so the
+       hit target is comfortable even at 14px glyph size. */
+    .verify-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px;
+      margin: 0;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      color: var(--dim);
+      transition: color var(--motion-fast) ease,
+        background var(--motion-fast) ease;
+    }
+    .verify-btn:hover {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+      color: var(--fg);
+    }
+    .verify-btn:focus-visible {
+      outline: 2px solid var(--focus-ring, var(--accent));
+      outline-offset: 1px;
+    }
+    .verify-check {
+      display: inline-flex;
+      color: inherit;
+    }
+    .verify-check.checked {
+      color: var(--accent);
+    }
+    .verify-check.rejected {
+      color: var(--danger, hsl(0, 65%, 50%));
+    }
+    .verify-check.mixed {
+      color: var(--accent);
+    }
+    /* Taxon-name-level verify — same button styling, but nudged
+       so it sits inline with the italicized scientific name
+       rather than crowding it. */
+    .tax-line .tax-verify {
+      margin-right: var(--sp-1);
+    }
     aside {
       overflow: auto;
       padding: var(--sp-2);
@@ -14403,6 +15568,33 @@ class SfgaReferences extends LitElement {
       display: flex;
       align-items: center;
       gap: var(--sp-1);
+    }
+    section .test-set-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-2);
+      margin-right: var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+      cursor: pointer;
+      user-select: none;
+      transition: color var(--transition-fast),
+        border-color var(--transition-fast);
+    }
+    section .test-set-toggle:hover {
+      color: var(--fg);
+      border-color: var(--accent);
+    }
+    section .test-set-toggle input[type="checkbox"] {
+      margin: 0;
+      cursor: pointer;
+    }
+    section .test-set-toggle input[type="checkbox"]:checked + span {
+      color: var(--accent);
+      font-weight: 600;
     }
     section .icon-btn {
       background: var(--bg);
@@ -14711,6 +15903,26 @@ class SfgaReferences extends LitElement {
     this._loading = false;
     this._error = "";
     this._query = "";
+    this._inTestSet = null;
+    this._llmInvokeOpen = false;
+    this._assertions = [];
+    this._assertionsLoading = false;
+    this._assertionIndexCache = null;
+    this._editingAssertionID = "";
+    this._editInputValue = "";
+    this._paperImportMappings = [];
+    this._assemblySelectedKey = "";
+    this._assemblyImporting = false;
+    this._assemblyImportResult = null;
+    this._composeTree = null;
+    this._composeRun = null;
+    this._runs = [];
+    this._compareMode = false;
+    this._compareRunAID = "";
+    this._compareRunBID = "";
+    this._activeComposeRunID = "";
+    this._activeCompareSide = "A";
+    this._nerRun = null;
     this._editRefID = "";
     this._addingNew = false;
     this._jatsRefEdit = null;
@@ -15124,6 +16336,18 @@ class SfgaReferences extends LitElement {
     }
     this._selectedId = id;
     this._current = null;
+    this._inTestSet = null;
+    this._llmInvokeOpen = false;
+    this._assertions = [];
+    this._composeTree = null;
+    this._composeRun = null;
+    this._runs = [];
+    this._compareMode = false;
+    this._compareRunAID = "";
+    this._compareRunBID = "";
+    this._activeComposeRunID = "";
+    this._activeCompareSide = "A";
+    this._nerRun = null;
     // Reset per-ref correction state so the previous ref's chips
     // don't flash on-screen while the new ref's corrections load.
     this._corrections = [];
@@ -15154,9 +16378,531 @@ class SfgaReferences extends LitElement {
         this._current?.attached_pdf_shas &&
         this._current.attached_pdf_shas[0];
       if (sha) this._fetchGrobidRegions(sha);
+      // Fire-and-forget test-set status fetch — checkbox binds to
+      // _inTestSet and shows a subtle intermediate state (null)
+      // while the fetch is in flight.
+      this._fetchTestSetStatus(id);
+      // If the Assertions tab is active (curator reloaded the
+      // browser with that tab selected, or navigated back to a
+      // ref they'd previously reviewed), fetch assertions +
+      // compose runs. Otherwise skip — the tab-click handler
+      // triggers the fetch on-demand.
+      if (this._workspaceTab === "assertions") {
+        this._fetchAssertions(id);
+      }
     } catch (err) {
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
     }
+  }
+
+  // _fetchTestSetStatus loads the reference's test-set membership
+  // into _inTestSet. Fire-and-forget from _selectReference — the
+  // checkbox binds to _inTestSet (null while loading, true/false
+  // once resolved). Silent on error so the checkbox just stays
+  // disabled rather than blocking the reference-load flow.
+  async _fetchTestSetStatus(id) {
+    try {
+      const body = await api.reference.getTestSet(id);
+      // Guard against a stale response coming back for a
+      // reference the curator has already navigated away from.
+      if (this._selectedId !== id) return;
+      this._inTestSet = !!body.in_test_set;
+    } catch (err) {
+      // Silent — test-set is orthogonal to the reference detail.
+      // The checkbox stays in loading state (disabled) so the
+      // curator sees "unknown status" rather than a wrong bool.
+    }
+  }
+
+  // _toggleTestSet flips the test-set membership. Optimistic:
+  // sets _inTestSet immediately so the checkbox responds without
+  // waiting for the round-trip; on failure, re-fetches to restore
+  // truth. Idempotent on the server (see [hive.Tx.AddToTestSet]
+  // and RemoveFromTestSet doc), so accidental double-clicks are
+  // harmless.
+  async _toggleTestSet(shouldBeIn) {
+    if (!this._selectedId) return;
+    const id = this._selectedId;
+    const prev = this._inTestSet;
+    this._inTestSet = shouldBeIn;
+    try {
+      if (shouldBeIn) {
+        await api.reference.addToTestSet(id);
+      } else {
+        await api.reference.removeFromTestSet(id);
+      }
+    } catch (err) {
+      // Restore truth on failure.
+      this._inTestSet = prev;
+      this._error =
+        err instanceof Problem ? err.detail || err.title : String(err);
+    }
+  }
+
+  // _fetchAssertions loads the reference's staged extraction
+  // assertions AND the runs list so the Assertions-tab can render
+  // either the composed tree (when a compose run exists) or the
+  // raw NER assertion list as fallback. Both fetches run in
+  // parallel; silent on error so the pane renders an empty state
+  // rather than blowing up when the API stumbles.
+  // _fetchPaperImportMappings loads the curator-approved mappings
+  // for this paper. Fires when the Assembly tab is activated.
+  // Silent on error — the pane still renders (with an empty
+  // mappings state) rather than blowing up if the endpoint is
+  // temporarily unavailable.
+  async _fetchPaperImportMappings(id) {
+    if (!id) {
+      this._paperImportMappings = [];
+      return;
+    }
+    try {
+      const resp = await api.reference.listImportMappings(id);
+      if (this._selectedId !== id) return; // stale
+      this._paperImportMappings = resp.items || [];
+    } catch (e) {
+      console.warn("paper import mappings load failed", e);
+      this._paperImportMappings = [];
+    }
+  }
+
+  // _assemblyMapMention creates/updates the mapping for one paper
+  // mention → target taxon UUID. Called on picker selection.
+  // match_mode = 'curator-picked' since v0 always requires explicit
+  // curator confirmation (no auto-match yet). Clears the staged
+  // target on success so the curator reselects for the next
+  // mapping — prevents accidentally binding the wrong mention.
+  async _assemblyMapMention(paperNameKey, targetTaxonID) {
+    if (!this._selectedId || !paperNameKey || !targetTaxonID) return;
+    try {
+      await api.reference.upsertImportMapping(this._selectedId, {
+        paper_name_key: paperNameKey,
+        target_taxon_id: targetTaxonID,
+        match_mode: "curator-picked",
+      });
+      await this._fetchPaperImportMappings(this._selectedId);
+      this._assemblySelectedKey = "";
+    } catch (e) {
+      console.error("assembly mapping upsert failed", e);
+    }
+  }
+
+  async _assemblyUnmapMention(paperNameKey) {
+    if (!this._selectedId || !paperNameKey) return;
+    try {
+      await api.reference.deleteImportMapping(this._selectedId, paperNameKey);
+      await this._fetchPaperImportMappings(this._selectedId);
+    } catch (e) {
+      console.error("assembly mapping delete failed", e);
+    }
+  }
+
+  // _assemblyExecuteImport POSTs to the executor endpoint using
+  // the active compose run's ID. Result summary lands in
+  // _assemblyImportResult for the curator to review.
+  async _assemblyExecuteImport() {
+    if (!this._selectedId) return;
+    const runID = this._activeComposeRunID;
+    if (!runID) {
+      this._assemblyImportResult = {
+        error: "no active compose run — run the extraction pipeline first",
+      };
+      return;
+    }
+    this._assemblyImporting = true;
+    this._assemblyImportResult = null;
+    try {
+      this._assemblyImportResult = await api.reference.executeImport(
+        this._selectedId,
+        runID,
+      );
+      await this._fetchPaperImportMappings(this._selectedId);
+    } catch (e) {
+      this._assemblyImportResult = { error: this._readErr(e) };
+    } finally {
+      this._assemblyImporting = false;
+    }
+  }
+
+  _readErr(e) {
+    if (!e) return "unknown error";
+    if (e.problem && e.problem.detail) return e.problem.detail;
+    if (e.problem && e.problem.title) return e.problem.title;
+    return e.message || String(e);
+  }
+
+  // _renderAssemblyPane renders the two-pane assembly layout:
+  // LEFT = target-taxon search picker + list of current mappings,
+  // RIGHT = the paper's compose tree with a drop-target on each
+  // taxon node. This is the v0 draft — the "minimal tree" for the
+  // left pane is a search-first list (no full tree browser yet);
+  // curator types a name, picks a target, then clicks the paper
+  // mention on the right to bind them.
+  _renderAssemblyPane() {
+    if (!this._selectedId) {
+      return html`<div class="pane pane-empty">
+        Pick a reference from the list to assemble.
+      </div>`;
+    }
+    const tree = this._composeTree;
+    const hasTree = tree && tree.name_usages && tree.name_usages.length > 0;
+    if (!hasTree) {
+      return html`<div class="pane pane-empty">
+        No compose tree for this paper yet — run the extraction
+        pipeline from the Assertions tab first, then come back
+        here to map its taxa onto your SFGA tree.
+      </div>`;
+    }
+    const mappingsByKey = new Map(
+      (this._paperImportMappings || []).map((m) => [m.paper_name_key, m]),
+    );
+    const mappedCount = mappingsByKey.size;
+    const totalMentions = (tree.name_usages || []).length;
+    return html`
+      <div class="assembly-pane">
+        <div class="assembly-toolbar">
+          <span class="assembly-count">
+            ${mappedCount} / ${totalMentions} mentions mapped
+          </span>
+          <span class="spacer"></span>
+          <button
+            class="assembly-import-btn"
+            type="button"
+            ?disabled=${this._assemblyImporting || mappedCount === 0}
+            title=${mappedCount === 0
+              ? "Map at least one mention before importing"
+              : "Materialize this paper's facts into the mapped taxa"}
+            @click=${() => this._assemblyExecuteImport()}
+          >
+            ${this._assemblyImporting ? "importing…" : "import"}
+          </button>
+        </div>
+        ${this._assemblyImportResult
+          ? this._renderAssemblyImportResult()
+          : nothing}
+        <div class="assembly-columns">
+          ${this._renderAssemblyLeftPane(mappingsByKey)}
+          ${this._renderAssemblyRightPane(tree, mappingsByKey)}
+        </div>
+      </div>
+    `;
+  }
+
+  _renderAssemblyImportResult() {
+    const r = this._assemblyImportResult;
+    if (r.error) {
+      return html`<div class="assembly-import-result error" role="alert">
+        Import failed: ${r.error}
+      </div>`;
+    }
+    const parts = [];
+    if (r.type_material_inserted)
+      parts.push(`${r.type_material_inserted} type-material`);
+    if (r.distribution_inserted)
+      parts.push(`${r.distribution_inserted} distribution`);
+    if (r.vernacular_inserted)
+      parts.push(`${r.vernacular_inserted} vernacular`);
+    const summary = parts.length > 0 ? parts.join(", ") : "no rows";
+    return html`<div class="assembly-import-result ok" role="status">
+      Imported: ${summary}
+      ${r.removed > 0 ? html` · replaced ${r.removed} prior rows` : nothing}
+      ${r.warnings && r.warnings.length > 0
+        ? html`<details>
+            <summary>${r.warnings.length} warnings</summary>
+            <ul>
+              ${r.warnings.map((w) => html`<li>${w}</li>`)}
+            </ul>
+          </details>`
+        : nothing}
+    </div>`;
+  }
+
+  // Left pane: target-taxon picker built from the same sfga-combobox
+  // + sfga-tree pair the Taxa view uses. Curator can search (jump-to-
+  // name) or browse (click through the tree) — both fire selection
+  // events that update _assemblySelectedKey. Tree runs in "picker"
+  // mode so per-row edit / add-child / delete buttons stay hidden;
+  // this is a target picker, not an editor.
+  _renderAssemblyLeftPane(mappingsByKey) {
+    return html`
+      <div class="assembly-column left">
+        <sfga-combobox
+          class="assembly-search"
+          placeholder="Search taxa to jump to…"
+          .source=${this._assemblyTaxonSearchSource ||
+          (this._assemblyTaxonSearchSource = (q) => taxonSource(q))}
+          .resolver=${taxonResolver}
+          @pick=${(e) => {
+            if (e.detail && e.detail.id) {
+              this._assemblySelectedKey = e.detail.id;
+              this._revealTaxonInAssemblyTree(e.detail.id);
+            }
+          }}
+        ></sfga-combobox>
+        <div class="assembly-tree-scroll">
+          <sfga-tree
+            class="assembly-tree"
+            mode="picker"
+            @taxon-selected=${(e) =>
+              (this._assemblySelectedKey = e.detail?.id || "")}
+          ></sfga-tree>
+        </div>
+        ${this._assemblySelectedKey
+          ? html`<div class="assembly-active-target" role="status">
+              Selected target:
+              <code>${this._assemblySelectedKey}</code>
+              <div class="hint">
+                Click a paper mention on the right to bind it here.
+              </div>
+            </div>`
+          : html`<div class="assembly-active-target hint" role="status">
+              Pick a target taxon from the tree or search above.
+            </div>`}
+      </div>
+    `;
+  }
+
+  // _revealTaxonInAssemblyTree tells the assembly tree to select
+  // (and, when supported, scroll to / expand ancestors of) a taxon
+  // that was picked via search. Uses the tree's own reveal API if
+  // present; falls back to setting selectedId directly.
+  _revealTaxonInAssemblyTree(taxonID) {
+    const tree = this.renderRoot?.querySelector("sfga-tree.assembly-tree");
+    if (!tree) return;
+    if (typeof tree.reveal === "function") {
+      tree.reveal(taxonID);
+    } else {
+      tree.selectedId = taxonID;
+    }
+  }
+
+  // Right pane: paper's compose tree, one entry per name_usage.
+  // Each entry shows the mention name + current mapping status
+  // (mapped-to-X or unmapped). Clicking an entry with an active
+  // target on the left creates the mapping; a small × removes
+  // an existing mapping.
+  _renderAssemblyRightPane(tree, mappingsByKey) {
+    const mentions = tree.name_usages || [];
+    return html`
+      <div class="assembly-column right">
+        <h4 class="assembly-column-title">Paper mentions</h4>
+        <ul class="assembly-mentions">
+          ${mentions.map((m) => this._renderAssemblyMention(m, mappingsByKey))}
+        </ul>
+      </div>
+    `;
+  }
+
+  _renderAssemblyMention(mention, mappingsByKey) {
+    const key = mention.id;
+    const mapping = mappingsByKey.get(key);
+    const name = this._unwrapValue(mention.scientificName);
+    const auth = this._unwrapValue(mention.authorship);
+    const rank = this._unwrapValue(mention.rank);
+    const canBind = !!this._assemblySelectedKey && !mapping;
+    return html`
+      <li
+        class="assembly-mention ${mapping ? "mapped" : "unmapped"} ${canBind
+          ? "can-bind"
+          : ""}"
+        role="button"
+        tabindex="0"
+        title=${mapping
+          ? `Mapped to ${mapping.target_taxon_id}`
+          : canBind
+            ? "Click to map this mention to the selected target"
+            : "Select a target on the left, then click to map"}
+        @click=${() => {
+          if (mapping) return;
+          if (this._assemblySelectedKey) {
+            this._assemblyMapMention(key, this._assemblySelectedKey);
+          }
+        }}
+      >
+        <div class="mention-name">
+          <span class="name">${name}</span>
+          ${auth ? html`<span class="auth"> ${auth}</span>` : nothing}
+          ${rank ? html`<span class="rank"> ${rank}</span>` : nothing}
+        </div>
+        ${mapping
+          ? html`<div class="mention-mapping">
+              → <code>${mapping.target_taxon_id.slice(0, 8)}</code>
+              <button
+                class="mention-unmap"
+                type="button"
+                title="remove mapping"
+                aria-label="remove mapping"
+                @click=${(e) => {
+                  e.stopPropagation();
+                  this._assemblyUnmapMention(key);
+                }}
+              >
+                ×
+              </button>
+            </div>`
+          : nothing}
+      </li>
+    `;
+  }
+
+  async _fetchAssertions(id) {
+    if (!id) {
+      this._assertions = [];
+      this._composeTree = null;
+      this._composeRun = null;
+      return;
+    }
+    this._assertionsLoading = true;
+    try {
+      const [assertions, runs] = await Promise.all([
+        api.reference.assertions(id),
+        api.llm.run.listForReference(id),
+      ]);
+      if (this._selectedId !== id) return; // stale response
+      this._assertions = assertions.items || [];
+      this._runs = runs.items || [];
+      // Seed active-run selection to the newest compose run when
+      // nothing is currently selected (fresh load) or when the
+      // previously-active run is no longer in the list (soft-deleted
+      // or re-fetched into a different reference). _deriveActiveRuns
+      // then reads _activeComposeRunID and populates _composeRun /
+      // _composeTree / _nerRun off it.
+      const composeRuns = (runs.items || []).filter(
+        (r) => r.purpose === "compose",
+      );
+      composeRuns.sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at),
+      );
+      const stillPresent =
+        this._activeComposeRunID &&
+        composeRuns.some((r) => r.run_id === this._activeComposeRunID);
+      if (!stillPresent) {
+        this._activeComposeRunID =
+          composeRuns.length > 0 ? composeRuns[0].run_id : "";
+      }
+      this._deriveActiveRuns();
+      // Push the annotation set to the reader iframe so it can
+      // paint the color-coded highlights over the paper text.
+      // Deferred one frame so the render pass completes and the
+      // iframe query finds the right (visible) reader.
+      requestAnimationFrame(() => this._postAnnotationsToReader());
+    } catch {
+      this._assertions = [];
+      this._composeTree = null;
+      this._composeRun = null;
+      this._nerRun = null;
+    } finally {
+      this._assertionsLoading = false;
+    }
+    // Deep-link: if the URL hash carried ?assertion=<id>, jump
+    // to that assertion's source now that the run data is loaded.
+    // Only fires when the Assertions tab is the active one; the
+    // pending id is consumed either way so a stale param doesn't
+    // linger into unrelated navigation.
+    this._maybeJumpToPendingAssertion();
+  }
+
+  // _maybeJumpToPendingAssertion is called after _fetchAssertions
+  // populates _assertions + reader. If location.hash carries
+  // ?assertion=<id> and we're on the Assertions workspace tab,
+  // resolve the assertion's source_ptr and post a jump message
+  // to the reader iframe. Also picks the compose run that
+  // materialized this assertion when possible, so the tree pane
+  // reflects the right run.
+  _maybeJumpToPendingAssertion() {
+    if (this._workspaceTab !== "assertions") return;
+    const hash = location.hash || "";
+    const qIdx = hash.indexOf("?");
+    if (qIdx < 0) return;
+    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const assertionID = params.get("assertion");
+    if (!assertionID) return;
+    // Consume the param so it doesn't fire again on subsequent
+    // fetches (e.g., when curator switches active-run).
+    const cleanHash = hash.slice(0, qIdx);
+    history.replaceState(null, "", "#" + cleanHash.replace(/^#/, ""));
+    const target = (this._assertions || []).find(
+      (a) => a.assertion_id === assertionID,
+    );
+    if (!target) return;
+    // Switch the active compose run to the one whose parent_run_id
+    // matches this assertion's source_run_id — that way the tree
+    // pane shows a compose that references THIS assertion, keeping
+    // the reader + tree in sync.
+    if (target.source_run_id) {
+      const composeRun = (this._runs || []).find(
+        (r) => r.purpose === "compose" && r.parent_run_id === target.source_run_id,
+      );
+      if (composeRun && composeRun.run_id !== this._activeComposeRunID) {
+        this._activeComposeRunID = composeRun.run_id;
+        this._deriveActiveRuns();
+      }
+    }
+    // Reader jump — post the source_ptr anchor to the iframe.
+    // Deep-link jumps race with reader-load; the reader may not
+    // have attached its message listener yet when we get here.
+    // Post immediately AND schedule a retry ~500ms out so the
+    // curator lands on the source span either way. The reader
+    // handler is idempotent for jump messages (re-jumping to
+    // the same anchor is a no-op after the first scroll).
+    const anchor = this._parseSourcePtr(target.source_ptr);
+    if (!anchor) return;
+    const post = () => this._postToReader({ type: "hive:jump-to-anchor", anchor });
+    requestAnimationFrame(post);
+    setTimeout(post, 500);
+  }
+
+  // _deriveActiveRuns resolves _composeRun / _composeTree / _nerRun
+  // off _activeComposeRunID. Kept separate from _fetchAssertions so
+  // switching the active run (either via the single-view picker or
+  // by clicking a compare-view column header) doesn't require a
+  // network round-trip — the runs list already has raw_output.
+  //
+  // NER selection: prefer the active compose run's parent_run_id
+  // (the exact NER pair that fed the composition) so tag_reviews
+  // and NER annotations stay coherent with the tree the curator
+  // is looking at. Fall back to the newest NER run only when the
+  // compose run has no parent recorded.
+  _deriveActiveRuns() {
+    const runs = this._runs || [];
+    const activeID = this._activeComposeRunID;
+    let composeRun = null;
+    if (activeID) {
+      composeRun = runs.find(
+        (r) => r.run_id === activeID && r.purpose === "compose",
+      );
+    }
+    if (composeRun && composeRun.raw_output) {
+      this._composeRun = composeRun;
+      this._composeTree = composeRun.raw_output;
+    } else {
+      this._composeRun = null;
+      this._composeTree = null;
+    }
+    const nerRuns = runs.filter((r) => r.purpose === "ner");
+    let nerRun = null;
+    if (this._composeRun && this._composeRun.parent_run_id) {
+      nerRun = nerRuns.find(
+        (r) => r.run_id === this._composeRun.parent_run_id,
+      );
+    }
+    if (!nerRun && nerRuns.length > 0) {
+      nerRuns.sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at),
+      );
+      nerRun = nerRuns[0];
+    }
+    this._nerRun = nerRun;
+  }
+
+  // _setActiveComposeRun switches the reader-facing run — updates
+  // the derived _composeRun/_composeTree/_nerRun and pushes the
+  // new annotation set to the reader iframe. Called by the single-
+  // view run picker and by compare-view column-header clicks.
+  _setActiveComposeRun(id) {
+    if (!id || id === this._activeComposeRunID) return;
+    this._activeComposeRunID = id;
+    this._deriveActiveRuns();
+    requestAnimationFrame(() => this._postAnnotationsToReader());
   }
 
   // _fetchGrobidRegions pulls every fig/table-wrap region from the
@@ -16221,6 +17967,25 @@ class SfgaReferences extends LitElement {
           ></sfga-add-reference-modal>`
         : nothing}
       ${this._renderBBoxForm()}
+      ${this._llmInvokeOpen && this._current
+        ? html`<sfga-llm-invoke-modal
+            .referenceId=${this._current.id}
+            .referenceLabel=${this._current.title ||
+            this._current.citation ||
+            this._current.id}
+            .attachedShas=${this._current.attached_pdf_shas || []}
+            @close=${() => (this._llmInvokeOpen = false)}
+            @run-created=${() => {
+              // Refresh assertions so the empty pane flips to the
+              // populated list without a manual reload. Also
+              // switches the workspace tab to Assertions so the
+              // curator sees the result immediately even if they
+              // triggered the run from a different tab.
+              this._workspaceTab = "assertions";
+              this._fetchAssertions(this._selectedId);
+            }}
+          ></sfga-llm-invoke-modal>`
+        : nothing}
     `;
   }
 
@@ -16309,7 +18074,12 @@ class SfgaReferences extends LitElement {
             role="tab"
             aria-selected=${this._workspaceTab === "bibliography"}
             class=${this._workspaceTab === "bibliography" ? "active" : ""}
-            @click=${() => (this._workspaceTab = "bibliography")}
+            @click=${() => {
+              this._workspaceTab = "bibliography";
+              requestAnimationFrame(() =>
+                this._postToReader({ type: "hive:set-workflow", workflow: "bibliography" }),
+              );
+            }}
           >
             Bibliography
           </button>
@@ -16321,7 +18091,12 @@ class SfgaReferences extends LitElement {
             title=${hasReader
               ? "Compare the augmented JATS reader with the source PDF"
               : "No PDF attached to this reference"}
-            @click=${() => (this._workspaceTab = "digitize")}
+            @click=${() => {
+              this._workspaceTab = "digitize";
+              requestAnimationFrame(() =>
+                this._postToReader({ type: "hive:set-workflow", workflow: "digitize" }),
+              );
+            }}
           >
             Digitize
           </button>
@@ -16329,10 +18104,34 @@ class SfgaReferences extends LitElement {
             role="tab"
             aria-selected=${this._workspaceTab === "assertions"}
             class=${this._workspaceTab === "assertions" ? "active" : ""}
-            title="Review structured assertions extracted from the paper against the source (coming soon)"
-            @click=${() => (this._workspaceTab = "assertions")}
+            title="Review structured assertions extracted from the paper"
+            @click=${() => {
+              this._workspaceTab = "assertions";
+              this._fetchAssertions(this._selectedId);
+              // Tell the visible reader iframe which workflow
+              // it's now hosting so per-workflow CSS overrides
+              // (GN dim, NER emphasis) apply.
+              requestAnimationFrame(() =>
+                this._postToReader({ type: "hive:set-workflow", workflow: "assertions" }),
+              );
+            }}
           >
             Assertions
+          </button>
+          <button
+            role="tab"
+            aria-selected=${this._workspaceTab === "assembly"}
+            class=${this._workspaceTab === "assembly" ? "active" : ""}
+            title="Assimilate paper mentions into the taxonomy tree and import"
+            @click=${() => {
+              this._workspaceTab = "assembly";
+              // Assembly needs the same data as Assertions (compose
+              // runs, per-mention keys) plus paper_import mappings.
+              this._fetchAssertions(this._selectedId);
+              this._fetchPaperImportMappings(this._selectedId);
+            }}
+          >
+            Assimilate
           </button>
         </div>
         <div class="workspace-panes">
@@ -16431,21 +18230,1547 @@ class SfgaReferences extends LitElement {
             </div>`}
       </div>
       <div class="tab-content" ?hidden=${this._workspaceTab !== "assertions"}>
-        <div class="pane pane-empty">
-          <strong>Assertions view — coming soon.</strong> Once the
-          extraction pipeline lands, this pane will show the
-          scientific names, nomenclatural acts, distributions, and
-          other structured claims hive pulled from the paper.
-          Clicking an assertion will jump the reader on the right
-          to the source paragraph so you can verify.
-        </div>
+        ${this._renderAssertionsPane()}
         ${hasReader
-          ? html`<iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>`
+          ? html`<iframe
+              class="pane reader"
+              title="Reader"
+              src=${readerSrc}
+              @load=${(e) => {
+                // Send the workflow first so per-workflow CSS
+                // (GN dim, NER emphasis) applies before the
+                // annotations paint over it. Both messages go to
+                // the same iframe.
+                e.target.contentWindow?.postMessage(
+                  { type: "hive:set-workflow", workflow: "assertions" },
+                  "*",
+                );
+                this._postAnnotationsToReader();
+              }}
+            ></iframe>`
           : html`<div class="pane pane-empty">
               No source available — attach a PDF to enable the reader pane.
             </div>`}
       </div>
+      <div class="tab-content assembly" ?hidden=${this._workspaceTab !== "assembly"}>
+        ${this._renderAssemblyPane()}
+      </div>
     `;
+  }
+
+  // _renderAssertionsPane returns the left-side workspace pane for
+  // the Assertions tab: a toolbar strip (invoke ✨ + compare 3-pane
+  // + count) plus either an empty-state call-to-action or a list of
+  // per-fact assertions grouped by source_run.
+  //
+  // The 3-pane compare view opens paper + candidate-tree-A +
+  // candidate-tree-B when the paper has multiple runs — stubbed
+  // for now with a disabled button + tooltip because that view is
+  // its own build (task not yet created; put it on the roadmap).
+  //
+  // Empty state ("no assertions yet") is the primary call-to-action
+  // rather than a passive "coming soon" placeholder — since running
+  // an extraction is the whole point of the tab, the empty pane
+  // exists to guide the curator into the invoke flow.
+  _renderAssertionsPane() {
+    if (!this._selectedId) {
+      return html`<div class="pane pane-empty">
+        Pick a reference from the list to view or run extractions.
+      </div>`;
+    }
+    // Prefer the composed tree when a compose run exists — it's
+    // the structure the Assembly step will eventually consume,
+    // and the color-tagged extension chips make it easy to spot
+    // missing categories in a future side-by-side compare view.
+    // Fall back to the raw NER assertion list when only NER runs
+    // exist (rare — pipeline always runs both).
+    const tree = this._composeTree;
+    const hasTree = tree && tree.name_usages && tree.name_usages.length > 0;
+    const nerCount = (this._assertions || []).length;
+    return html`
+      <div class="pane assertions-pane">
+        <div class="assertions-toolbar">
+          <span class="count">
+            ${this._assertionsLoading
+              ? "loading…"
+              : hasTree
+                ? `${tree.name_usages.length} taxa · ${nerCount} raw assertions`
+                : nerCount > 0
+                  ? `${nerCount} raw assertions (no tree yet)`
+                  : "no assertions yet"}
+          </span>
+          <span class="spacer"></span>
+          <button
+            class="icon-btn"
+            type="button"
+            @click=${() => (this._llmInvokeOpen = true)}
+            title=${hasTree || nerCount > 0
+              ? "Re-run extraction with a different model or prompt"
+              : "Run LLM extraction on this paper"}
+            aria-label="Run LLM extraction"
+          >
+            ${renderIcon("sparkles", 16)}
+          </button>
+          <button
+            class="icon-btn ${this._compareMode ? "active" : ""}"
+            type="button"
+            ?disabled=${this._composeRunCount() < 2}
+            title=${this._composeRunCount() < 2
+              ? "Compare model runs — run the paper through a second provider/model first"
+              : this._compareMode
+                ? "Exit compare view"
+                : "Compare two runs side-by-side"}
+            aria-label="Compare model runs"
+            aria-pressed=${this._compareMode ? "true" : "false"}
+            @click=${() => this._toggleCompareMode()}
+          >
+            ${renderIcon("columns-3", 16)}
+          </button>
+        </div>
+        ${this._compareMode
+          ? this._renderCompareView()
+          : hasTree
+            ? html`
+                ${this._renderComposeRunPicker()}
+                ${this._renderComposeTree(tree)}
+              `
+            : nerCount > 0
+              ? this._renderAssertionsList()
+              : this._renderAssertionsEmpty()}
+      </div>
+    `;
+  }
+
+  // _renderComposeRunPicker renders the single-view active-run
+  // dropdown — visible only when the paper has 2+ compose runs so
+  // it stays out of the way for the common single-run case. The
+  // selected run drives what the reader iframe paints (NER
+  // annotations + tag_reviews), so switching it lets the curator
+  // A/B extractions against the paper without opening compare view.
+  _renderComposeRunPicker() {
+    const composeRuns = (this._runs || [])
+      .filter((r) => r.purpose === "compose")
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    if (composeRuns.length < 2) return nothing;
+    return html`
+      <div class="compose-run-picker">
+        <label>Run</label>
+        <select
+          @change=${(e) => this._setActiveComposeRun(e.target.value)}
+        >
+          ${composeRuns.map(
+            (r) => html`
+              <option
+                value=${r.run_id}
+                ?selected=${r.run_id === this._activeComposeRunID}
+              >
+                ${this._composeRunLabel(r)}
+              </option>
+            `,
+          )}
+        </select>
+      </div>
+    `;
+  }
+
+  // _composeRunLabel builds a compact dropdown label — model +
+  // cost + relative age so the curator can distinguish runs at a
+  // glance without decoding the run_id UUID.
+  _composeRunLabel(r) {
+    const env = this._safeParseAssertion(r.envelope);
+    const model =
+      env?.model_version_id || env?.model || r.source_id || "unknown";
+    const cost = r.cost_usd != null ? ` · ${this._formatUSD(r.cost_usd)}` : "";
+    const when = r.created_at ? ` · ${this._relTime(r.created_at)}` : "";
+    return `${model}${cost}${when}`;
+  }
+
+  // _relTime returns a short relative timestamp (5m, 2h, 3d) —
+  // enough to disambiguate multiple runs of the same model without
+  // dedicating dropdown space to a full ISO date.
+  _relTime(iso) {
+    const t = new Date(iso).getTime();
+    if (!t) return "";
+    const diff = Date.now() - t;
+    const m = Math.round(diff / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.round(h / 24);
+    return `${d}d ago`;
+  }
+
+  // _composeRunCount is a helper for enabling/disabling the
+  // compare button — need at least two compose runs to compare.
+  _composeRunCount() {
+    return (this._runs || []).filter((r) => r.purpose === "compose").length;
+  }
+
+  _toggleCompareMode() {
+    if (this._compareMode) {
+      this._compareMode = false;
+      return;
+    }
+    // Entering compare mode — pick sensible defaults for the
+    // two panes. Two most recent compose runs from different
+    // providers give the best contrast; fall back to just the
+    // two most recent when all runs used the same provider.
+    const composeRuns = (this._runs || [])
+      .filter((r) => r.purpose === "compose")
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    if (composeRuns.length < 2) return;
+    const runA = composeRuns[0];
+    let runB = composeRuns.find((r) => r.source_id !== runA.source_id);
+    if (!runB) runB = composeRuns[1];
+    this._compareRunAID = runA.run_id;
+    this._compareRunBID = runB.run_id;
+    this._compareMode = true;
+    // Default active side to A on entry — reader mirrors whichever
+    // pane the curator focused, and A is what a fresh compare view
+    // shows on the left. _setActiveComposeRun triggers the reader
+    // postMessage; setActiveCompareSide keeps the state coherent.
+    this._setActiveCompareSide("A");
+  }
+
+  // _setActiveCompareSide promotes one of the two compare columns
+  // to "active" — its run drives what the reader iframe paints.
+  // Guards against no-op transitions so a click on the already-
+  // active column doesn't churn the reader.
+  _setActiveCompareSide(side) {
+    const targetID =
+      side === "B" ? this._compareRunBID : this._compareRunAID;
+    if (!targetID) return;
+    this._activeCompareSide = side;
+    this._setActiveComposeRun(targetID);
+  }
+
+  // _renderCompareView renders two compose trees side-by-side
+  // with a per-tree run picker + a header showing model / cost
+  // metadata so the curator can eyeball cost-vs-coverage in one
+  // glance. Reuses _renderComposeTree for each pane; shared
+  // color-tag categories mean missing categories jump out
+  // visually between the two trees (per project_extraction_runs
+  // _multi_model_schema design).
+  _renderCompareView() {
+    const composeRuns = (this._runs || [])
+      .filter((r) => r.purpose === "compose")
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const runA = composeRuns.find((r) => r.run_id === this._compareRunAID);
+    const runB = composeRuns.find((r) => r.run_id === this._compareRunBID);
+    const activeSide = this._activeCompareSide || "A";
+    return html`
+      <div class="compare-panes">
+        ${this._renderCompareColumn(
+          "A",
+          runA,
+          composeRuns,
+          activeSide === "A",
+          (id) => {
+            this._compareRunAID = id;
+            // If A is the active side, promote the newly-picked
+            // run to the reader immediately so the header pick
+            // reflects the change without a second click.
+            if (this._activeCompareSide === "A") {
+              this._setActiveComposeRun(id);
+            }
+          },
+          () => this._setActiveCompareSide("A"),
+        )}
+        ${this._renderCompareColumn(
+          "B",
+          runB,
+          composeRuns,
+          activeSide === "B",
+          (id) => {
+            this._compareRunBID = id;
+            if (this._activeCompareSide === "B") {
+              this._setActiveComposeRun(id);
+            }
+          },
+          () => this._setActiveCompareSide("B"),
+        )}
+      </div>
+    `;
+  }
+
+  _renderCompareColumn(label, run, options, isActive, onPick, onActivate) {
+    const tree = run && run.raw_output;
+    const env = run && this._safeParseAssertion(run.envelope);
+    const model = env?.model_version_id || env?.model || run?.source_id || "—";
+    const cost = run ? run.cost_usd : null;
+    return html`
+      <div class="compare-column ${isActive ? "active" : ""}">
+        <div
+          class="compare-header"
+          role="button"
+          tabindex="0"
+          aria-pressed=${isActive ? "true" : "false"}
+          title=${isActive
+            ? "Active pane — its NER tags drive the reader"
+            : "Click to make this pane's tags visible in the reader"}
+          @click=${(e) => {
+            // Don't hijack clicks on the picker itself.
+            if (e.target.closest("select")) return;
+            onActivate();
+          }}
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onActivate();
+            }
+          }}
+        >
+          <span class="compare-label">${label}</span>
+          <select
+            @change=${(e) => onPick(e.target.value)}
+            @click=${(e) => e.stopPropagation()}
+          >
+            ${options.map(
+              (r) => html`
+                <option
+                  value=${r.run_id}
+                  ?selected=${run && r.run_id === run.run_id}
+                >
+                  ${this._composeRunLabel(r)}
+                </option>
+              `,
+            )}
+          </select>
+          ${run
+            ? html`<span class="compare-meta">
+                ${model} · ${cost != null ? this._formatUSD(cost) : "—"}
+              </span>`
+            : nothing}
+        </div>
+        ${tree && tree.name_usages && tree.name_usages.length > 0
+          ? this._renderComposeTree(tree)
+          : html`<div class="pane-empty">no tree in this run</div>`}
+      </div>
+    `;
+  }
+
+  _safeParseAssertion(v) {
+    if (v == null) return null;
+    if (typeof v === "object") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return null;
+    }
+  }
+
+  _formatUSD(n) {
+    if (n == null) return "";
+    if (n < 0.01) return `~$${n.toFixed(4)}`;
+    return `~$${n.toFixed(2)}`;
+  }
+
+  // _renderComposeTree walks compose_v1's name_usages by parentID
+  // to build the taxonomic hierarchy, attaches extensions
+  // (type_material, distribution, vernacular_name) to their
+  // referenced nodes, and renders as a nested tree with
+  // color-coded fact chips. Structure is what the future Assembly
+  // step will consume — data-name-id attributes prep for
+  // drag-to-import UX.
+  _renderComposeTree(compose) {
+    const roots = this._buildComposeStructure(compose);
+    return html`
+      <div class="tax-tree" role="tree">
+        ${roots.map((r) => this._renderTaxonNode(r, 0))}
+      </div>
+    `;
+  }
+
+  _buildComposeStructure(compose) {
+    const nameUsages = compose.name_usages || [];
+    const byId = new Map();
+    for (const nu of nameUsages) {
+      byId.set(nu.id, { ...nu, _children: [] });
+    }
+    const roots = [];
+    for (const nu of nameUsages) {
+      const node = byId.get(nu.id);
+      const pid = nu.parentID;
+      if (pid && byId.has(pid)) {
+        byId.get(pid)._children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+    // Index extensions by their referenced ID and attach.
+    // Each attached entry carries {row, kind, index} so drag-and-
+    // drop can find the source row in the compose object without
+    // deep-searching by reference (which breaks after
+    // structuredClone during reparent).
+    const attach = (arr, kind, refKey, bucket) => {
+      (arr || []).forEach((row, index) => {
+        const id = row[refKey];
+        if (!byId.has(id)) return;
+        const node = byId.get(id);
+        if (!node[bucket]) node[bucket] = [];
+        node[bucket].push({ row, kind, index });
+      });
+    };
+    attach(compose.type_material, "type_material", "nameID", "_typeMaterial");
+    attach(compose.distribution, "distribution", "taxonID", "_distribution");
+    attach(compose.vernacular_name, "vernacular_name", "taxonID", "_vernacular");
+    return roots;
+  }
+
+  // Field order for the nom-group (the name-level facts about a
+  // taxon). Rendered inside every taxon node that has at least one
+  // populated name assertion so curators can verify scientificName,
+  // authorship, publishedInYear, etc. independently.
+  static NOM_FIELD_ORDER = [
+    "scientificName",
+    "authorship",
+    "publishedInYear",
+    "rank",
+    "nameStatus",
+    "status",
+  ];
+
+  _renderTaxonNode(node, depth) {
+    const name = this._unwrapValue(node.scientificName);
+    const auth = this._unwrapValue(node.authorship);
+    const rank = this._unwrapValue(node.rank);
+    const isSpecies = rank === "species" || rank === "subspecies" || rank === "variety";
+    const typeMat = node._typeMaterial || [];
+    const dist = node._distribution || [];
+    const vern = node._vernacular || [];
+    // Aggregate status across every name-level assertion so the
+    // curator can see at a glance whether they've verified the
+    // name for this node.
+    const nomFields = this._orderFields(node, SfgaReferences.NOM_FIELD_ORDER);
+    const nomStatuses = nomFields.map(([, v]) =>
+      this._statusForSources(v.sources || []),
+    );
+    const nomGroupStatus = this._aggregateStatus(nomStatuses);
+    const nomAllSources = [];
+    {
+      const seen = new Set();
+      for (const [, v] of nomFields) {
+        for (const s of v.sources || []) {
+          if (!seen.has(s)) {
+            seen.add(s);
+            nomAllSources.push(s);
+          }
+        }
+      }
+    }
+    const hasFacts =
+      typeMat.length + dist.length + vern.length > 0 || nomFields.length > 0;
+    return html`
+      <div class="tax-node" role="treeitem" data-name-id=${node.id}>
+        <div
+          class="tax-line"
+          style="padding-left: ${depth * 1.25}em"
+          @dragover=${(e) => this._onTaxonNodeDragOver(e)}
+          @dragleave=${(e) => this._onTaxonNodeDragLeave(e)}
+          @drop=${(e) => this._onTaxonNodeDrop(e, node.id)}
+        >
+          ${nomFields.length > 0
+            ? html`<button
+                class="verify-btn tax-verify"
+                type="button"
+                aria-label=${this._verifyLabel(nomGroupStatus) +
+                " (all name fields)"}
+                title=${this._verifyLabel(nomGroupStatus) +
+                " (all name fields)"}
+                @click=${(e) => {
+                  e.stopPropagation();
+                  this._toggleAssertionsForSources(nomAllSources);
+                }}
+              >
+                ${this._renderCheckbox(nomGroupStatus)}
+              </button>`
+            : nothing}
+          <span class="tax-name ${isSpecies ? "italic" : ""}">${name}</span>
+          ${auth ? html`<span class="tax-auth">${auth}</span>` : nothing}
+          ${rank ? html`<span class="tax-rank">${rank}</span>` : nothing}
+        </div>
+        ${hasFacts
+          ? html`<div
+              class="tax-facts"
+              style="padding-left: ${(depth + 1) * 1.25}em"
+            >
+              ${nomFields.length > 0
+                ? html`<div class="fact-group nom">
+                    <div class="fact-fields">
+                      ${nomFields.map(([field, v], i) =>
+                        this._renderFactField(
+                          "nom",
+                          field,
+                          v,
+                          nomStatuses[i],
+                        ),
+                      )}
+                    </div>
+                  </div>`
+                : nothing}
+              ${typeMat.map((entry) => this._renderTypeMaterialChip(entry))}
+              ${dist.map((entry) => this._renderDistributionChip(entry))}
+              ${vern.map((entry) => this._renderVernacularChip(entry))}
+            </div>`
+          : nothing}
+        ${(node._children || []).map((c) => this._renderTaxonNode(c, depth + 1))}
+      </div>
+    `;
+  }
+
+  // Field-order lists per extension kind. Rendering order matters —
+  // curators reading a type-material block expect status → sex →
+  // catalog → geo → date, matching how the label reads in the paper.
+  // Fields not in this list still render but appear at the end in
+  // insertion order (compose output preserves this).
+  // ISO `date` is intentionally excluded — verbatimDate is the
+  // curator-facing form (Roman-numeral month per taxonomic
+  // convention); ISO is a derived-for-programmatic-use value the
+  // server fills via pkg/taxonomy/labeldate. See memory
+  // project_taxonomic_date_conventions and feedback_per_mention
+  // _assertions.
+  static TYPE_MATERIAL_FIELD_ORDER = [
+    "status",
+    "sex",
+    "institutionCode",
+    "catalogNumber",
+    "country",
+    "stateProvince",
+    "locality",
+    "decimalLatitude",
+    "decimalLongitude",
+    "verbatimCoordinates",
+    "verbatimElevation",
+    "verbatimDate",
+    "recordedBy",
+    "habitat",
+  ];
+  static DISTRIBUTION_FIELD_ORDER = [
+    "area",
+    "areaID",
+    "gazetteer",
+    "status",
+    "reference",
+  ];
+  static VERNACULAR_FIELD_ORDER = [
+    "name",
+    "language",
+    "country",
+    "area",
+    "sex",
+    "lifeStage",
+    "reference",
+  ];
+
+  // _orderFields returns [key, wrappedValue] pairs from the row in
+  // curator-readable order, skipping fields whose value is empty.
+  // Non-{value, sources} fields (bare strings, foreign refs like
+  // nameID / taxonID) are excluded — they're plumbing, not
+  // extracted facts, and shouldn't get their own checkbox.
+  // Fields that are derived / stored for programmatic use but
+  // never shown in the curator-facing tree — showing both the
+  // verbatim form and the ISO derivation is redundant clutter and
+  // doubles curator verification work. Fields listed here are
+  // filtered out of the render regardless of whether they're in
+  // the ordered list or fall through to the appended remainder.
+  static HIDDEN_ASSERTION_FIELDS = new Set([
+    // ISO date is derived from verbatimDate server-side (see
+    // pkg/taxonomy/labeldate). Curator confirms the verbatim form;
+    // the ISO form follows deterministically.
+    "date",
+  ]);
+
+  _orderFields(row, order) {
+    if (!row || typeof row !== "object") return [];
+    const seen = new Set();
+    const pairs = [];
+    const isAssertionField = (v) =>
+      v && typeof v === "object" && "value" in v && Array.isArray(v.sources);
+    for (const key of order) {
+      if (SfgaReferences.HIDDEN_ASSERTION_FIELDS.has(key)) continue;
+      if (!(key in row)) continue;
+      const v = row[key];
+      if (!isAssertionField(v)) continue;
+      if (v.value == null || v.value === "") continue;
+      seen.add(key);
+      pairs.push([key, v]);
+    }
+    // Append any assertion fields not in the ordered list so a
+    // prompt update that emits a new field doesn't silently drop
+    // curator-visible facts.
+    for (const [key, v] of Object.entries(row)) {
+      if (seen.has(key)) continue;
+      if (SfgaReferences.HIDDEN_ASSERTION_FIELDS.has(key)) continue;
+      if (!isAssertionField(v)) continue;
+      if (v.value == null || v.value === "") continue;
+      pairs.push([key, v]);
+    }
+    return pairs;
+  }
+
+  // _formatFieldValue renders a compose field value with light,
+  // domain-appropriate formatting. Sex glyphs stay compact, status
+  // gets lowercased for uniform label appearance, everything else
+  // renders as-is. Extend here (not per-renderer) as new fields
+  // need special treatment.
+  _formatFieldValue(kind, field, value) {
+    if (field === "sex") {
+      if (value === "male") return "♂ male";
+      if (value === "female") return "♀ female";
+    }
+    return String(value);
+  }
+
+  // Human labels for compose field keys. Kept in a shared table so
+  // the same field renders identically across kinds (a "country"
+  // in type_material and a "country" in vernacular_name both read
+  // as "country"). Falls back to the raw key for anything the
+  // table doesn't cover.
+  static FIELD_LABELS = {
+    status: "status",
+    sex: "sex",
+    institutionCode: "institution",
+    catalogNumber: "catalog #",
+    country: "country",
+    stateProvince: "state/prov",
+    locality: "locality",
+    decimalLatitude: "lat",
+    decimalLongitude: "lon",
+    verbatimCoordinates: "coords",
+    verbatimElevation: "elevation",
+    verbatimDate: "date",
+    date: "date (ISO)",
+    recordedBy: "collector",
+    habitat: "habitat",
+    area: "area",
+    areaID: "area id",
+    gazetteer: "gazetteer",
+    reference: "reference",
+    name: "name",
+    language: "language",
+    lifeStage: "life stage",
+    scientificName: "scientific name",
+    authorship: "authorship",
+    publishedInYear: "published",
+    rank: "rank",
+    nameStatus: "name status",
+    parentID: "parent",
+  };
+
+  _fieldLabel(field) {
+    return SfgaReferences.FIELD_LABELS[field] || field;
+  }
+
+  // _renderFactField renders one per-assertion sub-row inside a
+  // fact-group. Three states:
+  //   1. Read-only (default): label + value + verify checkbox
+  //      + hover-only pencil + hover-only "was: X" strikethrough
+  //      annotation when a correction has been recorded.
+  //   2. Editing: inline text input replaces the value; Enter
+  //      saves via POST /api/assertion/{id}/correction, Esc
+  //      cancels. Pencil hides while editing.
+  //   3. Un-editable (multi-source compose fields where we can't
+  //      pick a single assertion to correct): pencil is hidden;
+  //      verification still works via the shared source list.
+  _renderFactField(wireKind, field, wrappedValue, status) {
+    const srcs = wrappedValue.sources || [];
+    const { display, correction, assertion } = this._displayValueForField(
+      srcs,
+      wrappedValue.value,
+    );
+    const shown = this._formatFieldValue(wireKind, field, display);
+    const assertionID = assertion?.assertion_id || "";
+    const canEdit = !!assertionID;
+    const editing =
+      canEdit && this._editingAssertionID === assertionID;
+    return html`
+      <div
+        class="fact-field ${status} ${correction ? "corrected" : ""}"
+        role=${editing ? "group" : "button"}
+        tabindex=${editing ? "-1" : "0"}
+        title=${editing
+          ? "editing — press Enter to save, Esc to cancel"
+          : "click text to jump to source · pencil to correct value · checkbox to toggle verified"}
+        @click=${(e) => {
+          if (editing) return;
+          if (e.target.closest(".verify-check")) return;
+          if (e.target.closest(".fact-field-edit")) return;
+          if (e.target.closest(".edit-btn")) return;
+          this._onFactChipClick(srcs);
+        }}
+        @keydown=${(e) => {
+          if (editing) return;
+          if (e.key === "Enter") this._onFactChipClick(srcs);
+        }}
+      >
+        <button
+          class="verify-btn"
+          type="button"
+          aria-label=${this._verifyLabel(status)}
+          title=${this._verifyLabel(status)}
+          @click=${(e) => {
+            e.stopPropagation();
+            this._toggleAssertionsForSources(srcs);
+          }}
+        >
+          ${this._renderCheckbox(status)}
+        </button>
+        <span class="fact-field-label">${this._fieldLabel(field)}</span>
+        ${editing
+          ? html`
+              <span class="fact-field-edit">
+                <input
+                  type="text"
+                  .value=${this._editInputValue}
+                  @input=${(e) => (this._editInputValue = e.target.value)}
+                  @keydown=${(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      this._saveFieldEdit(assertionID, field);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      this._cancelEditingField();
+                    }
+                  }}
+                />
+                <button
+                  class="edit-save"
+                  type="button"
+                  title="save correction"
+                  @click=${(e) => {
+                    e.stopPropagation();
+                    this._saveFieldEdit(assertionID, field);
+                  }}
+                >
+                  save
+                </button>
+                <button
+                  class="edit-cancel"
+                  type="button"
+                  title="cancel"
+                  @click=${(e) => {
+                    e.stopPropagation();
+                    this._cancelEditingField();
+                  }}
+                >
+                  cancel
+                </button>
+              </span>
+            `
+          : html`
+              <span class="fact-field-value">
+                ${shown}
+                ${correction
+                  ? html`<span
+                      class="was-annotation"
+                      title="corrected by ${correction.created_by ||
+                      "curator"} on ${(correction.created_at || "").slice(
+                        0,
+                        10,
+                      )}"
+                    >
+                      was:
+                      <span class="was-value">${correction.original}</span>
+                    </span>`
+                  : nothing}
+              </span>
+              ${canEdit
+                ? html`<button
+                    class="edit-btn"
+                    type="button"
+                    aria-label="correct this value"
+                    title="correct this value"
+                    @click=${(e) => {
+                      e.stopPropagation();
+                      this._startEditingField(assertionID, display);
+                    }}
+                  >
+                    ${renderIcon("pencil", 12)}
+                  </button>`
+                : nothing}
+            `}
+      </div>
+    `;
+  }
+
+  // _renderFactGroup renders one extension-row (specimen /
+  // locality / vernacular entry) as a two-level block: a group
+  // header with a summary + aggregate checkbox, and one sub-row
+  // per assertion field with its own checkbox. Sub-rows carry
+  // click-to-jump to the reader; the whole block is draggable so
+  // the chip-reparent flow still works at the group level.
+  //
+  // Takes a display-kind ("type" | "dist" | "vern" | "nom") for
+  // CSS class dispatch AND the domain-model kind used by the drag
+  // payload (compose output uses the full name "type_material" /
+  // "vernacular_name" as the source-array key). Keeping them
+  // separate lets the CSS palette stay short-string while the
+  // wire-format ID stays canonical.
+  _renderFactGroup(displayKind, wireKind, entry, summary, fieldOrder) {
+    const row = entry.row;
+    const fields = this._orderFields(row, fieldOrder);
+    const perFieldStatuses = fields.map(([, v]) =>
+      this._statusForSources(v.sources || []),
+    );
+    const groupStatus = this._aggregateStatus(perFieldStatuses);
+    const allSources = this._collectSources(row);
+    const kindLabel = wireKind.replace("_", " ");
+    return html`
+      <div
+        class="fact-group ${displayKind}"
+        draggable="true"
+        @dragstart=${(e) => this._onChipDragStart(e, entry)}
+      >
+        <div
+          class="fact-group-header"
+          role="button"
+          tabindex="0"
+          aria-label=${this._verifyLabel(groupStatus) + " (all fields)"}
+          title="click checkbox to verify all fields in this ${kindLabel} · click text to jump to source"
+          @click=${(e) => {
+            if (e.target.closest(".verify-check")) return;
+            this._onFactChipClick(allSources);
+          }}
+          @keydown=${(e) => {
+            if (e.key === "Enter") this._onFactChipClick(allSources);
+          }}
+        >
+          <button
+            class="verify-btn"
+            type="button"
+            aria-label=${this._verifyLabel(groupStatus)}
+            title=${this._verifyLabel(groupStatus)}
+            @click=${(e) => {
+              e.stopPropagation();
+              this._toggleAssertionsForSources(allSources);
+            }}
+          >
+            ${this._renderCheckbox(groupStatus)}
+          </button>
+          <span class="fact-kind-badge">${this._kindBadge(wireKind)}</span>
+          <span class="fact-summary">${summary}</span>
+        </div>
+        ${fields.length > 0
+          ? html`<div class="fact-fields">
+              ${fields.map(([field, v], i) =>
+                this._renderFactField(
+                  wireKind,
+                  field,
+                  v,
+                  perFieldStatuses[i],
+                ),
+              )}
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  _kindBadge(kind) {
+    switch (kind) {
+      case "type_material":
+        return "TYPE";
+      case "distribution":
+        return "DIST";
+      case "vernacular_name":
+        return "VERN";
+      case "nom":
+        return "NOM";
+      default:
+        return kind.toUpperCase();
+    }
+  }
+
+  _renderTypeMaterialChip(entry) {
+    const tm = entry.row;
+    // Human-readable summary for the group header — a compact
+    // recap of the specimen so curators can identify each block
+    // at a glance without expanding every field row.
+    const parts = [];
+    const status = this._unwrapValue(tm.status);
+    if (status) parts.push(status);
+    const sex = this._unwrapValue(tm.sex);
+    if (sex) parts.push(sex === "male" ? "♂" : sex === "female" ? "♀" : sex);
+    const inst = this._unwrapValue(tm.institutionCode);
+    const cat = this._unwrapValue(tm.catalogNumber);
+    if (inst || cat) parts.push([inst, cat].filter(Boolean).join(" "));
+    const geoBits = [
+      this._unwrapValue(tm.country),
+      this._unwrapValue(tm.locality),
+    ]
+      .filter(Boolean)
+      .join(" / ");
+    if (geoBits) parts.push(geoBits);
+    const summary = parts.join(" · ") || "type material";
+    return this._renderFactGroup(
+      "type",
+      "type_material",
+      entry,
+      summary,
+      SfgaReferences.TYPE_MATERIAL_FIELD_ORDER,
+    );
+  }
+
+  _renderDistributionChip(entry) {
+    const d = entry.row;
+    const area = this._unwrapValue(d.area);
+    const areaID = this._unwrapValue(d.areaID);
+    const summary = area && areaID ? `${area} (${areaID})` : area || areaID || "distribution";
+    return this._renderFactGroup(
+      "dist",
+      "distribution",
+      entry,
+      summary,
+      SfgaReferences.DISTRIBUTION_FIELD_ORDER,
+    );
+  }
+
+  _renderVernacularChip(entry) {
+    const v = entry.row;
+    const name = this._unwrapValue(v.name);
+    const lang = this._unwrapValue(v.language);
+    const summary = name && lang ? `${name} (${lang})` : name || "vernacular";
+    return this._renderFactGroup(
+      "vern",
+      "vernacular_name",
+      entry,
+      summary,
+      SfgaReferences.VERNACULAR_FIELD_ORDER,
+    );
+  }
+
+  // _onChipDragStart records which extension row is being dragged
+  // (kind = type_material | distribution | vernacular_name;
+  // index = position in the top-level compose array). Passed via
+  // dataTransfer so the drop handler on the target taxon node
+  // can find the row to reparent without keeping component state.
+  _onChipDragStart(e, entry) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(
+      "application/hive-chip",
+      JSON.stringify({ kind: entry.kind, index: entry.index }),
+    );
+  }
+
+  // _onTaxonNodeDragOver marks the tax-line as a drop target
+  // (visual feedback) and preventDefault so the browser accepts
+  // the drop. Fires very often — the CSS class add is idempotent
+  // so repeated calls are fine.
+  _onTaxonNodeDragOver(e) {
+    // Only react to drags carrying our chip payload.
+    const types = [...(e.dataTransfer?.types || [])];
+    if (!types.includes("application/hive-chip")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    e.currentTarget.classList.add("drop-target");
+  }
+
+  _onTaxonNodeDragLeave(e) {
+    e.currentTarget.classList.remove("drop-target");
+  }
+
+  // _onTaxonNodeDrop reparents the dragged extension row to the
+  // new taxon by mutating a clone of _composeTree (Lit reactivity
+  // needs an object-identity change to trigger re-render).
+  //
+  // Client-side only for now — the mutation lives until the
+  // Assertions tab re-fetches or the browser reloads. Persistent
+  // reparent is a follow-up (task tracked separately): a new
+  // hive__extraction_correction kind that layers on top of the
+  // immutable compose run's raw_output_json at read time. Keeps
+  // the LLM's original output preserved for provenance while
+  // curator edits accumulate as separate correction records.
+  _onTaxonNodeDrop(e, newTaxonID) {
+    e.currentTarget.classList.remove("drop-target");
+    const raw = e.dataTransfer?.getData("application/hive-chip");
+    if (!raw) return;
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!payload.kind || payload.index == null) return;
+    if (!this._composeTree) return;
+    const clone = structuredClone(this._composeTree);
+    const arr = clone[payload.kind];
+    if (!arr || !arr[payload.index]) return;
+    // type_material references nameID; distribution + vernacular
+    // reference taxonID. Both point at name_usage.id in compose
+    // output, so the target field name differs but the value is
+    // the same node id.
+    if (payload.kind === "type_material") {
+      arr[payload.index].nameID = newTaxonID;
+    } else {
+      arr[payload.index].taxonID = newTaxonID;
+    }
+    this._composeTree = clone;
+  }
+
+  // _assertionByPayloadID indexes _assertions by their embedded
+  // NER payload.id ("a12" etc.) so compose-output source refs
+  // resolve to the backing hive__reference_assertion row (which
+  // carries the durable UUID assertion_id + status).
+  //
+  // Scoped to the active NER run's source_run_id when known — two
+  // NER runs on the same paper both emit "a1", "a2" ...; without
+  // scoping, the map would collapse them and verification checks
+  // would flip the wrong row. Falls back to unscoped when no run
+  // is active (legacy assertions from before source_run_id existed
+  // still surface).
+  _assertionByPayloadID() {
+    const runID = this._nerRun?.run_id || "";
+    const cache = this._assertionIndexCache;
+    if (
+      cache &&
+      cache.list === this._assertions &&
+      cache.runID === runID
+    ) {
+      return cache.map;
+    }
+    const map = new Map();
+    for (const a of this._assertions || []) {
+      if (runID && a.source_run_id && a.source_run_id !== runID) continue;
+      try {
+        const p = typeof a.payload === "string"
+          ? JSON.parse(a.payload)
+          : a.payload;
+        if (p && p.id) map.set(p.id, a);
+      } catch {}
+    }
+    this._assertionIndexCache = {
+      list: this._assertions,
+      runID,
+      map,
+    };
+    return map;
+  }
+
+  // _statusForSources returns the aggregated review status for a
+  // list of compose-output source IDs — the state the checkbox
+  // renders as. Returns:
+  //   "accepted"     — every backing assertion is accepted
+  //   "rejected"     — every backing assertion is rejected
+  //   "pending"      — every backing assertion is pending
+  //   "mixed"        — any other combination (partial verification)
+  //   "unknown"      — no sources match a loaded assertion
+  _statusForSources(sourceIDs) {
+    if (!sourceIDs || sourceIDs.length === 0) return "unknown";
+    const idx = this._assertionByPayloadID();
+    const statuses = new Set();
+    for (const sid of sourceIDs) {
+      const row = idx.get(sid);
+      if (!row) continue;
+      statuses.add(row.status || "pending");
+    }
+    if (statuses.size === 0) return "unknown";
+    if (statuses.size === 1) {
+      const only = [...statuses][0];
+      // "edited" reads as accepted for checkbox purposes — the
+      // curator has touched the row, so it's not pending review.
+      if (only === "edited") return "accepted";
+      return only;
+    }
+    return "mixed";
+  }
+
+  // _aggregateStatus combines child statuses for a group header
+  // checkbox. Same value space as _statusForSources; mixed wins
+  // over any partial state so a curator who has verified 3 of 5
+  // sub-facts sees an indeterminate group check.
+  _aggregateStatus(childStatuses) {
+    if (childStatuses.length === 0) return "unknown";
+    const distinct = new Set(childStatuses.filter((s) => s !== "unknown"));
+    if (distinct.size === 0) return "unknown";
+    if (distinct.size === 1) return [...distinct][0];
+    return "mixed";
+  }
+
+  // _nextStatus cycles through the tri-state checkbox: pending →
+  // accepted → rejected → pending. "mixed" and "unknown" both jump
+  // straight to "accepted" so a partial group snaps to fully
+  // verified on the first click (the common case — the curator has
+  // eyeballed the whole specimen and wants to bulk-confirm).
+  _nextStatus(current) {
+    switch (current) {
+      case "pending":
+      case "unknown":
+      case "mixed":
+        return "accepted";
+      case "accepted":
+        return "rejected";
+      case "rejected":
+        return "pending";
+      default:
+        return "accepted";
+    }
+  }
+
+  // _renderCheckbox emits the tri-state checkbox glyph (☐ / ☑ /
+  // ☒) with a shared shape so the group and per-fact checkboxes
+  // look identical. Uses inline SVG rather than unicode so the
+  // stroke thickness reads at small sizes and the color follows
+  // currentColor for theme adaptation.
+  _renderCheckbox(status) {
+    // 14x14 keeps the box in line with the chip-text baseline; the
+    // fill accent tracks --accent so verified reads as "hive-
+    // colored" against the neutral chip background.
+    const isChecked = status === "accepted";
+    const isRejected = status === "rejected";
+    const isMixed = status === "mixed";
+    let cls = "verify-check";
+    if (isChecked) cls += " checked";
+    else if (isRejected) cls += " rejected";
+    else if (isMixed) cls += " mixed";
+    return html`<span class=${cls} aria-hidden="true">
+      <svg viewBox="0 0 14 14" width="14" height="14">
+        <rect x="1" y="1" width="12" height="12" rx="2"
+              fill=${isMixed ? "currentColor" : "none"}
+              stroke="currentColor" stroke-width="1.5"></rect>
+        ${isChecked
+          ? html`<path d="M3.5 7.5 L6 10 L10.5 4.5"
+                       fill="none" stroke="currentColor"
+                       stroke-width="1.75" stroke-linecap="round"
+                       stroke-linejoin="round"></path>`
+          : nothing}
+        ${isRejected
+          ? html`<path d="M4 4 L10 10 M10 4 L4 10"
+                       fill="none" stroke="currentColor"
+                       stroke-width="1.75"
+                       stroke-linecap="round"></path>`
+          : nothing}
+        ${isMixed
+          ? html`<rect x="3" y="6.25" width="8" height="1.5"
+                       fill="var(--bg)"></rect>`
+          : nothing}
+      </svg>
+    </span>`;
+  }
+
+  // _verifyLabel builds an aria-label describing the checkbox
+  // action for screen readers — "verify: pending" / "verify:
+  // accepted (click to reject)" etc. Kept in one place so a11y
+  // strings stay coherent as new states appear.
+  _verifyLabel(status) {
+    const next = this._nextStatus(status);
+    return `verification: ${status} — click to mark ${next}`;
+  }
+
+  // _setAssertionStatus PATCHes one assertion's status server-side
+  // and mutates _assertions in place on success so the tree
+  // rerenders without a full refetch. Silent on error at the UI
+  // layer — callers can surface toasts if a network fault becomes
+  // visible in practice.
+  async _setAssertionStatus(assertionID, status) {
+    if (!assertionID) return;
+    const reason = status === "rejected" ? "" : "";
+    try {
+      const updated = await api.assertion.patchStatus(
+        assertionID,
+        status,
+        reason,
+      );
+      const list = this._assertions || [];
+      const i = list.findIndex((a) => a.assertion_id === assertionID);
+      if (i >= 0) {
+        list[i] = { ...list[i], ...updated };
+        // Force a state slot swap so Lit's dirty check picks up
+        // the mutation. Assigning the same array reference is
+        // fine — the property setter triggers requestUpdate.
+        this._assertions = [...list];
+        this._assertionIndexCache = null;
+      }
+    } catch (e) {
+      console.error("assertion status patch failed", e);
+    }
+  }
+
+  // _toggleAssertionsForSources cycles the shared status of every
+  // backing assertion (dedup'd by assertion_id) — used by both the
+  // per-field and group-level checkboxes. Group behavior: if the
+  // group is "mixed", one click snaps everything to accepted (the
+  // common "yes I've reviewed the whole thing" case). If uniform,
+  // it advances one step in the pending → accepted → rejected →
+  // pending cycle.
+  async _toggleAssertionsForSources(sourceIDs) {
+    if (!sourceIDs || sourceIDs.length === 0) return;
+    const current = this._statusForSources(sourceIDs);
+    const next = this._nextStatus(current);
+    const idx = this._assertionByPayloadID();
+    const seen = new Set();
+    const targets = [];
+    for (const sid of sourceIDs) {
+      const row = idx.get(sid);
+      if (!row) continue;
+      if (seen.has(row.assertion_id)) continue;
+      seen.add(row.assertion_id);
+      targets.push(row.assertion_id);
+    }
+    await Promise.all(
+      targets.map((id) => this._setAssertionStatus(id, next)),
+    );
+  }
+
+  // _resolveSingleAssertion picks the one assertion a compose-
+  // output source list corresponds to when it uniquely identifies
+  // a single hive__reference_assertion row. Correction flow only
+  // makes sense for a 1:1 mapping — if the compose field merged
+  // several NER extractions (e.g. two sources agreeing "China"),
+  // we don't know which one to edit and return null, so the
+  // pencil doesn't render. Deferred: multi-source correction UI.
+  _resolveSingleAssertion(sourceIDs) {
+    if (!sourceIDs || sourceIDs.length === 0) return null;
+    const idx = this._assertionByPayloadID();
+    const seen = new Set();
+    let match = null;
+    for (const sid of sourceIDs) {
+      const row = idx.get(sid);
+      if (!row) continue;
+      if (seen.has(row.assertion_id)) continue;
+      seen.add(row.assertion_id);
+      match = row;
+      if (seen.size > 1) return null;
+    }
+    return seen.size === 1 ? match : null;
+  }
+
+  // _displayValueForField returns the value the tree should render
+  // for a compose field — prefers the latest correction if one
+  // exists, falls back to the raw compose value. Also returns the
+  // original + correction metadata so the sub-row can render the
+  // "was: X" hover annotation.
+  _displayValueForField(sourceIDs, rawValue) {
+    const assertion = this._resolveSingleAssertion(sourceIDs);
+    const correction = assertion && assertion.latest_correction;
+    if (!correction || !correction.corrected) {
+      return {
+        display: rawValue,
+        correction: null,
+        assertion,
+      };
+    }
+    return {
+      display: correction.corrected,
+      correction,
+      assertion,
+    };
+  }
+
+  _startEditingField(assertionID, initialValue) {
+    if (!assertionID) return;
+    this._editingAssertionID = assertionID;
+    this._editInputValue = initialValue || "";
+    // Focus the input on the next frame — the render pass has to
+    // land first before the DOM element exists.
+    requestAnimationFrame(() => {
+      const input = this.renderRoot?.querySelector(
+        ".fact-field-edit input",
+      );
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    });
+  }
+
+  _cancelEditingField() {
+    this._editingAssertionID = "";
+    this._editInputValue = "";
+  }
+
+  async _saveFieldEdit(assertionID, field) {
+    if (!assertionID) return;
+    const corrected = (this._editInputValue || "").trim();
+    if (!corrected) {
+      this._cancelEditingField();
+      return;
+    }
+    try {
+      const updated = await api.assertion.correct(
+        assertionID,
+        corrected,
+        field || "",
+      );
+      const list = this._assertions || [];
+      const i = list.findIndex((a) => a.assertion_id === assertionID);
+      if (i >= 0) {
+        list[i] = { ...list[i], ...updated };
+        this._assertions = [...list];
+        this._assertionIndexCache = null;
+      }
+    } catch (e) {
+      console.error("assertion correction failed", e);
+    } finally {
+      this._cancelEditingField();
+    }
+  }
+
+  // _collectSources walks a compose-output row and gathers every
+  // "sources" array from its {value, sources} wrapped fields into
+  // one deduped list. Chips aggregate multiple assertions into a
+  // single visual unit; click jumps to the first source's anchor
+  // (typically the earliest-mentioned in the paper).
+  _collectSources(row) {
+    if (!row || typeof row !== "object") return [];
+    const seen = new Set();
+    const out = [];
+    for (const val of Object.values(row)) {
+      if (!val || typeof val !== "object") continue;
+      const srcs = val.sources;
+      if (!Array.isArray(srcs)) continue;
+      for (const id of srcs) {
+        if (typeof id === "string" && !seen.has(id)) {
+          seen.add(id);
+          out.push(id);
+        }
+      }
+    }
+    return out;
+  }
+
+  // _onFactChipClick resolves the first source assertion id to its
+  // NER anchor (before/text/after triple or JATS element_id) and
+  // posts a hive:jump-to-anchor message to the reader iframe. The
+  // reader scrolls the source location into view and paints a
+  // fading highlight. Silent no-op when no matching assertion has
+  // an anchor — better than jumping to a wrong location.
+  _onFactChipClick(sources) {
+    if (!sources || sources.length === 0) return;
+    // Match assertion.payload.id (the ner_v5 "a<N>" id) against
+    // the source list. _assertions holds the per-fact rows
+    // materialized from the parent NER run.
+    for (const id of sources) {
+      const found = (this._assertions || []).find((a) => {
+        try {
+          const p = typeof a.payload === "string"
+            ? JSON.parse(a.payload)
+            : a.payload;
+          return p && p.id === id;
+        } catch {
+          return false;
+        }
+      });
+      if (!found) continue;
+      const anchor = this._parseSourcePtr(found.source_ptr);
+      if (!anchor) continue;
+      // Auto-switch to Bibliography workspace so the reader is
+      // visible when the jump lands — Assertions tab renders the
+      // reader on the right too, so we're fine there either way.
+      this._postToReader({ type: "hive:jump-to-anchor", anchor });
+      return;
+    }
+  }
+
+  _parseSourcePtr(ptr) {
+    if (!ptr) return null;
+    try {
+      return typeof ptr === "string" ? JSON.parse(ptr) : ptr;
+    } catch {
+      return null;
+    }
+  }
+
+  // _postAnnotationsToReader sends the current assertion set to
+  // the visible reader iframe so it can paint colored NER-tag
+  // highlights matching the Assertions-tab chip palette. Only
+  // fires when the Assertions workflow is active — Bibliography
+  // and Digitize workflows have different reader-annotation
+  // priorities (GN chips + xrefs / correction markers).
+  _postAnnotationsToReader() {
+    if (this._workspaceTab !== "assertions") return;
+    const annotations = (this._assertions || [])
+      .map((a) => {
+        const anchor = this._parseSourcePtr(a.source_ptr);
+        if (!anchor || !anchor.text) return null;
+        let payloadID = "";
+        try {
+          const p =
+            typeof a.payload === "string"
+              ? JSON.parse(a.payload)
+              : a.payload;
+          payloadID = (p && p.id) || "";
+        } catch {}
+        return {
+          assertion_id: a.assertion_id,
+          source_id: payloadID,
+          category: this._categorizeAssertionType(a.assertion_type),
+          anchor,
+        };
+      })
+      .filter(Boolean);
+    // Also forward LLM tag_reviews (verdicts on GNfinder tags:
+    // false_positive / wrong_boundary) so the reader can flag
+    // disputed chips visually. Kept separate from `annotations`
+    // in the payload because they target different DOM (existing
+    // GN chip elements, not arbitrary text spans).
+    const tagReviews = this._collectTagReviews();
+    this._postToReader({
+      type: "hive:set-annotations",
+      annotations,
+      tag_reviews: tagReviews,
+    });
+  }
+
+  // _collectTagReviews pulls the tag_reviews array from the
+  // latest NER run's raw output. Each entry is a GNfinder-chip
+  // verdict — {tp_taxon_name_text, tp_full_name, verdict, notes?}.
+  // Empty when no NER run has landed yet or the LLM produced
+  // no verdicts. See the ner_v5 prompt for the emitted shape.
+  _collectTagReviews() {
+    const raw = this._nerRun && this._nerRun.raw_output;
+    if (!raw || !Array.isArray(raw.tag_reviews)) return [];
+    return raw.tag_reviews;
+  }
+
+  // _categorizeAssertionType groups a DwC term into the tree-chip
+  // palette (nom / type / dist / vern / other). Keeps the paper's
+  // colored highlights consistent with the Assertions-tab tree so
+  // "click a green chip → find green highlight in paper" reads as
+  // one visual grammar rather than two systems to memorize.
+  _categorizeAssertionType(type) {
+    if (!type) return "other";
+    // Classification + name-status + authorship = nomenclature.
+    // Higher classification names get grouped here too since
+    // they're semantically the same category as species-level
+    // name facts.
+    if (
+      /^dwc:(kingdom|phylum|class|order|family|subfamily|tribe|subtribe|genus|subgenus|specificEpithet|infraspecificEpithet|scientificName|scientificNameAuthorship|namePublishedInYear|nomenclaturalStatus|taxonRank|taxonID)$/.test(
+        type,
+      )
+    ) {
+      return "nom";
+    }
+    // Specimen / type-material / collection event. Bundled with
+    // type since curators typically look at date+collector as
+    // part of the type-material block.
+    if (
+      /^dwc:(typeStatus|institutionCode|collectionCode|catalogNumber|sex|lifeStage|preparations|eventDate|verbatimEventDate|recordedBy|samplingProtocol|associatedTaxa)$/.test(
+        type,
+      )
+    ) {
+      return "type";
+    }
+    // Geography / distribution / event location.
+    if (
+      /^dwc:(country|countryCode|stateProvince|county|municipality|locality|continent|waterBody|decimalLatitude|decimalLongitude|verbatimCoordinates|verbatimLatitude|verbatimLongitude|minimumElevationInMeters|maximumElevationInMeters|verbatimElevation|habitat)$/.test(
+        type,
+      )
+    ) {
+      return "dist";
+    }
+    if (type === "dwc:vernacularName") return "vern";
+    return "other";
+  }
+
+  _postToReader(msg) {
+    // Each workspace tab (Bibliography, Digitize, Assertions)
+    // mounts its own reader iframe, so posting to querySelector's
+    // first match would target a hidden tab's iframe. Filter to
+    // the currently-visible tab-content (Lit sets the hidden
+    // attribute when ?hidden=true evaluates truthy).
+    const iframe = this.renderRoot?.querySelector(
+      ".tab-content:not([hidden]) iframe.pane.reader",
+    );
+    if (!iframe || !iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(msg, "*");
+  }
+
+  // _unwrapValue extracts the value from a compose_v1 {value,
+  // sources} field wrapper. Returns "" for null/undefined and
+  // returns the raw value for plain (unwrapped) fields, so the
+  // renderer works on both compose_v1 output and any future
+  // simpler shape.
+  _unwrapValue(field) {
+    if (field == null) return "";
+    if (typeof field === "object" && "value" in field) {
+      return field.value == null ? "" : String(field.value);
+    }
+    return String(field);
+  }
+
+  _renderAssertionsEmpty() {
+    return html`
+      <div class="assertions-empty">
+        <h3>No extraction runs for this paper yet</h3>
+        <p>
+          Run an LLM (or, once trained, a hive-native NER model)
+          against this paper to populate assertions. Runs are
+          persisted and cost is tracked so multiple models can be
+          compared on the same paper.
+        </p>
+        <button
+          class="primary"
+          type="button"
+          @click=${() => (this._llmInvokeOpen = true)}
+        >
+          Run extraction
+        </button>
+        <p class="hint">
+          Providers configure once via the ✨ icon in the top-right;
+          then this pane runs the extraction and shows the results
+          inline. Papers you mark "in test set" (checkbox in the
+          Bibliography tab header) anchor scoring accuracy.
+        </p>
+      </div>
+    `;
+  }
+
+  _renderAssertionsList() {
+    // MVP list — grouped by source_run_id so multi-run comparison
+    // reads naturally (one group per run). Full tree renderer with
+    // click-to-reveal-in-reader is a downstream slice.
+    const byRun = new Map();
+    for (const a of this._assertions) {
+      const key = a.source_run_id || "curator";
+      if (!byRun.has(key)) byRun.set(key, []);
+      byRun.get(key).push(a);
+    }
+    return html`
+      <div class="assertions-runs">
+        ${[...byRun.entries()].map(
+          ([runID, rows]) => html`
+            <div class="assertion-run">
+              <div class="run-header">
+                <span class="run-label">
+                  ${runID === "curator" ? "curator" : `run ${runID.slice(0, 8)}…`}
+                </span>
+                <span class="run-count">${rows.length}</span>
+              </div>
+              <ul class="assertion-rows">
+                ${rows.slice(0, 50).map(
+                  (a) => html`
+                    <li class=${"status-" + a.status}>
+                      <span class="atype">${a.assertion_type}</span>
+                      <span class="asubject">${this._assertionSubject(a)}</span>
+                    </li>
+                  `,
+                )}
+                ${rows.length > 50
+                  ? html`<li class="more">
+                      … ${rows.length - 50} more (full tree renderer coming)
+                    </li>`
+                  : nothing}
+              </ul>
+            </div>
+          `,
+        )}
+      </div>
+    `;
+  }
+
+  _assertionSubject(a) {
+    // Pull "subject" out of the payload JSON when present — that's
+    // the taxon-name string the NER prompt attributes the fact to.
+    // Silent on parse failure; MVP list can tolerate a blank cell.
+    try {
+      const p = a.payload;
+      if (!p) return "";
+      const obj = typeof p === "string" ? JSON.parse(p) : p;
+      return obj.subject || obj.text || "";
+    } catch {
+      return "";
+    }
   }
 
   _openEdit() {
@@ -16499,6 +19824,18 @@ class SfgaReferences extends LitElement {
       <div class="detail-header">
         <h2>${r.title || r.citation || r.id}</h2>
         <div class="header-actions">
+          <label
+            class="test-set-toggle"
+            title="Papers in the evaluation test set anchor gold-standard scoring. Toggle on to mark this paper for rigorous annotation."
+          >
+            <input
+              type="checkbox"
+              ?checked=${this._inTestSet === true}
+              ?disabled=${this._inTestSet === null}
+              @change=${(e) => this._toggleTestSet(e.target.checked)}
+            />
+            <span>in test set</span>
+          </label>
           <button
             class="icon-btn"
             type="button"

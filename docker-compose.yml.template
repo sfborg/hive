@@ -14,10 +14,21 @@
 #
 # ---------- quickstart ----------
 #
-#   # First: put an archive named `archive.db` in ./data/, then:
+#   # 1. Copy this template and .env.template into place, then
+#   #    fill in real values (API keys, etc.):
+#   cp docker-compose.yml.template docker-compose.yml
+#   cp .env.template .env
+#   $EDITOR .env
+#
+#   # 2. Put an archive named `archive.db` in ./data/.
+#
+#   # 3. Bring the stack up:
 #   docker compose up
 #
-#   # Open http://localhost:2365 in a browser.
+#   # 4. Open http://localhost:2365 in a browser.
+#
+# Both docker-compose.yml and .env are gitignored; the .template
+# files are the checked-in starting points.
 #
 # The `data/` directory is bind-mounted; the sidecar library
 # (<archive>.library/) lands alongside the .db file so a curator
@@ -74,6 +85,33 @@ services:
       # Attribution for edits. Real deployments set this to the
       # operator's ORCID iD or use --orcid on the command line.
       HIVE_ORCID: "0000-0000-0000-0000"
+      # LLM provider API keys. Compose reads these from .env in this
+      # directory (see .env.template for the checked-in starting
+      # point) or from the shell environment, and forwards them into
+      # the container via the entries below. Hive's own config file
+      # (~/.config/sfborg/hive/config.yml, or a mount into the
+      # container) references them via:
+      #     llm_providers:
+      #       - name: anthropic
+      #         kind: anthropic
+      #         default_model: claude-haiku-4-5
+      #         credential:
+      #           source: env
+      #           env_var: ANTHROPIC_API_KEY
+      # The ${VAR:-} form leaves the variable empty (not literal
+      # "${VAR}") when unset, so hive fails loud at first use rather
+      # than sending a bogus header. Add more provider keys here and
+      # in .env.template as needed (OPENAI_API_KEY, etc.).
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Hive writes its config file to ~/.config/sfborg/hive/config.yml.
+      # The container runs as UID from the `user:` line above, which
+      # has no /etc/passwd entry inside the image, so $HOME defaults
+      # to empty and the config path collapses to /.config/... (which
+      # is not user-writable). Pointing HOME at the bind-mounted
+      # /data lands the config at data/.config/sfborg/hive/config.yml
+      # on the host — persists across container restarts and stays
+      # writable by the host user.
+      HOME: /data
     depends_on:
       grobid:
         condition: service_healthy

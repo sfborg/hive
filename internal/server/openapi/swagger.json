@@ -1,0 +1,2841 @@
+{
+    "schemes": [
+        "http"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "REST API for the hive taxonomic editor. Reads and writes\nan sfga SQLite archive of taxonomic names, references,\nand supporting data. Regenerate this spec with `just openapi`.",
+        "title": "hive API",
+        "termsOfService": "https://github.com/sfborg/hive",
+        "contact": {
+            "name": "hive maintainers",
+            "url": "https://github.com/sfborg/hive"
+        },
+        "license": {
+            "name": "MIT",
+            "url": "https://github.com/sfborg/hive/blob/main/LICENSE"
+        },
+        "version": "0.1"
+    },
+    "host": "localhost:2365",
+    "basePath": "/api",
+    "paths": {
+        "/archive": {
+            "get": {
+                "description": "Report the archive path, schema version, and read-only mode.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Archive identity",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiArchive"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/distribution/{id}": {
+            "delete": {
+                "description": "Delete a distribution row by rowid.",
+                "tags": [
+                    "distributions"
+                ],
+                "summary": "Delete distribution",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Distribution rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Partially update a distribution row. TaxonID is not editable.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "distributions"
+                ],
+                "summary": "Update distribution",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Distribution rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiDistributionPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiDistribution"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "Static 200 response for orchestrator health checks.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Liveness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/keymap": {
+            "get": {
+                "description": "Canonical shortcut list shared between TUI and WUI. Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Keymap",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/metadata": {
+            "get": {
+                "description": "Fetch the dataset metadata row.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "Get metadata",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiMetadata"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Partially update the dataset metadata row. Seeds a missing row on first PATCH.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "Update metadata",
+                "parameters": [
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiMetadataPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiMetadata"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/name/{id}/type-materials": {
+            "get": {
+                "description": "Type-material rows attached to a name, ordered by status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "type-materials"
+                ],
+                "summary": "List type materials",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiTypeMaterial"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Add a type-material row to the given name.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "type-materials"
+                ],
+                "summary": "Create type material",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New type-material row",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiTypeMaterial"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiTypeMaterial"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/species-interaction/{id}": {
+            "delete": {
+                "description": "Delete a species-interaction row by rowid.",
+                "tags": [
+                    "species-interactions"
+                ],
+                "summary": "Delete species interaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Species interaction rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Partially update a species-interaction row. TaxonID is not editable.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "species-interactions"
+                ],
+                "summary": "Update species interaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Species interaction rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSpeciesInteractionPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSpeciesInteraction"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/roots": {
+            "get": {
+                "description": "Paginated list of root-level taxa.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "List root taxa",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Row offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiTaxonHit"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}": {
+            "get": {
+                "description": "Fetch a taxon by ID. The response ETag carries col__modified\nfor optimistic concurrency; pass it back as If-Match on PATCH.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Get taxon",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiTaxon"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/ancestors": {
+            "get": {
+                "description": "Parent-id chain in root-down order, excluding the taxon itself.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Ancestor id chain",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/child-ranks": {
+            "get": {
+                "description": "Ranks valid as children of the given parent taxon.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Valid child ranks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Parent taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/children": {
+            "get": {
+                "description": "Paginated list of children under the given parent taxon.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "List taxon children",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Parent taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Row offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiTaxonHit"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/classification": {
+            "get": {
+                "description": "Full ancestor chain in root-down order, including the taxon itself as the last element.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Classification chain",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiTaxonHit"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/code-default": {
+            "get": {
+                "description": "Seed value for the code picker on a new child of the given parent.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Default code for parent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Parent taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/create-name-prefix": {
+            "get": {
+                "description": "Pre-populated scientific-name prefix for a new child of the parent taxon.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Create-name prefix",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Parent taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/distributions": {
+            "get": {
+                "description": "Distribution rows attached to a taxon, ordered by gazetteer + area.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "distributions"
+                ],
+                "summary": "List distributions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiDistribution"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Add a distribution row to the given taxon.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "distributions"
+                ],
+                "summary": "Create distribution",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New distribution row",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiDistribution"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiDistribution"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/nomenclatural-history": {
+            "get": {
+                "description": "Basionym-anchored nomenclatural history for a taxon, grouped into original-combination clusters.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "taxa"
+                ],
+                "summary": "Nomenclatural history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiNomenHistory"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/species-interactions": {
+            "get": {
+                "description": "Species-interaction rows where the given taxon is the subject.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "species-interactions"
+                ],
+                "summary": "List species interactions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiSpeciesInteraction"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Add a species-interaction row where the given taxon is the subject.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "species-interactions"
+                ],
+                "summary": "Create species interaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New interaction row",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSpeciesInteraction"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSpeciesInteraction"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/synonyms": {
+            "get": {
+                "description": "Synonym rows for a taxon, each with a server-rendered display label and resolved reference label.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "synonyms"
+                ],
+                "summary": "List taxon synonyms",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiSynonym"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/taxon/{id}/vernaculars": {
+            "get": {
+                "description": "Vernacular-name rows attached to a taxon, preferred-first per language.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vernaculars"
+                ],
+                "summary": "List vernaculars",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiVernacular"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Add a vernacular-name row to the given taxon.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vernaculars"
+                ],
+                "summary": "Create vernacular",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New vernacular row",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVernacular"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVernacular"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/type-material/{id}": {
+            "delete": {
+                "description": "Delete a type-material row by rowid.",
+                "tags": [
+                    "type-materials"
+                ],
+                "summary": "Delete type material",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Type-material rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Partially update a type-material row. NameID is not editable.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "type-materials"
+                ],
+                "summary": "Update type material",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Type-material rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiTypeMaterialPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiTypeMaterial"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vernacular/{id}": {
+            "delete": {
+                "description": "Delete a vernacular row by rowid.",
+                "tags": [
+                    "vernaculars"
+                ],
+                "summary": "Delete vernacular",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Vernacular rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Partially update a vernacular row. TaxonID is not editable.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vernaculars"
+                ],
+                "summary": "Update vernacular",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Vernacular rowid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVernacularPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVernacular"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab": {
+            "get": {
+                "description": "All controlled vocabularies (rank, code, status, etc)\nloaded once per session. Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Vocabulary bundle",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/countries": {
+            "get": {
+                "description": "ISO 3166-1 alpha-2 country catalog. Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Countries vocabulary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/languages": {
+            "get": {
+                "description": "ISO 639-3 language catalog. Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Languages vocabulary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/nomen": {
+            "get": {
+                "description": "NOMEN ontology status terms served from an embedded OWL file. Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "NOMEN vocabulary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/sex": {
+            "get": {
+                "description": "Enriched sex terms (name + glyph + definition). Cached for one hour.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Sex vocabulary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/species_interaction_type": {
+            "post": {
+                "description": "Insert a new species_interaction_type vocab row.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Add species interaction type",
+                "parameters": [
+                    {
+                        "description": "New vocab row",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVocabTermDetail"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVocabTermDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/species_interaction_type/full": {
+            "get": {
+                "description": "Rich vocabulary rows for the species_interaction_type editor.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "List species interaction types",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiVocabTermDetail"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/vocab/species_interaction_type/{id}": {
+            "delete": {
+                "description": "Delete a species_interaction_type term. Returns 409 if any row still references it.",
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Delete species interaction type",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Vocab term ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Replace editable columns of a species_interaction_type term.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vocab"
+                ],
+                "summary": "Update species interaction type",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Vocab term ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Updated columns",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVocabTermDetail"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiVocabTermDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "server.apiArchive": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "read_only": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiDistribution": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "area_id": {
+                    "type": "string"
+                },
+                "gazetteer": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "issue_count": {
+                    "description": "IssueCount is the number of open validation issues currently\nfiled against this distribution row (table_name='distribution',\nnot-yet-acknowledged). Zero → elided from JSON. Front-ends\nrender a warn icon on the row when \u003e 0.",
+                    "type": "integer"
+                },
+                "max_severity": {
+                    "description": "MaxSeverity is the highest severity present among the row's\nopen issues (\"error\", \"warn\", \"info\", \"debug\"). Empty when\nIssueCount is 0; elided from JSON in that case. Drives the\nbadge color the WUI paints on the row.",
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiDistributionPatch": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "area_id": {
+                    "type": "string"
+                },
+                "gazetteer": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiLabel": {
+            "type": "object",
+            "properties": {
+                "html": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiMetadata": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "citation": {
+                    "type": "string"
+                },
+                "completeness": {
+                    "type": "integer"
+                },
+                "confidence": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "doi": {
+                    "type": "string"
+                },
+                "geographic_scope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "issued": {
+                    "type": "string"
+                },
+                "keywords": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "logo": {
+                    "type": "string"
+                },
+                "private": {
+                    "type": "boolean"
+                },
+                "taxonomic_scope": {
+                    "type": "string"
+                },
+                "temporal_scope": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings surfaces stored issues that apply to the metadata row\n(e.g. hive_stale_metadata). Same shape as apiTaxon.Warnings.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiValidationWarning"
+                    }
+                }
+            }
+        },
+        "server.apiMetadataPatch": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "citation": {
+                    "type": "string"
+                },
+                "completeness": {
+                    "type": "integer"
+                },
+                "confidence": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "doi": {
+                    "type": "string"
+                },
+                "geographic_scope": {
+                    "type": "string"
+                },
+                "issued": {
+                    "type": "string"
+                },
+                "keywords": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "logo": {
+                    "type": "string"
+                },
+                "private": {
+                    "type": "boolean"
+                },
+                "taxonomic_scope": {
+                    "type": "string"
+                },
+                "temporal_scope": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiNomenCluster": {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiNomenName"
+                    }
+                },
+                "role": {
+                    "description": "Role is \"accepted\" when the cluster contains the taxon's\ncurrently accepted name, \"synonym\" otherwise. Exactly one\n\"accepted\" cluster per response (empty when the taxon has\nno accepted name row — pathological but tolerated).",
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiNomenHistory": {
+            "type": "object",
+            "properties": {
+                "clusters": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiNomenCluster"
+                    }
+                }
+            }
+        },
+        "server.apiNomenName": {
+            "type": "object",
+            "properties": {
+                "authorship": {
+                    "description": "Authorship / Rank / Year are surfaced independently so the\nfront-end can compose alternate renderings (chronological\ngutter, rank badge, etc.) without re-parsing Label.",
+                    "type": "string"
+                },
+                "basionym_authorship": {
+                    "description": "Atomized authorship — surfaced so the WUI's \"Standardized\nauthorship\" toggle can compose the hybrid render (basionym\nauthor+year in parens, then combination author+year) that\nbridges ICZN and ICN conventions without dropping either\nside's information. Absent when the underlying column is\nempty — the toggle falls back to whichever pieces exist.",
+                    "type": "string"
+                },
+                "basionym_authorship_year": {
+                    "type": "string"
+                },
+                "combination_authorship": {
+                    "type": "string"
+                },
+                "combination_authorship_year": {
+                    "type": "string"
+                },
+                "involvement": {
+                    "description": "Involvement records how this name relates to the taxon being\nviewed: \"accepted\", \"synonym\", or \"unlinked\" (a sibling\nrecombination discovered via name_relation but not currently\nattached to this taxon).",
+                    "type": "string"
+                },
+                "is_basionym": {
+                    "description": "IsBasionym is true for the anchor name of the cluster —\nexactly one per cluster (the original combination).",
+                    "type": "boolean"
+                },
+                "issue_count": {
+                    "description": "IssueCount is the number of open validation issues currently\nfiled against this name row (table_name='name', not-yet-\nacknowledged). Zero → elided from JSON so the wire shape stays\nflat for the common case; front-ends render a warn icon on\nNomenclatural-history rows when \u003e 0.",
+                    "type": "integer"
+                },
+                "label": {
+                    "description": "Label is the server-rendered display (text + italicized HTML).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiLabel"
+                        }
+                    ]
+                },
+                "max_severity": {
+                    "description": "MaxSeverity is the highest severity among the row's open\nissues (\"error\" / \"warn\" / \"info\" / \"debug\"). Empty when\nIssueCount is 0. Drives the WUI badge color via the shared\nvalidationSeverityBadge helper.",
+                    "type": "string"
+                },
+                "name_id": {
+                    "description": "NameID is the id of the name row this entry stands for.\nFront-ends navigate to /api/name/{id} for the full detail.",
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "description": "ReferenceID / ReferenceLabel — the name's own publication\ncitation (from name.col__reference_id), resolved to a display\nstring by the handler for the footnote-accumulator flow.\nIndependent from any synonym-link reference (that lives on\napiSynonym).",
+                    "type": "string"
+                },
+                "reference_label": {
+                    "type": "string"
+                },
+                "synonym_id": {
+                    "description": "SynonymID is populated when Involvement == \"synonym\" — the\nsynonym-link row's own id (may be empty on legacy archives\nwhere synonym.col__id wasn't set).",
+                    "type": "string"
+                },
+                "year": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiPage-server_apiDistribution": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiDistribution"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiSpeciesInteraction": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiSpeciesInteraction"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiSynonym": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiSynonym"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiTaxonHit": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiTaxonHit"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiTypeMaterial": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiTypeMaterial"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiVernacular": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiVernacular"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiPage-server_apiVocabTermDetail": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiVocabTermDetail"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.apiRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "$ref": "#/definitions/server.apiLabel"
+                },
+                "rank": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiSpeciesInteraction": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "issue_count": {
+                    "type": "integer"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "related_taxon_id": {
+                    "type": "string"
+                },
+                "related_taxon_label": {
+                    "$ref": "#/definitions/server.apiLabel"
+                },
+                "related_taxon_scientific_name": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiSpeciesInteractionPatch": {
+            "type": "object",
+            "properties": {
+                "reference_id": {
+                    "type": "string"
+                },
+                "related_taxon_id": {
+                    "type": "string"
+                },
+                "related_taxon_scientific_name": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiSynonym": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "$ref": "#/definitions/server.apiLabel"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "name_id": {
+                    "type": "string"
+                },
+                "name_phrase": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "description": "ReferenceID is the synonym-relation's own reference (verbatim\nfrom synonym.col__reference_id — a comma-separated list per the\nsfga schema). Nil-empty for legacy rows without a cited source.",
+                    "type": "string"
+                },
+                "reference_label": {
+                    "description": "ReferenceLabel is the server-rendered \"Author (Year) Title\" of\nthe first id in ReferenceID, resolved by the handler so the\nnomenclatural-history footnote accumulator can display citations\ninline without a per-row round trip. Elided when the reference\nis unset or the resolution failed.",
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiTaxon": {
+            "type": "object",
+            "properties": {
+                "extinct": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "$ref": "#/definitions/server.apiLabel"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "name_id": {
+                    "type": "string"
+                },
+                "name_phrase": {
+                    "type": "string"
+                },
+                "ordinal": {
+                    "type": "integer"
+                },
+                "parent": {
+                    "$ref": "#/definitions/server.apiRef"
+                },
+                "parent_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "scrutinizer": {
+                    "type": "string"
+                },
+                "scrutinizer_date": {
+                    "type": "string"
+                },
+                "scrutinizer_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "warnings": {
+                    "description": "Soft warnings from gsvalidator, populated on create/update\nresponses. Empty / omitted on GET reads. See PLANNING.md §\nValidation engine.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiValidationWarning"
+                    }
+                }
+            }
+        },
+        "server.apiTaxonHit": {
+            "type": "object",
+            "properties": {
+                "authorship": {
+                    "type": "string"
+                },
+                "extinct": {
+                    "type": "boolean"
+                },
+                "has_children": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_synonym": {
+                    "description": "IsSynonym is set only when the search returned this row via a\nsynonym pointing at the accepted taxon (id). Elided when false\nso responses from list endpoints (ListChildren, roots) stay\nidentical to the pre-synonyms wire shape.",
+                    "type": "boolean"
+                },
+                "label": {
+                    "$ref": "#/definitions/server.apiLabel"
+                },
+                "matched_name": {
+                    "description": "MatchedName carries the text that actually satisfied the query.\nEquals name for accepted-name matches; equals the synonym's\ncanonical for synonym matches. Elided when unset (list\nendpoints leave it empty; front-ends fall back to name).",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "name_id": {
+                    "type": "string"
+                },
+                "parent": {
+                    "description": "Parent carries the immediate parent taxon's id + rendered\nlabel (rank baked in via BuildLabel) so front-ends can\ndisambiguate homonyms — two accepted taxa sharing a canonical\n— and give synonym rows a \"you land under X\" cue. Populated\nonly by SearchTaxa; list endpoints (children, roots) leave it\nnil, which the JSON omitempty erases. Root-level taxa also\nleave it nil.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiRef"
+                        }
+                    ]
+                },
+                "parent_id": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiTypeMaterial": {
+            "type": "object",
+            "properties": {
+                "altitude": {
+                    "type": "integer"
+                },
+                "associated_sequences": {
+                    "type": "string"
+                },
+                "catalog_number": {
+                    "type": "string"
+                },
+                "citation": {
+                    "type": "string"
+                },
+                "collector": {
+                    "type": "string"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "host": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "institution_code": {
+                    "type": "string"
+                },
+                "issue_count": {
+                    "description": "IssueCount is the number of open validation issues currently\nfiled against this type_material row. Zero → elided from JSON.\nFront-ends render a warn icon when \u003e 0.",
+                    "type": "integer"
+                },
+                "latitude": {
+                    "type": "number"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "locality": {
+                    "type": "string"
+                },
+                "longitude": {
+                    "type": "number"
+                },
+                "max_severity": {
+                    "description": "MaxSeverity is the highest severity (\"error\" \u003e \"warn\" \u003e \"info\"\n\u003e \"debug\") among the row's open issues. Empty → elided from\nJSON. Drives the badge color the WUI paints.",
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "name_id": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "specimen_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiTypeMaterialPatch": {
+            "type": "object",
+            "properties": {
+                "altitude": {
+                    "type": "integer"
+                },
+                "associated_sequences": {
+                    "type": "string"
+                },
+                "catalog_number": {
+                    "type": "string"
+                },
+                "citation": {
+                    "type": "string"
+                },
+                "collector": {
+                    "type": "string"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "host": {
+                    "type": "string"
+                },
+                "institution_code": {
+                    "type": "string"
+                },
+                "latitude": {
+                    "type": "number"
+                },
+                "link": {
+                    "type": "string"
+                },
+                "locality": {
+                    "type": "string"
+                },
+                "longitude": {
+                    "type": "number"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "specimen_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiValidationWarning": {
+            "type": "object",
+            "properties": {
+                "field_name": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "rule_id": {
+                    "type": "string"
+                },
+                "rule_name": {
+                    "type": "string"
+                },
+                "severity": {
+                    "description": "warn | info | debug",
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiVernacular": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "issue_count": {
+                    "description": "IssueCount is the number of open validation issues currently\nfiled against this vernacular row (table_name='vernacular',\nnot-yet-acknowledged). Zero → elided from JSON. Front-ends\nrender a warn icon on the row when \u003e 0.",
+                    "type": "integer"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "max_severity": {
+                    "description": "MaxSeverity is the highest severity present among the row's\nopen issues (\"error\", \"warn\", \"info\", \"debug\"). Empty when\nIssueCount is 0; elided from JSON in that case. Drives the\nbadge color the WUI paints on the row.",
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "modified_by": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "preferred": {
+                    "type": "boolean"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                },
+                "transliteration": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiVernacularPatch": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "country": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "preferred": {
+                    "type": "boolean"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "remarks": {
+                    "type": "string"
+                },
+                "sex": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "transliteration": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiVocabTermDetail": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "inverse": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "obo": {
+                    "description": "Obo carries an ontology URI (e.g. RO PURL). Column name\npreserved from sfga's col__obo for lossless round-trip even\nwhen the value isn't OBO-namespaced.",
+                    "type": "string"
+                },
+                "super_types": {
+                    "description": "SuperTypes is a comma-separated list of parent term ids —\nsfga's col__superTypes shape.",
+                    "type": "string"
+                },
+                "symmetrical": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.problem": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.problemField"
+                    }
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.problemField": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        }
+    },
+    "tags": [
+        {
+            "description": "Health, archive metadata, keymap, shared vocabularies.",
+            "name": "system"
+        },
+        {
+            "description": "Read + write the taxon tree, ancestors, classifications, moves.",
+            "name": "taxa"
+        },
+        {
+            "description": "Scientific-name search, parse, patch, relations, dependencies.",
+            "name": "names"
+        },
+        {
+            "description": "Synonym add/move/delete, pro-parte relationships.",
+            "name": "synonyms"
+        },
+        {
+            "description": "Reference CRUD, DOI/OpenAlex/BHLnames/BibTeX lookup, PDF upload/library, JATS conversion, corrections.",
+            "name": "references"
+        },
+        {
+            "description": "Vernacular-name CRUD scoped to a taxon.",
+            "name": "vernaculars"
+        },
+        {
+            "description": "Geographic distribution CRUD scoped to a taxon.",
+            "name": "distributions"
+        },
+        {
+            "description": "Species-interaction CRUD (predator/host/pollinator/etc).",
+            "name": "species-interactions"
+        },
+        {
+            "description": "Type-material CRUD scoped to a name.",
+            "name": "type-materials"
+        },
+        {
+            "description": "Name-relation CRUD (original combination, homonym, etc).",
+            "name": "name-relations"
+        },
+        {
+            "description": "Role-scoped agent CRUD (creator/contact/editor/contributor/publisher).",
+            "name": "agents"
+        },
+        {
+            "description": "Archive-level metadata (title, description, license, logo).",
+            "name": "metadata"
+        },
+        {
+            "description": "Validation issues (soft warnings) and rule reindex.",
+            "name": "issues"
+        },
+        {
+            "description": "Controlled vocabularies (rank, code, status, NOMEN, countries, etc).",
+            "name": "vocab"
+        },
+        {
+            "description": "Provider management + prompt invocation for LLM-assisted extraction.",
+            "name": "llm"
+        },
+        {
+            "description": "Prompt library CRUD (system/user prompt templates for LLM runs).",
+            "name": "prompts"
+        },
+        {
+            "description": "Curator review of LLM-extracted assertions staged on references.",
+            "name": "assertions"
+        },
+        {
+            "description": "Gold-standard test-set membership for evaluation runs.",
+            "name": "test-set"
+        },
+        {
+            "description": "OpenAPI spec + RapiDoc viewer.",
+            "name": "docs"
+        }
+    ]
+}

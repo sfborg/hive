@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/sfborg/hive/pkg/llm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +32,14 @@ type Config struct {
 	// slower anonymous pool. Per-curator (not project-wide) so
 	// OpenAlex sees real accountability signals.
 	OpenAlexEmail string `yaml:"openalex_email,omitempty"`
+	// LLMProviders is the curator's configured LLM providers, each
+	// resolvable at runtime via pkg/llm into a Provider instance
+	// (registered by name in an llm.Registry). Order in the file is
+	// preserved; duplicate names are shadowed by the last entry, in
+	// line with the registry's overwrite-on-Register behaviour. See
+	// project_llm_credential_encryption_arc for the roadmap on
+	// encrypting each entry's Credential.Value once user auth lands.
+	LLMProviders []llm.ProviderConfig `yaml:"llm_providers,omitempty"`
 }
 
 // Path resolves the on-disk location of hive's config file. Follows

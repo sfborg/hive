@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hive API</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/hive-brain.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; }
+      rapi-doc { height: 100vh; width: 100%; display: block; }
+    </style>
+  </head>
+  <body>
+    <!--
+      RapiDoc is a Lit web component; the vendored bundle is the same shape
+      as our other /vendor/ pins. See /vendor/README.md for version + SHA-256.
+
+      spec-url points at the OpenAPI YAML file that `just openapi` regenerates
+      from the swaggo annotations on internal/server/*.go.
+    -->
+    <rapi-doc
+      spec-url="/api/openapi.yaml"
+      render-style="read"
+      theme="dark"
+      show-header="false"
+      show-info="true"
+      allow-authentication="false"
+      allow-server-selection="false"
+      allow-try="true"
+      default-schema-tab="schema"
+      schema-style="table"
+      schema-expand-level="2"
+      primary-color="#2f81f7"
+      bg-color="#0d1117"
+      text-color="#e6edf3"
+      nav-bg-color="#161b22"
+      nav-text-color="#e6edf3"
+      nav-hover-bg-color="#21262d"
+      nav-accent-color="#2f81f7"
+    ></rapi-doc>
+    <script type="module" src="/vendor/rapidoc-9.3.8/rapidoc-min.js"></script>
+  </body>
+</html>

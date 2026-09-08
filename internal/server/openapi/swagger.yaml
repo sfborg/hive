@@ -1,0 +1,1979 @@
+basePath: /api
+definitions:
+  server.apiArchive:
+    properties:
+      path:
+        type: string
+      read_only:
+        type: boolean
+      schema_version:
+        type: string
+    type: object
+  server.apiDistribution:
+    properties:
+      area:
+        type: string
+      area_id:
+        type: string
+      gazetteer:
+        type: string
+      id:
+        type: string
+      issue_count:
+        description: |-
+          IssueCount is the number of open validation issues currently
+          filed against this distribution row (table_name='distribution',
+          not-yet-acknowledged). Zero → elided from JSON. Front-ends
+          render a warn icon on the row when > 0.
+        type: integer
+      max_severity:
+        description: |-
+          MaxSeverity is the highest severity present among the row's
+          open issues ("error", "warn", "info", "debug"). Empty when
+          IssueCount is 0; elided from JSON in that case. Drives the
+          badge color the WUI paints on the row.
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      status:
+        type: string
+      taxon_id:
+        type: string
+    type: object
+  server.apiDistributionPatch:
+    properties:
+      area:
+        type: string
+      area_id:
+        type: string
+      gazetteer:
+        type: string
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiLabel:
+    properties:
+      html:
+        type: string
+      text:
+        type: string
+    type: object
+  server.apiMetadata:
+    properties:
+      alias:
+        type: string
+      citation:
+        type: string
+      completeness:
+        type: integer
+      confidence:
+        type: integer
+      description:
+        type: string
+      doi:
+        type: string
+      geographic_scope:
+        type: string
+      id:
+        type: integer
+      issued:
+        type: string
+      keywords:
+        type: string
+      label:
+        type: string
+      license:
+        type: string
+      logo:
+        type: string
+      private:
+        type: boolean
+      taxonomic_scope:
+        type: string
+      temporal_scope:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+      version:
+        type: string
+      warnings:
+        description: |-
+          Warnings surfaces stored issues that apply to the metadata row
+          (e.g. hive_stale_metadata). Same shape as apiTaxon.Warnings.
+        items:
+          $ref: '#/definitions/server.apiValidationWarning'
+        type: array
+    type: object
+  server.apiMetadataPatch:
+    properties:
+      alias:
+        type: string
+      citation:
+        type: string
+      completeness:
+        type: integer
+      confidence:
+        type: integer
+      description:
+        type: string
+      doi:
+        type: string
+      geographic_scope:
+        type: string
+      issued:
+        type: string
+      keywords:
+        type: string
+      label:
+        type: string
+      license:
+        type: string
+      logo:
+        type: string
+      private:
+        type: boolean
+      taxonomic_scope:
+        type: string
+      temporal_scope:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+      version:
+        type: string
+    type: object
+  server.apiNomenCluster:
+    properties:
+      names:
+        items:
+          $ref: '#/definitions/server.apiNomenName'
+        type: array
+      role:
+        description: |-
+          Role is "accepted" when the cluster contains the taxon's
+          currently accepted name, "synonym" otherwise. Exactly one
+          "accepted" cluster per response (empty when the taxon has
+          no accepted name row — pathological but tolerated).
+        type: string
+    type: object
+  server.apiNomenHistory:
+    properties:
+      clusters:
+        items:
+          $ref: '#/definitions/server.apiNomenCluster'
+        type: array
+    type: object
+  server.apiNomenName:
+    properties:
+      authorship:
+        description: |-
+          Authorship / Rank / Year are surfaced independently so the
+          front-end can compose alternate renderings (chronological
+          gutter, rank badge, etc.) without re-parsing Label.
+        type: string
+      basionym_authorship:
+        description: |-
+          Atomized authorship — surfaced so the WUI's "Standardized
+          authorship" toggle can compose the hybrid render (basionym
+          author+year in parens, then combination author+year) that
+          bridges ICZN and ICN conventions without dropping either
+          side's information. Absent when the underlying column is
+          empty — the toggle falls back to whichever pieces exist.
+        type: string
+      basionym_authorship_year:
+        type: string
+      combination_authorship:
+        type: string
+      combination_authorship_year:
+        type: string
+      involvement:
+        description: |-
+          Involvement records how this name relates to the taxon being
+          viewed: "accepted", "synonym", or "unlinked" (a sibling
+          recombination discovered via name_relation but not currently
+          attached to this taxon).
+        type: string
+      is_basionym:
+        description: |-
+          IsBasionym is true for the anchor name of the cluster —
+          exactly one per cluster (the original combination).
+        type: boolean
+      issue_count:
+        description: |-
+          IssueCount is the number of open validation issues currently
+          filed against this name row (table_name='name', not-yet-
+          acknowledged). Zero → elided from JSON so the wire shape stays
+          flat for the common case; front-ends render a warn icon on
+          Nomenclatural-history rows when > 0.
+        type: integer
+      label:
+        allOf:
+        - $ref: '#/definitions/server.apiLabel'
+        description: Label is the server-rendered display (text + italicized HTML).
+      max_severity:
+        description: |-
+          MaxSeverity is the highest severity among the row's open
+          issues ("error" / "warn" / "info" / "debug"). Empty when
+          IssueCount is 0. Drives the WUI badge color via the shared
+          validationSeverityBadge helper.
+        type: string
+      name_id:
+        description: |-
+          NameID is the id of the name row this entry stands for.
+          Front-ends navigate to /api/name/{id} for the full detail.
+        type: string
+      rank:
+        type: string
+      reference_id:
+        description: |-
+          ReferenceID / ReferenceLabel — the name's own publication
+          citation (from name.col__reference_id), resolved to a display
+          string by the handler for the footnote-accumulator flow.
+          Independent from any synonym-link reference (that lives on
+          apiSynonym).
+        type: string
+      reference_label:
+        type: string
+      synonym_id:
+        description: |-
+          SynonymID is populated when Involvement == "synonym" — the
+          synonym-link row's own id (may be empty on legacy archives
+          where synonym.col__id wasn't set).
+        type: string
+      year:
+        type: string
+    type: object
+  server.apiPage-server_apiDistribution:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiDistribution'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiSpeciesInteraction:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiSpeciesInteraction'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiSynonym:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiSynonym'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiTaxonHit:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiTaxonHit'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiTypeMaterial:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiTypeMaterial'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiVernacular:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiVernacular'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiVocabTermDetail:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiVocabTermDetail'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiRef:
+    properties:
+      id:
+        type: string
+      label:
+        $ref: '#/definitions/server.apiLabel'
+      rank:
+        type: string
+    type: object
+  server.apiSpeciesInteraction:
+    properties:
+      id:
+        type: string
+      issue_count:
+        type: integer
+      modified:
+        type: string
+      modified_by:
+        type: string
+      reference_id:
+        type: string
+      related_taxon_id:
+        type: string
+      related_taxon_label:
+        $ref: '#/definitions/server.apiLabel'
+      related_taxon_scientific_name:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      taxon_id:
+        type: string
+      type:
+        type: string
+    type: object
+  server.apiSpeciesInteractionPatch:
+    properties:
+      reference_id:
+        type: string
+      related_taxon_id:
+        type: string
+      related_taxon_scientific_name:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      type:
+        type: string
+    type: object
+  server.apiSynonym:
+    properties:
+      id:
+        type: string
+      label:
+        $ref: '#/definitions/server.apiLabel'
+      link:
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      name_id:
+        type: string
+      name_phrase:
+        type: string
+      reference_id:
+        description: |-
+          ReferenceID is the synonym-relation's own reference (verbatim
+          from synonym.col__reference_id — a comma-separated list per the
+          sfga schema). Nil-empty for legacy rows without a cited source.
+        type: string
+      reference_label:
+        description: |-
+          ReferenceLabel is the server-rendered "Author (Year) Title" of
+          the first id in ReferenceID, resolved by the handler so the
+          nomenclatural-history footnote accumulator can display citations
+          inline without a per-row round trip. Elided when the reference
+          is unset or the resolution failed.
+        type: string
+      remarks:
+        type: string
+      status:
+        type: string
+      taxon_id:
+        type: string
+    type: object
+  server.apiTaxon:
+    properties:
+      extinct:
+        type: boolean
+      id:
+        type: string
+      label:
+        $ref: '#/definitions/server.apiLabel'
+      link:
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      name_id:
+        type: string
+      name_phrase:
+        type: string
+      ordinal:
+        type: integer
+      parent:
+        $ref: '#/definitions/server.apiRef'
+      parent_id:
+        type: string
+      remarks:
+        type: string
+      scrutinizer:
+        type: string
+      scrutinizer_date:
+        type: string
+      scrutinizer_id:
+        type: string
+      status:
+        type: string
+      warnings:
+        description: |-
+          Soft warnings from gsvalidator, populated on create/update
+          responses. Empty / omitted on GET reads. See PLANNING.md §
+          Validation engine.
+        items:
+          $ref: '#/definitions/server.apiValidationWarning'
+        type: array
+    type: object
+  server.apiTaxonHit:
+    properties:
+      authorship:
+        type: string
+      extinct:
+        type: boolean
+      has_children:
+        type: boolean
+      id:
+        type: string
+      is_synonym:
+        description: |-
+          IsSynonym is set only when the search returned this row via a
+          synonym pointing at the accepted taxon (id). Elided when false
+          so responses from list endpoints (ListChildren, roots) stay
+          identical to the pre-synonyms wire shape.
+        type: boolean
+      label:
+        $ref: '#/definitions/server.apiLabel'
+      matched_name:
+        description: |-
+          MatchedName carries the text that actually satisfied the query.
+          Equals name for accepted-name matches; equals the synonym's
+          canonical for synonym matches. Elided when unset (list
+          endpoints leave it empty; front-ends fall back to name).
+        type: string
+      name:
+        type: string
+      name_id:
+        type: string
+      parent:
+        allOf:
+        - $ref: '#/definitions/server.apiRef'
+        description: |-
+          Parent carries the immediate parent taxon's id + rendered
+          label (rank baked in via BuildLabel) so front-ends can
+          disambiguate homonyms — two accepted taxa sharing a canonical
+          — and give synonym rows a "you land under X" cue. Populated
+          only by SearchTaxa; list endpoints (children, roots) leave it
+          nil, which the JSON omitempty erases. Root-level taxa also
+          leave it nil.
+      parent_id:
+        type: string
+      rank:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiTypeMaterial:
+    properties:
+      altitude:
+        type: integer
+      associated_sequences:
+        type: string
+      catalog_number:
+        type: string
+      citation:
+        type: string
+      collector:
+        type: string
+      country:
+        type: string
+      date:
+        type: string
+      host:
+        type: string
+      id:
+        type: string
+      institution_code:
+        type: string
+      issue_count:
+        description: |-
+          IssueCount is the number of open validation issues currently
+          filed against this type_material row. Zero → elided from JSON.
+          Front-ends render a warn icon when > 0.
+        type: integer
+      latitude:
+        type: number
+      link:
+        type: string
+      locality:
+        type: string
+      longitude:
+        type: number
+      max_severity:
+        description: |-
+          MaxSeverity is the highest severity ("error" > "warn" > "info"
+          > "debug") among the row's open issues. Empty → elided from
+          JSON. Drives the badge color the WUI paints.
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      name_id:
+        type: string
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      sex:
+        type: string
+      source_id:
+        type: string
+      specimen_id:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiTypeMaterialPatch:
+    properties:
+      altitude:
+        type: integer
+      associated_sequences:
+        type: string
+      catalog_number:
+        type: string
+      citation:
+        type: string
+      collector:
+        type: string
+      country:
+        type: string
+      date:
+        type: string
+      host:
+        type: string
+      institution_code:
+        type: string
+      latitude:
+        type: number
+      link:
+        type: string
+      locality:
+        type: string
+      longitude:
+        type: number
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      sex:
+        type: string
+      source_id:
+        type: string
+      specimen_id:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiValidationWarning:
+    properties:
+      field_name:
+        type: string
+      message:
+        type: string
+      rule_id:
+        type: string
+      rule_name:
+        type: string
+      severity:
+        description: warn | info | debug
+        type: string
+    type: object
+  server.apiVernacular:
+    properties:
+      area:
+        type: string
+      country:
+        type: string
+      id:
+        type: string
+      issue_count:
+        description: |-
+          IssueCount is the number of open validation issues currently
+          filed against this vernacular row (table_name='vernacular',
+          not-yet-acknowledged). Zero → elided from JSON. Front-ends
+          render a warn icon on the row when > 0.
+        type: integer
+      language:
+        type: string
+      max_severity:
+        description: |-
+          MaxSeverity is the highest severity present among the row's
+          open issues ("error", "warn", "info", "debug"). Empty when
+          IssueCount is 0; elided from JSON in that case. Drives the
+          badge color the WUI paints on the row.
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      name:
+        type: string
+      preferred:
+        type: boolean
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      sex:
+        type: string
+      source_id:
+        type: string
+      taxon_id:
+        type: string
+      transliteration:
+        type: string
+    type: object
+  server.apiVernacularPatch:
+    properties:
+      area:
+        type: string
+      country:
+        type: string
+      language:
+        type: string
+      name:
+        type: string
+      preferred:
+        type: boolean
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      sex:
+        type: string
+      source_id:
+        type: string
+      transliteration:
+        type: string
+    type: object
+  server.apiVocabTermDetail:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      inverse:
+        type: string
+      name:
+        type: string
+      obo:
+        description: |-
+          Obo carries an ontology URI (e.g. RO PURL). Column name
+          preserved from sfga's col__obo for lossless round-trip even
+          when the value isn't OBO-namespaced.
+        type: string
+      super_types:
+        description: |-
+          SuperTypes is a comma-separated list of parent term ids —
+          sfga's col__superTypes shape.
+        type: string
+      symmetrical:
+        type: boolean
+    type: object
+  server.problem:
+    properties:
+      detail:
+        type: string
+      errors:
+        items:
+          $ref: '#/definitions/server.problemField'
+        type: array
+      instance:
+        type: string
+      status:
+        type: integer
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  server.problemField:
+    properties:
+      field:
+        type: string
+      reason:
+        type: string
+    type: object
+host: localhost:2365
+info:
+  contact:
+    name: hive maintainers
+    url: https://github.com/sfborg/hive
+  description: |-
+    REST API for the hive taxonomic editor. Reads and writes
+    an sfga SQLite archive of taxonomic names, references,
+    and supporting data. Regenerate this spec with `just openapi`.
+  license:
+    name: MIT
+    url: https://github.com/sfborg/hive/blob/main/LICENSE
+  termsOfService: https://github.com/sfborg/hive
+  title: hive API
+  version: "0.1"
+paths:
+  /archive:
+    get:
+      description: Report the archive path, schema version, and read-only mode.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiArchive'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Archive identity
+      tags:
+      - system
+  /distribution/{id}:
+    delete:
+      description: Delete a distribution row by rowid.
+      parameters:
+      - description: Distribution rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete distribution
+      tags:
+      - distributions
+    patch:
+      consumes:
+      - application/json
+      description: Partially update a distribution row. TaxonID is not editable.
+      parameters:
+      - description: Distribution rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiDistributionPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiDistribution'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update distribution
+      tags:
+      - distributions
+  /health:
+    get:
+      description: Static 200 response for orchestrator health checks.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness probe
+      tags:
+      - system
+  /keymap:
+    get:
+      description: Canonical shortcut list shared between TUI and WUI. Cached for
+        one hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Keymap
+      tags:
+      - system
+  /metadata:
+    get:
+      description: Fetch the dataset metadata row.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiMetadata'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get metadata
+      tags:
+      - metadata
+    patch:
+      consumes:
+      - application/json
+      description: Partially update the dataset metadata row. Seeds a missing row
+        on first PATCH.
+      parameters:
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiMetadataPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiMetadata'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update metadata
+      tags:
+      - metadata
+  /name/{id}/type-materials:
+    get:
+      description: Type-material rows attached to a name, ordered by status.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTypeMaterial'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List type materials
+      tags:
+      - type-materials
+    post:
+      consumes:
+      - application/json
+      description: Add a type-material row to the given name.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New type-material row
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiTypeMaterial'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiTypeMaterial'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create type material
+      tags:
+      - type-materials
+  /species-interaction/{id}:
+    delete:
+      description: Delete a species-interaction row by rowid.
+      parameters:
+      - description: Species interaction rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete species interaction
+      tags:
+      - species-interactions
+    patch:
+      consumes:
+      - application/json
+      description: Partially update a species-interaction row. TaxonID is not editable.
+      parameters:
+      - description: Species interaction rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiSpeciesInteractionPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiSpeciesInteraction'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update species interaction
+      tags:
+      - species-interactions
+  /taxon/{id}:
+    get:
+      description: |-
+        Fetch a taxon by ID. The response ETag carries col__modified
+        for optimistic concurrency; pass it back as If-Match on PATCH.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTaxon'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get taxon
+      tags:
+      - taxa
+  /taxon/{id}/ancestors:
+    get:
+      description: Parent-id chain in root-down order, excluding the taxon itself.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Ancestor id chain
+      tags:
+      - taxa
+  /taxon/{id}/child-ranks:
+    get:
+      description: Ranks valid as children of the given parent taxon.
+      parameters:
+      - description: Parent taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Valid child ranks
+      tags:
+      - taxa
+  /taxon/{id}/children:
+    get:
+      description: Paginated list of children under the given parent taxon.
+      parameters:
+      - description: Parent taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Row offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTaxonHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List taxon children
+      tags:
+      - taxa
+  /taxon/{id}/classification:
+    get:
+      description: Full ancestor chain in root-down order, including the taxon itself
+        as the last element.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTaxonHit'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Classification chain
+      tags:
+      - taxa
+  /taxon/{id}/code-default:
+    get:
+      description: Seed value for the code picker on a new child of the given parent.
+      parameters:
+      - description: Parent taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Default code for parent
+      tags:
+      - taxa
+  /taxon/{id}/create-name-prefix:
+    get:
+      description: Pre-populated scientific-name prefix for a new child of the parent
+        taxon.
+      parameters:
+      - description: Parent taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create-name prefix
+      tags:
+      - taxa
+  /taxon/{id}/distributions:
+    get:
+      description: Distribution rows attached to a taxon, ordered by gazetteer + area.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiDistribution'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List distributions
+      tags:
+      - distributions
+    post:
+      consumes:
+      - application/json
+      description: Add a distribution row to the given taxon.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New distribution row
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiDistribution'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiDistribution'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create distribution
+      tags:
+      - distributions
+  /taxon/{id}/nomenclatural-history:
+    get:
+      description: Basionym-anchored nomenclatural history for a taxon, grouped into
+        original-combination clusters.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiNomenHistory'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Nomenclatural history
+      tags:
+      - taxa
+  /taxon/{id}/species-interactions:
+    get:
+      description: Species-interaction rows where the given taxon is the subject.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiSpeciesInteraction'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List species interactions
+      tags:
+      - species-interactions
+    post:
+      consumes:
+      - application/json
+      description: Add a species-interaction row where the given taxon is the subject.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New interaction row
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiSpeciesInteraction'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiSpeciesInteraction'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create species interaction
+      tags:
+      - species-interactions
+  /taxon/{id}/synonyms:
+    get:
+      description: Synonym rows for a taxon, each with a server-rendered display label
+        and resolved reference label.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiSynonym'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List taxon synonyms
+      tags:
+      - synonyms
+  /taxon/{id}/vernaculars:
+    get:
+      description: Vernacular-name rows attached to a taxon, preferred-first per language.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiVernacular'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List vernaculars
+      tags:
+      - vernaculars
+    post:
+      consumes:
+      - application/json
+      description: Add a vernacular-name row to the given taxon.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New vernacular row
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiVernacular'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiVernacular'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create vernacular
+      tags:
+      - vernaculars
+  /taxon/roots:
+    get:
+      description: Paginated list of root-level taxa.
+      parameters:
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Row offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTaxonHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List root taxa
+      tags:
+      - taxa
+  /type-material/{id}:
+    delete:
+      description: Delete a type-material row by rowid.
+      parameters:
+      - description: Type-material rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete type material
+      tags:
+      - type-materials
+    patch:
+      consumes:
+      - application/json
+      description: Partially update a type-material row. NameID is not editable.
+      parameters:
+      - description: Type-material rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiTypeMaterialPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTypeMaterial'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update type material
+      tags:
+      - type-materials
+  /vernacular/{id}:
+    delete:
+      description: Delete a vernacular row by rowid.
+      parameters:
+      - description: Vernacular rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete vernacular
+      tags:
+      - vernaculars
+    patch:
+      consumes:
+      - application/json
+      description: Partially update a vernacular row. TaxonID is not editable.
+      parameters:
+      - description: Vernacular rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to update
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiVernacularPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiVernacular'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update vernacular
+      tags:
+      - vernaculars
+  /vocab:
+    get:
+      description: |-
+        All controlled vocabularies (rank, code, status, etc)
+        loaded once per session. Cached for one hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Vocabulary bundle
+      tags:
+      - vocab
+  /vocab/countries:
+    get:
+      description: ISO 3166-1 alpha-2 country catalog. Cached for one hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Countries vocabulary
+      tags:
+      - vocab
+  /vocab/languages:
+    get:
+      description: ISO 639-3 language catalog. Cached for one hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Languages vocabulary
+      tags:
+      - vocab
+  /vocab/nomen:
+    get:
+      description: NOMEN ontology status terms served from an embedded OWL file. Cached
+        for one hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: NOMEN vocabulary
+      tags:
+      - vocab
+  /vocab/sex:
+    get:
+      description: Enriched sex terms (name + glyph + definition). Cached for one
+        hour.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Sex vocabulary
+      tags:
+      - vocab
+  /vocab/species_interaction_type:
+    post:
+      consumes:
+      - application/json
+      description: Insert a new species_interaction_type vocab row.
+      parameters:
+      - description: New vocab row
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiVocabTermDetail'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiVocabTermDetail'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Add species interaction type
+      tags:
+      - vocab
+  /vocab/species_interaction_type/{id}:
+    delete:
+      description: Delete a species_interaction_type term. Returns 409 if any row
+        still references it.
+      parameters:
+      - description: Vocab term ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete species interaction type
+      tags:
+      - vocab
+    patch:
+      consumes:
+      - application/json
+      description: Replace editable columns of a species_interaction_type term.
+      parameters:
+      - description: Vocab term ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated columns
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiVocabTermDetail'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiVocabTermDetail'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Update species interaction type
+      tags:
+      - vocab
+  /vocab/species_interaction_type/full:
+    get:
+      description: Rich vocabulary rows for the species_interaction_type editor.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiVocabTermDetail'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List species interaction types
+      tags:
+      - vocab
+schemes:
+- http
+swagger: "2.0"
+tags:
+- description: Health, archive metadata, keymap, shared vocabularies.
+  name: system
+- description: Read + write the taxon tree, ancestors, classifications, moves.
+  name: taxa
+- description: Scientific-name search, parse, patch, relations, dependencies.
+  name: names
+- description: Synonym add/move/delete, pro-parte relationships.
+  name: synonyms
+- description: Reference CRUD, DOI/OpenAlex/BHLnames/BibTeX lookup, PDF upload/library,
+    JATS conversion, corrections.
+  name: references
+- description: Vernacular-name CRUD scoped to a taxon.
+  name: vernaculars
+- description: Geographic distribution CRUD scoped to a taxon.
+  name: distributions
+- description: Species-interaction CRUD (predator/host/pollinator/etc).
+  name: species-interactions
+- description: Type-material CRUD scoped to a name.
+  name: type-materials
+- description: Name-relation CRUD (original combination, homonym, etc).
+  name: name-relations
+- description: Role-scoped agent CRUD (creator/contact/editor/contributor/publisher).
+  name: agents
+- description: Archive-level metadata (title, description, license, logo).
+  name: metadata
+- description: Validation issues (soft warnings) and rule reindex.
+  name: issues
+- description: Controlled vocabularies (rank, code, status, NOMEN, countries, etc).
+  name: vocab
+- description: Provider management + prompt invocation for LLM-assisted extraction.
+  name: llm
+- description: Prompt library CRUD (system/user prompt templates for LLM runs).
+  name: prompts
+- description: Curator review of LLM-extracted assertions staged on references.
+  name: assertions
+- description: Gold-standard test-set membership for evaluation runs.
+  name: test-set
+- description: OpenAPI spec + RapiDoc viewer.
+  name: docs

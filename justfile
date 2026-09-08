@@ -39,6 +39,25 @@ check: fmt vet
 tidy:
     go mod tidy
 
+# Regenerate the OpenAPI (Swagger 2.0) spec from the swaggo annotations
+# on internal/server/*.go. Writes swagger.yaml + swagger.json into
+# internal/server/openapi/ where the server embeds them via //go:embed.
+#
+# The spec is served at /api/openapi.yaml + /api/openapi.json, and the
+# vendored RapiDoc viewer at /docs renders it interactively. Re-run this
+# recipe after adding or editing @Summary / @Param / @Success / @Router
+# annotations, then commit the regenerated files alongside the code.
+#
+# swag is invoked via `go run` at a pinned version so no external
+# tooling install is required — a Go toolchain is enough.
+openapi:
+    go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+        -g serve.go \
+        -d internal/server \
+        -o internal/server/openapi \
+        --outputTypes yaml,json \
+        --parseInternal
+
 # Generate a small demo archive at ./demo.db (or the given path).
 # Idempotent: deletes the file first so re-runs produce a clean archive.
 demo path='./demo.db':

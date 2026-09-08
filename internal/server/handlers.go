@@ -19,6 +19,7 @@ import (
 
 	hive "github.com/sfborg/hive/pkg"
 	"github.com/sfborg/hive/pkg/correction"
+	"github.com/sfborg/hive/pkg/llm"
 	"github.com/sfborg/hive/pkg/refmanager/bibtex"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
@@ -66,10 +67,29 @@ type server struct {
 	// keeps its concrete-typed accessor until the shared name-lookup
 	// interface has more than one implementation to shape it.
 	bhlnames *bhlnames.Client
+	// llmRunner invokes shipped-library prompts (ner_v5, compose_v1,
+	// future translation) against curator-configured providers. nil
+	// when the user config declares no llm_providers — the
+	// /api/llm/invoke endpoint then returns 400 rather than a
+	// misleading 500.
+	llmRunner *llm.Runner
+	// llmProviders is the raw config-declared provider list, kept so
+	// GET /api/llm/providers can describe what's configured (name,
+	// kind, default model) without extending the Provider interface
+	// or reloading config. Credentials never appear in the API
+	// response — the CredentialConfig fields are ignored on read.
+	llmProviders []llm.ProviderConfig
 }
 
 func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// OpenAPI spec + Docs UI. The spec is regenerated from swaggo
+	// annotations by `just openapi`. /docs boots the vendored RapiDoc
+	// component against /api/openapi.yaml.
+	mux.HandleFunc("GET /api/openapi.yaml", s.handleOpenAPIYAML)
+	mux.HandleFunc("GET /api/openapi.json", s.handleOpenAPIJSON)
+	mux.HandleFunc("GET /docs", s.handleDocs)
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
@@ -191,6 +211,37 @@ func (s *server) routes() *http.ServeMux {
 
 	mux.HandleFunc("POST /api/reindex/validation", s.handleReindexValidation)
 
+	mux.HandleFunc("GET /api/llm/providers", s.handleListLLMProviders)
+	mux.HandleFunc("POST /api/llm/providers", s.handleCreateLLMProvider)
+	mux.HandleFunc("PATCH /api/llm/providers/{name}", s.handlePatchLLMProvider)
+	mux.HandleFunc("DELETE /api/llm/providers/{name}", s.handleDeleteLLMProvider)
+	mux.HandleFunc("GET /api/llm/providers/{name}/models", s.handleListLLMProviderModels)
+	mux.HandleFunc("POST /api/llm/estimate", s.handleEstimateLLM)
+	mux.HandleFunc("POST /api/llm/invoke", s.handleInvokeLLM)
+	mux.HandleFunc("POST /api/llm/pipeline", s.handleRunLLMPipeline)
+	mux.HandleFunc("GET /api/reference/{id}/llm-runs", s.handleListReferenceLLMRuns)
+	mux.HandleFunc("GET /api/reference/{id}/assertions", s.handleListReferenceAssertions)
+	mux.HandleFunc("PATCH /api/assertion/{id}/status", s.handlePatchAssertionStatus)
+	mux.HandleFunc("POST /api/assertion/{id}/correction", s.handlePostAssertionCorrection)
+	mux.HandleFunc("GET /api/taxon/{id}/row-sources", s.handleGetTaxonRowSources)
+	mux.HandleFunc("GET /api/reference/{id}/paper-import", s.handleListPaperImportMappings)
+	mux.HandleFunc("POST /api/reference/{id}/paper-import", s.handleUpsertPaperImportMapping)
+	mux.HandleFunc("DELETE /api/reference/{id}/paper-import/{key}", s.handleDeletePaperImportMapping)
+	mux.HandleFunc("POST /api/reference/{id}/paper-import/execute", s.handleExecutePaperImport)
+	mux.HandleFunc("GET /api/prompt", s.handleListPrompts)
+	mux.HandleFunc("GET /api/prompt/{id}", s.handleGetPrompt)
+	mux.HandleFunc("POST /api/prompt", s.handleCreatePrompt)
+	mux.HandleFunc("PATCH /api/prompt/{id}", s.handlePatchPrompt)
+	mux.HandleFunc("DELETE /api/prompt/{id}", s.handleDeletePrompt)
+	mux.HandleFunc("GET /api/test-set", s.handleListTestSet)
+	mux.HandleFunc("GET /api/test-set/{id}", s.handleGetTestSetStatus)
+	mux.HandleFunc("POST /api/test-set/{id}", s.handleAddToTestSet)
+	mux.HandleFunc("DELETE /api/test-set/{id}", s.handleRemoveFromTestSet)
+	mux.HandleFunc("GET /api/llm/run/{id}", s.handleGetLLMRun)
+	mux.HandleFunc("DELETE /api/llm/run/{id}", s.handleSoftDeleteLLMRun)
+	mux.HandleFunc("POST /api/llm/run/{id}/restore", s.handleRestoreLLMRun)
+	mux.HandleFunc("POST /api/llm/run/{id}/gold-standard", s.handleSetLLMRunGoldStandard)
+
 	mux.HandleFunc("GET /api/issue/summary", s.handleIssueSummary)
 	mux.HandleFunc("GET /api/issue", s.handleIssueList)
 
@@ -210,6 +261,13 @@ func (s *server) routes() *http.ServeMux {
 
 // handleHealth is the trivial liveness probe. Returns 200 with a static body
 // so orchestrators can distinguish "server up" from "server hung."
+//
+// @Summary      Liveness probe
+// @Description  Static 200 response for orchestrator health checks.
+// @Tags         system
+// @Produce      json
+// @Success      200 {object} map[string]string
+// @Router       /health [get]
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -219,6 +277,15 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // long Cache-Control keeps browsers from re-fetching. Bundle-endpoint
 // URL stays plural-ish (`/api/vocab` is treated as a mass noun) because
 // it isn't a "get one resource by id" lookup.
+//
+// @Summary      Vocabulary bundle
+// @Description  All controlled vocabularies (rank, code, status, etc)
+// @Description  loaded once per session. Cached for one hour.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Failure      500 {object} problem
+// @Router       /vocab [get]
 func (s *server) handleVocab(w http.ResponseWriter, r *http.Request) {
 	v, err := s.a.Vocabulary(r.Context())
 	if err != nil {
@@ -237,6 +304,14 @@ func (s *server) handleVocab(w http.ResponseWriter, r *http.Request) {
 // needs (description / obo / inverse / symmetrical / superTypes).
 // The picker's /api/vocab bundle continues to ship the slim
 // (id, name) shape.
+//
+// @Summary      List species interaction types
+// @Description  Rich vocabulary rows for the species_interaction_type editor.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} apiPage[apiVocabTermDetail]
+// @Failure      500 {object} problem
+// @Router       /vocab/species_interaction_type/full [get]
 func (s *server) handleListSpeciesInteractionTypes(w http.ResponseWriter, r *http.Request) {
 	terms, err := s.a.ListSpeciesInteractionTypes(r.Context())
 	if err != nil {
@@ -254,6 +329,19 @@ func (s *server) handleListSpeciesInteractionTypes(w http.ResponseWriter, r *htt
 // /api/vocab/species_interaction_type; body is apiVocabTermDetail
 // (id required). Uniqueness on the id column is enforced by sfga's
 // PK — a duplicate returns 409 via ErrConflict.
+//
+// @Summary      Add species interaction type
+// @Description  Insert a new species_interaction_type vocab row.
+// @Tags         vocab
+// @Accept       json
+// @Produce      json
+// @Param        body body apiVocabTermDetail true "New vocab row"
+// @Success      201 {object} apiVocabTermDetail
+// @Failure      400 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /vocab/species_interaction_type [post]
 func (s *server) handleAddSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
 	var body apiVocabTermDetail
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -282,6 +370,20 @@ func (s *server) handleAddSpeciesInteractionType(w http.ResponseWriter, r *http.
 // the term at {id}. The id itself isn't editable — renaming an id
 // is delete + re-add on a new id (also rare — other rows reference
 // it via FK).
+//
+// @Summary      Update species interaction type
+// @Description  Replace editable columns of a species_interaction_type term.
+// @Tags         vocab
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Vocab term ID"
+// @Param        body body apiVocabTermDetail true "Updated columns"
+// @Success      200 {object} apiVocabTermDetail
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /vocab/species_interaction_type/{id} [patch]
 func (s *server) handlePatchSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body apiVocabTermDetail
@@ -308,6 +410,16 @@ func (s *server) handlePatchSpeciesInteractionType(w http.ResponseWriter, r *htt
 // species_interaction.col__type_id blocks the delete when any row
 // still cites the term — returns 409 (ErrConflict) so the caller
 // can prompt the curator to reassign the affected rows first.
+//
+// @Summary      Delete species interaction type
+// @Description  Delete a species_interaction_type term. Returns 409 if any row still references it.
+// @Tags         vocab
+// @Param        id path string true "Vocab term ID"
+// @Success      204 "No Content"
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /vocab/species_interaction_type/{id} [delete]
 func (s *server) handleDeleteSpeciesInteractionType(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
@@ -352,6 +464,14 @@ func apiVocabTermDetailToCore(a apiVocabTermDetail) hive.VocabTermDetail {
 // vocabs (/api/vocab) because it comes from an embedded OWL file and
 // the frontend fetches it only when the status picker is opened.
 // See CLAUDE.md § Nomenclatural status vocabulary (NOMEN).
+//
+// @Summary      NOMEN vocabulary
+// @Description  NOMEN ontology status terms served from an embedded OWL file. Cached for one hour.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Failure      500 {object} problem
+// @Router       /vocab/nomen [get]
 func (s *server) handleNomenVocab(w http.ResponseWriter, r *http.Request) {
 	terms, err := hive.Nomen()
 	if err != nil {
@@ -368,6 +488,14 @@ func (s *server) handleNomenVocab(w http.ResponseWriter, r *http.Request) {
 // country lookup). Sourced from ChecklistBank so hive picks
 // countries from the same list as CoLDP tooling — see
 // hive.Countries().
+//
+// @Summary      Countries vocabulary
+// @Description  ISO 3166-1 alpha-2 country catalog. Cached for one hour.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Failure      500 {object} problem
+// @Router       /vocab/countries [get]
 func (s *server) handleCountriesVocab(w http.ResponseWriter, r *http.Request) {
 	items, err := hive.Countries()
 	if err != nil {
@@ -383,6 +511,14 @@ func (s *server) handleCountriesVocab(w http.ResponseWriter, r *http.Request) {
 // vernacular col__language picker (and any other 3-letter language
 // lookup). Ships ~7900 entries; frontends should fetch on-demand
 // (when the picker first opens) rather than at boot.
+//
+// @Summary      Languages vocabulary
+// @Description  ISO 639-3 language catalog. Cached for one hour.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Failure      500 {object} problem
+// @Router       /vocab/languages [get]
 func (s *server) handleLanguagesVocab(w http.ResponseWriter, r *http.Request) {
 	items, err := hive.Languages()
 	if err != nil {
@@ -399,6 +535,14 @@ func (s *server) handleLanguagesVocab(w http.ResponseWriter, r *http.Request) {
 // the flat form (id-only from the archive's own `sex` table); the
 // enriched form here is drawn from ChecklistBank for pickers that
 // want to show the ♀ / ♂ / ⚥ symbol and hover-tooltip.
+//
+// @Summary      Sex vocabulary
+// @Description  Enriched sex terms (name + glyph + definition). Cached for one hour.
+// @Tags         vocab
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Failure      500 {object} problem
+// @Router       /vocab/sex [get]
 func (s *server) handleSexVocab(w http.ResponseWriter, r *http.Request) {
 	items, err := hive.SexTerms()
 	if err != nil {
@@ -417,6 +561,13 @@ func (s *server) handleSexVocab(w http.ResponseWriter, r *http.Request) {
 // the full list (including TUI-only rows) keeps the endpoint useful
 // to other consumers — future automation tooling, documentation
 // generators, or the eventual customization layer.
+//
+// @Summary      Keymap
+// @Description  Canonical shortcut list shared between TUI and WUI. Cached for one hour.
+// @Tags         system
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Router       /keymap [get]
 func (s *server) handleKeymap(w http.ResponseWriter, r *http.Request) {
 	// Same immutable-for-process-lifetime story as vocab / NOMEN.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
@@ -426,6 +577,15 @@ func (s *server) handleKeymap(w http.ResponseWriter, r *http.Request) {
 // handleGetMetadata returns the dataset metadata row (title,
 // description, license, …). Missing metadata is a 404 — legacy
 // archives without a seeded row can PATCH one in.
+//
+// @Summary      Get metadata
+// @Description  Fetch the dataset metadata row.
+// @Tags         metadata
+// @Produce      json
+// @Success      200 {object} apiMetadata
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /metadata [get]
 func (s *server) handleGetMetadata(w http.ResponseWriter, r *http.Request) {
 	m, err := s.a.GetMetadata(r.Context())
 	if err != nil {
@@ -441,6 +601,18 @@ func (s *server) handleGetMetadata(w http.ResponseWriter, r *http.Request) {
 // Missing row → UpdateMetadata inserts one on the fly, so a PATCH
 // against a legacy archive without seeded metadata also serves as the
 // initial seed (as long as the patch supplies Title).
+//
+// @Summary      Update metadata
+// @Description  Partially update the dataset metadata row. Seeds a missing row on first PATCH.
+// @Tags         metadata
+// @Accept       json
+// @Produce      json
+// @Param        body body apiMetadataPatch true "Fields to update"
+// @Success      200 {object} apiMetadata
+// @Failure      400 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /metadata [patch]
 func (s *server) handlePatchMetadata(w http.ResponseWriter, r *http.Request) {
 	var patch apiMetadataPatch
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
@@ -473,6 +645,14 @@ func (s *server) handlePatchMetadata(w http.ResponseWriter, r *http.Request) {
 // handleArchive returns the archive's identity: path, schema version, and
 // read-only mode. Cheap enough to be called on every WUI boot to display
 // the current dataset.
+//
+// @Summary      Archive identity
+// @Description  Report the archive path, schema version, and read-only mode.
+// @Tags         system
+// @Produce      json
+// @Success      200 {object} apiArchive
+// @Failure      500 {object} problem
+// @Router       /archive [get]
 func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 	version, err := s.a.SchemaVersion(r.Context())
 	if err != nil {
@@ -490,10 +670,33 @@ func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 // /api/taxon/{id}/children with an empty parent ID; kept as a dedicated
 // endpoint so WUI/TUI code that wants the top of the tree doesn't need to
 // invent a magic sentinel.
+//
+// @Summary      List root taxa
+// @Description  Paginated list of root-level taxa.
+// @Tags         taxa
+// @Produce      json
+// @Param        limit query int false "Page size"
+// @Param        offset query int false "Row offset"
+// @Success      200 {object} apiPage[apiTaxonHit]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/roots [get]
 func (s *server) handleRoots(w http.ResponseWriter, r *http.Request) {
 	s.writeChildren(w, r, "")
 }
 
+// handleGetTaxon returns one taxon by ID.
+//
+// @Summary      Get taxon
+// @Description  Fetch a taxon by ID. The response ETag carries col__modified
+// @Description  for optimistic concurrency; pass it back as If-Match on PATCH.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiTaxon
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id} [get]
 func (s *server) handleGetTaxon(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	t, err := s.a.GetTaxon(r.Context(), id)
@@ -524,6 +727,20 @@ func (s *server) handleGetTaxon(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+// handleChildren returns a paginated list of the given taxon's children.
+//
+// @Summary      List taxon children
+// @Description  Paginated list of children under the given parent taxon.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Parent taxon ID"
+// @Param        limit query int false "Page size"
+// @Param        offset query int false "Row offset"
+// @Success      200 {object} apiPage[apiTaxonHit]
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/children [get]
 func (s *server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	s.writeChildren(w, r, r.PathValue("id"))
 }
@@ -557,6 +774,16 @@ func (s *server) writeChildren(w http.ResponseWriter, r *http.Request, parentID 
 // should seed the code picker with — the code_id from the given parent
 // taxon's associated name row, or "" if none is set. Frontends call
 // this when opening the create form under a selected parent.
+//
+// @Summary      Default code for parent
+// @Description  Seed value for the code picker on a new child of the given parent.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Parent taxon ID"
+// @Success      200 {object} map[string]string
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/code-default [get]
 func (s *server) handleCodeDefault(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PathValue("id")
 	code, err := s.a.CodeForParent(r.Context(), parentID)
@@ -572,6 +799,16 @@ func (s *server) handleCodeDefault(w http.ResponseWriter, r *http.Request) {
 // a space so the curator's cursor lands ready to type the new epithet.
 // Empty prefix ("" — child is a fresh uninomial) is a valid response.
 // See hive.CreateNamePrefix for the exact rules.
+//
+// @Summary      Create-name prefix
+// @Description  Pre-populated scientific-name prefix for a new child of the parent taxon.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Parent taxon ID"
+// @Success      200 {object} map[string]string
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/create-name-prefix [get]
 func (s *server) handleCreateNamePrefix(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PathValue("id")
 	prefix, err := s.a.CreateNamePrefix(r.Context(), parentID)
@@ -590,6 +827,16 @@ func (s *server) handleCreateNamePrefix(w http.ResponseWriter, r *http.Request) 
 // to the common ranks; the curator can widen via search or an
 // explicit "show all" toggle.
 // See hive.Archive.ValidChildRanks for filter logic.
+//
+// @Summary      Valid child ranks
+// @Description  Ranks valid as children of the given parent taxon.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Parent taxon ID"
+// @Success      200 {object} map[string]interface{}
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/child-ranks [get]
 func (s *server) handleChildRanks(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PathValue("id")
 	ranks, err := s.a.ValidChildRanks(r.Context(), parentID)
@@ -611,6 +858,16 @@ func (s *server) handleChildRanks(w http.ResponseWriter, r *http.Request) {
 // per-ancestor children requests in parallel instead of sequentially).
 //
 // Empty items array means the taxon id is unknown.
+//
+// @Summary      Classification chain
+// @Description  Full ancestor chain in root-down order, including the taxon itself as the last element.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiPage[apiTaxonHit]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/classification [get]
 func (s *server) handleClassification(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	hits, err := s.a.Classification(r.Context(), id)
@@ -634,6 +891,16 @@ func (s *server) handleClassification(w http.ResponseWriter, r *http.Request) {
 // only needs the id chain doesn't have to pay for the name+rank join,
 // and the existing WUI shell code paths that just want the chain don't
 // have to be rewritten in the same change that adds classification.
+//
+// @Summary      Ancestor id chain
+// @Description  Parent-id chain in root-down order, excluding the taxon itself.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} map[string]interface{}
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/ancestors [get]
 func (s *server) handleAncestors(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ids, err := s.a.Ancestors(r.Context(), id)
@@ -655,6 +922,16 @@ func (s *server) handleAncestors(w http.ResponseWriter, r *http.Request) {
 // here so the frontend footnote accumulator can render citations
 // inline without a per-row round trip. Same treatment the synonym
 // endpoint just picked up.
+//
+// @Summary      Nomenclatural history
+// @Description  Basionym-anchored nomenclatural history for a taxon, grouped into original-combination clusters.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiNomenHistory
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/nomenclatural-history [get]
 func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	hist, err := s.a.NomenclaturalHistory(r.Context(), id)
@@ -694,6 +971,17 @@ func (s *server) handleNomenclaturalHistory(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleSynonyms returns the synonym rows attached to the given taxon.
+//
+// @Summary      List taxon synonyms
+// @Description  Synonym rows for a taxon, each with a server-rendered display label and resolved reference label.
+// @Tags         synonyms
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiPage[apiSynonym]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/synonyms [get]
 func (s *server) handleSynonyms(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	// ListSynonymHits joins each synonym to its name so we can ship a
@@ -734,6 +1022,16 @@ func firstCSVID(s string) string {
 // the given taxon, ordered preferred-first per language. The rowid
 // handle is stringified into `id` on the wire so front-ends address
 // individual rows against PATCH/DELETE /api/vernacular/{id}.
+//
+// @Summary      List vernaculars
+// @Description  Vernacular-name rows attached to a taxon, preferred-first per language.
+// @Tags         vernaculars
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiPage[apiVernacular]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/vernaculars [get]
 func (s *server) handleListVernaculars(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	hits, err := s.a.ListVernaculars(r.Context(), taxonID)
@@ -753,6 +1051,20 @@ func (s *server) handleListVernaculars(w http.ResponseWriter, r *http.Request) {
 // the caller can splice it into local state without a follow-up
 // list refresh. TaxonID is taken from the path, not the body —
 // consistent with POST /api/taxon/{id}/basionym.
+//
+// @Summary      Create vernacular
+// @Description  Add a vernacular-name row to the given taxon.
+// @Tags         vernaculars
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Param        body body apiVernacular true "New vernacular row"
+// @Success      201 {object} apiVernacular
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/vernaculars [post]
 func (s *server) handleCreateVernacular(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	var body apiVernacular
@@ -799,6 +1111,20 @@ func (s *server) handleCreateVernacular(w http.ResponseWriter, r *http.Request) 
 // patch mean "leave alone"; a set pointer to zero-value clears the
 // field. TaxonID is not editable — reparent a vernacular by
 // delete+add on the new taxon.
+//
+// @Summary      Update vernacular
+// @Description  Partially update a vernacular row. TaxonID is not editable.
+// @Tags         vernaculars
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Vernacular rowid"
+// @Param        body body apiVernacularPatch true "Fields to update"
+// @Success      200 {object} apiVernacular
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /vernacular/{id} [patch]
 func (s *server) handlePatchVernacular(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseVernacularRowID(w, r)
 	if !ok {
@@ -844,6 +1170,16 @@ func (s *server) handlePatchVernacular(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteVernacular removes the row at the given rowid.
 // Unknown row → 404 via ErrNotFound.
+//
+// @Summary      Delete vernacular
+// @Description  Delete a vernacular row by rowid.
+// @Tags         vernaculars
+// @Param        id path string true "Vernacular rowid"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /vernacular/{id} [delete]
 func (s *server) handleDeleteVernacular(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseVernacularRowID(w, r)
 	if !ok {
@@ -923,6 +1259,16 @@ func ptrBoolToNull(p *bool) sql.NullBool {
 // to the given taxon, ordered by gazetteer + area. Same rowid-as-
 // string handle pattern as vernaculars — front-ends address rows
 // via PATCH/DELETE /api/distribution/{id}.
+//
+// @Summary      List distributions
+// @Description  Distribution rows attached to a taxon, ordered by gazetteer + area.
+// @Tags         distributions
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiPage[apiDistribution]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/distributions [get]
 func (s *server) handleListDistributions(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	hits, err := s.a.ListDistributions(r.Context(), taxonID)
@@ -942,6 +1288,20 @@ func (s *server) handleListDistributions(w http.ResponseWriter, r *http.Request)
 // apiDistribution so the caller can splice it into local state
 // without a follow-up list refresh. TaxonID is taken from the
 // path, not the body — consistent with the vernacular create.
+//
+// @Summary      Create distribution
+// @Description  Add a distribution row to the given taxon.
+// @Tags         distributions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Param        body body apiDistribution true "New distribution row"
+// @Success      201 {object} apiDistribution
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/distributions [post]
 func (s *server) handleCreateDistribution(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	var body apiDistribution
@@ -981,6 +1341,20 @@ func (s *server) handleCreateDistribution(w http.ResponseWriter, r *http.Request
 // the patch mean "leave alone"; a set pointer to zero-value
 // clears the field. TaxonID is not editable — reparent via
 // delete+add on the new taxon.
+//
+// @Summary      Update distribution
+// @Description  Partially update a distribution row. TaxonID is not editable.
+// @Tags         distributions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Distribution rowid"
+// @Param        body body apiDistributionPatch true "Fields to update"
+// @Success      200 {object} apiDistribution
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /distribution/{id} [patch]
 func (s *server) handlePatchDistribution(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseDistributionRowID(w, r)
 	if !ok {
@@ -1023,6 +1397,16 @@ func (s *server) handlePatchDistribution(w http.ResponseWriter, r *http.Request)
 
 // handleDeleteDistribution removes the row at the given rowid.
 // Unknown row → 404 via ErrNotFound.
+//
+// @Summary      Delete distribution
+// @Description  Delete a distribution row by rowid.
+// @Tags         distributions
+// @Param        id path string true "Distribution rowid"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /distribution/{id} [delete]
 func (s *server) handleDeleteDistribution(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseDistributionRowID(w, r)
 	if !ok {
@@ -1083,6 +1467,16 @@ func applyDistributionPatch(d *coldp.Distribution, p apiDistributionPatch) {
 // rowid-as-string handle pattern as vernacular / distribution.
 // Each row carries a server-resolved related-taxon label so the
 // front-end row can render without a follow-up fetch.
+//
+// @Summary      List species interactions
+// @Description  Species-interaction rows where the given taxon is the subject.
+// @Tags         species-interactions
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiPage[apiSpeciesInteraction]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/species-interactions [get]
 func (s *server) handleListSpeciesInteractions(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	hits, err := s.a.ListSpeciesInteractions(r.Context(), taxonID)
@@ -1102,6 +1496,20 @@ func (s *server) handleListSpeciesInteractions(w http.ResponseWriter, r *http.Re
 // apiSpeciesInteraction so the caller can splice it into local
 // state without a follow-up list refresh. TaxonID from path
 // wins over body.
+//
+// @Summary      Create species interaction
+// @Description  Add a species-interaction row where the given taxon is the subject.
+// @Tags         species-interactions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Param        body body apiSpeciesInteraction true "New interaction row"
+// @Success      201 {object} apiSpeciesInteraction
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/species-interactions [post]
 func (s *server) handleCreateSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	var body apiSpeciesInteraction
@@ -1140,6 +1548,20 @@ func (s *server) handleCreateSpeciesInteraction(w http.ResponseWriter, r *http.R
 // fields on the patch mean "leave alone"; a set pointer to
 // zero-value clears the field. TaxonID is not editable —
 // reparent via delete+add on the new taxon.
+//
+// @Summary      Update species interaction
+// @Description  Partially update a species-interaction row. TaxonID is not editable.
+// @Tags         species-interactions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Species interaction rowid"
+// @Param        body body apiSpeciesInteractionPatch true "Fields to update"
+// @Success      200 {object} apiSpeciesInteraction
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /species-interaction/{id} [patch]
 func (s *server) handlePatchSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseSpeciesInteractionRowID(w, r)
 	if !ok {
@@ -1190,6 +1612,16 @@ func (s *server) handlePatchSpeciesInteraction(w http.ResponseWriter, r *http.Re
 
 // handleDeleteSpeciesInteraction removes the row at the given
 // rowid. Unknown row → 404 via ErrNotFound.
+//
+// @Summary      Delete species interaction
+// @Description  Delete a species-interaction row by rowid.
+// @Tags         species-interactions
+// @Param        id path string true "Species interaction rowid"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /species-interaction/{id} [delete]
 func (s *server) handleDeleteSpeciesInteraction(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseSpeciesInteractionRowID(w, r)
 	if !ok {
@@ -1222,6 +1654,16 @@ func parseSpeciesInteractionRowID(w http.ResponseWriter, r *http.Request) (int64
 // to the given name, ordered by status. The rowid handle is
 // stringified into `id` on the wire so front-ends address rows via
 // PATCH/DELETE /api/type-material/{id}.
+//
+// @Summary      List type materials
+// @Description  Type-material rows attached to a name, ordered by status.
+// @Tags         type-materials
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Success      200 {object} apiPage[apiTypeMaterial]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id}/type-materials [get]
 func (s *server) handleListTypeMaterials(w http.ResponseWriter, r *http.Request) {
 	nameID := r.PathValue("id")
 	hits, err := s.a.ListTypeMaterials(r.Context(), nameID)
@@ -1240,6 +1682,20 @@ func (s *server) handleListTypeMaterials(w http.ResponseWriter, r *http.Request)
 // to the {id} name and returns the freshly-hydrated apiTypeMaterial
 // so the caller can splice it into local state without a follow-up
 // list refresh. NameID is taken from the path, not the body.
+//
+// @Summary      Create type material
+// @Description  Add a type-material row to the given name.
+// @Tags         type-materials
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Param        body body apiTypeMaterial true "New type-material row"
+// @Success      201 {object} apiTypeMaterial
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id}/type-materials [post]
 func (s *server) handleCreateTypeMaterial(w http.ResponseWriter, r *http.Request) {
 	nameID := r.PathValue("id")
 	var body apiTypeMaterial
@@ -1291,6 +1747,20 @@ func (s *server) handleCreateTypeMaterial(w http.ResponseWriter, r *http.Request
 // patch mean "leave alone"; a set pointer overwrites (including with
 // zero-value strings / coordinates). NameID isn't editable — reparent
 // a type_material row by delete+add on the new name.
+//
+// @Summary      Update type material
+// @Description  Partially update a type-material row. NameID is not editable.
+// @Tags         type-materials
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Type-material rowid"
+// @Param        body body apiTypeMaterialPatch true "Fields to update"
+// @Success      200 {object} apiTypeMaterial
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /type-material/{id} [patch]
 func (s *server) handlePatchTypeMaterial(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseTypeMaterialRowID(w, r)
 	if !ok {
@@ -1345,6 +1815,16 @@ func (s *server) handlePatchTypeMaterial(w http.ResponseWriter, r *http.Request)
 
 // handleDeleteTypeMaterial removes the row at the given rowid.
 // Unknown row → 404 via ErrNotFound.
+//
+// @Summary      Delete type material
+// @Description  Delete a type-material row by rowid.
+// @Tags         type-materials
+// @Param        id path string true "Type-material rowid"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /type-material/{id} [delete]
 func (s *server) handleDeleteTypeMaterial(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseTypeMaterialRowID(w, r)
 	if !ok {
@@ -1461,6 +1941,16 @@ func ptrIntToNull(p *int) sql.NullInt64 {
 // the caller renders the counterpart's canonical + authorship without
 // a per-row fetch. Reference label is populated when the row cites
 // one.
+//
+// @Summary      List name relations
+// @Description  Name-relation rows where the given name is subject or object, with resolved counterpart labels.
+// @Tags         name-relations
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Success      200 {object} apiPage[apiNameRelation]
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id}/relations [get]
 func (s *server) handleListNameRelations(w http.ResponseWriter, r *http.Request) {
 	nameID := r.PathValue("id")
 	hits, err := s.a.ListNameRelations(r.Context(), nameID)
@@ -1480,6 +1970,20 @@ func (s *server) handleListNameRelations(w http.ResponseWriter, r *http.Request)
 // type + optional reference / page / remarks. Returns the freshly
 // hydrated apiNameRelation so callers can splice into local state
 // without a follow-up list refresh.
+//
+// @Summary      Create name relation
+// @Description  Link a name to a related name with a nom_rel_type relation.
+// @Tags         name-relations
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Subject name ID"
+// @Param        body body apiNameRelationCreate true "Relation payload"
+// @Success      201 {object} apiNameRelation
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id}/relations [post]
 func (s *server) handleCreateNameRelation(w http.ResponseWriter, r *http.Request) {
 	nameID := r.PathValue("id")
 	var body apiNameRelationCreate
@@ -1543,6 +2047,16 @@ func (s *server) handleCreateNameRelation(w http.ResponseWriter, r *http.Request
 
 // handleDeleteNameRelation removes the row at the given rowid.
 // Unknown row → 404 via ErrNotFound.
+//
+// @Summary      Delete name relation
+// @Description  Delete a name-relation row by rowid.
+// @Tags         name-relations
+// @Param        id path string true "Name relation rowid"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name-relation/{id} [delete]
 func (s *server) handleDeleteNameRelation(w http.ResponseWriter, r *http.Request) {
 	rowid, ok := parseNameRelationRowID(w, r)
 	if !ok {
@@ -1625,6 +2139,17 @@ func applySpeciesInteractionPatch(s *coldp.SpeciesInteraction, p apiSpeciesInter
 	}
 }
 
+// handleGetName returns one name by ID.
+//
+// @Summary      Get name
+// @Description  Fetch a name by ID. Includes resolved reference label and basionym reference when present.
+// @Tags         names
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Success      200 {object} apiName
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id} [get]
 func (s *server) handleGetName(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	n, err := s.a.GetName(r.Context(), id)
@@ -1705,6 +2230,19 @@ func (s *server) referenceLabel(ctx context.Context, id string) string {
 // taxa reached via matching synonyms — see hive.SearchTaxa. When set,
 // each apiTaxonHit carries is_synonym (true when the match came via
 // a synonym) and matched_name (the string that actually matched).
+//
+// @Summary      Search taxa
+// @Description  Search taxa by name. Supports prefix, partial, and fuzzy modes; optional synonym expansion.
+// @Tags         taxa
+// @Produce      json
+// @Param        q query string true "Query string"
+// @Param        limit query int false "Page size"
+// @Param        mode query string false "Match mode: prefix|partial|fuzzy"
+// @Param        include_synonyms query bool false "Extend hits with accepted taxa reached via matching synonyms"
+// @Success      200 {object} apiPage[apiTaxonHit]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/search [get]
 func (s *server) handleTaxonSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -1790,6 +2328,22 @@ func parseBoolParam(v string) bool {
 // v0 does NOT refresh denormalized classification columns after the move —
 // see CLAUDE.md § pkg/ package conventions. A future Reclassify endpoint
 // will rebuild them.
+//
+// @Summary      Move taxon
+// @Description  Reparent a taxon. Empty new_parent_id moves it to root. Optimistic concurrency via If-Match.
+// @Tags         taxa
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Param        If-Match header string false "col__modified value for optimistic concurrency"
+// @Param        body body object true "New parent id" schema-example({"new_parent_id":"..."})
+// @Success      200 {object} apiTaxon
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/move [post]
 func (s *server) handleMoveTaxon(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
@@ -1852,6 +2406,21 @@ func (s *server) handleMoveTaxon(w http.ResponseWriter, r *http.Request) {
 // Returns the newly created basionym as apiName so the client can
 // display / pick it. The parent taxon's row is untouched; the client
 // stays on its current view.
+//
+// @Summary      Add basionym
+// @Description  Create the basionym name for the current-combination taxon and link the BASIONYM relation atomically.
+// @Tags         names
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Current combination taxon ID"
+// @Param        body body createTaxonBody true "New basionym name payload"
+// @Success      201 {object} apiName
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/basionym [post]
 func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	if taxonID == "" {
@@ -1948,6 +2517,21 @@ func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
 // it. The parent taxon's row is untouched; the client refreshes the
 // taxon detail to pick the new synonym up in the Nomenclatural history
 // section.
+//
+// @Summary      Add synonym
+// @Description  Create a name and link it as a synonym of the given taxon. Optionally links a basionym in the same transaction.
+// @Tags         synonyms
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Accepted taxon ID"
+// @Param        body body createTaxonBody true "New synonym name payload"
+// @Success      201 {object} apiName
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/synonym [post]
 func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	if taxonID == "" {
@@ -2050,6 +2634,16 @@ func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
 // only if all three counts are zero AFTER the synonym being deleted
 // has been removed (i.e., synonym_count = 1 today and it's the target
 // synonym, and every other count = 0).
+//
+// @Summary      Name dependency counts
+// @Description  Count of taxa, synonyms, and name-relations that reference a name.
+// @Tags         names
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Success      200 {object} map[string]int
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id}/dependencies [get]
 func (s *server) handleNameDependencies(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	deps, err := s.a.NameDependencies(r.Context(), id)
@@ -2069,6 +2663,20 @@ func (s *server) handleNameDependencies(w http.ResponseWriter, r *http.Request) 
 // col__id stays stable — this is an in-place taxon-id update, not a
 // delete-and-recreate, so any external reference to the synonym id
 // (audit log, undo) survives.
+//
+// @Summary      Move synonym
+// @Description  Reassign a synonym row to a new accepted taxon in place.
+// @Tags         synonyms
+// @Accept       json
+// @Param        id path string true "Synonym ID"
+// @Param        body body object true "New accepted taxon id"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /synonym/{id}/move [post]
 func (s *server) handleMoveSynonym(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -2105,6 +2713,18 @@ func (s *server) handleMoveSynonym(w http.ResponseWriter, r *http.Request) {
 // synonym-gone-but-name-still-there half-state on cascade failure.
 //
 // Returns 204 on success.
+//
+// @Summary      Delete synonym
+// @Description  Delete a synonym row; optionally cascade the underlying name row when no other row references it.
+// @Tags         synonyms
+// @Param        id path string true "Synonym ID"
+// @Param        cascade_name query bool false "Also delete the underlying name row if it becomes orphaned"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /synonym/{id} [delete]
 func (s *server) handleDeleteSynonym(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -2149,6 +2769,20 @@ func (s *server) handleDeleteSynonym(w http.ResponseWriter, r *http.Request) {
 // the parse.
 //
 // parent_id may be empty (creates a root-level taxon).
+//
+// @Summary      Create taxon
+// @Description  Create a name and its associated taxon in one transaction. Optionally links a basionym.
+// @Tags         taxa
+// @Accept       json
+// @Produce      json
+// @Param        body body createTaxonBody true "New taxon payload"
+// @Success      201 {object} apiTaxon
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon [post]
 func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 	var body createTaxonBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -2308,6 +2942,17 @@ func metadataWarnings(a *hive.Archive, ctx context.Context, id int) []apiValidat
 // Refuses (409) when the taxon has children — the curator must reparent
 // or delete them first. The response body carries the parent_id so
 // front-ends can reveal the tree at the parent's location.
+//
+// @Summary      Delete taxon
+// @Description  Delete a taxon and its per-taxon associations. Refuses when the taxon still has children.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} map[string]string
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id} [delete]
 func (s *server) handleDeleteTaxon(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -2336,6 +2981,16 @@ func (s *server) handleDeleteTaxon(w http.ResponseWriter, r *http.Request) {
 // confirming a cascade delete: direct-child count (drives the "leaf
 // vs parent" UI branch), descendant count, and per-association-table
 // counts across the descendant set.
+//
+// @Summary      Delete preview
+// @Description  Descendant counts and per-association counts for a proposed cascade delete.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} map[string]interface{}
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/delete-preview [get]
 func (s *server) handleDeletePreview(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	p, err := s.a.TaxonDeletePreview(r.Context(), id)
@@ -2363,6 +3018,17 @@ func (s *server) handleDeletePreview(w http.ResponseWriter, r *http.Request) {
 // then leaf-deletes the taxon. Response body carries the destination
 // parent_id (empty when children became new roots) so the client can
 // reveal the tree at the parent's position.
+//
+// @Summary      Delete with reparent
+// @Description  Move direct children up one level, then leaf-delete the taxon.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} map[string]string
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/delete-reparent [post]
 func (s *server) handleDeleteReparent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -2391,6 +3057,17 @@ func (s *server) handleDeleteReparent(w http.ResponseWriter, r *http.Request) {
 // body carries the deleted-root's parent_id so the client can reveal
 // the tree at the surviving parent (empty = tree returned to roots-
 // only view).
+//
+// @Summary      Delete cascade
+// @Description  Delete the taxon, every descendant, and every per-taxon association attached to the set.
+// @Tags         taxa
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} map[string]string
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/delete-cascade [post]
 func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -2417,6 +3094,18 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // handleReferences returns a paginated list of references, ordered
 // by author + year + title. Same shape as the taxon list endpoints so
 // clients can render either aggregate uniformly.
+//
+// @Summary      List references
+// @Description  Paginated list of references. Sort by author (default) or recent.
+// @Tags         references
+// @Produce      json
+// @Param        limit query int false "Page size"
+// @Param        offset query int false "Row offset"
+// @Param        sort query string false "Sort: author|recent"
+// @Success      200 {object} apiPage[apiReferenceHit]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference [get]
 func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	limit, offset, err := parseLimitOffset(r)
 	if err != nil {
@@ -2445,6 +3134,17 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 
 // handleReferenceSearch returns references whose author, title, or
 // citation matches q as a case-insensitive substring.
+//
+// @Summary      Search references
+// @Description  Case-insensitive substring search across author, title, and citation.
+// @Tags         references
+// @Produce      json
+// @Param        q query string true "Query string"
+// @Param        limit query int false "Page size"
+// @Success      200 {object} apiPage[apiReferenceHit]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/search [get]
 func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -2480,6 +3180,20 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 //
 // Body: {"sha512": "..."}. Idempotent — a repeat attach with
 // the same sha is a no-op.
+//
+// @Summary      Attach PDF to reference
+// @Description  Associate a sidecar-library sha512 with an existing reference. Idempotent.
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        body body object true "SHA-512 hex payload"
+// @Success      200 {object} map[string]string
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/attach-pdf [post]
 func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
@@ -2518,6 +3232,18 @@ func (s *server) handleAttachReferencePDF(w http.ResponseWriter, r *http.Request
 // Shared PDFs (rare — same content-addressed sha attached to
 // multiple references): the sidecar stays, other references keep
 // working. Only the calling reference's association is severed.
+//
+// @Summary      Detach PDF from reference
+// @Description  Break the (reference, sha) association. Cascades correction cleanup; wipes sidecar files when the sha becomes orphaned.
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        sha path string true "SHA-512 hex"
+// @Success      200 {object} apiDetachPDFResponse
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/attached-pdf/{sha} [delete]
 func (s *server) handleDetachReferencePDF(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	sha := r.PathValue("sha")
@@ -2589,6 +3315,17 @@ type apiDetachPDFResponse struct {
 // when downstream aggregates still cite the reference — DeleteReference
 // refuses rather than orphaning them. Curator's UI shows the error
 // so they can un-cite the reference first.
+//
+// @Summary      Delete reference
+// @Description  Delete a reference row. Refuses with 409 when downstream aggregates still cite it.
+// @Tags         references
+// @Param        id path string true "Reference ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id} [delete]
 func (s *server) handleDeleteReference(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {

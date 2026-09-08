@@ -295,6 +295,11 @@ export const api = {
     childRanks: (parentId) =>
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/child-ranks`),
     search: (opts) => j("GET", `/api/taxon/search${qs(opts)}`),
+    // rowSources returns hive__row_source entries for the taxon's
+    // extension rows (type_material, distribution, vernacular).
+    // Backs the source badges on the detail-pane extension tables.
+    rowSources: (id) =>
+      j("GET", `/api/taxon/${encodeURIComponent(id)}/row-sources`),
     patch: (id, patch, ifMatch) =>
       j("PATCH", `/api/taxon/${encodeURIComponent(id)}`, patch, ifMatch ? { "If-Match": ifMatch } : {}),
     move: (id, newParentID, ifMatch) =>
@@ -508,6 +513,90 @@ export const api = {
       ),
   },
 
+  // LLM invocation + provider management. Curator configures
+  // providers once (either by hand in ~/.config/sfborg/hive/config.yml
+  // or via api.llm.providers.create() which stores the API key in
+  // the OS keyring — Keychain / DPAPI / Secret Service), then any
+  // number of prompt runs flow through /api/llm/invoke and get
+  // persisted as hive__extraction_run rows for per-paper multi-model
+  // comparison and cost accountability.
+  llm: {
+    providers: {
+      list: () => j("GET", "/api/llm/providers"),
+      // create pastes an API key to the server, which writes it to
+      // the OS keyring and adds a {source: keyring, value: <name>}
+      // credential entry to the user config. The key never touches
+      // the config file — only the label (the provider name) does.
+      // Response shape: apiLLMProvider {name, kind, default_model}.
+      create: (body) => j("POST", "/api/llm/providers", body),
+      // models fetches the provider's models-listing endpoint
+      // (server-side proxy so the API key stays out of the
+      // browser). Cached per-server for one hour so repeated
+      // invoke-modal opens don't hammer the upstream. Returns
+      // {items: [{id, display_name?, context_window?,
+      // input_price_per_million?, output_price_per_million?}]}.
+      // 501 when the underlying adapter doesn't support models
+      // listing — WUI should fall back to a free-text override.
+      models: (name) =>
+        j("GET", `/api/llm/providers/${encodeURIComponent(name)}/models`),
+      // patch applies partial updates to a provider. Only
+      // non-empty fields in the body take effect. Rules for
+      // credential handling live in the server-side doc for
+      // apiLLMProviderPatchRequest — TL;DR: swap source =
+      // requires the new source's key material; keep source +
+      // supply APIKey = rotate stored value; keep source + no
+      // APIKey = leave credential alone.
+      patch: (name, body) =>
+        j("PATCH", `/api/llm/providers/${encodeURIComponent(name)}`, body),
+      // delete removes the provider from config and deletes its
+      // keyring entry. Idempotent — 204 whether the provider
+      // existed or not.
+      delete: (name) => j("DELETE", `/api/llm/providers/${encodeURIComponent(name)}`),
+    },
+    // estimate returns the token count + USD cost forecast + context-
+    // window check for a would-be invocation. The WUI uses this to
+    // show cost near the submit button, disable submit when the
+    // input would exceed the model's context window, and trigger a
+    // confirm() dialog above confirm_threshold_usd. See
+    // apiLLMEstimateResponse on the server for the full field set.
+    estimate: (body) => j("POST", "/api/llm/estimate", body),
+    // invoke runs the prompt via the selected provider and persists
+    // a hive__extraction_run row. Response shape:
+    // {run_id, envelope, persist_error?}. persist_error is
+    // populated when the LLM call succeeded but the run couldn't be
+    // saved — the envelope is still returned so the curator sees
+    // the paid-for result.
+    invoke: (body) => j("POST", "/api/llm/invoke", body),
+    // pipeline runs the two-step NER → compose flow in one call so
+    // curators see it as a single "Run" action. Backend fetches
+    // the paper's JATS body server-side from the reference's
+    // attached PDF sidecar (curator never handles raw XML) and
+    // orchestrates both steps, persisting a hive__extraction_run
+    // row for each (compose linked to NER via parent_run_id).
+    // Response: {ner_run, compose_run, tree, failed_stage?, error?}.
+    pipeline: (body) => j("POST", "/api/llm/pipeline", body),
+    run: {
+      // listForReference returns every run associated with a
+      // reference, most-recent first. includeDeleted brings back
+      // soft-deleted rows for the cost dashboard.
+      listForReference: (referenceID, opts = {}) =>
+        j(
+          "GET",
+          `/api/reference/${encodeURIComponent(referenceID)}/llm-runs${qs({ include_deleted: opts.includeDeleted ? "1" : "" })}`,
+        ),
+      get: (id) => j("GET", `/api/llm/run/${encodeURIComponent(id)}`),
+      // delete is soft — deleted_at gets stamped, row stays in DB
+      // so cost dashboards keep visibility of paid-for spend.
+      delete: (id) => j("DELETE", `/api/llm/run/${encodeURIComponent(id)}`),
+      restore: (id) => j("POST", `/api/llm/run/${encodeURIComponent(id)}/restore`, {}),
+      // setGoldStandard flips the run's ground-truth flag used by
+      // sampling-based accuracy scoring. Gold runs anchor the
+      // per-language F1 estimates.
+      setGoldStandard: (id, gold) =>
+        j("POST", `/api/llm/run/${encodeURIComponent(id)}/gold-standard`, { gold }),
+    },
+  },
+
   reference: {
     list: (opts) => j("GET", `/api/reference${qs(opts)}`),
     get: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}`),
@@ -530,6 +619,31 @@ export const api = {
         ifMatch ? { "If-Match": ifMatch } : {},
       ),
     resolveDOI: (doi) => j("GET", `/api/reference/resolve-doi${qs({ doi })}`),
+
+    // Per-reference assertions — the staged per-fact rows
+    // materialized from an LLM (or curator) extraction run.
+    // Query filters: status[], source_run_id, asserted_by.
+    // Backs the Assertions-tab list and the paper-level
+    // comparison view. Empty items array when no runs have
+    // landed yet — WUI shows an empty-state call-to-action.
+    assertions: (id, opts = {}) =>
+      j("GET", `/api/reference/${encodeURIComponent(id)}/assertions${qs(opts)}`),
+
+    // Test-set membership — the "is this paper part of the
+    // evaluation set?" per-reference flag. Presence of a
+    // hive__reference_test_set row = in the set; absence = not.
+    // Response shape for getTestSet: {in_test_set, added_at?, added_by?, notes?}.
+    // Backs the toolbar checkbox on the reference detail page.
+    //
+    // Path is /api/test-set/{ref_id} (not /api/reference/{id}/test-set)
+    // to avoid stdlib mux ambiguity with existing correction routes.
+    getTestSet: (id) =>
+      j("GET", `/api/test-set/${encodeURIComponent(id)}`),
+    addToTestSet: (id, notes) =>
+      j("POST", `/api/test-set/${encodeURIComponent(id)}`,
+        notes ? { notes } : {}),
+    removeFromTestSet: (id) =>
+      j("DELETE", `/api/test-set/${encodeURIComponent(id)}`),
     delete: (id) => j("DELETE", `/api/reference/${encodeURIComponent(id)}`),
     attachPDF: (id, sha512) =>
       j("POST", `/api/reference/${encodeURIComponent(id)}/attach-pdf`, { sha512 }),
@@ -542,6 +656,20 @@ export const api = {
     // has was printed.
     lookupOpenAlex: (opts) =>
       j("GET", `/api/reference/lookup-openalex${qs(opts)}`),
+
+    // Paper-import assembly mappings — one row per paper mention
+    // → target taxon UUID. Backs the Assembly workspace tab's
+    // drag-and-drop / picker-based flow.
+    listImportMappings: (referenceID) =>
+      j("GET", `/api/reference/${encodeURIComponent(referenceID)}/paper-import`),
+    upsertImportMapping: (referenceID, body) =>
+      j("POST", `/api/reference/${encodeURIComponent(referenceID)}/paper-import`, body),
+    deleteImportMapping: (referenceID, paperNameKey) =>
+      j("DELETE", `/api/reference/${encodeURIComponent(referenceID)}/paper-import/${encodeURIComponent(paperNameKey)}`),
+    executeImport: (referenceID, extractionRunID) =>
+      j("POST",
+        `/api/reference/${encodeURIComponent(referenceID)}/paper-import/execute`,
+        { extraction_run_id: extractionRunID }),
     lookupBHLnames: (body) => j("POST", `/api/reference/lookup-bhlnames`, body),
     // parseBibTeX sends the raw entry with the vendor MIME type — the
     // handler accepts either form, and the raw path avoids a JSON escape
@@ -593,5 +721,64 @@ export const api = {
       }
       return res.json();
     },
+  },
+
+  // Prompt library — shipped built-ins from pkg/prompts/ merged
+  // with curator forks stored in hive__prompt. list() returns
+  // the merged list (built-ins + curator forks), get() fetches
+  // content for one prompt (by shipped name or curator UUID),
+  // create() forks, patch() edits a curator fork's content,
+  // remove() soft-deletes.
+  prompt: {
+    // list options: {purpose?: "ner"|"compose", include_content?: bool}
+    // Content is omitted by default so the picker payload stays
+    // lean; opt in with include_content=true when the caller
+    // wants to inline preview panes.
+    list: (opts = {}) => {
+      const params = { purpose: opts.purpose || "" };
+      if (opts.include_content) params.include_content = "1";
+      return j("GET", `/api/prompt${qs(params)}`);
+    },
+    get: (id) => j("GET", `/api/prompt/${encodeURIComponent(id)}`),
+    create: (body) => j("POST", `/api/prompt`, body),
+    patch: (id, content) =>
+      j("PATCH", `/api/prompt/${encodeURIComponent(id)}`, { content }),
+    remove: (id) =>
+      j("DELETE", `/api/prompt/${encodeURIComponent(id)}`),
+  },
+
+  // Individual staged assertions. reference.assertions() lists them
+  // in bulk; this namespace covers per-row curator actions.
+  assertion: {
+    // patchStatus flips one assertion's review status. Valid values:
+    // pending | accepted | rejected | edited. reject_reason is
+    // required by the backend when status === "rejected" — pass an
+    // empty string for other transitions and the server ignores it.
+    // Response echoes the updated row so callers can hydrate local
+    // state without a re-list.
+    patchStatus: (id, status, rejectReason = "") =>
+      j(
+        "PATCH",
+        `/api/assertion/${encodeURIComponent(id)}/status`,
+        { status, reject_reason: rejectReason },
+      ),
+
+    // correct records a curator fix to the NER value of one
+    // assertion — additive, not destructive: the model's original
+    // extraction stays on the assertion row; the correction lands
+    // as a separate hive__extraction_correction record so both
+    // signals are available as training data.
+    //
+    // corrected: the truth value the curator wants persisted
+    // field:    the compose-output slot name this fix targets
+    //           (e.g. "verbatimDate") — optional; blank when the
+    //           assertion type unambiguously identifies the field
+    // notes:    curator rationale — optional
+    correct: (id, corrected, field = "", notes = "") =>
+      j(
+        "POST",
+        `/api/assertion/${encodeURIComponent(id)}/correction`,
+        { corrected, field, notes },
+      ),
   },
 };

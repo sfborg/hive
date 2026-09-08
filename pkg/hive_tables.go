@@ -214,7 +214,22 @@ CREATE TABLE IF NOT EXISTS hive__reference_assertion (
 	imported_at    TEXT,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL,
-	created_by     TEXT NOT NULL DEFAULT ''
+	created_by     TEXT NOT NULL DEFAULT '',
+	-- source_run_id links a materialized assertion back to the
+	-- hive__extraction_run row it was parsed out of. Nullable —
+	-- curator-authored assertions have no run to link to.
+	-- Soft-deleting the parent run hides these via a join filter
+	-- rather than cascading DELETE (the row stays for audit).
+	source_run_id  TEXT,
+	-- asserted_by is the view-filter column per the
+	-- assertions-as-source-of-truth design memory: who is CLAIMING
+	-- the assertion (curator ORCID for curator entries, synthetic
+	-- "llm-run:<id>" for LLM outputs). Distinct from created_by
+	-- (who added the row to the local DB). Tree-render recursive
+	-- CTEs filter on this column to swap views. Nullable — legacy
+	-- rows predate this column and fall back to created_by for
+	-- filtering.
+	asserted_by    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_ref
@@ -222,6 +237,17 @@ CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_ref
 
 CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_status
 	ON hive__reference_assertion (reference_id, status);
+
+-- source_run_id index makes "list assertions produced by this run"
+-- fast — the hot query when a curator opens a run's review screen.
+CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_source_run
+	ON hive__reference_assertion (source_run_id);
+
+-- asserted_by index supports the multi-view tree-render recursive
+-- CTE's WHERE clause. Sub-second even at Coleoptera scale on
+-- SQLite (per assertions-as-source-of-truth benchmark note).
+CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_asserted_by
+	ON hive__reference_assertion (asserted_by);
 
 -- hive__extraction_correction records curator corrections to the
 -- attached-PDF extraction pipeline (GROBID → jatsconv → JATS).
@@ -295,7 +321,8 @@ CREATE TABLE IF NOT EXISTS hive__extraction_correction (
 	                       ('bbox-add', 'bbox-modify', 'bbox-remove',
 	                        'text-tag', 'text-remove', 'text-restore',
 	                        'xref-fix', 'chip-feedback',
-	                        'ref-merge', 'ref-edit')),
+	                        'ref-merge', 'ref-edit',
+	                        'assertion-edit')),
 	content_type       TEXT NOT NULL,
 	bbox_page          INTEGER,
 	bbox_json          TEXT,
@@ -320,6 +347,116 @@ CREATE INDEX IF NOT EXISTS idx_hive__extraction_correction_ref
 
 CREATE INDEX IF NOT EXISTS idx_hive__extraction_correction_sha
 	ON hive__extraction_correction (sidecar_sha);
+
+-- hive__reference_test_set records references curators have marked
+-- for the evaluation test set. Presence of a row = the reference
+-- is in the test set; absence = it isn't. The flag is separate
+-- from hive__extraction_run.is_gold_standard: the test-set flag
+-- marks a PAPER as belonging to the evaluation set (intent, and a
+-- work queue for curator annotation), while the run flag marks a
+-- specific curator-authored ANNOTATION as ground truth against
+-- which LLM runs are scored. A paper can be in the test set
+-- before it has a gold run (intent captured; annotation pending).
+--
+-- Corpus-scale invocation surfaces test-set papers first + marks
+-- them in dashboards so curators know which references anchor the
+-- scoring pipeline. Test-set papers get mixed into batch runs so
+-- the LLM cannot distinguish them from ordinary corpus papers —
+-- their scores anchor the sampling-based accuracy estimate.
+CREATE TABLE IF NOT EXISTS hive__reference_test_set (
+    reference_id  TEXT PRIMARY KEY,
+    added_at      TEXT NOT NULL,
+    added_by      TEXT NOT NULL DEFAULT '',
+    notes         TEXT NOT NULL DEFAULT ''
+);
+
+-- hive__extraction_run records one invocation of an extraction
+-- pipeline: an LLM NER pass, an LLM compose pass, a future
+-- hive-native NER model run, or a curator's manual annotation.
+-- Runs persist by default so curators can compare model outputs,
+-- review after the fact, and see cost accountability. Soft-delete
+-- (deleted_at) keeps cost visibility even after a curator "deletes"
+-- a run — throwing away the row would lose the paid-for context.
+--
+-- Multiple runs per reference are expected and normal: curators may
+-- run the same paper through Opus + Sonnet + Haiku to compare
+-- quality vs cost, or iterate on prompt versions. The comparison UI
+-- (paper + N candidate trees, plus corpus-level dashboard rolling
+-- up scores across the test set) reads this table.
+--
+-- Assertions produced by each run will live in
+-- hive__reference_assertion linked via a source_run_id column
+-- (added when the assertion-materialization slice lands); the
+-- source_kind + is_gold_standard columns here are what enables the
+-- gold-standard test-set scoring described in
+-- project_extraction_runs_multi_model_schema memory.
+--
+-- Columns:
+--   run_id           UUID PK
+--   reference_id     which paper the run processed; nullable
+--                    because ad-hoc /api/llm/invoke test calls
+--                    aren't necessarily paper-scoped
+--   purpose          'ner' | 'compose' | future 'translate' — what
+--                    this run represents in the pipeline
+--   source_kind      'llm' | 'hive_ner' | 'curator' — same table
+--                    houses LLM invocations AND future hive-trained
+--                    NER model outputs AND curator manual entries,
+--                    so multi-model comparison + gold-standard
+--                    scoring work uniformly across all three
+--   source_id        provider name for llm, model version for
+--                    hive_ner, ORCID for curator
+--   envelope_json    full llm.Envelope JSON — prompt hash, provider,
+--                    model version, tokens, invoked_at, raw output;
+--                    the authoritative provenance record. Empty
+--                    string for source_kind='curator'.
+--   raw_output_json  parsed NER/compose output (also inside envelope
+--                    for llm runs; denormalized here for query
+--                    speed on the comparison UI's hot path)
+--   parent_run_id    nullable — compose runs link to the NER run
+--                    whose assertions they consumed; the WUI walks
+--                    this pointer to render "the NER output this
+--                    compose was built from"
+--   cost_usd         actual USD cost (from envelope for llm; zero
+--                    for hive_ner and curator)
+--   is_gold_standard 0/1 — curator flags a run as ground truth for
+--                    scoring. When batch runs process a corpus,
+--                    LLM output on gold-flagged references is
+--                    compared to the gold run's assertions to
+--                    compute precision/recall/F1 — sampling-based
+--                    accuracy estimation. See scoring notes in
+--                    project_extraction_runs_multi_model_schema.
+--   notes            curator annotations (free text)
+--   created_at
+--   deleted_at       soft delete — non-NULL means "hidden from
+--                    default views but still counted in cost
+--                    dashboards and restorable"
+CREATE TABLE IF NOT EXISTS hive__extraction_run (
+    run_id            TEXT PRIMARY KEY,
+    reference_id      TEXT,
+    purpose           TEXT NOT NULL
+                        CHECK (purpose IN ('ner', 'compose', 'translate')),
+    source_kind       TEXT NOT NULL
+                        CHECK (source_kind IN ('llm', 'hive_ner', 'curator')),
+    source_id         TEXT NOT NULL,
+    envelope_json     TEXT NOT NULL DEFAULT '',
+    raw_output_json   TEXT NOT NULL DEFAULT '',
+    parent_run_id     TEXT,
+    cost_usd          REAL NOT NULL DEFAULT 0,
+    is_gold_standard  INTEGER NOT NULL DEFAULT 0
+                        CHECK (is_gold_standard IN (0, 1)),
+    notes             TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL,
+    deleted_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__extraction_run_ref
+    ON hive__extraction_run (reference_id);
+
+CREATE INDEX IF NOT EXISTS idx_hive__extraction_run_purpose
+    ON hive__extraction_run (purpose, source_kind);
+
+CREATE INDEX IF NOT EXISTS idx_hive__extraction_run_parent
+    ON hive__extraction_run (parent_run_id);
 
 -- hive__config_rules holds per-rule overrides of enabled state and
 -- severity. Missing row (or NULL columns) means "use the ruleset
@@ -504,6 +641,103 @@ CREATE TRIGGER IF NOT EXISTS hive__name_fts_tri_au AFTER UPDATE ON name BEGIN
   INSERT INTO hive__name_fts_tri(rowid, gn__canonical_simple, col__scientific_name, col__authorship)
   VALUES (new.rowid, new.gn__canonical_simple, new.col__scientific_name, new.col__authorship);
 END;
+
+-- hive__prompt holds curator-forked prompts, one row per fork.
+-- Shipped built-in prompts stay in pkg/prompts/ as embedded .md
+-- files (versioned in place; never edited). Curator forks live
+-- here so they travel with the archive and are visible across
+-- collaborators sharing one project.
+--
+-- name is the curator-chosen slug (unique per purpose). purpose
+-- routes the prompt to the right pipeline stage. fork_of is the
+-- source prompt's stable ID (either a shipped name like "ner_v6"
+-- or another curator prompt's prompt_id) for provenance.
+--
+-- Soft-delete via is_active — hard delete would break the
+-- provenance trail of any extraction_run tagged with this
+-- prompt's ID. Same principle as the extraction_run soft-delete.
+CREATE TABLE IF NOT EXISTS hive__prompt (
+	prompt_id    TEXT PRIMARY KEY,
+	name         TEXT NOT NULL,
+	purpose      TEXT NOT NULL CHECK (purpose IN ('ner', 'compose')),
+	content      TEXT NOT NULL,
+	fork_of      TEXT NOT NULL,
+	is_active    INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+	created_at   TEXT NOT NULL,
+	updated_at   TEXT NOT NULL,
+	created_by   TEXT NOT NULL DEFAULT '',
+	UNIQUE (name, purpose)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__prompt_purpose
+    ON hive__prompt (purpose, is_active);
+
+-- hive__paper_import stores curator-approved per-name mappings
+-- from a paper's compose-tree mentions to target taxa in the
+-- current SFGA tree. One row per (reference_id, paper_name_key).
+--
+-- This is the per-paper equivalent of a CoL "sector" but with a
+-- narrower shape: subtree assembly is not a concept here. Each
+-- name mentioned in the paper resolves independently to a target
+-- taxon UUID. See project_assembly_interface_plan memory for
+-- the design rationale.
+--
+-- target_taxon_id is a UUID pointer, not a name-based reference:
+-- if the target gets renamed / moved / downgraded to synonym, the
+-- mapping still resolves. Curator repairs dangling mappings via
+-- the assembly UI when they surface after downstream backbone
+-- edits.
+CREATE TABLE IF NOT EXISTS hive__paper_import (
+	reference_id      TEXT NOT NULL,
+	paper_name_key    TEXT NOT NULL,
+	target_taxon_id   TEXT NOT NULL,
+	match_mode        TEXT NOT NULL DEFAULT 'curator-picked'
+	                    CHECK (match_mode IN (
+	                        'auto-canonical',
+	                        'auto-canonical-auth',
+	                        'curator-picked')),
+	match_confidence  REAL,
+	last_synced_at    TEXT,
+	created_at        TEXT NOT NULL,
+	updated_at        TEXT NOT NULL,
+	created_by        TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (reference_id, paper_name_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__paper_import_ref
+    ON hive__paper_import (reference_id);
+CREATE INDEX IF NOT EXISTS idx_hive__paper_import_target
+    ON hive__paper_import (target_taxon_id);
+
+-- hive__row_source is the provenance join for imported SFGA rows.
+-- (entity_table, entity_id) identifies an SFGA row (type_material,
+-- distribution, vernacular_name, ...); the (reference_id,
+-- extraction_run_id, assertion_id) triple records what paper /
+-- run / assertion contributed it.
+--
+-- Using a join table rather than adding hive__source_* columns to
+-- every SFGA extension table keeps the sfga schema pristine —
+-- sf / gndb round-trips still see the original shape.
+--
+-- Multiple rows can point at the same entity when a row was
+-- re-imported (matched on same key across runs). Not currently
+-- enforced unique — the executor deletes prior rows for a
+-- (reference_id, entity_table, entity_id) triple before inserting.
+CREATE TABLE IF NOT EXISTS hive__row_source (
+	entity_table      TEXT NOT NULL,
+	entity_id         TEXT NOT NULL,
+	reference_id      TEXT NOT NULL,
+	extraction_run_id TEXT,
+	assertion_id      TEXT,
+	created_at        TEXT NOT NULL,
+	created_by        TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (entity_table, entity_id, reference_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__row_source_ref
+    ON hive__row_source (reference_id);
+CREATE INDEX IF NOT EXISTS idx_hive__row_source_run
+    ON hive__row_source (extraction_run_id);
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
@@ -642,6 +876,48 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 	if err := migrateExtractionCorrectionForModify(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateReferenceAssertionForRunLink(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateReferenceAssertionForRunLink adds source_run_id and
+// asserted_by columns to hive__reference_assertion on archives
+// that predate the extraction-run schema. Both nullable — no
+// backfill needed; legacy rows just show as unlinked (which is
+// accurate — they weren't produced by an extraction_run).
+// Idempotent: skips columns that already exist.
+func migrateReferenceAssertionForRunLink(ctx context.Context, db *sql.DB) error {
+	exists, err := tableExists(ctx, db, "hive__reference_assertion")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	hasSource, err := columnExists(ctx, db, "hive__reference_assertion", "source_run_id")
+	if err != nil {
+		return err
+	}
+	if !hasSource {
+		if _, err := db.ExecContext(ctx,
+			`ALTER TABLE hive__reference_assertion ADD COLUMN source_run_id TEXT`,
+		); err != nil {
+			return fmt.Errorf("core: add source_run_id: %w", err)
+		}
+	}
+	hasAsserted, err := columnExists(ctx, db, "hive__reference_assertion", "asserted_by")
+	if err != nil {
+		return err
+	}
+	if !hasAsserted {
+		if _, err := db.ExecContext(ctx,
+			`ALTER TABLE hive__reference_assertion ADD COLUMN asserted_by TEXT`,
+		); err != nil {
+			return fmt.Errorf("core: add asserted_by: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -749,7 +1025,7 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 	// Probe with the newest correction kind — the rebuild target
 	// includes every kind up through today, so any archive whose
 	// CHECK doesn't accept the newest kind needs rebuilding.
-	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "text-restore")
+	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "assertion-edit")
 	if err != nil {
 		return err
 	}
@@ -766,7 +1042,8 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 				                       ('bbox-add', 'bbox-modify', 'bbox-remove',
 				                        'text-tag', 'text-remove', 'text-restore',
 				                        'xref-fix', 'chip-feedback',
-				                        'ref-merge', 'ref-edit')),
+				                        'ref-merge', 'ref-edit',
+				                        'assertion-edit')),
 				content_type       TEXT NOT NULL,
 				bbox_page          INTEGER,
 				bbox_json          TEXT,

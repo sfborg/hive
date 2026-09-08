@@ -1,9 +1,21 @@
 *.md
+# Prompts are code-adjacent shipped assets — carve them out of the
+# blanket *.md rule so they land in the binary and reach collaborators
+# running their own hive instances.
+docker-compose.yml
+!pkg/prompts/*.md
 *.db
 *.db-wal
 *.db-shm
 /hive
 /bin/
+
+# Local dev-stack secrets and mounted archive directory. .env is the
+# real file docker compose reads; .env.template is the checked-in
+# starting point. data/ is the bind-mounted archive + sidecar library
+# root for the docker stack — contents are per-machine.
+/.env
+/data/
 
 # Local-only survey notes
 /docs/

@@ -85,6 +85,19 @@ const (
 	// only the changed fields — untouched fields stay as GROBID had
 	// them, so a re-import that improves extraction still benefits.
 	KindRefEdit Kind = "ref-edit"
+	// KindAssertionEdit records a curator correction to the value
+	// of one NER assertion (a single {field, value} extracted from
+	// the paper). TargetElementID names the assertion_id from
+	// hive__reference_assertion. Payload carries an
+	// AssertionEditPayload with both original and corrected values
+	// so the row is a self-contained training-signal record even
+	// if the underlying assertion is later re-materialized.
+	//
+	// The original NER value STAYS on the assertion row unchanged
+	// — corrections are additive, not destructive, so a re-run of
+	// NER training against the same paper can pair "what the model
+	// said" with "what the curator said" without a JOIN chain.
+	KindAssertionEdit Kind = "assertion-edit"
 )
 
 // Status tracks whether a correction still applies to the current
@@ -227,4 +240,29 @@ type TextRestorePayload struct {
 	// <hive:noise correction-id="…"> element in the sidecar and
 	// unwraps it.
 	RemoveCorrectionID string `json:"remove_correction_id"`
+}
+
+// AssertionEditPayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'assertion-edit'. Records the curator's fix to a single NER-
+// extracted field on hive__reference_assertion.
+//
+// Original + Corrected are stored side-by-side so the correction
+// is a self-contained training-signal record — a downstream
+// training pipeline can build contrastive pairs ({original ←
+// model prediction, corrected ← ground truth}) without joining
+// back through the assertion row (whose payload might get
+// re-materialized on a fresh NER run).
+//
+// AssertionType echoes the DwC term of the field being corrected
+// (e.g. "dwc:eventDate"). Field names the compose-output slot for
+// UI-side reconstruction ("verbatimDate", "country", ...). Notes
+// captures the curator's rationale when they choose to record
+// one; empty otherwise.
+type AssertionEditPayload struct {
+	AssertionType string `json:"assertion_type"`
+	Field         string `json:"field,omitempty"`
+	Original      string `json:"original"`
+	Corrected     string `json:"corrected"`
+	Notes         string `json:"notes,omitempty"`
 }

@@ -517,6 +517,100 @@ class SfgaReader extends LitElement {
       0% { background: color-mix(in srgb, var(--accent) 35%, transparent); }
       100% { background: transparent; }
     }
+    /* Jump-to-anchor highlight applied when the Assertions-tab
+       chip is clicked and the reader scrolls to the source
+       location. Fades over ~2.5s so the curator sees where the
+       fact was extracted without permanent visual clutter. Uses
+       the accent color for consistency with other cross-frame
+       navigations (fig-xref click, ref-hover). */
+    .hive-jump-flash,
+    mark.hive-jump-flash {
+      background: color-mix(in oklab, var(--accent) 30%, transparent);
+      animation: hiveJumpFlash 2.5s ease-out;
+      border-radius: 2px;
+      padding: 0 2px;
+      color: inherit;
+    }
+    @keyframes hiveJumpFlash {
+      0% { background: color-mix(in oklab, var(--accent) 60%, transparent); }
+      100% { background: color-mix(in oklab, var(--accent) 5%, transparent); }
+    }
+    /* Persistent NER-annotation highlights posted from the
+       Assertions workflow. Palette matches the Assertions-tab
+       tree chips (purple=nom, blue=type, green=dist, gold=vern)
+       so curator's mental model transfers between panes:
+       "green chip in the tree → green highlight in the paper".
+       Backgrounds tint at ~18-22% saturation over the theme bg
+       so body text stays readable; a solid left border
+       reinforces the category color at scale. */
+    mark.ner-tag {
+      background: transparent;
+      color: inherit;
+      padding: 0 2px;
+      border-radius: 2px;
+      border-bottom: 2px solid transparent;
+    }
+    mark.ner-tag.nom {
+      background: color-mix(in oklab, hsl(280, 55%, 45%) 18%, transparent);
+      border-bottom-color: hsl(280, 55%, 45%);
+    }
+    mark.ner-tag.type {
+      background: color-mix(in oklab, hsl(210, 60%, 42%) 18%, transparent);
+      border-bottom-color: hsl(210, 60%, 42%);
+    }
+    mark.ner-tag.dist {
+      background: color-mix(in oklab, hsl(140, 50%, 35%) 20%, transparent);
+      border-bottom-color: hsl(140, 50%, 35%);
+    }
+    mark.ner-tag.vern {
+      background: color-mix(in oklab, hsl(35, 70%, 40%) 22%, transparent);
+      border-bottom-color: hsl(35, 70%, 40%);
+    }
+    mark.ner-tag.other {
+      background: color-mix(in oklab, var(--dim) 15%, transparent);
+      border-bottom-color: var(--dim);
+    }
+    /* Workflow-scoped GN chip dimming. In the Assertions
+       workflow, GNfinder/GNverifier taxon-name chips are
+       context (curator glances to confirm names got detected)
+       but not the focus — the NER color coding is. Dim them to
+       neutral gray so the NER marks pop visually. Bibliography
+       and Digitize workflows keep GN's traffic-light palette.
+       Selectors cover the four verification states the reader
+       renders (see .taxon-name.{verified,ambiguous,unverified,
+       unresolved} definitions below). */
+    :host([data-workflow="assertions"]) .taxon-name,
+    :host([data-workflow="assertions"]) .taxon-name.verified,
+    :host([data-workflow="assertions"]) .taxon-name.ambiguous,
+    :host([data-workflow="assertions"]) .taxon-name.unverified,
+    :host([data-workflow="assertions"]) .taxon-name.unresolved {
+      background: color-mix(in oklab, var(--dim) 12%, transparent) !important;
+      border-color: color-mix(in oklab, var(--dim) 40%, transparent) !important;
+      color: var(--dim) !important;
+    }
+    /* LLM tag_reviews: verdicts on GNfinder chips (from ner_v5's
+       tag_reviews array). false_positive = "this isn't a taxon
+       in context" — highlight in the sev-error hue so curator
+       attention is drawn; wrong_boundary = "chip covers the
+       wrong span" — sev-warn (amber) since the tag is
+       partially right. Overrides the workflow-dim rule above
+       via specificity + !important so verdicts stay visible
+       even in the Assertions workflow. */
+    :host([data-workflow="assertions"]) .taxon-name.ner-verdict-false_positive,
+    .taxon-name.ner-verdict-false_positive {
+      background: color-mix(in oklab, var(--sev-error) 22%, var(--bg)) !important;
+      border-color: var(--sev-error) !important;
+      color: var(--sev-error) !important;
+      text-decoration: line-through;
+      cursor: help;
+    }
+    :host([data-workflow="assertions"]) .taxon-name.ner-verdict-wrong_boundary,
+    .taxon-name.ner-verdict-wrong_boundary {
+      background: color-mix(in oklab, var(--sev-warn) 22%, var(--bg)) !important;
+      border-color: var(--sev-warn) !important;
+      color: var(--sev-warn) !important;
+      cursor: help;
+    }
     /* Figure-jump affordance: a small "Open in PDF — page N" link
        above each figure's caption in the trailing "Figures" sec.
        The discovery-path click for curators who scroll to a
@@ -905,8 +999,361 @@ class SfgaReader extends LitElement {
       if (d.type === "hive:set-tool" && typeof d.tool === "string") {
         this._activeTool = d.tool;
       }
+      // Jump to the source location where a fact/assertion was
+      // extracted. Payload is a NER anchor: {before, text, after}
+      // for a text-triple anchor, OR {element_id} for a JATS
+      // element-ID anchor. Reader scrolls the match into view and
+      // adds a temporary highlight (~2s) so the curator sees
+      // exactly where the extraction landed.
+      if (d.type === "hive:jump-to-anchor" && d.anchor) {
+        this._jumpToAnchor(d.anchor);
+      }
+      // Persistent NER-annotation set from the Assertions
+      // workflow — walk the DOM once and wrap matched text
+      // spans in color-coded <mark class="ner-tag <category>">.
+      // Palette matches the Assertions-tab chip colors so
+      // curator's mental model transfers directly.
+      if (
+        d.type === "hive:set-annotations" &&
+        Array.isArray(d.annotations)
+      ) {
+        this._pendingAnnotations = d.annotations;
+        this._applyAnnotations();
+        // Piggyback the tag_reviews payload here — same
+        // lifecycle as annotations (arrive on Assertions-tab
+        // load or on iframe load), so applying both from one
+        // message avoids a second race window.
+        this._pendingTagReviews = Array.isArray(d.tag_reviews)
+          ? d.tag_reviews
+          : [];
+        this._applyTagReviews();
+      }
+      // Which workflow the shell is currently in — controls
+      // per-layer emphasis (Bibliography = GN chips at full
+      // color; Assertions = GN dimmed so NER color coding
+      // takes the visual foreground; Digitize = correction
+      // markers primary). Reader adds a data-workflow attribute
+      // on its host so per-workflow CSS overrides apply.
+      if (d.type === "hive:set-workflow" && typeof d.workflow === "string") {
+        this._workflow = d.workflow;
+        this.setAttribute("data-workflow", d.workflow);
+      }
     };
     window.addEventListener("message", this._onShellMessage);
+  }
+
+  // _jumpToAnchor scrolls the reader to the anchor location and
+  // paints a fading highlight. Search order:
+  //   1. anchor.element_id — direct DOM id lookup.
+  //   2. anchor.text (with before/after context) in main body.
+  //   3. anchor.text in figure/table captions — opens the
+  //      figure modal (which renders caption text into the DOM)
+  //      then re-searches within the modal.
+  // Silent no-op when nothing matches; better than jumping to
+  // the wrong spot.
+  _jumpToAnchor(anchor) {
+    if (!anchor || typeof anchor !== "object") return;
+    if (anchor.element_id) {
+      const el = this.renderRoot?.querySelector(`#${CSS.escape(anchor.element_id)}`);
+      if (el) {
+        this._flashHighlight(el);
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+    }
+    if (!anchor.text || typeof anchor.text !== "string") return;
+    // Try main body first.
+    if (this._flashRangeIfFound(anchor)) return;
+    // Fallback: text may live inside a fig/table-wrap caption
+    // (either legitimately in a figure caption, or in a paragraph
+    // GROBID misclassified into a caption block due to poor
+    // publisher typesetting). Find the enclosing fig id in the
+    // JATS source, open its modal, then retry the search — the
+    // modal renders caption content into the DOM.
+    const figID = this._findFigIDContainingText(anchor.text);
+    if (!figID) return;
+    this._openFigModal(null, figID);
+    // Modal renders on the next Lit update tick; retry after
+    // both a microtask and a rAF so the shadow-DOM commit has
+    // finished before we search.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => this._flashRangeIfFound(anchor)),
+    );
+  }
+
+  // _flashRangeIfFound tries to locate the anchor in the current
+  // DOM, wraps the match in a temporary mark, scrolls it into
+  // view, and fades over ~2.5s. Returns true when a range was
+  // found (regardless of surroundContents outcome), false when
+  // no text match was made — the caller uses the return value
+  // to decide whether to attempt the figure-modal fallback.
+  _flashRangeIfFound(anchor) {
+    const range = this._findTextRange(anchor.text, anchor.before, anchor.after);
+    if (!range) return false;
+    const mark = document.createElement("mark");
+    mark.className = "hive-jump-flash";
+    try {
+      range.surroundContents(mark);
+    } catch {
+      // surroundContents throws when the range spans element
+      // boundaries — fall back to scrolling to the range's
+      // start container without wrapping.
+      const anchorNode = range.startContainer.parentElement;
+      if (anchorNode) {
+        this._flashHighlight(anchorNode);
+        anchorNode.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      return true;
+    }
+    mark.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    }, 2500);
+    return true;
+  }
+
+  // _findFigIDContainingText searches the JATS source document
+  // (this._doc) for a <fig> or <table-wrap> whose textContent
+  // includes the anchor text, and returns its id. Used to
+  // reveal caption content that isn't in the reader's inline
+  // article DOM but IS in the figure modal's rendered content.
+  // Returns "" when the text isn't found in any fig/table-wrap.
+  _findFigIDContainingText(text) {
+    if (!this._doc || !text) return "";
+    const containers = this._doc.querySelectorAll("fig, table-wrap");
+    for (const c of containers) {
+      const content = c.textContent || "";
+      if (content.includes(text) && c.id) return c.id;
+    }
+    return "";
+  }
+
+  _flashHighlight(el) {
+    el.classList.add("hive-jump-flash");
+    setTimeout(() => el.classList.remove("hive-jump-flash"), 2500);
+  }
+
+  // _applyAnnotations wraps every matched anchor text span in a
+  // colored <mark> element. Called when the shell posts
+  // hive:set-annotations. Also re-runs after _doc changes (via
+  // updated() lifecycle) so a paper-swap doesn't leave stale marks.
+  //
+  // Sort by anchor.text length descending so longer matches wrap
+  // first — surroundContents() throws if a range partially covers
+  // an existing mark, so wrapping shorter spans first would leave
+  // the longer ones un-wrappable when they'd have contained the
+  // shorter mark.
+  _applyAnnotations() {
+    if (!this._doc) return; // paper not loaded yet — retry after
+    this._clearAnnotations();
+    const anns = this._pendingAnnotations || [];
+    if (anns.length === 0) return;
+    const sorted = [...anns].sort(
+      (a, b) => (b.anchor?.text?.length || 0) - (a.anchor?.text?.length || 0),
+    );
+    for (const ann of sorted) {
+      if (!ann.anchor?.text) continue;
+      const range = this._findTextRange(
+        ann.anchor.text,
+        ann.anchor.before,
+        ann.anchor.after,
+      );
+      if (!range) continue;
+      try {
+        const mark = document.createElement("mark");
+        mark.className = "ner-tag " + (ann.category || "other");
+        if (ann.assertion_id) mark.dataset.assertionId = ann.assertion_id;
+        if (ann.source_id) mark.dataset.sourceId = ann.source_id;
+        range.surroundContents(mark);
+      } catch {
+        // Range spans element boundaries — skip; text-crossing
+        // matches are rare enough that a bespoke splitter isn't
+        // worth the code.
+      }
+    }
+  }
+
+  // _clearAnnotations removes every NER-mark from the reader DOM,
+  // restoring the underlying text nodes. Called before applying a
+  // new annotation set + on paper-swap to keep the DOM clean.
+  _clearAnnotations() {
+    const marks = this.renderRoot?.querySelectorAll("mark.ner-tag");
+    if (!marks || marks.length === 0) return;
+    for (const m of marks) {
+      const parent = m.parentNode;
+      if (!parent) continue;
+      while (m.firstChild) parent.insertBefore(m.firstChild, m);
+      parent.removeChild(m);
+      parent.normalize();
+    }
+  }
+
+  // _applyTagReviews decorates GNfinder-tagged chips that the LLM
+  // disagreed with. Two verdict kinds today (from ner_v5's
+  // tag_reviews array):
+  //   - false_positive: LLM says this isn't a taxonomic name in
+  //     context (e.g., "Jiang" is a surname, not a taxon).
+  //   - wrong_boundary: LLM says the chip includes/excludes
+  //     tokens that shouldn't/should be part of the name.
+  //
+  // Adds .ner-verdict + .ner-verdict-<kind> classes on the
+  // matching .taxon-name element so per-verdict CSS applies.
+  // A data-attr carries the LLM's rationale for hover popups.
+  //
+  // Requires _doc to be loaded (matching text against rendered
+  // chips). Runs after _applyAnnotations so the ordering is
+  // deterministic if both message types fire in the same frame.
+  _applyTagReviews() {
+    if (!this._doc) return;
+    this._clearTagReviews();
+    const reviews = this._pendingTagReviews || [];
+    if (reviews.length === 0) return;
+    // Index GN chips by their text content so we can find
+    // matches without a scan per verdict.
+    const chips = this.renderRoot?.querySelectorAll(".taxon-name") || [];
+    const byText = new Map();
+    for (const chip of chips) {
+      const txt = (chip.textContent || "").trim();
+      if (!txt) continue;
+      if (!byText.has(txt)) byText.set(txt, []);
+      byText.get(txt).push(chip);
+    }
+    for (const r of reviews) {
+      const key = (r.tp_taxon_name_text || r.tp_full_name || "").trim();
+      if (!key) continue;
+      const targets = byText.get(key);
+      if (!targets) continue;
+      const verdict = String(r.verdict || "");
+      const cls = "ner-verdict-" + verdict.replace(/[^a-z0-9_-]/gi, "");
+      for (const el of targets) {
+        el.classList.add("ner-verdict", cls);
+        if (r.notes) el.dataset.ninerdictNotes = String(r.notes);
+        el.setAttribute(
+          "title",
+          `LLM verdict: ${verdict}${r.notes ? " — " + r.notes : ""}`,
+        );
+      }
+    }
+  }
+
+  _clearTagReviews() {
+    const flagged = this.renderRoot?.querySelectorAll(".ner-verdict") || [];
+    for (const el of flagged) {
+      // Remove every ner-verdict-* class + the marker class.
+      const classes = [...el.classList].filter(
+        (c) => c.startsWith("ner-verdict"),
+      );
+      classes.forEach((c) => el.classList.remove(c));
+      delete el.dataset.ninerdictNotes;
+      // Only remove the title if we set it — best-effort: reset
+      // to empty (the reader doesn't set title on GN chips
+      // otherwise; if that changes, this line needs to preserve
+      // the pre-existing title).
+      el.removeAttribute("title");
+    }
+  }
+
+  // _findTextRange returns a Range covering the anchor text in
+  // the reader's shadow DOM, using before/after context to
+  // disambiguate multiple occurrences of the same text (e.g.
+  // "Holotype" appears in every type-material block; only the
+  // one whose preceding context matches is the right one).
+  //
+  // Two-phase search:
+  //  1. Walk all text nodes once, building an aggregate string
+  //     plus a node-offset index. Match `text` in the aggregate
+  //     so cross-node matches (text broken by inline tags) still
+  //     resolve. When before/after are given, verify the
+  //     surrounding aggregate context matches too.
+  //  2. Map the aggregate-position back to (node, offset) pairs
+  //     and build a Range that may span multiple text nodes.
+  //
+  // Context match uses the last 60 chars of `before` and first
+  // 60 chars of `after` — long enough to disambiguate reliably
+  // in prose, short enough that minor whitespace / normalization
+  // drift between the JATS anchor and rendered DOM doesn't kill
+  // the match. Falls back to first-match when neither before nor
+  // after is supplied (or context matching returned nothing —
+  // better a mark on the wrong "Holotype" than no mark at all).
+  _findTextRange(text, before, after) {
+    if (!text) return null;
+    const root = this.renderRoot;
+    if (!root) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let aggregate = "";
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const val = node.nodeValue || "";
+      nodes.push({ node, offset: aggregate.length, len: val.length });
+      aggregate += val;
+    }
+    if (aggregate.length === 0) return null;
+
+    const ctxLen = 60;
+    const beforeCtx = before ? before.slice(-ctxLen) : "";
+    const afterCtx = after ? after.slice(0, ctxLen) : "";
+
+    // Find best match: context-matching preferred; fall back to
+    // first-match when nothing has both contexts (or neither
+    // context was supplied).
+    let bestPos = -1;
+    let firstMatchPos = -1;
+    let scan = 0;
+    while (true) {
+      const idx = aggregate.indexOf(text, scan);
+      if (idx < 0) break;
+      if (firstMatchPos < 0) firstMatchPos = idx;
+      const beforeOK =
+        !beforeCtx ||
+        aggregate.slice(Math.max(0, idx - beforeCtx.length), idx).endsWith(beforeCtx);
+      const afterOK =
+        !afterCtx ||
+        aggregate.slice(idx + text.length, idx + text.length + afterCtx.length).startsWith(afterCtx);
+      if (beforeOK && afterOK) {
+        bestPos = idx;
+        break;
+      }
+      scan = idx + 1;
+    }
+    const pos = bestPos >= 0 ? bestPos : firstMatchPos;
+    if (pos < 0) return null;
+
+    // Map aggregate position → (node, offset). The match may
+    // span multiple text nodes; build the range accordingly.
+    const range = document.createRange();
+    let startSet = false;
+    let remaining = text.length;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const nodeEnd = n.offset + n.len;
+      if (!startSet) {
+        if (pos < nodeEnd) {
+          const start = pos - n.offset;
+          range.setStart(n.node, start);
+          startSet = true;
+          const consumed = Math.min(n.len - start, remaining);
+          remaining -= consumed;
+          if (remaining === 0) {
+            range.setEnd(n.node, start + consumed);
+            return range;
+          }
+        }
+        continue;
+      }
+      // continuation node
+      const consumed = Math.min(n.len, remaining);
+      remaining -= consumed;
+      if (remaining === 0) {
+        range.setEnd(n.node, consumed);
+        return range;
+      }
+    }
+    return null;
   }
 
   disconnectedCallback() {
@@ -928,7 +1375,41 @@ class SfgaReader extends LitElement {
     ) {
       // Wait a frame so Lit finishes committing DOM changes
       // before we measure.
-      requestAnimationFrame(() => this._recomputePages());
+      requestAnimationFrame(() => {
+        this._recomputePages();
+        // Re-apply any pending NER annotations after the paper
+        // DOM has committed — this catches the race where the
+        // shell posted hive:set-annotations before _doc loaded,
+        // as well as the paper-swap case (previous marks were
+        // in the old doc's DOM, gone with the re-render).
+        if (this._pendingAnnotations && this._pendingAnnotations.length > 0) {
+          this._applyAnnotations();
+        }
+        if (this._pendingTagReviews && this._pendingTagReviews.length > 0) {
+          this._applyTagReviews();
+        }
+      });
+    }
+    // When the figure/table modal opens, its caption content
+    // enters the DOM for the first time. Any NER-anchor marks or
+    // GN-chip tag_review verdicts scoped to text inside that
+    // caption were previously invisible (their target didn't
+    // exist yet). Re-apply now so caption-scoped facts get their
+    // color mark and disputed GN chips get their warning styling.
+    //
+    // This is the partial workaround for task #240 — the real
+    // fix (render captions inline as fig cards) makes captions
+    // reachable in the article DOM so this re-apply becomes
+    // unnecessary. Until then, opening the modal fills the gap.
+    if (changed.has("_modalFigID") && this._modalFigID) {
+      requestAnimationFrame(() => {
+        if (this._pendingAnnotations && this._pendingAnnotations.length > 0) {
+          this._applyAnnotations();
+        }
+        if (this._pendingTagReviews && this._pendingTagReviews.length > 0) {
+          this._applyTagReviews();
+        }
+      });
     }
     if (changed.has("_page") || changed.has("_pageCount")) {
       this._applyPageTransform();
