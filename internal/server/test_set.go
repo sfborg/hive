@@ -29,6 +29,16 @@ type apiTestSetAddRequest struct {
 // handleGetTestSetStatus returns whether the reference is in the
 // evaluation test set + the audit fields when it is. WUI binds a
 // checkbox to the in_test_set field.
+//
+// @Summary      Test-set membership status for a reference
+// @Description  Report whether the given reference is in the evaluation test set + audit fields.
+// @Tags         test-set
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiTestSetStatus
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /test-set/{id} [get]
 func (s *server) handleGetTestSetStatus(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -58,6 +68,18 @@ func (s *server) handleGetTestSetStatus(w http.ResponseWriter, r *http.Request) 
 // handleAddToTestSet inserts (or updates) a membership row.
 // Idempotent — the underlying accessor upserts, so a WUI
 // double-click doesn't error. Returns the fresh status.
+//
+// @Summary      Add a reference to the test set
+// @Description  Insert or update the test-set membership row for a reference. Idempotent.
+// @Tags         test-set
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        body body apiTestSetAddRequest false "Optional add body {notes}"
+// @Success      200 {object} apiTestSetStatus
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /test-set/{id} [post]
 func (s *server) handleAddToTestSet(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -84,6 +106,15 @@ func (s *server) handleAddToTestSet(w http.ResponseWriter, r *http.Request) {
 // handleRemoveFromTestSet drops the membership row. Idempotent —
 // removing an already-absent reference returns 204 so a WUI
 // uncheck-when-not-checked doesn't produce a confusing 404.
+//
+// @Summary      Remove a reference from the test set
+// @Description  Drop the test-set membership row. Idempotent.
+// @Tags         test-set
+// @Param        id path string true "Reference ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /test-set/{id} [delete]
 func (s *server) handleRemoveFromTestSet(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -119,6 +150,14 @@ type apiTestSetList struct {
 // curator work-queue view: "papers marked as evaluation set" plus
 // derivable status ("has a gold run yet?" via a join in a future
 // endpoint).
+//
+// @Summary      List test-set roster
+// @Description  Full test-set roster, oldest-first (natural work-queue order).
+// @Tags         test-set
+// @Produce      json
+// @Success      200 {object} apiTestSetList
+// @Failure      500 {object} problem
+// @Router       /test-set [get]
 func (s *server) handleListTestSet(w http.ResponseWriter, r *http.Request) {
 	members, err := s.a.ListTestSetMembers(r.Context())
 	if err != nil {

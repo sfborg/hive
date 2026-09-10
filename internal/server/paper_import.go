@@ -48,6 +48,16 @@ func mappingToAPI(m hive.PaperImportMapping) apiPaperImportMapping {
 // handleListPaperImportMappings returns the curator-approved
 // mappings for one paper. Backs the assembly UI's "restore
 // existing state on open" flow.
+//
+// @Summary      List paper-import mappings
+// @Description  Curator-approved paper-name → target-taxon mappings for one reference.
+// @Tags         assertions
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiPaperImportMappingList
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/paper-import [get]
 func (s *server) handleListPaperImportMappings(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -76,6 +86,21 @@ type apiPaperImportMappingUpsert struct {
 	MatchConfidence float64 `json:"match_confidence,omitempty"`
 }
 
+// handleUpsertPaperImportMapping creates or updates one paper-name →
+// target-taxon mapping for the given reference. Drag-drop assembly
+// UI calls this on every drop so first-mapping and re-mapping share
+// one code path.
+//
+// @Summary      Upsert a paper-import mapping
+// @Description  Create or update one paper-name → target-taxon mapping for a reference.
+// @Tags         assertions
+// @Accept       json
+// @Param        id path string true "Reference ID"
+// @Param        body body apiPaperImportMappingUpsert true "Mapping body"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/paper-import [post]
 func (s *server) handleUpsertPaperImportMapping(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -107,6 +132,18 @@ func (s *server) handleUpsertPaperImportMapping(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDeletePaperImportMapping removes one paper-name mapping
+// from the reference's assembly state.
+//
+// @Summary      Delete a paper-import mapping
+// @Description  Remove one paper-name → target-taxon mapping from a reference's assembly state.
+// @Tags         assertions
+// @Param        id path string true "Reference ID"
+// @Param        key path string true "Paper-name key"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/paper-import/{key} [delete]
 func (s *server) handleDeletePaperImportMapping(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	key := r.PathValue("key")
@@ -144,6 +181,19 @@ type apiPaperImportExecuteResponse struct {
 // output as SFGA extension rows on the mapped target taxa. See
 // pkg/paper_import_exec.go for the semantics (additive-only,
 // delete-then-reinsert on re-run, provenance via hive__row_source).
+//
+// @Summary      Execute a paper import
+// @Description  Materialize the paper's compose output as SFGA extension rows on the mapped target taxa. Additive-only; delete-then-reinsert on re-run.
+// @Tags         assertions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        body body apiPaperImportExecuteRequest true "Execute body"
+// @Success      200 {object} apiPaperImportExecuteResponse
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/paper-import/execute [post]
 func (s *server) handleExecutePaperImport(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {

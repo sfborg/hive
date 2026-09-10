@@ -75,7 +75,7 @@ type apiLLMPipelineRequest struct {
 type apiLLMPipelineResponse struct {
 	NERRun     apiLLMRun       `json:"ner_run"`
 	ComposeRun apiLLMRun       `json:"compose_run,omitempty"`
-	Tree       json.RawMessage `json:"tree,omitempty"`
+	Tree       json.RawMessage `json:"tree,omitempty" swaggertype:"object"`
 	// AssertionsMaterialized is how many hive__reference_assertion
 	// rows the NER step produced after parsing its output. Zero
 	// with a non-empty NERMaterializeError means the NER output
@@ -108,6 +108,17 @@ type apiLLMPipelineResponse struct {
 //
 // Both runs land regardless of parse-of-output success — curator
 // keeps paid-for envelopes even when the model's JSON is malformed.
+//
+// @Summary      Run the two-step NER → compose pipeline
+// @Description  Runs NER then compose against the paper's JATS body, persisting an extraction_run row for each and linking compose→NER via parent_run_id.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body body apiLLMPipelineRequest true "Pipeline request"
+// @Success      200 {object} apiLLMPipelineResponse
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/pipeline [post]
 func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 	if s.llmRunner == nil {
 		writeBadRequest(w, r, "no llm providers configured in user config (llm_providers)")

@@ -1,5 +1,77 @@
 basePath: /api
 definitions:
+  server.apiAgent:
+    properties:
+      city:
+        type: string
+      country:
+        type: string
+      department:
+        type: string
+      email:
+        type: string
+      family:
+        type: string
+      given:
+        type: string
+      id:
+        type: integer
+      note:
+        type: string
+      orcid:
+        type: string
+      organisation:
+        type: string
+      role:
+        type: string
+      rorid:
+        type: string
+      state:
+        type: string
+      url:
+        type: string
+    type: object
+  server.apiAgentList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiAgent'
+        type: array
+    type: object
+  server.apiAgentPatch:
+    properties:
+      city:
+        type: string
+      country:
+        type: string
+      department:
+        type: string
+      email:
+        type: string
+      family:
+        type: string
+      given:
+        type: string
+      note:
+        type: string
+      orcid:
+        type: string
+      organisation:
+        type: string
+      rorid:
+        type: string
+      state:
+        type: string
+      url:
+        type: string
+    type: object
+  server.apiAnchor:
+    properties:
+      element_id:
+        type: string
+      position:
+        type: string
+    type: object
   server.apiArchive:
     properties:
       path:
@@ -8,6 +80,213 @@ definitions:
         type: boolean
       schema_version:
         type: string
+    type: object
+  server.apiAssertion:
+    properties:
+      asserted_by:
+        type: string
+      assertion_id:
+        type: string
+      assertion_type:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      imported_at:
+        type: string
+      latest_correction:
+        allOf:
+        - $ref: '#/definitions/server.apiAssertionCorrection'
+        description: |-
+          LatestCorrection surfaces the newest active assertion-edit
+          correction (if any) so the WUI can render the corrected
+          value + author + timestamp without a second fetch. Older
+          corrections are still retrievable from the corrections list
+          when curators want to see history.
+      origin:
+        type: string
+      payload:
+        type: object
+      reference_id:
+        type: string
+      reject_reason:
+        type: string
+      source_ptr:
+        type: object
+      source_run_id:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  server.apiAssertionCorrection:
+    properties:
+      corrected:
+        type: string
+      correction_id:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      field:
+        type: string
+      notes:
+        type: string
+      original:
+        type: string
+    type: object
+  server.apiAssertionCorrectionPost:
+    properties:
+      corrected:
+        type: string
+      field:
+        type: string
+      notes:
+        type: string
+    type: object
+  server.apiAssertionList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiAssertion'
+        type: array
+    type: object
+  server.apiAssertionStatusPatch:
+    properties:
+      reject_reason:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiAttachedReference:
+    properties:
+      citation:
+        type: string
+      id:
+        type: string
+      title:
+        type: string
+    type: object
+  server.apiAttentionRow:
+    properties:
+      count:
+        type: integer
+      description:
+        type: string
+      step:
+        type: integer
+    type: object
+  server.apiBBox:
+    properties:
+      h:
+        type: number
+      w:
+        type: number
+      x:
+        type: number
+      "y":
+        type: number
+    type: object
+  server.apiBHLnameHit:
+    properties:
+      matched_name:
+        type: string
+      page_id:
+        type: integer
+      page_url:
+        type: string
+      quality:
+        type: integer
+      reference:
+        $ref: '#/definitions/server.apiReference'
+      score:
+        type: integer
+    type: object
+  server.apiCopyAgentRequest:
+    properties:
+      blank_note:
+        description: default true when absent
+        type: boolean
+      to_role:
+        type: string
+    type: object
+  server.apiCorrection:
+    properties:
+      anchor_ptr:
+        $ref: '#/definitions/server.apiAnchor'
+      bbox:
+        $ref: '#/definitions/server.apiBBox'
+      bbox_page:
+        type: integer
+      content_type:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      figure_id:
+        description: |-
+          FigureID is the JATS element id the correction's fig/table
+          element ends up with — used by the client to build the PNG
+          URL (/api/reference/library/<sha>/figures/<id>).
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      payload:
+        type: string
+      reference_id:
+        type: string
+      reverted_reason:
+        type: string
+      sidecar_sha:
+        type: string
+      status:
+        type: string
+      target_element_id:
+        type: string
+    type: object
+  server.apiCorrectionDeleteResponse:
+    properties:
+      deleted:
+        type: boolean
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  server.apiCorrectionList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiCorrection'
+        type: array
+    type: object
+  server.apiCorrectionResponse:
+    properties:
+      correction:
+        $ref: '#/definitions/server.apiCorrection'
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  server.apiDetachPDFResponse:
+    properties:
+      deleted:
+        type: boolean
+      sidecar_wiped:
+        type: boolean
+      warnings:
+        items:
+          type: string
+        type: array
     type: object
   server.apiDistribution:
     properties:
@@ -64,6 +343,318 @@ definitions:
         type: string
       status:
         type: string
+    type: object
+  server.apiExtractedLabel:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      page:
+        type: integer
+    type: object
+  server.apiIssue:
+    properties:
+      acknowledged_at:
+        type: string
+      acknowledged_by:
+        type: string
+      actual_value:
+        type: string
+      created_at:
+        type: string
+      enforcement:
+        type: string
+      expected_value:
+        type: string
+      field_name:
+        type: string
+      id:
+        type: string
+      link_taxon_id:
+        type: string
+      message:
+        type: string
+      record_id:
+        type: string
+      record_label:
+        type: string
+      rule_id:
+        type: string
+      rule_name:
+        type: string
+      severity:
+        type: string
+      table:
+        type: string
+    type: object
+  server.apiIssueSummary:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiIssueSummaryRow'
+        type: array
+    type: object
+  server.apiIssueSummaryRow:
+    properties:
+      count:
+        type: integer
+      rule_id:
+        type: string
+      rule_name:
+        type: string
+      severity:
+        type: string
+      table:
+        type: string
+    type: object
+  server.apiLLMEstimateRequest:
+    properties:
+      input:
+        type: string
+      max_tokens:
+        type: integer
+      model:
+        type: string
+      prompt:
+        type: string
+      provider:
+        type: string
+    type: object
+  server.apiLLMEstimateResponse:
+    properties:
+      confirm_threshold_usd:
+        type: number
+      context_window:
+        type: integer
+      estimated_cost_usd:
+        type: number
+      input_tokens:
+        type: integer
+      limits_known:
+        type: boolean
+      max_output_tokens:
+        type: integer
+      model:
+        type: string
+      pricing_known:
+        type: boolean
+      provider:
+        type: string
+      would_exceed_context:
+        type: boolean
+    type: object
+  server.apiLLMInvokeRequest:
+    properties:
+      input:
+        type: string
+      max_tokens:
+        type: integer
+      model:
+        type: string
+      notes:
+        type: string
+      parent_run_id:
+        description: compose→NER link
+        type: string
+      prompt:
+        type: string
+      provider:
+        type: string
+      purpose:
+        description: '"ner" | "compose" | "translate"'
+        type: string
+      reference_id:
+        description: which paper this run is for
+        type: string
+      response_format:
+        type: string
+      temperature:
+        type: number
+    type: object
+  server.apiLLMInvokeResponse:
+    properties:
+      assertions_materialized:
+        type: integer
+      envelope:
+        type: object
+      materialize_error:
+        type: string
+      persist_error:
+        type: string
+      run_id:
+        type: string
+    type: object
+  server.apiLLMModelList:
+    properties:
+      items:
+        items:
+          type: object
+        type: array
+    type: object
+  server.apiLLMPipelineRequest:
+    properties:
+      compose_prompt_id:
+        type: string
+      ner_max_tokens:
+        description: |-
+          Per-step max_tokens overrides. Compose typically needs more
+          output budget (whole-tree JSON) than NER (assertion array).
+        type: integer
+      ner_model:
+        type: string
+      ner_prompt_id:
+        description: |-
+          NERPromptID and ComposePromptID select which prompt to send
+          to each stage. Value is either a shipped built-in name
+          ("ner_v6") or a curator fork's UUID. Empty falls back to
+          the current shipped default (defaultNERPromptID /
+          defaultComposePromptID). Resolves through the curator DB
+          first, then the built-in library.
+        type: string
+      ner_provider:
+        description: |-
+          NERProvider names the registered provider for the NER pass.
+          Required. NERModel optionally overrides the provider's
+          configured DefaultModel for this run.
+        type: string
+      notes:
+        description: Notes annotates both runs. Curator-facing free text.
+        type: string
+      reference_id:
+        description: |-
+          ReferenceID is which paper the pipeline runs against. Required —
+          the handler looks up the attached PDF sha and reads the JATS
+          body from the sidecar. Papers without an attached PDF are
+          rejected with a helpful message.
+        type: string
+      temperature:
+        description: |-
+          Temperature applied uniformly to both steps. Zero-value =
+          provider default (usually deterministic-ish).
+        type: number
+      tree_max_tokens:
+        type: integer
+      tree_model:
+        type: string
+      tree_provider:
+        description: |-
+          TreeProvider names the registered provider for the compose
+          (tree assembly) pass. Required. TreeModel optionally
+          overrides the provider's configured DefaultModel.
+        type: string
+    type: object
+  server.apiLLMPipelineResponse:
+    properties:
+      assertions_materialized:
+        description: |-
+          AssertionsMaterialized is how many hive__reference_assertion
+          rows the NER step produced after parsing its output. Zero
+          with a non-empty NERMaterializeError means the NER output
+          was malformed (typically truncated at max_tokens).
+        type: integer
+      compose_run:
+        $ref: '#/definitions/server.apiLLMRun'
+      error:
+        type: string
+      failed_stage:
+        description: |-
+          FailedStage is "ner" | "compose" | "" (empty on full
+          success). Lets the WUI show a targeted error UI instead of
+          having to reason about which step's error message applies.
+        type: string
+      ner_materialize_error:
+        type: string
+      ner_run:
+        $ref: '#/definitions/server.apiLLMRun'
+      tree:
+        type: object
+    type: object
+  server.apiLLMProvider:
+    properties:
+      default_model:
+        type: string
+      kind:
+        type: string
+      name:
+        type: string
+    type: object
+  server.apiLLMProviderCreateRequest:
+    properties:
+      api_key:
+        type: string
+      base_url:
+        type: string
+      default_model:
+        type: string
+      env_var:
+        type: string
+      kind:
+        type: string
+      name:
+        type: string
+      source:
+        type: string
+    type: object
+  server.apiLLMProviderList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiLLMProvider'
+        type: array
+    type: object
+  server.apiLLMProviderPatchRequest:
+    properties:
+      api_key:
+        type: string
+      base_url:
+        type: string
+      default_model:
+        type: string
+      env_var:
+        type: string
+      kind:
+        type: string
+      source:
+        type: string
+    type: object
+  server.apiLLMRun:
+    properties:
+      cost_usd:
+        type: number
+      created_at:
+        type: string
+      deleted_at:
+        type: string
+      envelope:
+        type: object
+      is_gold_standard:
+        type: boolean
+      notes:
+        type: string
+      parent_run_id:
+        type: string
+      purpose:
+        type: string
+      raw_output:
+        type: object
+      reference_id:
+        type: string
+      run_id:
+        type: string
+      source_id:
+        type: string
+      source_kind:
+        type: string
+    type: object
+  server.apiLLMRunList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiLLMRun'
+        type: array
     type: object
   server.apiLabel:
     properties:
@@ -157,6 +748,249 @@ definitions:
       url:
         type: string
       version:
+        type: string
+    type: object
+  server.apiName:
+    properties:
+      authors:
+        type: string
+      authorship:
+        type: string
+      basionym:
+        allOf:
+        - $ref: '#/definitions/server.apiRef'
+        description: |-
+          Basionym is the linked basionym / original combination — the
+          separate Name row this name derives from via a name_relation of
+          type BASIONYM. Populated on read when the linkage exists.
+          Curator-facing "Basionym: <label>" row on the taxon detail
+          pane resolves through this field so the display stays in sync
+          with the actual name_relation (as opposed to just the atomized
+          col__basionym_authorship string, which lives on this name and
+          isn't necessarily linked to a separate row).
+      basionym_authorship:
+        type: string
+      basionym_authorship_year:
+        type: string
+      basionym_ex_authorship:
+        type: string
+      canonical_full:
+        type: string
+      canonical_simple:
+        description: |-
+          gn__ cache. Exposed but marked so the WUI can hide them behind a
+          "parse details" affordance rather than treat them as editable.
+        type: string
+      canonical_stemmed:
+        type: string
+      cardinality:
+        type: integer
+      code:
+        type: string
+      combination_authorship:
+        description: |-
+          Atomized authorship — gnparser's split of the raw Authorship
+          field into original-vs-recombiner components. Populated on write
+          via core's fill-from-parse (respects caller-supplied overrides).
+          Zoology: BasionymAuthorship holds the parenthetical author of a
+          recombined name (e.g., "Linnaeus" for "Panthera onca (Linnaeus, 1758)");
+          CombinationAuthorship holds the recombiner when cited. Botany/
+          microbiology: BasionymAuthorship holds the protologue author of
+          the underlying basionym.
+        type: string
+      combination_authorship_year:
+        type: string
+      combination_ex_authorship:
+        type: string
+      cultivar_epithet:
+        type: string
+      etymology:
+        type: string
+      gender:
+        type: string
+      genus:
+        type: string
+      gn_id:
+        type: string
+      id:
+        type: string
+      infrageneric_epithet:
+        type: string
+      infraspecific_epithet:
+        type: string
+      link:
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      notho:
+        type: string
+      parse_quality:
+        type: integer
+      published_in_page:
+        type: string
+      published_in_page_link:
+        type: string
+      published_in_year:
+        type: string
+      rank:
+        type: string
+      reference_id:
+        description: |-
+          ReferenceID is the "published in" reference — sfga stores it as
+          a comma-separated list of ids (name can be cited in multiple
+          refs) but hive v1 treats it as a single value. Legacy multi-
+          value strings surface as the first-entry ID; edits write one
+          ID back. Multi-reference support tracked as a later slice.
+        type: string
+      reference_label:
+        description: |-
+          ReferenceLabel is a server-resolved display for ReferenceID so
+          front-ends don't have to fetch the reference separately.
+          "Author (Year) Title" per hive convention. Empty when the ID
+          doesn't resolve.
+        type: string
+      remarks:
+        type: string
+      scientific_name:
+        type: string
+      scientific_name_string:
+        type: string
+      specific_epithet:
+        type: string
+      status:
+        type: string
+      tail:
+        description: |-
+          Tail is the unparseable trailing text gnparser rejected. Populated
+          only on the /api/name/parse response — persisted name rows never
+          carry a tail (gn__* is a cache; tail is re-derivable via re-parse).
+          Empty for clean parses; front-ends render a soft-warning banner
+          when non-empty so curators see exactly where the parse gave up.
+        type: string
+      uninomial:
+        description: Structural pieces the curator can edit.
+        type: string
+    type: object
+  server.apiNameHit:
+    properties:
+      authorship:
+        type: string
+      code:
+        type: string
+      full:
+        type: string
+      id:
+        type: string
+      rank:
+        type: string
+      scientific:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiNamePatch:
+    properties:
+      authorship:
+        type: string
+      basionym_authorship:
+        type: string
+      basionym_authorship_year:
+        type: string
+      basionym_ex_authorship:
+        type: string
+      code:
+        type: string
+      combination_authorship:
+        description: |-
+          Atomized authorship — the CoLDP split of the raw Authorship
+          string. See apiName's field-level comments for the code-specific
+          semantics; both pointers accept empty-string to clear the slot.
+        type: string
+      combination_authorship_year:
+        type: string
+      combination_ex_authorship:
+        type: string
+      cultivar_epithet:
+        type: string
+      etymology:
+        type: string
+      gender:
+        type: string
+      genus:
+        type: string
+      infrageneric_epithet:
+        type: string
+      infraspecific_epithet:
+        type: string
+      link:
+        type: string
+      notho:
+        type: string
+      published_in_page:
+        type: string
+      published_in_page_link:
+        type: string
+      published_in_year:
+        type: string
+      rank:
+        description: |-
+          Rank / Code / Status / Gender are typed enums; they arrive as raw
+          enum-ID strings (RANK_KEY, ZOOLOGICAL, ACCEPTED, MASCULINE, …).
+        type: string
+      reference_id:
+        description: |-
+          ReferenceID is the "published in" reference ID (v1: single value
+          stored into sfga's comma-separated col__reference_id). Sending
+          "" clears the link.
+        type: string
+      remarks:
+        type: string
+      scientific_name:
+        type: string
+      scientific_name_string:
+        type: string
+      specific_epithet:
+        type: string
+      status:
+        type: string
+      uninomial:
+        description: Structural pieces the curator edits.
+        type: string
+    type: object
+  server.apiNameRelation:
+    properties:
+      direction:
+        type: string
+      id:
+        type: string
+      name_id:
+        type: string
+      page:
+        type: string
+      reference_id:
+        type: string
+      reference_label:
+        type: string
+      related_name:
+        $ref: '#/definitions/server.apiRef'
+      remarks:
+        type: string
+      type:
+        type: string
+    type: object
+  server.apiNameRelationCreate:
+    properties:
+      page:
+        type: string
+      reference_id:
+        type: string
+      related_name_id:
+        type: string
+      remarks:
+        type: string
+      type:
         type: string
     type: object
   server.apiNomenCluster:
@@ -260,11 +1094,77 @@ definitions:
       year:
         type: string
     type: object
+  server.apiPage-server_apiBHLnameHit:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiBHLnameHit'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
   server.apiPage-server_apiDistribution:
     properties:
       items:
         items:
           $ref: '#/definitions/server.apiDistribution'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiIssue:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiIssue'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiNameHit:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiNameHit'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiNameRelation:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiNameRelation'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiReference:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiReference'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  server.apiPage-server_apiReferenceHit:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiReferenceHit'
         type: array
       next_cursor:
         type: string
@@ -337,6 +1237,132 @@ definitions:
       total:
         type: integer
     type: object
+  server.apiPaperImportExecuteRequest:
+    properties:
+      extraction_run_id:
+        type: string
+    type: object
+  server.apiPaperImportExecuteResponse:
+    properties:
+      distribution_inserted:
+        type: integer
+      removed:
+        type: integer
+      type_material_inserted:
+        type: integer
+      vernacular_inserted:
+        type: integer
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  server.apiPaperImportMapping:
+    properties:
+      created_at:
+        type: string
+      created_by:
+        type: string
+      last_synced_at:
+        type: string
+      match_confidence:
+        type: number
+      match_mode:
+        type: string
+      paper_name_key:
+        type: string
+      reference_id:
+        type: string
+      target_taxon_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  server.apiPaperImportMappingList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiPaperImportMapping'
+        type: array
+    type: object
+  server.apiPaperImportMappingUpsert:
+    properties:
+      match_confidence:
+        type: number
+      match_mode:
+        type: string
+      paper_name_key:
+        type: string
+      target_taxon_id:
+        type: string
+    type: object
+  server.apiPreviewCorrectionRequest:
+    properties:
+      bbox:
+        $ref: '#/definitions/server.apiBBox'
+      page:
+        type: integer
+      sidecar_sha:
+        type: string
+    type: object
+  server.apiPreviewCorrectionResponse:
+    properties:
+      detected_label:
+        type: string
+      detected_type:
+        type: string
+      existing_labels:
+        items:
+          $ref: '#/definitions/server.apiExtractedLabel'
+        type: array
+      extracted_text:
+        type: string
+      png_data_url:
+        type: string
+    type: object
+  server.apiPrompt:
+    properties:
+      content:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      fork_of:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      purpose:
+        type: string
+      source:
+        description: '"builtin" | "curator"'
+        type: string
+    type: object
+  server.apiPromptCreate:
+    properties:
+      content:
+        type: string
+      fork_of:
+        type: string
+      name:
+        type: string
+      purpose:
+        type: string
+    type: object
+  server.apiPromptList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiPrompt'
+        type: array
+    type: object
+  server.apiPromptPatch:
+    properties:
+      content:
+        type: string
+    type: object
   server.apiRef:
     properties:
       id:
@@ -345,6 +1371,322 @@ definitions:
         $ref: '#/definitions/server.apiLabel'
       rank:
         type: string
+    type: object
+  server.apiReference:
+    properties:
+      accessed:
+        type: string
+      alternative_id:
+        type: string
+      attached_pdf_shas:
+        description: |-
+          AttachedPDFShas lists the sidecar-library sha512s associated
+          with this reference via hive__reference_pdf. Typically one
+          entry (one PDF per reference); the references-screen reader
+          pane loads the first sha. Empty when no source document has
+          been attached.
+        items:
+          type: string
+        type: array
+      author:
+        type: string
+      author_id:
+        type: string
+      citation:
+        type: string
+      collection_editor:
+        type: string
+      collection_title:
+        type: string
+      container_author:
+        type: string
+      container_title:
+        type: string
+      container_title_short:
+        type: string
+      doi:
+        type: string
+      edition:
+        type: string
+      editor:
+        type: string
+      editor_id:
+        type: string
+      has_source_doc:
+        description: |-
+          HasSourceDoc mirrors the field on apiReferenceHit — true when
+          the ingested source document is available in the sidecar.
+          See apiReferenceHit for the full rationale.
+
+          (Issue count + max severity are NOT mirrored here — the
+          resolver on the WUI side fetches /api/issue directly and
+          computes both locally to keep this endpoint fast.)
+        type: boolean
+      id:
+        type: string
+      isbn:
+        type: string
+      issn:
+        type: string
+      issue:
+        type: string
+      issued:
+        type: string
+      link:
+        type: string
+      modified:
+        type: string
+      modified_by:
+        type: string
+      page:
+        type: string
+      publisher:
+        type: string
+      publisher_place:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      title:
+        type: string
+      title_short:
+        type: string
+      type:
+        type: string
+      version:
+        type: string
+      volume:
+        type: string
+    type: object
+  server.apiReferenceDashboard:
+    properties:
+      attention:
+        items:
+          $ref: '#/definitions/server.apiAttentionRow'
+        type: array
+      steps:
+        $ref: '#/definitions/server.apiReferenceDashboardSteps'
+      total:
+        type: integer
+    type: object
+  server.apiReferenceDashboardSteps:
+    properties:
+      assertions_extracted:
+        $ref: '#/definitions/server.apiStepCount'
+      bibliographic:
+        $ref: '#/definitions/server.apiStepCount'
+      digitized:
+        $ref: '#/definitions/server.apiStepCount'
+      imported:
+        $ref: '#/definitions/server.apiStepCount'
+    type: object
+  server.apiReferenceHit:
+    properties:
+      author:
+        type: string
+      citation:
+        type: string
+      has_source_doc:
+        description: |-
+          HasSourceDoc is true when the reference has an ingested source
+          document available in the archive's sidecar directory (PDF
+          → JATS conversion complete, ready for annotation and
+          AI-assisted extraction — see REFERENCE_PDF_PLAN.md).
+          Drives the gold-star tier of the reference-picker badge:
+          structured-metadata + source-attached → curator has fully
+          upgraded this reference. Elided from JSON (omitempty) so a
+          legacy row with no source document doesn't clutter the wire
+          shape. Falsy today until PDF ingest slice lands.
+        type: boolean
+      id:
+        type: string
+      issue_count:
+        description: |-
+          IssueCount is the number of open validation issues currently
+          filed against this reference row. Zero → elided from JSON so
+          the wire shape stays flat; front-ends render a warn badge on
+          picker results when > 0 and route a click to the reference-
+          quick-fix modal (feedback_no_side_quests).
+        type: integer
+      max_severity:
+        description: |-
+          MaxSeverity is the highest severity among the record's open
+          issues ("error" / "warn" / "info" / "debug"). Empty when
+          IssueCount is 0. Drives the WUI badge color via the shared
+          validationSeverityBadge helper so every picker/list surface
+          renders the same signal.
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+      year:
+        type: string
+    type: object
+  server.apiReferencePatch:
+    properties:
+      accessed:
+        type: string
+      alternative_id:
+        type: string
+      author:
+        type: string
+      author_id:
+        type: string
+      citation:
+        type: string
+      collection_editor:
+        type: string
+      collection_title:
+        type: string
+      container_author:
+        type: string
+      container_title:
+        type: string
+      container_title_short:
+        type: string
+      doi:
+        type: string
+      edition:
+        type: string
+      editor:
+        type: string
+      editor_id:
+        type: string
+      isbn:
+        type: string
+      issn:
+        type: string
+      issue:
+        type: string
+      issued:
+        type: string
+      link:
+        type: string
+      page:
+        type: string
+      publisher:
+        type: string
+      publisher_place:
+        type: string
+      remarks:
+        type: string
+      source_id:
+        type: string
+      title:
+        type: string
+      title_short:
+        type: string
+      type:
+        type: string
+      version:
+        type: string
+      volume:
+        type: string
+    type: object
+  server.apiReferenceUpload:
+    properties:
+      already_existed:
+        type: boolean
+      annotation_name_count:
+        type: integer
+      annotation_status:
+        description: "AnnotationStatus reports what happened during the follow-on\nGNfinder
+          + GNverifier pass that produces augmented JATS +\nTaxPub XML stored at <sha>.jats.xml.
+          Values:\n\n\t\"annotated\"      — augmented XML generated and stored\n\t\"skipped\"
+          \       — no TEI was available (upstream GROBID\n\t                   failed
+          or was skipped for a non-PDF)\n\t\"already_exists\" — dedup hit and augmented
+          XML was already on\n\t                   disk from a prior upload\n\t\"failed\"
+          \        — annotation pass errored; upload still\n\t                   succeeded,
+          curator can retry later\n\nAnnotationNameCount is the number of <tp:taxon-name>
+          elements\nin the augmented XML (raw hit count from GNfinder; not de-\nduplicated).
+          Present when status == \"annotated\" or\n\"already_exists\"."
+        type: string
+      attached_references:
+        description: |-
+          AttachedReferences lists reference rows that already have
+          this sha attached via hive__reference_pdf. Populated when
+          the sidecar dedupes so the WUI can offer to jump to an
+          existing reference instead of walking the curator through
+          a fresh bibliographic-entry flow they'd end up discarding.
+        items:
+          $ref: '#/definitions/server.apiAttachedReference'
+        type: array
+      doi:
+        type: string
+      ext:
+        type: string
+      metadata:
+        $ref: '#/definitions/server.apiUploadBibHeader'
+      sha512:
+        type: string
+      size:
+        type: integer
+      tei_status:
+        type: string
+    type: object
+  server.apiRegion:
+    properties:
+      bbox:
+        $ref: '#/definitions/server.apiBBox'
+      id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      origin:
+        type: string
+      page:
+        type: integer
+    type: object
+  server.apiRegionList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiRegion'
+        type: array
+    type: object
+  server.apiReindexResult:
+    properties:
+      elapsed_ms:
+        type: integer
+      records:
+        type: integer
+      table:
+        type: string
+    type: object
+  server.apiRowSource:
+    properties:
+      assertion_id:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      entity_id:
+        type: string
+      entity_table:
+        type: string
+      extraction_run_id:
+        type: string
+      reference_citation:
+        type: string
+      reference_id:
+        type: string
+    type: object
+  server.apiRowSourceList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiRowSource'
+        type: array
+    type: object
+  server.apiSetGoldStandardRequest:
+    properties:
+      gold:
+        type: boolean
     type: object
   server.apiSpeciesInteraction:
     properties:
@@ -387,6 +1729,13 @@ definitions:
         type: string
       type:
         type: string
+    type: object
+  server.apiStepCount:
+    properties:
+      done:
+        type: integer
+      total:
+        type: integer
     type: object
   server.apiSynonym:
     properties:
@@ -516,6 +1865,61 @@ definitions:
       status:
         type: string
     type: object
+  server.apiTaxonPatch:
+    properties:
+      according_to_page:
+        type: string
+      according_to_page_link:
+        type: string
+      extinct:
+        type: boolean
+      link:
+        type: string
+      name_phrase:
+        type: string
+      remarks:
+        type: string
+      scrutinizer:
+        type: string
+      scrutinizer_date:
+        type: string
+      scrutinizer_id:
+        type: string
+    type: object
+  server.apiTestSetAddRequest:
+    properties:
+      notes:
+        type: string
+    type: object
+  server.apiTestSetList:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiTestSetMember'
+        type: array
+    type: object
+  server.apiTestSetMember:
+    properties:
+      added_at:
+        type: string
+      added_by:
+        type: string
+      notes:
+        type: string
+      reference_id:
+        type: string
+    type: object
+  server.apiTestSetStatus:
+    properties:
+      added_at:
+        type: string
+      added_by:
+        type: string
+      in_test_set:
+        type: boolean
+      notes:
+        type: string
+    type: object
   server.apiTypeMaterial:
     properties:
       altitude:
@@ -616,6 +2020,25 @@ definitions:
       specimen_id:
         type: string
       status:
+        type: string
+    type: object
+  server.apiUploadBibHeader:
+    properties:
+      author:
+        type: string
+      container_title:
+        type: string
+      issue:
+        type: string
+      issued:
+        type: string
+      page:
+        type: string
+      publisher:
+        type: string
+      title:
+        type: string
+      volume:
         type: string
     type: object
   server.apiValidationWarning:
@@ -724,6 +2147,100 @@ definitions:
       symmetrical:
         type: boolean
     type: object
+  server.createTaxonBody:
+    properties:
+      authorship:
+        type: string
+      basionym:
+        $ref: '#/definitions/server.createTaxonBody'
+      basionym_authorship:
+        type: string
+      basionym_authorship_year:
+        type: string
+      basionym_ex_authorship:
+        type: string
+      basionym_name_id:
+        description: |-
+          Optional basionym link — set exactly ONE of the following to
+          link this new name to its original combination in the same
+          atomic transaction as the primary create. See CLAUDE.md
+          § Combination bracketing rules.
+
+            BasionymNameID — id of an existing name row already in the
+              archive. Handler links a BASIONYM name_relation from the
+              primary name to this id.
+
+            Basionym       — nested createTaxonBody-shaped payload for a
+              brand-new original-combination name. Handler CreateNames
+              it first, then uses the resulting id as the BASIONYM link
+              target.
+
+          Setting both is a 400 (ambiguous intent). Setting neither
+          preserves today's behavior (no basionym link — the primary
+          name is either an original combination or a curator-added-later-
+          basionym recomb).
+        type: string
+      code:
+        type: string
+      combination_authorship:
+        type: string
+      combination_authorship_year:
+        type: string
+      combination_ex_authorship:
+        type: string
+      cultivar_epithet:
+        type: string
+      etymology:
+        type: string
+      gender:
+        type: string
+      genus:
+        type: string
+      infrageneric_epithet:
+        type: string
+      infraspecific_epithet:
+        type: string
+      link:
+        type: string
+      name_phrase:
+        type: string
+      notho:
+        type: string
+      parent_id:
+        description: Taxon aggregate.
+        type: string
+      published_in_page:
+        type: string
+      published_in_page_link:
+        type: string
+      published_in_year:
+        type: string
+      rank:
+        type: string
+      reference_id:
+        type: string
+      remarks:
+        type: string
+      scientific_name:
+        description: Name aggregate (verbatim + code required; rest optional).
+        type: string
+      scientific_name_string:
+        type: string
+      specific_epithet:
+        type: string
+      status:
+        type: string
+      synonym_status:
+        description: |-
+          SynonymStatus is applied by handleAddSynonym only — the
+          taxonomic_status of the synonym-link row (SYNONYM,
+          AMBIGUOUS_SYNONYM, MISAPPLIED). Ignored by other endpoints
+          (handleCreateTaxon / handleAddBasionym). Empty defaults to
+          SYNONYM inside AddSynonym.
+        type: string
+      uninomial:
+        type: string
+    type: object
   server.problem:
     properties:
       detail:
@@ -764,6 +2281,267 @@ info:
   title: hive API
   version: "0.1"
 paths:
+  /agent/{role}:
+    get:
+      description: Every agent row scoped to one role table (creator | contact | editor
+        | contributor | publisher). Sorted by family, given, id.
+      parameters:
+      - description: Role table (creator|contact|editor|contributor|publisher)
+        in: path
+        name: role
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAgentList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List agents for a role
+      tags:
+      - agents
+    post:
+      consumes:
+      - application/json
+      description: Insert a new agent row scoped to the URL role. Any body role field
+        is overridden by the path parameter.
+      parameters:
+      - description: Role table
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Agent body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiAgent'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiAgent'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create an agent
+      tags:
+      - agents
+  /agent/{role}/{id}:
+    delete:
+      description: Remove an agent row.
+      parameters:
+      - description: Role table
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete an agent
+      tags:
+      - agents
+    get:
+      description: Return a single agent row by (role, id).
+      parameters:
+      - description: Role table
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAgent'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get an agent
+      tags:
+      - agents
+    patch:
+      consumes:
+      - application/json
+      description: Partial update to an agent row. Pointer-optional fields distinguish
+        leave-alone vs clear.
+      parameters:
+      - description: Role table
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Agent ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Agent patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiAgentPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAgent'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch an agent
+      tags:
+      - agents
+  /agent/{role}/{id}/copy:
+    post:
+      consumes:
+      - application/json
+      description: Create a new agent in the target role from the source (URL role
+        + id). Note field is blanked by default (role-specific); pass blank_note=false
+        to preserve.
+      parameters:
+      - description: Source role
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Source agent ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Copy request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiCopyAgentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiAgent'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Copy an agent to another role
+      tags:
+      - agents
+  /agent/{role}/{id}/move:
+    post:
+      consumes:
+      - application/json
+      description: Atomically reassign an agent to a different role (create target
+        + delete source in one tx).
+      parameters:
+      - description: Source role
+        in: path
+        name: role
+        required: true
+        type: string
+      - description: Source agent ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Move request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiCopyAgentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiAgent'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Move an agent to another role
+      tags:
+      - agents
   /archive:
     get:
       description: Report the archive path, schema version, and read-only mode.
@@ -781,6 +2559,87 @@ paths:
       summary: Archive identity
       tags:
       - system
+  /assertion/{id}/correction:
+    post:
+      consumes:
+      - application/json
+      description: Record a curator's fix to one NER-extracted field. The correction
+        is additive; the original NER value stays on the assertion for training pipelines.
+        Flips the assertion status to 'edited'.
+      parameters:
+      - description: Assertion ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Correction body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiAssertionCorrectionPost'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAssertion'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create an assertion-edit correction
+      tags:
+      - assertions
+  /assertion/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: Flip an assertion's review status (pending/accepted/rejected/edited).
+        reject_reason required when status is 'rejected'.
+      parameters:
+      - description: Assertion ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiAssertionStatusPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAssertion'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch assertion status
+      tags:
+      - assertions
   /distribution/{id}:
     delete:
       description: Delete a distribution row by rowid.
@@ -865,6 +2724,76 @@ paths:
       summary: Liveness probe
       tags:
       - system
+  /issue:
+    get:
+      description: Paginated list of validation issues matching the given filters.
+      parameters:
+      - description: Filter by table_name
+        in: query
+        name: table
+        type: string
+      - description: Filter by record id
+        in: query
+        name: record_id
+        type: string
+      - description: Filter by rule id
+        in: query
+        name: rule_id
+        type: string
+      - collectionFormat: csv
+        description: 'Filter by severity (repeatable: error|warn|info|debug)'
+        in: query
+        items:
+          type: string
+        name: severity
+        type: array
+      - description: Hide acknowledged issues
+        in: query
+        name: hide_acknowledged
+        type: boolean
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiIssue'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List validation issues
+      tags:
+      - issues
+  /issue/summary:
+    get:
+      description: Per-rule / per-severity counts across the archive.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiIssueSummary'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Issue counts summary
+      tags:
+      - issues
   /keymap:
     get:
       description: Canonical shortcut list shared between TUI and WUI. Cached for
@@ -880,6 +2809,348 @@ paths:
       summary: Keymap
       tags:
       - system
+  /llm/estimate:
+    post:
+      consumes:
+      - application/json
+      description: Compute approximate token count and USD cost for a would-be invocation
+        without calling the provider.
+      parameters:
+      - description: Estimate request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiLLMEstimateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMEstimateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Estimate an LLM invocation
+      tags:
+      - llm
+  /llm/invoke:
+    post:
+      consumes:
+      - application/json
+      description: Run a shipped-library prompt via a configured provider. Persists
+        the invocation as an ExtractionRun row and materializes assertions for NER
+        purpose runs.
+      parameters:
+      - description: Invoke request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiLLMInvokeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMInvokeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Invoke an LLM prompt
+      tags:
+      - llm
+  /llm/pipeline:
+    post:
+      consumes:
+      - application/json
+      description: Runs NER then compose against the paper's JATS body, persisting
+        an extraction_run row for each and linking compose→NER via parent_run_id.
+      parameters:
+      - description: Pipeline request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiLLMPipelineRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMPipelineResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Run the two-step NER → compose pipeline
+      tags:
+      - llm
+  /llm/providers:
+    get:
+      description: Configured provider entries with kind + default model. Credentials
+        are never exposed.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMProviderList'
+      summary: List LLM providers
+      tags:
+      - llm
+    post:
+      consumes:
+      - application/json
+      description: Add a new provider entry to the user config and store its API key
+        per the requested source (keyring / env / plaintext). Live-registers the provider
+        so subsequent invocations work without a restart.
+      parameters:
+      - description: Provider create body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiLLMProviderCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiLLMProvider'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create an LLM provider
+      tags:
+      - llm
+  /llm/providers/{name}:
+    delete:
+      description: Remove the named provider from the user config and delete its keyring
+        entry. Idempotent — deleting an already-absent provider returns 204.
+      parameters:
+      - description: Provider name
+        in: path
+        name: name
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete an LLM provider
+      tags:
+      - llm
+    patch:
+      consumes:
+      - application/json
+      description: Partial update to an existing provider (kind, default model, base
+        URL, credential source, rotated API key). Live-re-registers the entry.
+      parameters:
+      - description: Provider name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Provider patch body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiLLMProviderPatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMProvider'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch an LLM provider
+      tags:
+      - llm
+  /llm/providers/{name}/models:
+    get:
+      description: Call the provider's models-listing endpoint and return the normalized
+        model list. Cached per-process for an hour.
+      parameters:
+      - description: Provider name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMModelList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "501":
+          description: Not Implemented
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List models for a provider
+      tags:
+      - llm
+  /llm/run/{id}:
+    delete:
+      description: Stamp deleted_at on the run row. Cost dashboards still see the
+        spend; default lists filter it out.
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Soft-delete an LLM run
+      tags:
+      - llm
+    get:
+      description: Return one persisted extraction run by ID (including its envelope
+        + raw output).
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMRun'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get an LLM run
+      tags:
+      - llm
+  /llm/run/{id}/gold-standard:
+    post:
+      consumes:
+      - application/json
+      description: Toggle is_gold_standard on the run row. Gold runs anchor sampling-based
+        accuracy scoring.
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Gold-standard toggle
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiSetGoldStandardRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMRun'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Set an LLM run's gold-standard flag
+      tags:
+      - llm
+  /llm/run/{id}/restore:
+    post:
+      description: Clear deleted_at on the run row.
+      parameters:
+      - description: Run ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Restore a soft-deleted LLM run
+      tags:
+      - llm
   /metadata:
     get:
       description: Fetch the dataset metadata row.
@@ -935,6 +3206,212 @@ paths:
       summary: Update metadata
       tags:
       - metadata
+  /name-relation/{id}:
+    delete:
+      description: Delete a name-relation row by rowid.
+      parameters:
+      - description: Name relation rowid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete name relation
+      tags:
+      - name-relations
+  /name/{id}:
+    get:
+      description: Fetch a name by ID. Includes resolved reference label and basionym
+        reference when present.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiName'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get name
+      tags:
+      - names
+    patch:
+      consumes:
+      - application/json
+      description: Partial update to a name row. gn__* fields are always re-derived
+        server-side from the scientific-name string; supports If-Match optimistic
+        concurrency.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: col__modified ETag for optimistic concurrency
+        in: header
+        name: If-Match
+        type: string
+      - description: Name patch body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiNamePatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiName'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch a name
+      tags:
+      - names
+  /name/{id}/dependencies:
+    get:
+      description: Count of taxa, synonyms, and name-relations that reference a name.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Name dependency counts
+      tags:
+      - names
+  /name/{id}/relations:
+    get:
+      description: Name-relation rows where the given name is subject or object, with
+        resolved counterpart labels.
+      parameters:
+      - description: Name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiNameRelation'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List name relations
+      tags:
+      - name-relations
+    post:
+      consumes:
+      - application/json
+      description: Link a name to a related name with a nom_rel_type relation.
+      parameters:
+      - description: Subject name ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Relation payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiNameRelationCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiNameRelation'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create name relation
+      tags:
+      - name-relations
   /name/{id}/type-materials:
     get:
       description: Type-material rows attached to a name, ordered by status.
@@ -1004,6 +3481,1236 @@ paths:
       summary: Create type material
       tags:
       - type-materials
+  /name/parse:
+    post:
+      consumes:
+      - application/json
+      description: Run gnparser on a verbatim name and return an apiName-shaped preview
+        with atomized col__ fields + gn__* cache + a code-scoped rank guess. Nothing
+        is written.
+      parameters:
+      - description: Parse request {scientific_name, code}
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiName'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Parse a scientific name
+      tags:
+      - names
+  /name/search:
+    get:
+      description: Case-insensitive substring search over scientific-name forms.
+      parameters:
+      - description: Query string
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiNameHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Search names
+      tags:
+      - names
+  /openapi.json:
+    get:
+      description: Return the embedded OpenAPI 2.0 spec as JSON.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: JSON body
+      summary: OpenAPI spec (JSON)
+      tags:
+      - docs
+  /openapi.yaml:
+    get:
+      description: Return the embedded OpenAPI 2.0 spec as YAML.
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: YAML body
+      summary: OpenAPI spec (YAML)
+      tags:
+      - docs
+  /prompt:
+    get:
+      description: Merged list of shipped built-in prompts and curator forks. Filter
+        by purpose; include_content=1 inlines the prompt body.
+      parameters:
+      - description: Restrict to one purpose (ner|compose)
+        in: query
+        name: purpose
+        type: string
+      - description: Inline prompt content bytes (default omitted)
+        in: query
+        name: include_content
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPromptList'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List prompts
+      tags:
+      - prompts
+    post:
+      consumes:
+      - application/json
+      description: Insert a curator fork of an existing prompt. Name must be unique
+        per purpose.
+      parameters:
+      - description: Fork body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiPromptCreate'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiPrompt'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create a prompt fork
+      tags:
+      - prompts
+  /prompt/{id}:
+    delete:
+      description: Soft-delete a curator prompt fork. Built-in prompts cannot be deleted.
+      parameters:
+      - description: Prompt ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete a curator prompt
+      tags:
+      - prompts
+    get:
+      description: Return one prompt (built-in or curator fork) by ID, including its
+        content.
+      parameters:
+      - description: Prompt ID (builtin name or curator UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPrompt'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get a prompt
+      tags:
+      - prompts
+    patch:
+      consumes:
+      - application/json
+      description: Update the content of a curator prompt fork. Name and purpose are
+        immutable post-create.
+      parameters:
+      - description: Prompt ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Prompt patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiPromptPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPrompt'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch a curator prompt
+      tags:
+      - prompts
+  /reference:
+    get:
+      description: Paginated list of references. Sort by author (default) or recent.
+      parameters:
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Row offset
+        in: query
+        name: offset
+        type: integer
+      - description: 'Sort: author|recent'
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiReferenceHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List references
+      tags:
+      - references
+    post:
+      consumes:
+      - application/json
+      description: Insert a new reference row and return the hydrated record. Optional
+        attach_pdf_sha query param links a previously-uploaded sidecar PDF in the
+        same tx.
+      parameters:
+      - description: Sidecar SHA-512 to attach in the same tx
+        in: query
+        name: attach_pdf_sha
+        type: string
+      - description: Reference body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiReference'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiReference'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create a reference
+      tags:
+      - references
+  /reference/{id}:
+    delete:
+      description: Delete a reference row. Refuses with 409 when downstream aggregates
+        still cite it.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete reference
+      tags:
+      - references
+    get:
+      description: Full reference detail, including attached sidecar PDF shas.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReference'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get a reference
+      tags:
+      - references
+    patch:
+      consumes:
+      - application/json
+      description: Partial update to a reference row. Pointer-optional fields distinguish
+        clear vs leave-alone; supports If-Match optimistic concurrency.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: col__modified ETag for optimistic concurrency
+        in: header
+        name: If-Match
+        type: string
+      - description: Reference patch body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiReferencePatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReference'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch a reference
+      tags:
+      - references
+  /reference/{id}/assertions:
+    get:
+      description: Per-fact staged assertions for a reference, filterable by status
+        (repeatable), source_run_id, and asserted_by. Includes latest active edit-correction
+        inline.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - collectionFormat: csv
+        description: Status filter (pending|accepted|rejected|edited, repeatable)
+        in: query
+        items:
+          type: string
+        name: status
+        type: array
+      - description: Filter by extraction run
+        in: query
+        name: source_run_id
+        type: string
+      - description: Filter by asserter label
+        in: query
+        name: asserted_by
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiAssertionList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List staged assertions for a reference
+      tags:
+      - assertions
+  /reference/{id}/attach-pdf:
+    post:
+      consumes:
+      - application/json
+      description: Associate a sidecar-library sha512 with an existing reference.
+        Idempotent.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: SHA-512 hex payload
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Attach PDF to reference
+      tags:
+      - references
+  /reference/{id}/attached-pdf/{sha}:
+    delete:
+      description: Break the (reference, sha) association. Cascades correction cleanup;
+        wipes sidecar files when the sha becomes orphaned.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: SHA-512 hex
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiDetachPDFResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Detach PDF from reference
+      tags:
+      - references
+  /reference/{id}/corrections:
+    get:
+      description: Every correction attached to the given reference, both active and
+        reverted.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiCorrectionList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List corrections for a reference
+      tags:
+      - references
+  /reference/{id}/llm-runs:
+    get:
+      description: Every extraction run linked to the reference, most-recent first.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Include soft-deleted rows (1 = yes)
+        in: query
+        name: include_deleted
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLLMRunList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List LLM runs for a reference
+      tags:
+      - llm
+  /reference/{id}/paper-import:
+    get:
+      description: Curator-approved paper-name → target-taxon mappings for one reference.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPaperImportMappingList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List paper-import mappings
+      tags:
+      - assertions
+    post:
+      consumes:
+      - application/json
+      description: Create or update one paper-name → target-taxon mapping for a reference.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Mapping body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiPaperImportMappingUpsert'
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Upsert a paper-import mapping
+      tags:
+      - assertions
+  /reference/{id}/paper-import/{key}:
+    delete:
+      description: Remove one paper-name → target-taxon mapping from a reference's
+        assembly state.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Paper-name key
+        in: path
+        name: key
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete a paper-import mapping
+      tags:
+      - assertions
+  /reference/{id}/paper-import/execute:
+    post:
+      consumes:
+      - application/json
+      description: Materialize the paper's compose output as SFGA extension rows on
+        the mapped target taxa. Additive-only; delete-then-reinsert on re-run.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Execute body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiPaperImportExecuteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPaperImportExecuteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Execute a paper import
+      tags:
+      - assertions
+  /reference/correction:
+    post:
+      consumes:
+      - application/json
+      description: Insert a new correction row (bbox-add, text-tag, ref-merge, etc),
+        apply the mutation to the JATS sidecar, and re-run figure extraction on the
+        new region.
+      parameters:
+      - description: Correction body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiCorrection'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiCorrectionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create a reference correction
+      tags:
+      - references
+  /reference/correction/{id}:
+    delete:
+      description: Remove the correction row and re-derive the sidecar JATS from the
+        remaining active corrections.
+      parameters:
+      - description: Correction ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiCorrectionDeleteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete a correction
+      tags:
+      - references
+  /reference/correction/preview:
+    post:
+      consumes:
+      - application/json
+      description: 'Dry-run a bbox: crop the region to PNG, extract text via pdftotext,
+        and return the PNG data URL plus any detected fig/table label. Nothing is
+        persisted.'
+      parameters:
+      - description: Preview request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiPreviewCorrectionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPreviewCorrectionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Preview a correction
+      tags:
+      - references
+  /reference/dashboard:
+    get:
+      description: Per-step done/total counts across the 4-step ingest workflow plus
+        next-action buckets.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReferenceDashboard'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Reference dashboard
+      tags:
+      - references
+  /reference/library/{sha}/figures/{id}:
+    get:
+      description: PNG crop of a fig or table-wrap rendered from the source PDF via
+        GROBID coordinates.
+      parameters:
+      - description: Sidecar SHA-512 hex
+        in: path
+        name: sha
+        required: true
+        type: string
+      - description: JATS fig/table id (e.g. fig_0, tab_1)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - image/png
+      responses:
+        "200":
+          description: PNG bytes
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Stream a figure/table PNG crop
+      tags:
+      - references
+  /reference/library/{sha}/regions:
+    get:
+      description: Every fig/table-wrap region in the sidecar JATS with bbox coords
+        and origin (GROBID / curator).
+      parameters:
+      - description: Sidecar SHA-512 hex
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiRegionList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List sidecar regions
+      tags:
+      - references
+  /reference/library/{sha}/source:
+    get:
+      description: Stream the raw uploaded source (PDF / EPUB / HTML / JATS) with
+        the correct Content-Type for inline browser rendering.
+      parameters:
+      - description: Sidecar SHA-512 hex
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: Raw file bytes
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Stream sidecar source file
+      tags:
+      - references
+  /reference/library/{sha}/taxpub:
+    get:
+      description: Return the sidecar's TaxPub-augmented JATS (with GNfinder + GNverifier
+        taxon-name markup).
+      parameters:
+      - description: Sidecar SHA-512 hex
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - text/xml
+      responses:
+        "200":
+          description: JATS XML body
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Stream TaxPub-augmented JATS
+      tags:
+      - references
+  /reference/lookup-bhlnames:
+    post:
+      consumes:
+      - application/json
+      description: Match a scientific name against BHLnames and return hits (each
+        with an unsaved apiReference preview and BHLnames quality signals).
+      parameters:
+      - description: Lookup request {canonical, authors, year, nomen_event, limit}
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiBHLnameHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: BHLnames scientific-name lookup
+      tags:
+      - references
+  /reference/lookup-openalex:
+    get:
+      description: Search OpenAlex for references matching title (+ optional author,
+        year). Returns up to 5 unsaved apiReference previews.
+      parameters:
+      - description: Title text
+        in: query
+        name: title
+        required: true
+        type: string
+      - description: First-author surname
+        in: query
+        name: author
+        type: string
+      - description: Publication year
+        in: query
+        name: year
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiReference'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/server.problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: OpenAlex free-text lookup
+      tags:
+      - references
+  /reference/parse-bibtex:
+    post:
+      consumes:
+      - application/json
+      - text/plain
+      description: Parse a single BibTeX entry (raw body or {"text":"..."} JSON) and
+        return an unsaved apiReference preview.
+      parameters:
+      - description: BibTeX entry text
+        in: body
+        name: body
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReference'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Parse a BibTeX entry
+      tags:
+      - references
+  /reference/regenerate-citations:
+    post:
+      description: Rewrite col__citation using ComposeCitation over each row's structured
+        fields. overwrite=true replaces every row; default only fills empty citations.
+      parameters:
+      - description: Replace non-empty citations too
+        in: query
+        name: overwrite
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Regenerate reference citations
+      tags:
+      - references
+  /reference/resolve-doi:
+    get:
+      description: Fetch a reference by DOI from the configured resolver. Returns
+        an unsaved apiReference preview (empty id); the curator confirms and POSTs
+        to /api/reference to persist.
+      parameters:
+      - description: DOI (with or without doi.org prefix)
+        in: query
+        name: doi
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReference'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/server.problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Resolve a DOI to a reference preview
+      tags:
+      - references
+  /reference/search:
+    get:
+      description: Case-insensitive substring search across author, title, and citation.
+      parameters:
+      - description: Query string
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiReferenceHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Search references
+      tags:
+      - references
+  /reference/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Multipart upload of PDF / EPUB / HTML / JATS. Stored content-addressed
+        on sha512; PDFs trigger GROBID + annotation follow-ups synchronously.
+      parameters:
+      - description: Source file (pdf/epub/html/xml/jats)
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Optional origin URL for the upload
+        in: formData
+        name: source_url
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiReferenceUpload'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Upload a reference source file
+      tags:
+      - references
+  /reindex/validation:
+    post:
+      description: Walk every hive-validated table and rewrite __gsvalidator_results.
+        Runs synchronously; returns a small summary.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReindexResult'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Reindex validation issues
+      tags:
+      - issues
   /species-interaction/{id}:
     delete:
       description: Delete a species-interaction row by rowid.
@@ -1073,7 +4780,162 @@ paths:
       summary: Update species interaction
       tags:
       - species-interactions
+  /synonym/{id}:
+    delete:
+      description: Delete a synonym row; optionally cascade the underlying name row
+        when no other row references it.
+      parameters:
+      - description: Synonym ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Also delete the underlying name row if it becomes orphaned
+        in: query
+        name: cascade_name
+        type: boolean
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete synonym
+      tags:
+      - synonyms
+  /synonym/{id}/move:
+    post:
+      consumes:
+      - application/json
+      description: Reassign a synonym row to a new accepted taxon in place.
+      parameters:
+      - description: Synonym ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New accepted taxon id
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Move synonym
+      tags:
+      - synonyms
+  /taxon:
+    post:
+      consumes:
+      - application/json
+      description: Create a name and its associated taxon in one transaction. Optionally
+        links a basionym.
+      parameters:
+      - description: New taxon payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.createTaxonBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiTaxon'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create taxon
+      tags:
+      - taxa
   /taxon/{id}:
+    delete:
+      description: Delete a taxon and its per-taxon associations. Refuses when the
+        taxon still has children.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete taxon
+      tags:
+      - taxa
     get:
       description: |-
         Fetch a taxon by ID. The response ETag carries col__modified
@@ -1100,6 +4962,57 @@ paths:
           schema:
             $ref: '#/definitions/server.problem'
       summary: Get taxon
+      tags:
+      - taxa
+    patch:
+      consumes:
+      - application/json
+      description: Partial update to a taxon row. Pointer-optional fields distinguish
+        clear vs leave-alone; supports If-Match optimistic concurrency.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: col__modified ETag for optimistic concurrency
+        in: header
+        name: If-Match
+        type: string
+      - description: Taxon patch body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiTaxonPatch'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTaxon'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Patch a taxon
       tags:
       - taxa
   /taxon/{id}/ancestors:
@@ -1130,6 +5043,54 @@ paths:
       summary: Ancestor id chain
       tags:
       - taxa
+  /taxon/{id}/basionym:
+    post:
+      consumes:
+      - application/json
+      description: Create the basionym name for the current-combination taxon and
+        link the BASIONYM relation atomically.
+      parameters:
+      - description: Current combination taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New basionym name payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.createTaxonBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiName'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Add basionym
+      tags:
+      - names
   /taxon/{id}/child-ranks:
     get:
       description: Ranks valid as children of the given parent taxon.
@@ -1284,6 +5245,102 @@ paths:
       summary: Create-name prefix
       tags:
       - taxa
+  /taxon/{id}/delete-cascade:
+    post:
+      description: Delete the taxon, every descendant, and every per-taxon association
+        attached to the set.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete cascade
+      tags:
+      - taxa
+  /taxon/{id}/delete-preview:
+    get:
+      description: Descendant counts and per-association counts for a proposed cascade
+        delete.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete preview
+      tags:
+      - taxa
+  /taxon/{id}/delete-reparent:
+    post:
+      description: Move direct children up one level, then leaf-delete the taxon.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Delete with reparent
+      tags:
+      - taxa
   /taxon/{id}/distributions:
     get:
       description: Distribution rows attached to a taxon, ordered by gazetteer + area.
@@ -1353,6 +5410,58 @@ paths:
       summary: Create distribution
       tags:
       - distributions
+  /taxon/{id}/move:
+    post:
+      consumes:
+      - application/json
+      description: Reparent a taxon. Empty new_parent_id moves it to root. Optimistic
+        concurrency via If-Match.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: col__modified value for optimistic concurrency
+        in: header
+        name: If-Match
+        type: string
+      - description: New parent id
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTaxon'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Move taxon
+      tags:
+      - taxa
   /taxon/{id}/nomenclatural-history:
     get:
       description: Basionym-anchored nomenclatural history for a taxon, grouped into
@@ -1381,6 +5490,39 @@ paths:
       summary: Nomenclatural history
       tags:
       - taxa
+  /taxon/{id}/row-sources:
+    get:
+      description: Every hive__row_source row attached to the taxon's type_material,
+        distribution, and vernacular children, plus a short citation for each unique
+        reference.
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiRowSourceList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List row sources for a taxon
+      tags:
+      - assertions
   /taxon/{id}/species-interactions:
     get:
       description: Species-interaction rows where the given taxon is the subject.
@@ -1450,6 +5592,54 @@ paths:
       summary: Create species interaction
       tags:
       - species-interactions
+  /taxon/{id}/synonym:
+    post:
+      consumes:
+      - application/json
+      description: Create a name and link it as a synonym of the given taxon. Optionally
+        links a basionym in the same transaction.
+      parameters:
+      - description: Accepted taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New synonym name payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.createTaxonBody'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiName'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/server.problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Add synonym
+      tags:
+      - synonyms
   /taxon/{id}/synonyms:
     get:
       description: Synonym rows for a taxon, each with a server-rendered display label
@@ -1577,6 +5767,146 @@ paths:
       summary: List root taxa
       tags:
       - taxa
+  /taxon/search:
+    get:
+      description: Search taxa by name. Supports prefix, partial, and fuzzy modes;
+        optional synonym expansion.
+      parameters:
+      - description: Query string
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: 'Match mode: prefix|partial|fuzzy'
+        in: query
+        name: mode
+        type: string
+      - description: Extend hits with accepted taxa reached via matching synonyms
+        in: query
+        name: include_synonyms
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTaxonHit'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Search taxa
+      tags:
+      - taxa
+  /test-set:
+    get:
+      description: Full test-set roster, oldest-first (natural work-queue order).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTestSetList'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List test-set roster
+      tags:
+      - test-set
+  /test-set/{id}:
+    delete:
+      description: Drop the test-set membership row. Idempotent.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Remove a reference from the test set
+      tags:
+      - test-set
+    get:
+      description: Report whether the given reference is in the evaluation test set
+        + audit fields.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTestSetStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Test-set membership status for a reference
+      tags:
+      - test-set
+    post:
+      consumes:
+      - application/json
+      description: Insert or update the test-set membership row for a reference. Idempotent.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Optional add body {notes}
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/server.apiTestSetAddRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiTestSetStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Add a reference to the test set
+      tags:
+      - test-set
   /type-material/{id}:
     delete:
       description: Delete a type-material row by rowid.

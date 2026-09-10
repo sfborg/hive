@@ -67,7 +67,7 @@ type apiLLMInvokeRequest struct {
 // raw_output_json for prompt-drift debugging.
 type apiLLMInvokeResponse struct {
 	RunID                  string       `json:"run_id"`
-	Envelope               llm.Envelope `json:"envelope"`
+	Envelope               llm.Envelope `json:"envelope" swaggertype:"object"`
 	PersistError           string       `json:"persist_error,omitempty"`
 	AssertionsMaterialized int          `json:"assertions_materialized,omitempty"`
 	MaterializeError       string       `json:"materialize_error,omitempty"`
@@ -77,6 +77,13 @@ type apiLLMInvokeResponse struct {
 // Empty items array (200) when no providers are configured — an
 // empty dropdown UI is more useful than a hard 404, and the WUI
 // treats zero providers as "prompt the curator to add one."
+//
+// @Summary      List LLM providers
+// @Description  Configured provider entries with kind + default model. Credentials are never exposed.
+// @Tags         llm
+// @Produce      json
+// @Success      200 {object} apiLLMProviderList
+// @Router       /llm/providers [get]
 func (s *server) handleListLLMProviders(w http.ResponseWriter, r *http.Request) {
 	items := make([]apiLLMProvider, 0, len(s.llmProviders))
 	for _, pc := range s.llmProviders {
@@ -129,6 +136,16 @@ type apiLLMEstimateResponse struct {
 // would exceed the model's context window so the WUI can disable
 // submit for hopeless cases (e.g. a 700-page paper on a 200K-token
 // Claude model — chunking support is deferred as its own concern).
+//
+// @Summary      Estimate an LLM invocation
+// @Description  Compute approximate token count and USD cost for a would-be invocation without calling the provider.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body body apiLLMEstimateRequest true "Estimate request"
+// @Success      200 {object} apiLLMEstimateResponse
+// @Failure      400 {object} problem
+// @Router       /llm/estimate [post]
 func (s *server) handleEstimateLLM(w http.ResponseWriter, r *http.Request) {
 	if s.llmRunner == nil {
 		writeBadRequest(w, r, "no llm providers configured in user config (llm_providers)")
@@ -216,6 +233,17 @@ func (s *server) handleEstimateLLM(w http.ResponseWriter, r *http.Request) {
 // response returns an empty RunID + PersistError message so the
 // WUI can show a warning ("results not saved; consider retrying
 // or exporting manually") without losing the envelope content.
+//
+// @Summary      Invoke an LLM prompt
+// @Description  Run a shipped-library prompt via a configured provider. Persists the invocation as an ExtractionRun row and materializes assertions for NER purpose runs.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body body apiLLMInvokeRequest true "Invoke request"
+// @Success      200 {object} apiLLMInvokeResponse
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/invoke [post]
 func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 	if s.llmRunner == nil {
 		writeBadRequest(w, r, "no llm providers configured in user config (llm_providers)")
@@ -375,8 +403,8 @@ type apiLLMRun struct {
 	Purpose        string          `json:"purpose"`
 	SourceKind     string          `json:"source_kind"`
 	SourceID       string          `json:"source_id"`
-	Envelope       json.RawMessage `json:"envelope,omitempty"`
-	RawOutput      json.RawMessage `json:"raw_output,omitempty"`
+	Envelope       json.RawMessage `json:"envelope,omitempty" swaggertype:"object"`
+	RawOutput      json.RawMessage `json:"raw_output,omitempty" swaggertype:"object"`
 	ParentRunID    string          `json:"parent_run_id,omitempty"`
 	CostUSD        float64         `json:"cost_usd"`
 	IsGoldStandard bool            `json:"is_gold_standard"`
@@ -461,6 +489,17 @@ func runToAPI(r hive.ExtractionRun) apiLLMRun {
 // reference, most-recent first. include_deleted=1 query param
 // toggles inclusion of soft-deleted rows (default false; the cost
 // dashboard uses true so spend stays visible).
+//
+// @Summary      List LLM runs for a reference
+// @Description  Every extraction run linked to the reference, most-recent first.
+// @Tags         llm
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        include_deleted query int false "Include soft-deleted rows (1 = yes)"
+// @Success      200 {object} apiLLMRunList
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/llm-runs [get]
 func (s *server) handleListReferenceLLMRuns(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -481,6 +520,16 @@ func (s *server) handleListReferenceLLMRuns(w http.ResponseWriter, r *http.Reque
 }
 
 // handleGetLLMRun returns one persisted run by ID.
+//
+// @Summary      Get an LLM run
+// @Description  Return one persisted extraction run by ID (including its envelope + raw output).
+// @Tags         llm
+// @Produce      json
+// @Param        id path string true "Run ID"
+// @Success      200 {object} apiLLMRun
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Router       /llm/run/{id} [get]
 func (s *server) handleGetLLMRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	if runID == "" {
@@ -499,6 +548,15 @@ func (s *server) handleGetLLMRun(w http.ResponseWriter, r *http.Request) {
 // removing it. Cost dashboards still see the spend; default lists
 // filter it out. Use POST /api/llm/run/{id}/restore (future) to
 // undo.
+//
+// @Summary      Soft-delete an LLM run
+// @Description  Stamp deleted_at on the run row. Cost dashboards still see the spend; default lists filter it out.
+// @Tags         llm
+// @Param        id path string true "Run ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/run/{id} [delete]
 func (s *server) handleSoftDeleteLLMRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	if runID == "" {
@@ -517,6 +575,15 @@ func (s *server) handleSoftDeleteLLMRun(w http.ResponseWriter, r *http.Request) 
 
 // handleRestoreLLMRun clears deleted_at, un-hiding a soft-deleted
 // run.
+//
+// @Summary      Restore a soft-deleted LLM run
+// @Description  Clear deleted_at on the run row.
+// @Tags         llm
+// @Param        id path string true "Run ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/run/{id}/restore [post]
 func (s *server) handleRestoreLLMRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	if runID == "" {
@@ -544,6 +611,19 @@ type apiSetGoldStandardRequest struct {
 // Gold runs anchor sampling-based accuracy scoring — LLM runs on
 // gold-flagged references get scored against the gold assertion
 // set. See project_extraction_runs_multi_model_schema memory.
+//
+// @Summary      Set an LLM run's gold-standard flag
+// @Description  Toggle is_gold_standard on the run row. Gold runs anchor sampling-based accuracy scoring.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Run ID"
+// @Param        body body apiSetGoldStandardRequest true "Gold-standard toggle"
+// @Success      200 {object} apiLLMRun
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/run/{id}/gold-standard [post]
 func (s *server) handleSetLLMRunGoldStandard(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	if runID == "" {
