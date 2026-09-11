@@ -43,6 +43,17 @@ type apiRowSourceList struct {
 // row) and, in aggregate, could feed a tree-node "N papers"
 // count later. Response includes a short reference citation
 // string so the badge doesn't need a second fetch.
+//
+// @Summary      List row sources for a taxon
+// @Description  Every hive__row_source row attached to the taxon's type_material, distribution, and vernacular children, plus a short citation for each unique reference.
+// @Tags         assertions
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {object} apiRowSourceList
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id}/row-sources [get]
 func (s *server) handleGetTaxonRowSources(w http.ResponseWriter, r *http.Request) {
 	taxonID := r.PathValue("id")
 	if taxonID == "" {

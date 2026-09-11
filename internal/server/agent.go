@@ -167,6 +167,16 @@ func (s *server) parseAgentIDPath(w http.ResponseWriter, r *http.Request) (int, 
 
 // handleListAgents returns every row from the role's table.
 // Ordering follows the pkg/ default (family, given, id).
+//
+// @Summary      List agents for a role
+// @Description  Every agent row scoped to one role table (creator | contact | editor | contributor | publisher). Sorted by family, given, id.
+// @Tags         agents
+// @Produce      json
+// @Param        role path string true "Role table (creator|contact|editor|contributor|publisher)"
+// @Success      200 {object} apiAgentList
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role} [get]
 func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.parseRolePath(w, r)
 	if !ok {
@@ -185,6 +195,18 @@ func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetAgent returns a single row by (role, id).
+//
+// @Summary      Get an agent
+// @Description  Return a single agent row by (role, id).
+// @Tags         agents
+// @Produce      json
+// @Param        role path string true "Role table"
+// @Param        id path int true "Agent ID"
+// @Success      200 {object} apiAgent
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role}/{id} [get]
 func (s *server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.parseRolePath(w, r)
 	if !ok {
@@ -205,6 +227,18 @@ func (s *server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 // handleCreateAgent inserts a new row. Request body is a full
 // apiAgent (client authors every relevant field); the URL role
 // wins if the body's role disagrees.
+//
+// @Summary      Create an agent
+// @Description  Insert a new agent row scoped to the URL role. Any body role field is overridden by the path parameter.
+// @Tags         agents
+// @Accept       json
+// @Produce      json
+// @Param        role path string true "Role table"
+// @Param        body body apiAgent true "Agent body"
+// @Success      201 {object} apiAgent
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role} [post]
 func (s *server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.parseRolePath(w, r)
 	if !ok {
@@ -242,6 +276,20 @@ func (s *server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 // applies the patch, then writes back — same shape as
 // handlePatchMetadata so per-field null-vs-clear behavior stays
 // consistent across the API.
+//
+// @Summary      Patch an agent
+// @Description  Partial update to an agent row. Pointer-optional fields distinguish leave-alone vs clear.
+// @Tags         agents
+// @Accept       json
+// @Produce      json
+// @Param        role path string true "Role table"
+// @Param        id path int true "Agent ID"
+// @Param        body body apiAgentPatch true "Agent patch"
+// @Success      200 {object} apiAgent
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role}/{id} [patch]
 func (s *server) handlePatchAgent(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.parseRolePath(w, r)
 	if !ok {
@@ -277,6 +325,16 @@ func (s *server) handlePatchAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteAgent removes a row. 204 on success.
+//
+// @Summary      Delete an agent
+// @Description  Remove an agent row.
+// @Tags         agents
+// @Param        role path string true "Role table"
+// @Param        id path int true "Agent ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role}/{id} [delete]
 func (s *server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	role, ok := s.parseRolePath(w, r)
 	if !ok {
@@ -307,6 +365,20 @@ type apiCopyAgentRequest struct {
 
 // handleCopyAgent creates a new agent in the target role from the
 // source (URL role + id). Returns the newly-created agent.
+//
+// @Summary      Copy an agent to another role
+// @Description  Create a new agent in the target role from the source (URL role + id). Note field is blanked by default (role-specific); pass blank_note=false to preserve.
+// @Tags         agents
+// @Accept       json
+// @Produce      json
+// @Param        role path string true "Source role"
+// @Param        id path int true "Source agent ID"
+// @Param        body body apiCopyAgentRequest true "Copy request"
+// @Success      201 {object} apiAgent
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role}/{id}/copy [post]
 func (s *server) handleCopyAgent(w http.ResponseWriter, r *http.Request) {
 	s.handleCopyOrMoveAgent(w, r, false)
 }
@@ -314,6 +386,20 @@ func (s *server) handleCopyAgent(w http.ResponseWriter, r *http.Request) {
 // handleMoveAgent reassigns an agent to a different role atomically
 // (create target + delete source, one tx). Returns the newly-created
 // agent in the target role; the source id is gone after this call.
+//
+// @Summary      Move an agent to another role
+// @Description  Atomically reassign an agent to a different role (create target + delete source in one tx).
+// @Tags         agents
+// @Accept       json
+// @Produce      json
+// @Param        role path string true "Source role"
+// @Param        id path int true "Source agent ID"
+// @Param        body body apiCopyAgentRequest true "Move request"
+// @Success      201 {object} apiAgent
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /agent/{role}/{id}/move [post]
 func (s *server) handleMoveAgent(w http.ResponseWriter, r *http.Request) {
 	s.handleCopyOrMoveAgent(w, r, true)
 }

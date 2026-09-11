@@ -150,14 +150,14 @@ func TestRepairTagBoundarySpacing(t *testing.T) {
 func TestISSNJoinsAllWithLinkingFirst(t *testing.T) {
 	const fixture = `{
 		"id": "https://openalex.org/W1",
-		"doi": "https://doi.org/10.11646/zootaxa.1362.1.2",
-		"title": "Key to conifer-infesting species of Lepidosaphes",
+		"doi": "https://doi.org/10.3897/zookeys.88.807",
+		"title": "Family-Group Names In Coleoptera (Insecta)",
 		"primary_location": {
 			"source": {
-				"display_name": "Zootaxa",
+				"display_name": "ZooKeys",
 				"type": "journal",
-				"issn": ["1175-5334", "1175-5326"],
-				"issn_l": "1175-5326"
+				"issn": ["1313-2989", "1313-2970"],
+				"issn_l": "1313-2970"
 			}
 		}
 	}`
@@ -166,7 +166,7 @@ func TestISSNJoinsAllWithLinkingFirst(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	r := w.toReference()
-	if r.ISSN != "1175-5326, 1175-5334" {
+	if r.ISSN != "1313-2970, 1313-2989" {
 		t.Errorf("ISSN = %q, want ISSN-L first then remaining", r.ISSN)
 	}
 }

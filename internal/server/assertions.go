@@ -17,8 +17,8 @@ type apiAssertion struct {
 	AssertionID   string          `json:"assertion_id"`
 	ReferenceID   string          `json:"reference_id"`
 	AssertionType string          `json:"assertion_type"`
-	Payload       json.RawMessage `json:"payload,omitempty"`
-	SourcePtr     json.RawMessage `json:"source_ptr,omitempty"`
+	Payload       json.RawMessage `json:"payload,omitempty" swaggertype:"object"`
+	SourcePtr     json.RawMessage `json:"source_ptr,omitempty" swaggertype:"object"`
 	Origin        string          `json:"origin"`
 	Status        string          `json:"status"`
 	RejectReason  string          `json:"reject_reason,omitempty"`
@@ -91,6 +91,19 @@ func assertionToAPI(a hive.ReferenceAssertion) apiAssertion {
 // Empty filter returns everything for the reference, oldest first.
 // Backs the paper-level assertion-review UI and, via the
 // asserted_by filter, the multi-view comparison rendering.
+//
+// @Summary      List staged assertions for a reference
+// @Description  Per-fact staged assertions for a reference, filterable by status (repeatable), source_run_id, and asserted_by. Includes latest active edit-correction inline.
+// @Tags         assertions
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        status query []string false "Status filter (pending|accepted|rejected|edited, repeatable)"
+// @Param        source_run_id query string false "Filter by extraction run"
+// @Param        asserted_by query string false "Filter by asserter label"
+// @Success      200 {object} apiAssertionList
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/assertions [get]
 func (s *server) handleListReferenceAssertions(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -180,6 +193,19 @@ type apiAssertionStatusPatch struct {
 // handlePatchAssertionStatus updates the status column and
 // (optionally) reject_reason. Curator review flow: iterate the
 // list, hit accept / reject / edit per row.
+//
+// @Summary      Patch assertion status
+// @Description  Flip an assertion's review status (pending/accepted/rejected/edited). reject_reason required when status is 'rejected'.
+// @Tags         assertions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Assertion ID"
+// @Param        body body apiAssertionStatusPatch true "Status patch"
+// @Success      200 {object} apiAssertion
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /assertion/{id}/status [patch]
 func (s *server) handlePatchAssertionStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -236,6 +262,19 @@ type apiAssertionCorrectionPost struct {
 // Returns the fresh assertion (with LatestCorrection attached)
 // so the WUI can render the corrected value without a follow-up
 // list fetch.
+//
+// @Summary      Create an assertion-edit correction
+// @Description  Record a curator's fix to one NER-extracted field. The correction is additive; the original NER value stays on the assertion for training pipelines. Flips the assertion status to 'edited'.
+// @Tags         assertions
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Assertion ID"
+// @Param        body body apiAssertionCorrectionPost true "Correction body"
+// @Success      200 {object} apiAssertion
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /assertion/{id}/correction [post]
 func (s *server) handlePostAssertionCorrection(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {

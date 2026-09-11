@@ -40,6 +40,16 @@ type apiPromptList struct {
 // Curator prompts appear first (newest first), then built-ins in
 // name order — so the omnibox surfaces the curator's own forks
 // above the shipped defaults without a separate section header.
+//
+// @Summary      List prompts
+// @Description  Merged list of shipped built-in prompts and curator forks. Filter by purpose; include_content=1 inlines the prompt body.
+// @Tags         prompts
+// @Produce      json
+// @Param        purpose query string false "Restrict to one purpose (ner|compose)"
+// @Param        include_content query int false "Inline prompt content bytes (default omitted)"
+// @Success      200 {object} apiPromptList
+// @Failure      500 {object} problem
+// @Router       /prompt [get]
 func (s *server) handleListPrompts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	purposeFilter := q.Get("purpose")
@@ -131,6 +141,16 @@ func loadBuiltinPrompt(name string) (string, error) {
 // Built-in IDs are the prompt name ("ner_v6"); curator IDs are
 // UUIDs. The resolver tries the DB first (UUID hit) and falls
 // back to the built-in library.
+//
+// @Summary      Get a prompt
+// @Description  Return one prompt (built-in or curator fork) by ID, including its content.
+// @Tags         prompts
+// @Produce      json
+// @Param        id path string true "Prompt ID (builtin name or curator UUID)"
+// @Success      200 {object} apiPrompt
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Router       /prompt/{id} [get]
 func (s *server) handleGetPrompt(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -181,6 +201,18 @@ type apiPromptCreate struct {
 // handleCreatePrompt inserts a curator fork. Purpose + ForkOf are
 // required for provenance. Name must be unique per purpose (DB
 // constraint enforces).
+//
+// @Summary      Create a prompt fork
+// @Description  Insert a curator fork of an existing prompt. Name must be unique per purpose.
+// @Tags         prompts
+// @Accept       json
+// @Produce      json
+// @Param        body body apiPromptCreate true "Fork body"
+// @Success      201 {object} apiPrompt
+// @Failure      400 {object} problem
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /prompt [post]
 func (s *server) handleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 	var body apiPromptCreate
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -231,6 +263,21 @@ type apiPromptPatch struct {
 	Content string `json:"content"`
 }
 
+// handlePatchPrompt updates a curator fork's content. Name and
+// purpose are immutable post-create; forkOf tracks the original.
+//
+// @Summary      Patch a curator prompt
+// @Description  Update the content of a curator prompt fork. Name and purpose are immutable post-create.
+// @Tags         prompts
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Prompt ID"
+// @Param        body body apiPromptPatch true "Prompt patch"
+// @Success      200 {object} apiPrompt
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /prompt/{id} [patch]
 func (s *server) handlePatchPrompt(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -269,6 +316,15 @@ func (s *server) handlePatchPrompt(w http.ResponseWriter, r *http.Request) {
 
 // handleDeletePrompt soft-deletes a curator prompt. Built-in
 // prompts can't be deleted (they're on disk, not in the DB).
+//
+// @Summary      Delete a curator prompt
+// @Description  Soft-delete a curator prompt fork. Built-in prompts cannot be deleted.
+// @Tags         prompts
+// @Param        id path string true "Prompt ID"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /prompt/{id} [delete]
 func (s *server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {

@@ -60,7 +60,7 @@ func storeModels(name string, models []llm.ModelInfo) {
 // apiLLMModelList is the wire shape returned by
 // GET /api/llm/providers/{name}/models.
 type apiLLMModelList struct {
-	Items []llm.ModelInfo `json:"items"`
+	Items []llm.ModelInfo `json:"items" swaggertype:"array,object"`
 }
 
 // handleListLLMProviderModels calls the provider's models-listing
@@ -70,6 +70,17 @@ type apiLLMModelList struct {
 // the upstream. 501 when the underlying adapter doesn't support
 // models listing — the WUI falls back to a free-text override
 // input in that case.
+//
+// @Summary      List models for a provider
+// @Description  Call the provider's models-listing endpoint and return the normalized model list. Cached per-process for an hour.
+// @Tags         llm
+// @Produce      json
+// @Param        name path string true "Provider name"
+// @Success      200 {object} apiLLMModelList
+// @Failure      400 {object} problem
+// @Failure      501 {object} map[string]string
+// @Failure      502 {object} problem
+// @Router       /llm/providers/{name}/models [get]
 func (s *server) handleListLLMProviderModels(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -138,6 +149,17 @@ type apiLLMProviderCreateRequest struct {
 // Rejects duplicates: the WUI should PATCH to update (once we add
 // that endpoint) rather than shadow-with-later-wins semantics that
 // would leave orphaned keyring entries.
+//
+// @Summary      Create an LLM provider
+// @Description  Add a new provider entry to the user config and store its API key per the requested source (keyring / env / plaintext). Live-registers the provider so subsequent invocations work without a restart.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body body apiLLMProviderCreateRequest true "Provider create body"
+// @Success      201 {object} apiLLMProvider
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/providers [post]
 func (s *server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request) {
 	var body apiLLMProviderCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -285,6 +307,18 @@ type apiLLMProviderPatchRequest struct {
 // provider entry. Live-re-registers the modified provider in the
 // runner's registry so subsequent invocations use the new config
 // without a server restart.
+//
+// @Summary      Patch an LLM provider
+// @Description  Partial update to an existing provider (kind, default model, base URL, credential source, rotated API key). Live-re-registers the entry.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        name path string true "Provider name"
+// @Param        body body apiLLMProviderPatchRequest true "Provider patch body"
+// @Success      200 {object} apiLLMProvider
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/providers/{name} [patch]
 func (s *server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -429,6 +463,15 @@ func (s *server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 // invocations in flight uninterrupted). The next hive restart
 // picks up the config-cleared state and the deleted provider is
 // gone for good.
+//
+// @Summary      Delete an LLM provider
+// @Description  Remove the named provider from the user config and delete its keyring entry. Idempotent — deleting an already-absent provider returns 204.
+// @Tags         llm
+// @Param        name path string true "Provider name"
+// @Success      204 "No Content"
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /llm/providers/{name} [delete]
 func (s *server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {

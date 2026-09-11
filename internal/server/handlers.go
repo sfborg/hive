@@ -3349,6 +3349,14 @@ func (s *server) handleDeleteReference(w http.ResponseWriter, r *http.Request) {
 // for the workflow definition and JSON shape.
 //
 // One SQL round-trip. Cheap to call on every landing; no caching.
+//
+// @Summary      Reference dashboard
+// @Description  Per-step done/total counts across the 4-step ingest workflow plus next-action buckets.
+// @Tags         references
+// @Produce      json
+// @Success      200 {object} apiReferenceDashboard
+// @Failure      500 {object} problem
+// @Router       /reference/dashboard [get]
 func (s *server) handleReferenceDashboard(w http.ResponseWriter, r *http.Request) {
 	d, err := s.a.ReferenceDashboard(r.Context())
 	if err != nil {
@@ -3415,6 +3423,18 @@ type apiAttentionRow struct {
 // timestamps). On JATS mutation or figextract failure the DB row
 // stays (so the training-signal record isn't lost) but the response
 // carries a warning field so the UI can surface the partial success.
+//
+// @Summary      Create a reference correction
+// @Description  Insert a new correction row (bbox-add, text-tag, ref-merge, etc), apply the mutation to the JATS sidecar, and re-run figure extraction on the new region.
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        body body apiCorrection true "Correction body"
+// @Success      201 {object} apiCorrectionResponse
+// @Failure      400 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/correction [post]
 func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) {
 	var body apiCorrection
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -3675,6 +3695,17 @@ func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) []string
 //
 // existing_labels is returned inline so the form only needs one
 // round-trip after the bbox is drawn.
+//
+// @Summary      Preview a correction
+// @Description  Dry-run a bbox: crop the region to PNG, extract text via pdftotext, and return the PNG data URL plus any detected fig/table label. Nothing is persisted.
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        body body apiPreviewCorrectionRequest true "Preview request"
+// @Success      200 {object} apiPreviewCorrectionResponse
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/correction/preview [post]
 func (s *server) handlePreviewCorrection(w http.ResponseWriter, r *http.Request) {
 	var body apiPreviewCorrectionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -3742,6 +3773,17 @@ func (s *server) handlePreviewCorrection(w http.ResponseWriter, r *http.Request)
 // extracted ones in one color, curator-added ones in another.
 // Powers the "see everything the extractor found" affordance on
 // the Digitize tab.
+//
+// @Summary      List sidecar regions
+// @Description  Every fig/table-wrap region in the sidecar JATS with bbox coords and origin (GROBID / curator).
+// @Tags         references
+// @Produce      json
+// @Param        sha path string true "Sidecar SHA-512 hex"
+// @Success      200 {object} apiRegionList
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/library/{sha}/regions [get]
 func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
 	if sha == "" {
@@ -3814,6 +3856,16 @@ type apiExtractedLabel struct {
 // handleListCorrections returns every correction attached to the
 // given reference, both active and reverted. Used by the Digitize
 // tab's chip strip on load.
+//
+// @Summary      List corrections for a reference
+// @Description  Every correction attached to the given reference, both active and reverted.
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiCorrectionList
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/corrections [get]
 func (s *server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("id")
 	if refID == "" {
@@ -3843,6 +3895,17 @@ func (s *server) handleListCorrections(w http.ResponseWriter, r *http.Request) {
 // re-run jatsconv from the source TEI and re-apply every remaining
 // active correction. Baseline is always regenerable, so no data
 // loss risk.
+//
+// @Summary      Delete a correction
+// @Description  Remove the correction row and re-derive the sidecar JATS from the remaining active corrections.
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Correction ID"
+// @Success      200 {object} apiCorrectionDeleteResponse
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/correction/{id} [delete]
 func (s *server) handleDeleteCorrection(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -4050,6 +4113,16 @@ func apiCorrectionFromCore(c *correction.Correction) apiCorrection {
 // preserving import citations that came with their own format.
 //
 // Returns the number of rows actually updated.
+//
+// @Summary      Regenerate reference citations
+// @Description  Rewrite col__citation using ComposeCitation over each row's structured fields. overwrite=true replaces every row; default only fills empty citations.
+// @Tags         references
+// @Produce      json
+// @Param        overwrite query bool false "Replace non-empty citations too"
+// @Success      200 {object} map[string]int
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/regenerate-citations [post]
 func (s *server) handleRegenerateCitations(w http.ResponseWriter, r *http.Request) {
 	overwrite := r.URL.Query().Get("overwrite") == "true"
 	var updated int
@@ -4071,6 +4144,19 @@ func (s *server) handleRegenerateCitations(w http.ResponseWriter, r *http.Reques
 // — an empty ID triggers a UUID inside hive.CreateReference. Callers
 // that want to preserve an upstream id (e.g. a legacy CoLDP-string
 // identifier) can send it verbatim.
+//
+// @Summary      Create a reference
+// @Description  Insert a new reference row and return the hydrated record. Optional attach_pdf_sha query param links a previously-uploaded sidecar PDF in the same tx.
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        attach_pdf_sha query string false "Sidecar SHA-512 to attach in the same tx"
+// @Param        body body apiReference true "Reference body"
+// @Success      201 {object} apiReference
+// @Failure      400 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference [post]
 func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 	var body apiReference
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -4126,6 +4212,18 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 // The modal shows this as a preview form; on curator confirm the WUI
 // POSTs to /api/reference to persist. Returns 404 with a distinguishing
 // problem type when OpenAlex has no match, 502 on upstream errors.
+//
+// @Summary      Resolve a DOI to a reference preview
+// @Description  Fetch a reference by DOI from the configured resolver. Returns an unsaved apiReference preview (empty id); the curator confirms and POSTs to /api/reference to persist.
+// @Tags         references
+// @Produce      json
+// @Param        doi query string true "DOI (with or without doi.org prefix)"
+// @Success      200 {object} apiReference
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      501 {object} problem
+// @Failure      502 {object} problem
+// @Router       /reference/resolve-doi [get]
 func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 	doi := strings.TrimSpace(r.URL.Query().Get("doi"))
 	if doi == "" {
@@ -4170,6 +4268,19 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 // Query params: title (required), author (optional first-author
 // surname, sharpens the OpenAlex ranking), year (optional
 // publication year for the same reason).
+//
+// @Summary      OpenAlex free-text lookup
+// @Description  Search OpenAlex for references matching title (+ optional author, year). Returns up to 5 unsaved apiReference previews.
+// @Tags         references
+// @Produce      json
+// @Param        title query string true "Title text"
+// @Param        author query string false "First-author surname"
+// @Param        year query string false "Publication year"
+// @Success      200 {object} apiPage[apiReference]
+// @Failure      400 {object} problem
+// @Failure      501 {object} problem
+// @Failure      502 {object} problem
+// @Router       /reference/lookup-openalex [get]
 func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 	title := strings.TrimSpace(r.URL.Query().Get("title"))
 	if title == "" {
@@ -4223,6 +4334,17 @@ func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 // Body: {canonical, authors, year, nomen_event, limit}. `canonical` is
 // required; the rest are optional but scores improve dramatically when
 // authorship + year are supplied.
+//
+// @Summary      BHLnames scientific-name lookup
+// @Description  Match a scientific name against BHLnames and return hits (each with an unsaved apiReference preview and BHLnames quality signals).
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        body body object true "Lookup request {canonical, authors, year, nomen_event, limit}"
+// @Success      200 {object} apiPage[apiBHLnameHit]
+// @Failure      400 {object} problem
+// @Failure      502 {object} problem
+// @Router       /reference/lookup-bhlnames [post]
 func (s *server) handleLookupBHLnames(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Canonical  string `json:"canonical"`
@@ -4264,6 +4386,18 @@ func (s *server) handleLookupBHLnames(w http.ResponseWriter, r *http.Request) {
 // application/x-bibtex (raw entry as the body) or application/json
 // ({"text":"@article{..."}) for callers that prefer to keep everything
 // on the JSON path.
+//
+// @Summary      Parse a BibTeX entry
+// @Description  Parse a single BibTeX entry (raw body or {"text":"..."} JSON) and return an unsaved apiReference preview.
+// @Tags         references
+// @Accept       json
+// @Accept       plain
+// @Produce      json
+// @Param        body body string true "BibTeX entry text"
+// @Success      200 {object} apiReference
+// @Failure      400 {object} problem
+// @Failure      422 {object} problem
+// @Router       /reference/parse-bibtex [post]
 func (s *server) handleParseBibTeX(w http.ResponseWriter, r *http.Request) {
 	var text string
 	ct := r.Header.Get("Content-Type")
@@ -4304,6 +4438,16 @@ func (s *server) handleParseBibTeX(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetReference returns the full reference detail.
+//
+// @Summary      Get a reference
+// @Description  Full reference detail, including attached sidecar PDF shas.
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiReference
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id} [get]
 func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ref, err := s.a.GetReference(r.Context(), id)
@@ -4336,6 +4480,22 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 // create/edit taxon pane when a reference has a validation warning
 // on missing structured metadata. See feedback_no_side_quests for
 // the UX principle motivating in-context fixes.
+//
+// @Summary      Patch a reference
+// @Description  Partial update to a reference row. Pointer-optional fields distinguish clear vs leave-alone; supports If-Match optimistic concurrency.
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Param        If-Match header string false "col__modified ETag for optimistic concurrency"
+// @Param        body body apiReferencePatch true "Reference patch body"
+// @Success      200 {object} apiReference
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/{id} [patch]
 func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var patch apiReferencePatch
@@ -4386,6 +4546,19 @@ func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
 // Max upload size is limited to 100 MB. Scientific PDFs are
 // almost always under that; the cap protects against a curator
 // accidentally uploading a book scan or a huge sequencing dataset.
+//
+// @Summary      Upload a reference source file
+// @Description  Multipart upload of PDF / EPUB / HTML / JATS. Stored content-addressed on sha512; PDFs trigger GROBID + annotation follow-ups synchronously.
+// @Tags         references
+// @Accept       mpfd
+// @Produce      json
+// @Param        file formData file true "Source file (pdf/epub/html/xml/jats)"
+// @Param        source_url formData string false "Optional origin URL for the upload"
+// @Success      201 {object} apiReferenceUpload
+// @Failure      400 {object} problem
+// @Failure      413 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/upload [post]
 func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	const maxUploadBytes = 100 << 20 // 100 MB
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
@@ -4794,6 +4967,17 @@ func parseHeaderToAPI(tei []byte) *apiUploadBibHeader {
 // (application/pdf) rather than triggering a download. Unknown
 // extensions fall back to a generic type — safer than guessing
 // wrong and mis-labeling a JATS XML as HTML.
+//
+// @Summary      Stream sidecar source file
+// @Description  Stream the raw uploaded source (PDF / EPUB / HTML / JATS) with the correct Content-Type for inline browser rendering.
+// @Tags         references
+// @Produce      octet-stream
+// @Param        sha path string true "Sidecar SHA-512 hex"
+// @Success      200 "Raw file bytes"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/library/{sha}/source [get]
 func (s *server) handleReferenceLibrarySource(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
 	if sha == "" {
@@ -4854,6 +5038,17 @@ func (s *server) handleReferenceLibrarySource(w http.ResponseWriter, r *http.Req
 // reader UI, corpus-scale analysis, curator eyeballing via curl.
 // Returns 404 when no augmented XML exists (upload happened but
 // annotation was skipped or failed).
+//
+// @Summary      Stream TaxPub-augmented JATS
+// @Description  Return the sidecar's TaxPub-augmented JATS (with GNfinder + GNverifier taxon-name markup).
+// @Tags         references
+// @Produce      xml
+// @Param        sha path string true "Sidecar SHA-512 hex"
+// @Success      200 "JATS XML body"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/library/{sha}/taxpub [get]
 func (s *server) handleReferenceLibraryTaxpub(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
 	if sha == "" {
@@ -4884,6 +5079,18 @@ func (s *server) handleReferenceLibraryTaxpub(w http.ResponseWriter, r *http.Req
 // was missing so figextract skipped that fig, or the extraction
 // hasn't run yet. Client should degrade gracefully (show caption
 // only, offer "Open in PDF" as fallback).
+//
+// @Summary      Stream a figure/table PNG crop
+// @Description  PNG crop of a fig or table-wrap rendered from the source PDF via GROBID coordinates.
+// @Tags         references
+// @Produce      png
+// @Param        sha path string true "Sidecar SHA-512 hex"
+// @Param        id path string true "JATS fig/table id (e.g. fig_0, tab_1)"
+// @Success      200 "PNG bytes"
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/library/{sha}/figures/{id} [get]
 func (s *server) handleReferenceLibraryFigure(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
 	id := r.PathValue("id")
@@ -4951,6 +5158,16 @@ func safeIDForFilename(id string) bool {
 // Body:  {"scientific_name": "...", "code": "ZOOLOGICAL"}
 // Empty scientific_name yields 400; code is optional (unset code skips
 // the suffix-rule tier of RankGuess).
+//
+// @Summary      Parse a scientific name
+// @Description  Run gnparser on a verbatim name and return an apiName-shaped preview with atomized col__ fields + gn__* cache + a code-scoped rank guess. Nothing is written.
+// @Tags         names
+// @Accept       json
+// @Produce      json
+// @Param        body body object true "Parse request {scientific_name, code}"
+// @Success      200 {object} apiName
+// @Failure      400 {object} problem
+// @Router       /name/parse [post]
 func (s *server) handleParseName(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ScientificName string `json:"scientific_name"`
@@ -4974,6 +5191,19 @@ func (s *server) handleParseName(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handleNameSearch returns names whose canonical/scientific-name form
+// matches q as a case-insensitive substring.
+//
+// @Summary      Search names
+// @Description  Case-insensitive substring search over scientific-name forms.
+// @Tags         names
+// @Produce      json
+// @Param        q query string true "Query string"
+// @Param        limit query int false "Page size"
+// @Success      200 {object} apiPage[apiNameHit]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/search [get]
 func (s *server) handleNameSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -5043,6 +5273,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 //
 // A concurrent edit between (1) and (2) causes a 409 conflict and the
 // client re-reads.
+//
+// @Summary      Patch a taxon
+// @Description  Partial update to a taxon row. Pointer-optional fields distinguish clear vs leave-alone; supports If-Match optimistic concurrency.
+// @Tags         taxa
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Param        If-Match header string false "col__modified ETag for optimistic concurrency"
+// @Param        body body apiTaxonPatch true "Taxon patch body"
+// @Success      200 {object} apiTaxon
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /taxon/{id} [patch]
 func (s *server) handlePatchTaxon(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var patch apiTaxonPatch
@@ -5081,6 +5327,22 @@ func (s *server) handlePatchTaxon(w http.ResponseWriter, r *http.Request) {
 // handlePatchName applies a partial update to a name. gn__* fields are
 // regenerated by hive.UpdateName from the (possibly-patched) verbatim
 // name string; callers cannot bypass this — see CLAUDE.md § gn__*.
+//
+// @Summary      Patch a name
+// @Description  Partial update to a name row. gn__* fields are always re-derived server-side from the scientific-name string; supports If-Match optimistic concurrency.
+// @Tags         names
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Name ID"
+// @Param        If-Match header string false "col__modified ETag for optimistic concurrency"
+// @Param        body body apiNamePatch true "Name patch body"
+// @Success      200 {object} apiName
+// @Failure      400 {object} problem
+// @Failure      404 {object} problem
+// @Failure      409 {object} problem
+// @Failure      422 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name/{id} [patch]
 func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var patch apiNamePatch
@@ -5149,6 +5411,15 @@ func (s *server) handlePatchName(w http.ResponseWriter, r *http.Request) {
 //
 // Refuses (409) on a read-only archive. Response body is a small
 // summary; consumers can render a toast or refresh the issue list.
+//
+// @Summary      Reindex validation issues
+// @Description  Walk every hive-validated table and rewrite __gsvalidator_results. Runs synchronously; returns a small summary.
+// @Tags         issues
+// @Produce      json
+// @Success      200 {object} apiReindexResult
+// @Failure      409 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reindex/validation [post]
 func (s *server) handleReindexValidation(w http.ResponseWriter, r *http.Request) {
 	if s.a.IsReadOnly() {
 		writeProblem(w, r, hive.ErrReadOnly)
@@ -5186,6 +5457,14 @@ type apiReindexResult struct {
 // handleIssueSummary returns per-rule / per-severity counts across the
 // archive so a dashboard can render totals broken down by both axes
 // without paging through the issue list itself.
+//
+// @Summary      Issue counts summary
+// @Description  Per-rule / per-severity counts across the archive.
+// @Tags         issues
+// @Produce      json
+// @Success      200 {object} apiIssueSummary
+// @Failure      500 {object} problem
+// @Router       /issue/summary [get]
 func (s *server) handleIssueSummary(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.a.IssueSummary(r.Context())
 	if err != nil {
@@ -5208,6 +5487,22 @@ func (s *server) handleIssueSummary(w http.ResponseWriter, r *http.Request) {
 // handleIssueList returns a page of issues matching the query filters.
 // Recognised query params: table, rule_id, severity (repeatable),
 // hide_acknowledged (bool), limit, offset. All optional.
+//
+// @Summary      List validation issues
+// @Description  Paginated list of validation issues matching the given filters.
+// @Tags         issues
+// @Produce      json
+// @Param        table query string false "Filter by table_name"
+// @Param        record_id query string false "Filter by record id"
+// @Param        rule_id query string false "Filter by rule id"
+// @Param        severity query []string false "Filter by severity (repeatable: error|warn|info|debug)"
+// @Param        hide_acknowledged query bool false "Hide acknowledged issues"
+// @Param        limit query int false "Page size"
+// @Param        cursor query string false "Pagination cursor"
+// @Success      200 {object} apiPage[apiIssue]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /issue [get]
 func (s *server) handleIssueList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := hive.IssueFilter{

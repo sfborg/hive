@@ -21,6 +21,13 @@ var openAPIJSON []byte
 
 // handleOpenAPIYAML serves the OpenAPI spec as YAML. The MIME type
 // `application/yaml` is the IANA-registered form (RFC 9512).
+//
+// @Summary      OpenAPI spec (YAML)
+// @Description  Return the embedded OpenAPI 2.0 spec as YAML.
+// @Tags         docs
+// @Produce      plain
+// @Success      200 "YAML body"
+// @Router       /openapi.yaml [get]
 func (s *server) handleOpenAPIYAML(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -29,6 +36,13 @@ func (s *server) handleOpenAPIYAML(w http.ResponseWriter, r *http.Request) {
 
 // handleOpenAPIJSON serves the OpenAPI spec as JSON for tooling that
 // prefers JSON over YAML.
+//
+// @Summary      OpenAPI spec (JSON)
+// @Description  Return the embedded OpenAPI 2.0 spec as JSON.
+// @Tags         docs
+// @Produce      json
+// @Success      200 "JSON body"
+// @Router       /openapi.json [get]
 func (s *server) handleOpenAPIJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

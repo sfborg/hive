@@ -25,3 +25,20 @@ docker-compose.yml
 # is how the Docker build gets the code into its build context).
 # Not committed — regenerated whenever docker-build runs.
 /vendor/
+
+# Sidecar library directories and everything derived from an attached
+# source document — PDFs, EPUBs, JATS/TEI conversions, extracted
+# figures, and provenance metadata. Everything under <archive>.library/
+# is covered by the directory pattern; the extension patterns catch
+# stray copies that land elsewhere in the tree. Attached sources and
+# their conversions are per-machine and are not distributed through
+# the repository. Mirrors the .dockerignore entries.
+*.library/
+*.pdfs/
+*.figures/
+*.pdf
+*.epub
+*.jats.xml
+*.tei.xml
+*.grobid.xml
+*.meta.json
