@@ -25,12 +25,22 @@ type Limits struct {
 // limits unknown for this model" and (defensively) skip the size
 // check rather than assume infinite context.
 var limitsTable = map[string]Limits{
+	// Anthropic Claude 5 — 200K context standard tier. Output caps
+	// mirror the 4.x family (Sonnet 64K, Opus 32K) pending
+	// authoritative verification against Anthropic's per-model
+	// documentation; update if the 5-series changes them.
+	"claude-opus-5":   {ContextWindow: 200_000, MaxOutputTokens: 32_000},
+	"claude-sonnet-5": {ContextWindow: 200_000, MaxOutputTokens: 64_000},
+	"claude-fable-5-1": {ContextWindow: 200_000, MaxOutputTokens: 32_000},
+
 	// Anthropic Claude 4.x — 200K context standard tier
 	"claude-opus-4-7":   {ContextWindow: 200_000, MaxOutputTokens: 32_000},
 	"claude-opus-4-6":   {ContextWindow: 200_000, MaxOutputTokens: 32_000},
 	"claude-sonnet-4-6": {ContextWindow: 200_000, MaxOutputTokens: 64_000},
 	"claude-sonnet-4-5": {ContextWindow: 200_000, MaxOutputTokens: 64_000},
 	"claude-haiku-4-5":  {ContextWindow: 200_000, MaxOutputTokens: 8_192},
+	// Dated variant returned by the API for `claude-haiku-4-5`.
+	"claude-haiku-4-5-20251001": {ContextWindow: 200_000, MaxOutputTokens: 8_192},
 
 	// Anthropic Claude 3.x
 	"claude-3-5-sonnet-20241022": {ContextWindow: 200_000, MaxOutputTokens: 8_192},

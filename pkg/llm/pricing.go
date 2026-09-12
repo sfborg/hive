@@ -43,6 +43,17 @@ var pricingTable = map[string]Pricing{
 	"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0, CacheReadPerMillion: 0.30},
 	"claude-sonnet-4-5": {InputPerMillion: 3.0, OutputPerMillion: 15.0, CacheReadPerMillion: 0.30},
 	"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0, CacheReadPerMillion: 0.10},
+	"claude-haiku-4-5-20251001": {InputPerMillion: 1.0, OutputPerMillion: 5.0, CacheReadPerMillion: 0.10},
+
+	// Anthropic Claude 5 — pricing mirrors the 4.x family pending
+	// authoritative verification against Anthropic's pricing page
+	// (docs.anthropic.com/en/docs/about-claude/pricing). Values
+	// are the best-effort placeholders that keep cost-accounting
+	// non-zero; update these before relying on the cost_usd column
+	// for budget decisions.
+	"claude-opus-5":    {InputPerMillion: 15.0, OutputPerMillion: 75.0, CacheReadPerMillion: 1.50},
+	"claude-sonnet-5":  {InputPerMillion: 3.0, OutputPerMillion: 15.0, CacheReadPerMillion: 0.30},
+	"claude-fable-5-1": {InputPerMillion: 15.0, OutputPerMillion: 75.0, CacheReadPerMillion: 1.50},
 
 	// Anthropic Claude 3.x (older; still available on the API)
 	"claude-3-5-sonnet-20241022": {InputPerMillion: 3.0, OutputPerMillion: 15.0, CacheReadPerMillion: 0.30},
