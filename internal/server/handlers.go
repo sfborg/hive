@@ -18,6 +18,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/assembler"
 	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/llm"
 	"github.com/sfborg/hive/pkg/refmanager/bibtex"
@@ -93,6 +94,7 @@ func (s *server) routes() *http.ServeMux {
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
+	mux.HandleFunc("POST /api/archive/reassemble", s.handleReassembleArchive)
 	mux.HandleFunc("GET /api/vocab", s.handleVocab)
 	mux.HandleFunc("GET /api/vocab/nomen", s.handleNomenVocab)
 	mux.HandleFunc("GET /api/vocab/countries", s.handleCountriesVocab)
@@ -664,6 +666,101 @@ func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion: version,
 		ReadOnly:      s.a.IsReadOnly(),
 	})
+}
+
+// apiReassembleReport is the JSON projection of
+// hive.ReassembleReport returned by POST /api/archive/reassemble.
+type apiReassembleReport struct {
+	PapersLoaded            int      `json:"papers_loaded"`
+	PapersSkipped           int      `json:"papers_skipped"`
+	Warnings                []string `json:"warnings,omitempty"`
+	Matched                 int      `json:"matched"`
+	TaxaCreated             int      `json:"taxa_created"`
+	SynonymsCreated         int      `json:"synonyms_created"`
+	BracketedCreated        int      `json:"bracketed_created"`
+	ConceptRelationsAdded   int      `json:"concept_relations_added"`
+	ConceptFieldsSet        int      `json:"concept_fields_set"`
+	Flags                   []apiAssemblerFlag `json:"flags,omitempty"`
+}
+
+// apiAssemblerFlag mirrors assembler.FlagAction in the response.
+type apiAssemblerFlag struct {
+	Kind       string   `json:"kind"`
+	Message    string   `json:"message"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
+// handleReassembleArchive runs the deterministic assembler across
+// every compose extraction run in the archive and materializes
+// Layer 2 into the taxon / synonym / name / taxon_concept_relation
+// tables. See docs/2026-09-12_LITERATURE_VIEW.md § Slice 1.
+//
+// @Summary      Reassemble literature view from Layer 1 assertions
+// @Description  Runs the deterministic assembler across every
+// @Description  compose run in the archive. Materializes matched /
+// @Description  created taxa, synonyms, [bracket]ed species, and
+// @Description  sensu-derived concept relations. Returns per-paper
+// @Description  and per-action counters plus any curator-actionable
+// @Description  flags.
+// @Tags         archive
+// @Produce      json
+// @Success      200 {object} apiReassembleReport
+// @Failure      500 {object} problem
+// @Router       /archive/reassemble [post]
+func (s *server) handleReassembleArchive(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	var report *hive.ReassembleReport
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		out, err := tx.ExecuteReassemble(assembler.DefaultRules())
+		report = out
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reassembleReportToAPI(report))
+}
+
+func reassembleReportToAPI(r *hive.ReassembleReport) apiReassembleReport {
+	out := apiReassembleReport{
+		PapersLoaded:          r.PapersLoaded,
+		PapersSkipped:         r.PapersSkipped,
+		Warnings:              r.Warnings,
+		Matched:               r.AssemblerReport.Matched,
+		TaxaCreated:           r.AssemblerReport.TaxaCreated,
+		SynonymsCreated:       r.AssemblerReport.SynonymsCreated,
+		BracketedCreated:      r.AssemblerReport.BracketedCreated,
+		ConceptRelationsAdded: r.AssemblerReport.ConceptRelationsInserted,
+		ConceptFieldsSet:      r.AssemblerReport.ConceptFieldsSet,
+	}
+	for _, f := range r.AssemblerReport.Flags {
+		out.Flags = append(out.Flags, apiAssemblerFlag{
+			Kind:       assemblerFlagKindString(f.Kind),
+			Message:    f.Message,
+			Candidates: f.Candidates,
+		})
+	}
+	return out
+}
+
+func assemblerFlagKindString(k assembler.FlagKind) string {
+	switch k {
+	case assembler.FlagAmbiguousMatch:
+		return "ambiguous_match"
+	case assembler.FlagUnresolvedAnchor:
+		return "unresolved_anchor"
+	case assembler.FlagContradictorySynonymy:
+		return "contradictory_synonymy"
+	case assembler.FlagAmbiguousImplicitReference:
+		return "ambiguous_implicit_reference"
+	case assembler.FlagMissingImplicitReference:
+		return "missing_implicit_reference"
+	}
+	return "unknown"
 }
 
 // handleRoots is a paginated projection of root-level taxa. Alias of
