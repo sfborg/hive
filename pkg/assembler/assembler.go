@@ -420,13 +420,93 @@ func LoadExisting(r Reader) (Existing, error) {
 // against the existing taxonomy snapshot. Pure function: same
 // inputs, same output.
 //
-// TODO(slice-1): implement rule bodies. Current placeholder emits
-// an empty plan so callers can wire the surface and iterate.
+// Papers are processed in the order supplied. Callers are
+// responsible for sorting (typically by paper publication date,
+// with extraction_run_id as a deterministic tiebreak) so the
+// result is invariant to storage order — see LITERATURE_VIEW.md
+// § Determinism guarantees.
 func Build(papers []PaperInput, existing Existing, rules Rules) Plan {
-	_ = papers
-	_ = existing
-	_ = rules
-	return Plan{}
+	idx := newTaxonIndex(existing.Taxa)
+	plan := Plan{}
+	for _, paper := range papers {
+		for _, nu := range paper.NameUsages {
+			acts := planMention(paper, nu, idx, rules)
+			plan.Actions = append(plan.Actions, acts...)
+		}
+	}
+	return plan
+}
+
+// planMention runs the per-mention rule cascade and returns the
+// resulting action(s). Called once per name_usage per paper.
+//
+// Slice 1 currently implements auto-match only. Subsequent rules
+// (cascade, bracket, synonymy, concept relations) land in
+// follow-up commits and are inserted into this cascade.
+func planMention(paper PaperInput, nu NameUsage, idx *taxonIndex, rules Rules) []Action {
+	if nu.Canonical == "" {
+		// Nothing to match; leave for a later rule (or curator).
+		return nil
+	}
+	res := idx.lookup(nu.Canonical, nu.Authorship)
+	prov := actionProv(paper, nu)
+	switch res.outcome {
+	case matchUnique:
+		// Reject the canonical-only match if the rule requires
+		// authorship and the mention carries none.
+		if rules.AutoMatchAuthorshipRequired && !res.authorshipConfirmed {
+			return []Action{flag(prov, FlagUnresolvedAnchor,
+				"canonical-only match rejected (authorship required)",
+				[]string{res.taxonID})}
+		}
+		return []Action{{
+			Kind:                   ActionMatch,
+			SourcePaperReferenceID: prov.ReferenceID,
+			SourceMentionID:        prov.MentionID,
+			Match: MatchAction{
+				TaxonID:             res.taxonID,
+				AuthorshipConfirmed: res.authorshipConfirmed,
+			},
+		}}
+	case matchAmbiguous:
+		return []Action{flag(prov, FlagAmbiguousMatch,
+			"canonical+authorship matched multiple existing taxa",
+			res.candidates)}
+	case matchNone:
+		// Later rules (cascade, bracket, create-taxon) fill this
+		// branch. For Slice 1's auto-match milestone we surface an
+		// UnresolvedAnchor flag so callers can see coverage; the
+		// cascade / bracket / create-taxon commits replace this
+		// with a real action.
+		return []Action{flag(prov, FlagUnresolvedAnchor,
+			"no existing taxon matched canonical + authorship",
+			nil)}
+	}
+	return nil
+}
+
+// actionProv builds the ActionProvenance triple used by every
+// action produced by planMention.
+func actionProv(paper PaperInput, nu NameUsage) ActionProvenance {
+	return ActionProvenance{
+		ReferenceID: paper.ReferenceID,
+		MentionID:   nu.MentionID,
+	}
+}
+
+// flag is a small constructor for ActionFlag entries. Keeps the
+// noisy field-population out of the per-rule bodies.
+func flag(prov ActionProvenance, kind FlagKind, msg string, candidates []string) Action {
+	return Action{
+		Kind:                   ActionFlag,
+		SourcePaperReferenceID: prov.ReferenceID,
+		SourceMentionID:        prov.MentionID,
+		Flag: FlagAction{
+			Kind:       kind,
+			Message:    msg,
+			Candidates: candidates,
+		},
+	}
 }
 
 // Apply walks a [Plan] and invokes the [Writer] for each action.
