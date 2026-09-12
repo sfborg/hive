@@ -38,7 +38,11 @@ func NewOpenAICompat(name, baseURL, defaultModel string, cred Credential) *OpenA
 		baseURL:      strings.TrimRight(baseURL, "/"),
 		defaultModel: defaultModel,
 		cred:         cred,
-		client:       &http.Client{Timeout: 5 * time.Minute},
+		// 20-minute HTTP timeout — see the matching comment in
+		// anthropic.go for the reasoning. Larger models on
+		// whole-paper NER regularly exceed 5 minutes even when the
+		// call ultimately succeeds.
+		client:       &http.Client{Timeout: 20 * time.Minute},
 	}
 }
 

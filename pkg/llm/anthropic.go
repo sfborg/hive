@@ -54,7 +54,16 @@ func NewAnthropic(name, baseURL, defaultModel string, cred Credential) *Anthropi
 		baseURL:      strings.TrimRight(baseURL, "/"),
 		defaultModel: defaultModel,
 		cred:         cred,
-		client:       &http.Client{Timeout: 5 * time.Minute},
+		// 20-minute HTTP timeout. Whole-paper NER on a larger model
+		// (Sonnet 5, Opus 5) can generate 30K+ output tokens on a
+		// dense monograph; at ~60 tokens/sec that's 8-10 minutes
+		// just on generation, plus provider queueing. 5 minutes was
+		// tuned for Haiku's 8K output ceiling and now cuts off
+		// mid-response for larger models. Per-treatment NER
+		// (each treatment fits comfortably under a minute) is the
+		// structural fix; the timeout bump unblocks whole-paper
+		// runs until that lands.
+		client:       &http.Client{Timeout: 20 * time.Minute},
 	}
 }
 
