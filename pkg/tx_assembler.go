@@ -273,8 +273,194 @@ func (t *Tx) ExecuteReassemble(rules assembler.Rules) (*ReassembleReport, error)
 	if err != nil {
 		return nil, err
 	}
+	// Layer 3 diff pass. For each active overlay, compare its
+	// claim against the just-materialized Layer 2 state and emit
+	// FlagOrphanedOverlay / FlagOverlayMatchedByPublication as
+	// appropriate. Flags land in both the persisted table and the
+	// report so the HTTP response carries them without a
+	// round-trip.
+	l3Flags, err := t.emitLayer3DiffFlags()
+	if err != nil {
+		return nil, err
+	}
+	ar.Flags = append(ar.Flags, l3Flags...)
 	report.AssemblerReport = ar
 	return report, nil
+}
+
+// emitLayer3DiffFlags is the pass-3 (Layer 3 diff) helper. Loads
+// active overlays and, for each one, either emits an orphan flag
+// (taxon vanished) or a matched-by-publication flag (Layer 2 now
+// agrees with the overlay's claim). Returns the flags emitted so
+// the caller can append them to the assembler report.
+func (t *Tx) emitLayer3DiffFlags() ([]assembler.FlagAction, error) {
+	overlays, err := t.listActiveOverlays()
+	if err != nil {
+		return nil, err
+	}
+	var out []assembler.FlagAction
+	for _, o := range overlays {
+		flag, err := t.diffOverlay(o)
+		if err != nil {
+			return nil, err
+		}
+		if flag == nil {
+			continue
+		}
+		if err := t.RecordAssemblerFlag(*flag, assembler.ActionProvenance{
+			ReferenceID: flag.TaxonID, // no paper anchor here
+		}); err != nil {
+			return nil, err
+		}
+		out = append(out, *flag)
+	}
+	return out, nil
+}
+
+// diffOverlay applies the per-overlay-type diff and returns a
+// flag (or nil for a no-op). Kept small — each overlay type gets
+// its own small helper so future types graft on cleanly.
+func (t *Tx) diffOverlay(o Layer3Overlay) (*assembler.FlagAction, error) {
+	// Existence check first: a Layer 2 recompute may have removed
+	// the taxon the overlay pointed at.
+	exists, err := t.taxonExistsBool(o.TaxonID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &assembler.FlagAction{
+			Kind: assembler.FlagOrphanedOverlay,
+			Message: fmt.Sprintf("Layer 3 overlay %s references missing taxon %s",
+				o.ID, o.TaxonID),
+			TaxonID:    o.TaxonID,
+			Candidates: []string{o.ID},
+		}, nil
+	}
+	switch o.OverlayType {
+	case OverlayTypeSynonymyOverride:
+		return t.diffSynonymyOverride(o)
+	case OverlayTypePlacementOverride:
+		return t.diffPlacementOverride(o)
+	case OverlayTypeConceptOverride:
+		// TODO(slice-2 follow-up): concept-relation diff. Concept
+		// overrides need a taxon_concept_relation lookup with
+		// (taxon_id, related_taxon_id, rel_type_id) matching; the
+		// reference id on the row gives the citation candidate.
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// diffSynonymyOverride checks a "keep as accepted" style overlay.
+// Claim shape: {"status": "accepted"}. Agreement means the L2
+// taxon's status is currently accepted (or provisionally
+// accepted). Candidate reference is the taxon's own
+// col__reference_id when populated.
+func (t *Tx) diffSynonymyOverride(o Layer3Overlay) (*assembler.FlagAction, error) {
+	var claim struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(o.ClaimJSON), &claim); err != nil {
+		// Malformed claim → no diff, no flag. Curator can inspect
+		// via GetOverlay.
+		return nil, nil
+	}
+	if strings.ToLower(claim.Status) != "accepted" {
+		return nil, nil
+	}
+	status, refID, err := t.readTaxonStatusAndRef(o.TaxonID)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.ToUpper(status)
+	if s == "" || s == "ACCEPTED" || s == "PROVISIONALLY_ACCEPTED" ||
+		s == "VALID" || s == "PROVISIONALLY_VALID" {
+		return &assembler.FlagAction{
+			Kind: assembler.FlagOverlayMatchedByPublication,
+			Message: fmt.Sprintf("Layer 2 now agrees the taxon is accepted (overlay %s)",
+				o.ID),
+			TaxonID:    o.TaxonID,
+			Candidates: candidateRefs(o.ID, refID),
+		}, nil
+	}
+	return nil, nil
+}
+
+// diffPlacementOverride checks a "belongs under parent X" style
+// overlay. Claim shape: {"parent_taxon_id": "..."}. Agreement
+// means the L2 taxon's col__parent_id == the claim's target.
+func (t *Tx) diffPlacementOverride(o Layer3Overlay) (*assembler.FlagAction, error) {
+	var claim struct {
+		ParentTaxonID string `json:"parent_taxon_id"`
+	}
+	if err := json.Unmarshal([]byte(o.ClaimJSON), &claim); err != nil {
+		return nil, nil
+	}
+	if claim.ParentTaxonID == "" {
+		return nil, nil
+	}
+	parentID, refID, err := t.readTaxonParentAndRef(o.TaxonID)
+	if err != nil {
+		return nil, err
+	}
+	if parentID != claim.ParentTaxonID {
+		return nil, nil
+	}
+	return &assembler.FlagAction{
+		Kind: assembler.FlagOverlayMatchedByPublication,
+		Message: fmt.Sprintf("Layer 2 now places the taxon under %s (overlay %s)",
+			claim.ParentTaxonID, o.ID),
+		TaxonID:    o.TaxonID,
+		Candidates: candidateRefs(o.ID, refID),
+	}, nil
+}
+
+// taxonExistsBool wraps getTaxonExists so a "not found" error
+// becomes a false-return rather than propagating.
+func (t *Tx) taxonExistsBool(taxonID string) (bool, error) {
+	row := t.tx.QueryRowContext(t.ctx,
+		`SELECT 1 FROM taxon WHERE col__id = ?`, taxonID)
+	var one int
+	if err := row.Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("core: taxonExistsBool(%s): %w", taxonID, err)
+	}
+	return true, nil
+}
+
+func (t *Tx) readTaxonStatusAndRef(taxonID string) (string, string, error) {
+	row := t.tx.QueryRowContext(t.ctx,
+		`SELECT COALESCE(col__status_id, ''), COALESCE(col__reference_id, '')
+		   FROM taxon WHERE col__id = ?`, taxonID)
+	var status, refID string
+	if err := row.Scan(&status, &refID); err != nil {
+		return "", "", fmt.Errorf("core: readTaxonStatusAndRef(%s): %w", taxonID, err)
+	}
+	return status, refID, nil
+}
+
+func (t *Tx) readTaxonParentAndRef(taxonID string) (string, string, error) {
+	row := t.tx.QueryRowContext(t.ctx,
+		`SELECT COALESCE(col__parent_id, ''), COALESCE(col__reference_id, '')
+		   FROM taxon WHERE col__id = ?`, taxonID)
+	var parentID, refID string
+	if err := row.Scan(&parentID, &refID); err != nil {
+		return "", "", fmt.Errorf("core: readTaxonParentAndRef(%s): %w", taxonID, err)
+	}
+	return parentID, refID, nil
+}
+
+// candidateRefs builds the flag's Candidates slice: [overlayID]
+// alone when no reference id is available, [overlayID, refID]
+// otherwise. The overlay id always leads so the UI can key on
+// element 0 to identify the affected overlay.
+func candidateRefs(overlayID, refID string) []string {
+	if refID == "" {
+		return []string{overlayID}
+	}
+	return []string{overlayID, refID}
 }
 
 // loadPapersForAssembler walks hive__extraction_run for every
