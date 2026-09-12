@@ -224,6 +224,13 @@ const (
 	// creating a new row.
 	ActionSetConceptFields
 
+	// ActionResolveImplicitConceptRel is a deferred concept-
+	// relation write: the planner knows the subject taxon and the
+	// [conceptimport.DerivedRelation] but the related-taxon side
+	// depends on live DB state, so Apply consults the [Reader] and
+	// materializes the write (or a flag if the lookup is ambiguous).
+	ActionResolveImplicitConceptRel
+
 	// ActionFlag surfaces a paper mention that the assembler
 	// couldn't decide about (ambiguous auto-match, contradictory
 	// synonymies, missing anchor with bracket fallback disabled).
@@ -245,13 +252,41 @@ type Action struct {
 
 	// The following fields are populated according to Kind. Zero
 	// values elsewhere.
-	Match             MatchAction
-	CreateTaxon       CreateTaxonAction
-	CreateSynonym     CreateSynonymAction
-	Bracket           BracketAction
-	InsertConceptRel  conceptimport.ConceptRelation
-	SetConceptFields  SetConceptFieldsAction
-	Flag              FlagAction
+	Match                    MatchAction
+	CreateTaxon              CreateTaxonAction
+	CreateSynonym            CreateSynonymAction
+	Bracket                  BracketAction
+	InsertConceptRel         conceptimport.ConceptRelation
+	SetConceptFields         SetConceptFieldsAction
+	ResolveImplicitConceptRel ResolveImplicitConceptRelAction
+	Flag                     FlagAction
+}
+
+// ResolveImplicitConceptRelAction is the deferred concept-relation
+// write for a bare sensu lato / sensu stricto mention. Apply
+// invokes [Reader.FindImplicitReferenceCandidates] to identify the
+// related-taxon side at write time.
+type ResolveImplicitConceptRelAction struct {
+	// SubjectTaxonID is the taxon the paper mention resolved to
+	// (real id or plan-local id).
+	SubjectTaxonID string
+
+	// ReferenceID is the paper that made the assertion.
+	ReferenceID string
+
+	// AccordingToRef is the resolved reference-row id when the
+	// mention carried a named author. Typically empty for implicit
+	// resolution — this action is emitted for bare sensu markers
+	// where the caller can't resolve a reference.
+	AccordingToRef string
+
+	// NamePhrase is the sensu qualifier itself; passed to the
+	// Reader lookup verbatim.
+	NamePhrase string
+
+	// Derived is the [conceptimport.DerivedRelation] the planner
+	// computed from the mention.
+	Derived conceptimport.DerivedRelation
 }
 
 // MatchAction records a canonical+authorship auto-match binding.
@@ -339,6 +374,7 @@ const (
 	FlagUnresolvedAnchor
 	FlagContradictorySynonymy
 	FlagAmbiguousImplicitReference
+	FlagMissingImplicitReference
 )
 
 // FlagAction records a curator-actionable condition the assembler
@@ -352,19 +388,23 @@ type FlagAction struct {
 
 // Reader is the read-side interface the caller implements against
 // its Tx. [LoadExisting] uses it to build an [Existing] snapshot
-// before [Plan] runs.
+// before [Build] runs; [Apply] consults it while walking a plan
+// for lookups that depend on live DB state
+// (implicit-reference resolution).
 type Reader interface {
 	// ListAllTaxaForAssembler returns every taxon row visible to
 	// the assembler, projected to [ExistingTaxon]. Callers are
 	// expected to filter by archive scope in their implementation.
 	ListAllTaxaForAssembler() ([]ExistingTaxon, error)
 
-	// FindImplicitReferenceTaxa mirrors conceptimport's implicit-
-	// reference lookup: given a nameID and a namePhrase, return the
-	// candidate taxa the phrase could refer to. See
+	// FindImplicitReferenceCandidates returns the candidate taxa an
+	// implicit-reference namePhrase (bare sensu lato / stricto)
+	// could resolve to, given the subject taxon. Implementations
+	// typically look up the subject's nameID and then delegate to
+	// the same query [conceptimport] uses. See
 	// [conceptimport.ResolveImplicitReference] for how the result
 	// count is interpreted.
-	FindImplicitReferenceTaxa(nameID, namePhrase string) ([]string, error)
+	FindImplicitReferenceCandidates(subjectTaxonID, namePhrase string) ([]string, error)
 }
 
 // Writer is the write-side interface [Apply] invokes. Extends
@@ -606,6 +646,7 @@ func (s *planState) resolveMention(mentionID string) mentionResolution {
 				AuthorshipConfirmed: res.authorshipConfirmed,
 			},
 		})
+		s.emitConceptActions(nu, res.taxonID, prov)
 		r := mentionResolution{kind: resolvedMatched, anchorID: res.taxonID}
 		s.resolved[key] = r
 		return r
@@ -678,9 +719,68 @@ func (s *planState) resolveMention(mentionID string) mentionResolution {
 	// LocalID is used as the "taxon id" in the index because Apply
 	// will remap it.
 	s.idx.add(localID, nu.Canonical, nu.Authorship)
+	s.emitConceptActions(nu, localID, prov)
 	r := mentionResolution{kind: resolvedCreated, anchorID: localID}
 	s.resolved[key] = r
 	return r
+}
+
+// emitConceptActions appends the concept-fields + concept-relation
+// actions implied by a mention's NamePhrase / AccordingTo /
+// NomenclaturalNote fields, if any.
+//
+// The name_phrase (and, when present, an already-resolved
+// according-to reference id) always flow through
+// SetConceptFields — those writes are safe-mode (never overwrite)
+// per [conceptimport.Writer].
+//
+// The concept relation itself splits:
+//
+//   - Named-author sensu (Derived.AgainstNamedAuthor true): the
+//     assembler defers to the curator UI, since reference-row
+//     resolution isn't wired here yet.
+//   - Bare sensu (HasRelation without AgainstNamedAuthor):
+//     ActionResolveImplicitConceptRel — Apply consults the Reader
+//     to identify the related taxon at write time.
+func (s *planState) emitConceptActions(nu NameUsage, subjectID string, prov ActionProvenance) {
+	if nu.NamePhrase == "" && nu.AccordingTo == "" && nu.NomenclaturalNote == "" {
+		return
+	}
+	// Concept fields land unconditionally when the mention carries
+	// a phrase. The according-to field stays empty until reference-
+	// row resolution is wired.
+	if nu.NamePhrase != "" {
+		s.actions = append(s.actions, Action{
+			Kind:                   ActionSetConceptFields,
+			SourcePaperReferenceID: prov.ReferenceID,
+			SourceMentionID:        prov.MentionID,
+			SetConceptFields: SetConceptFieldsAction{
+				EntityKind: "taxon",
+				TaxonID:    subjectID,
+				NamePhrase: nu.NamePhrase,
+			},
+		})
+	}
+	derived := conceptimport.Derive(nu.mention())
+	if !derived.HasRelation() {
+		return
+	}
+	if derived.AgainstNamedAuthor {
+		// Reference-row resolution needed; deferred to the curator
+		// UI. Nothing to write from the assembler.
+		return
+	}
+	s.actions = append(s.actions, Action{
+		Kind:                   ActionResolveImplicitConceptRel,
+		SourcePaperReferenceID: prov.ReferenceID,
+		SourceMentionID:        prov.MentionID,
+		ResolveImplicitConceptRel: ResolveImplicitConceptRelAction{
+			SubjectTaxonID: subjectID,
+			ReferenceID:    prov.ReferenceID,
+			NamePhrase:     nu.NamePhrase,
+			Derived:        derived,
+		},
+	})
 }
 
 // isSpeciesGroupRank reports whether a CoLDP rank string names a
@@ -1075,6 +1175,22 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 				return report, err
 			}
 			report.ConceptFieldsSet++
+		case ActionResolveImplicitConceptRel:
+			ric := act.ResolveImplicitConceptRel
+			subj, err := resolveLocal(ric.SubjectTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			flagOut, inserted, err := resolveImplicitAndWrite(w, r, subj, ric, prov)
+			if err != nil {
+				return report, err
+			}
+			if inserted {
+				report.ConceptRelationsInserted++
+			}
+			if flagOut != nil {
+				report.Flags = append(report.Flags, *flagOut)
+			}
 		case ActionFlag:
 			if err := w.RecordAssemblerFlag(act.Flag, prov); err != nil {
 				return report, fmt.Errorf("assembler: record flag: %w", err)
@@ -1086,6 +1202,69 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 	}
 	_ = r
 	return report, nil
+}
+
+// resolveImplicitAndWrite performs a Reader-driven implicit-
+// reference lookup and either writes a concept-relation row or
+// emits a flag, mirroring
+// [conceptimport.ResolveImplicitReference] semantics. Returns the
+// flag (if any), whether a row was inserted, and any error.
+func resolveImplicitAndWrite(
+	w Writer, r Reader, subjectTaxonID string,
+	ric ResolveImplicitConceptRelAction, prov ActionProvenance,
+) (*FlagAction, bool, error) {
+	if r == nil {
+		return nil, false, errors.New("assembler: implicit concept-rel resolution needs a Reader")
+	}
+	candidates, err := r.FindImplicitReferenceCandidates(subjectTaxonID, ric.NamePhrase)
+	if err != nil {
+		return nil, false, fmt.Errorf("assembler: implicit-reference lookup: %w", err)
+	}
+	// Exclude the subject itself from candidates so we don't
+	// relate the taxon to itself.
+	filtered := candidates[:0]
+	for _, id := range candidates {
+		if id != subjectTaxonID {
+			filtered = append(filtered, id)
+		}
+	}
+	var singleID string
+	if len(filtered) == 1 {
+		singleID = filtered[0]
+	}
+	outcome, rel := conceptimport.ResolveImplicitReference(
+		ric.Derived, subjectTaxonID, ric.ReferenceID, ric.AccordingToRef,
+		len(filtered), singleID,
+	)
+	switch outcome {
+	case conceptimport.ImplicitReferenceResolved:
+		if err := w.InsertConceptRelation(rel); err != nil {
+			return nil, false, fmt.Errorf("assembler: insert concept relation: %w", err)
+		}
+		return nil, true, nil
+	case conceptimport.ImplicitReferenceAmbiguous:
+		f := FlagAction{
+			Kind: FlagAmbiguousImplicitReference,
+			Message: fmt.Sprintf("implicit-reference lookup for %s matched %d candidates",
+				ric.NamePhrase, len(filtered)),
+			Candidates: append([]string(nil), filtered...),
+		}
+		if err := w.RecordAssemblerFlag(f, prov); err != nil {
+			return nil, false, fmt.Errorf("assembler: record ambiguous flag: %w", err)
+		}
+		return &f, false, nil
+	case conceptimport.ImplicitReferenceMissing:
+		f := FlagAction{
+			Kind: FlagMissingImplicitReference,
+			Message: fmt.Sprintf("implicit-reference lookup for %s found no candidates",
+				ric.NamePhrase),
+		}
+		if err := w.RecordAssemblerFlag(f, prov); err != nil {
+			return nil, false, fmt.Errorf("assembler: record missing flag: %w", err)
+		}
+		return &f, false, nil
+	}
+	return nil, false, nil
 }
 
 // resolveLocal remaps a "plan:<n>" reference into the real id the

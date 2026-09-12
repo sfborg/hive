@@ -3,6 +3,8 @@ package assembler
 import (
 	"testing"
 	"time"
+
+	"github.com/sfborg/hive/pkg/conceptimport"
 )
 
 // TestBuild_AutoMatchExactWithAuthorship: mention canonical+authorship
@@ -608,6 +610,200 @@ func TestBuild_SynonymyTieFlagsContradiction(t *testing.T) {
 	}
 	if !flagFound {
 		t.Errorf("want FlagContradictorySynonymy, got: %#v", plan.Actions)
+	}
+}
+
+// TestBuild_ConceptFieldsSetOnMatched: a matched mention with a
+// sensu-lato name_phrase should emit both ActionMatch and an
+// ActionSetConceptFields carrying the phrase, plus an
+// ActionResolveImplicitConceptRel with the derived INCLUDES
+// relation.
+func TestBuild_ConceptFieldsSetOnMatched(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{{
+			MentionID: "m1", Canonical: "Aus bus", Authorship: "L., 1970",
+			NamePhrase: "sensu lato",
+		}},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 3 {
+		t.Fatalf("want 3 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[0].Kind != ActionMatch {
+		t.Errorf("actions[0] want ActionMatch, got %#v", plan.Actions[0])
+	}
+	scf := plan.Actions[1]
+	if scf.Kind != ActionSetConceptFields {
+		t.Fatalf("actions[1] want ActionSetConceptFields, got %#v", scf)
+	}
+	if scf.SetConceptFields.NamePhrase != "sensu lato" {
+		t.Errorf("phrase = %q", scf.SetConceptFields.NamePhrase)
+	}
+	if scf.SetConceptFields.TaxonID != "t1" {
+		t.Errorf("phrase target taxon = %q", scf.SetConceptFields.TaxonID)
+	}
+	ric := plan.Actions[2]
+	if ric.Kind != ActionResolveImplicitConceptRel {
+		t.Fatalf("actions[2] want ActionResolveImplicitConceptRel, got %#v", ric)
+	}
+	if ric.ResolveImplicitConceptRel.Derived.RelTypeID != "INCLUDES" {
+		t.Errorf("derived rel = %q, want INCLUDES",
+			ric.ResolveImplicitConceptRel.Derived.RelTypeID)
+	}
+	if ric.ResolveImplicitConceptRel.Derived.AgainstNamedAuthor {
+		t.Error("bare sensu lato should not be against a named author")
+	}
+}
+
+// TestBuild_ConceptFieldsSkippedWhenPhraseAbsent: matched mention
+// without any concept qualifier emits only the match.
+func TestBuild_ConceptFieldsSkippedWhenPhraseAbsent(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{{
+			MentionID: "m1", Canonical: "Aus bus", Authorship: "L., 1970",
+		}},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 1 || plan.Actions[0].Kind != ActionMatch {
+		t.Fatalf("want 1 ActionMatch, got %#v", plan.Actions)
+	}
+}
+
+// TestBuild_ConceptRelDeferredForNamedAuthor: sensu <author>
+// resolves to Derived.AgainstNamedAuthor=true. No
+// ActionResolveImplicitConceptRel is emitted; the assembler
+// leaves named-author relations to the curator UI (per the pass
+// comment).
+func TestBuild_ConceptRelDeferredForNamedAuthor(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{{
+			MentionID: "m1", Canonical: "Aus bus",
+			NamePhrase:  "sensu Smith, 1980",
+			AccordingTo: "Smith, 1980",
+		}},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	for _, a := range plan.Actions {
+		if a.Kind == ActionResolveImplicitConceptRel {
+			t.Errorf("named-author sensu should not emit resolve-implicit action: %#v", a)
+		}
+	}
+}
+
+// stubReaderWriter is a minimal Reader+Writer for exercising
+// Apply's ActionResolveImplicitConceptRel branch.
+type stubReaderWriter struct {
+	// candidates maps subjectTaxonID → the list of candidate ids
+	// FindImplicitReferenceCandidates should return.
+	candidates map[string][]string
+
+	insertedRels []conceptimport.ConceptRelation
+	flags        []FlagAction
+}
+
+func (s *stubReaderWriter) ListAllTaxaForAssembler() ([]ExistingTaxon, error) {
+	return nil, nil
+}
+func (s *stubReaderWriter) FindImplicitReferenceCandidates(subj, phrase string) ([]string, error) {
+	return append([]string(nil), s.candidates[subj]...), nil
+}
+func (s *stubReaderWriter) SetTaxonNamePhrase(string, string, bool) error         { return nil }
+func (s *stubReaderWriter) SetTaxonAccordingTo(string, string, bool) error        { return nil }
+func (s *stubReaderWriter) SetSynonymNamePhrase(string, string, string, bool) error {
+	return nil
+}
+func (s *stubReaderWriter) SetSynonymAccordingTo(string, string, string, bool) error {
+	return nil
+}
+func (s *stubReaderWriter) InsertConceptRelation(rel conceptimport.ConceptRelation) error {
+	s.insertedRels = append(s.insertedRels, rel)
+	return nil
+}
+func (s *stubReaderWriter) CreateTaxonForAssembler(a CreateTaxonAction, refID string) (string, error) {
+	return "real-" + a.LocalID, nil
+}
+func (s *stubReaderWriter) CreateSynonymForAssembler(a CreateSynonymAction, refID string) (string, error) {
+	return "syn-real", nil
+}
+func (s *stubReaderWriter) CreateBracketedTaxonForAssembler(a BracketAction, refID string) (string, error) {
+	return "bracket-real", nil
+}
+func (s *stubReaderWriter) RecordAssemblerFlag(f FlagAction, _ ActionProvenance) error {
+	s.flags = append(s.flags, f)
+	return nil
+}
+
+// TestApply_ResolveImplicitInsertsWhenUnique: given a single
+// candidate, Apply materializes the concept relation via the
+// Writer.
+func TestApply_ResolveImplicitInsertsWhenUnique(t *testing.T) {
+	rw := &stubReaderWriter{candidates: map[string][]string{
+		"t1": {"t2"},
+	}}
+	plan := Plan{Actions: []Action{{
+		Kind:                   ActionResolveImplicitConceptRel,
+		SourcePaperReferenceID: "ref-a",
+		ResolveImplicitConceptRel: ResolveImplicitConceptRelAction{
+			SubjectTaxonID: "t1",
+			ReferenceID:    "ref-a",
+			NamePhrase:     "sensu lato",
+			Derived: conceptimport.DerivedRelation{
+				RelTypeID: conceptimport.RelIncludes,
+			},
+		},
+	}}}
+	report, err := Apply(rw, rw, plan)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if report.ConceptRelationsInserted != 1 {
+		t.Errorf("want 1 rel inserted, got %d", report.ConceptRelationsInserted)
+	}
+	if len(rw.insertedRels) != 1 {
+		t.Fatalf("want 1 inserted, got %d", len(rw.insertedRels))
+	}
+	if rw.insertedRels[0].TaxonID != "t1" || rw.insertedRels[0].RelatedTaxonID != "t2" {
+		t.Errorf("wrong relation: %#v", rw.insertedRels[0])
+	}
+}
+
+// TestApply_ResolveImplicitAmbiguousFlags: multiple candidates
+// route to FlagAmbiguousImplicitReference. No relation inserted.
+func TestApply_ResolveImplicitAmbiguousFlags(t *testing.T) {
+	rw := &stubReaderWriter{candidates: map[string][]string{
+		"t1": {"t2", "t3"},
+	}}
+	plan := Plan{Actions: []Action{{
+		Kind: ActionResolveImplicitConceptRel,
+		ResolveImplicitConceptRel: ResolveImplicitConceptRelAction{
+			SubjectTaxonID: "t1",
+			NamePhrase:     "sensu lato",
+			Derived: conceptimport.DerivedRelation{
+				RelTypeID: conceptimport.RelIncludes,
+			},
+		},
+	}}}
+	report, err := Apply(rw, rw, plan)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if len(rw.insertedRels) != 0 {
+		t.Errorf("no relation should be inserted on ambiguous lookup")
+	}
+	if len(report.Flags) != 1 || report.Flags[0].Kind != FlagAmbiguousImplicitReference {
+		t.Errorf("want FlagAmbiguousImplicitReference, got %#v", report.Flags)
 	}
 }
 
