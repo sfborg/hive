@@ -96,6 +96,11 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("POST /api/archive/reassemble", s.handleReassembleArchive)
 	mux.HandleFunc("GET /api/archive/assembler-nodes", s.handleAssemblerNodes)
+	mux.HandleFunc("GET /api/taxon/{id}/overlays", s.handleListOverlaysForTaxon)
+	mux.HandleFunc("POST /api/taxon/{id}/overlays", s.handleCreateOverlay)
+	mux.HandleFunc("GET /api/overlay/{id}", s.handleGetOverlay)
+	mux.HandleFunc("DELETE /api/overlay/{id}", s.handleRetireOverlay)
+	mux.HandleFunc("PATCH /api/overlay/{id}/citation", s.handleSetOverlayCitation)
 	mux.HandleFunc("GET /api/vocab", s.handleVocab)
 	mux.HandleFunc("GET /api/vocab/nomen", s.handleNomenVocab)
 	mux.HandleFunc("GET /api/vocab/countries", s.handleCountriesVocab)
@@ -791,6 +796,226 @@ func assemblerNodeToAPI(n hive.AssemblerNode) apiAssemblerNode {
 		HasOverlay:    n.HasOverlay,
 		Flags:         flags,
 	}
+}
+
+// apiLayer3Overlay is the JSON projection of hive.Layer3Overlay
+// used by the overlay CRUD endpoints.
+type apiLayer3Overlay struct {
+	ID                  string `json:"id"`
+	TaxonID             string `json:"taxon_id"`
+	OverlayType         string `json:"overlay_type"`
+	Claim               any    `json:"claim,omitempty"`
+	Notes               string `json:"notes,omitempty"`
+	CitationReferenceID string `json:"citation_reference_id,omitempty"`
+	RetiredAt           string `json:"retired_at,omitempty"`
+	CreatedAt           string `json:"created_at,omitempty"`
+	UpdatedAt           string `json:"updated_at,omitempty"`
+	CreatedBy           string `json:"created_by,omitempty"`
+}
+
+// apiCreateOverlayReq is the POST body for creating an overlay.
+// Claim is passed as a decoded object so callers don't have to
+// double-encode JSON; the server re-marshals it into claim_json.
+type apiCreateOverlayReq struct {
+	OverlayType string `json:"overlay_type"`
+	Claim       any    `json:"claim"`
+	Notes       string `json:"notes,omitempty"`
+}
+
+// apiSetOverlayCitationReq is the PATCH body for
+// SetOverlayCitation.
+type apiSetOverlayCitationReq struct {
+	CitationReferenceID string `json:"citation_reference_id"`
+}
+
+func overlayToAPI(o hive.Layer3Overlay) apiLayer3Overlay {
+	out := apiLayer3Overlay{
+		ID:                  o.ID,
+		TaxonID:             o.TaxonID,
+		OverlayType:         o.OverlayType,
+		Notes:               o.Notes,
+		CitationReferenceID: o.CitationReferenceID,
+		CreatedBy:           o.CreatedBy,
+	}
+	if !o.CreatedAt.IsZero() {
+		out.CreatedAt = o.CreatedAt.Format(time.RFC3339Nano)
+	}
+	if !o.UpdatedAt.IsZero() {
+		out.UpdatedAt = o.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	if !o.RetiredAt.IsZero() {
+		out.RetiredAt = o.RetiredAt.Format(time.RFC3339Nano)
+	}
+	if o.ClaimJSON != "" {
+		var claim any
+		if err := json.Unmarshal([]byte(o.ClaimJSON), &claim); err == nil {
+			out.Claim = claim
+		}
+	}
+	return out
+}
+
+// handleListOverlaysForTaxon returns the active Layer 3 overlays
+// anchored to the given taxon id.
+//
+// @Summary      List Layer 3 overlays for a taxon
+// @Tags         overlays
+// @Produce      json
+// @Param        id path string true "Taxon ID"
+// @Success      200 {array} apiLayer3Overlay
+// @Router       /taxon/{id}/overlays [get]
+func (s *server) handleListOverlaysForTaxon(w http.ResponseWriter, r *http.Request) {
+	taxonID := r.PathValue("id")
+	list, err := s.a.ListOverlaysForTaxon(r.Context(), taxonID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := make([]apiLayer3Overlay, 0, len(list))
+	for _, o := range list {
+		out = append(out, overlayToAPI(o))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCreateOverlay adds a new Layer 3 overlay.
+//
+// @Summary      Create a Layer 3 overlay for a taxon
+// @Tags         overlays
+// @Accept       json
+// @Produce      json
+// @Param        id   path string             true "Taxon ID"
+// @Param        body body apiCreateOverlayReq true "Overlay request"
+// @Success      201 {object} apiLayer3Overlay
+// @Failure      400 {object} problem
+// @Router       /taxon/{id}/overlays [post]
+func (s *server) handleCreateOverlay(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	taxonID := r.PathValue("id")
+	var body apiCreateOverlayReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(body.OverlayType) == "" {
+		writeBadRequest(w, r, "overlay_type is required")
+		return
+	}
+	claimJSON := "{}"
+	if body.Claim != nil {
+		b, err := json.Marshal(body.Claim)
+		if err != nil {
+			writeBadRequest(w, r, "claim payload cannot be marshaled")
+			return
+		}
+		claimJSON = string(b)
+	}
+	var newID string
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		id, err := tx.AddOverlay(hive.Layer3Overlay{
+			TaxonID:     taxonID,
+			OverlayType: body.OverlayType,
+			ClaimJSON:   claimJSON,
+			Notes:       body.Notes,
+		})
+		newID = id
+		return err
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetOverlay(r.Context(), newID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, overlayToAPI(*fresh))
+}
+
+// handleGetOverlay returns one overlay by id — active OR retired.
+//
+// @Summary      Get a Layer 3 overlay
+// @Tags         overlays
+// @Produce      json
+// @Param        id path string true "Overlay ID"
+// @Success      200 {object} apiLayer3Overlay
+// @Failure      404 {object} problem
+// @Router       /overlay/{id} [get]
+func (s *server) handleGetOverlay(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	o, err := s.a.GetOverlay(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, overlayToAPI(*o))
+}
+
+// handleRetireOverlay stamps retired_at on an active overlay.
+// Idempotent-adjacent: a second call on the same overlay returns
+// 404 because the WHERE clause excludes retired rows.
+//
+// @Summary      Retire a Layer 3 overlay
+// @Tags         overlays
+// @Param        id path string true "Overlay ID"
+// @Success      204
+// @Failure      404 {object} problem
+// @Router       /overlay/{id} [delete]
+func (s *server) handleRetireOverlay(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	id := r.PathValue("id")
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.RetireOverlay(id)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetOverlayCitation attaches (or clears) the citation
+// reference id on an active overlay.
+//
+// @Summary      Set the citation reference on an overlay
+// @Tags         overlays
+// @Accept       json
+// @Param        id   path string                    true "Overlay ID"
+// @Param        body body apiSetOverlayCitationReq true "Citation reference"
+// @Success      200 {object} apiLayer3Overlay
+// @Failure      404 {object} problem
+// @Router       /overlay/{id}/citation [patch]
+func (s *server) handleSetOverlayCitation(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	id := r.PathValue("id")
+	var body apiSetOverlayCitationReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.SetOverlayCitation(id, body.CitationReferenceID)
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetOverlay(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, overlayToAPI(*fresh))
 }
 
 func reassembleReportToAPI(r *hive.ReassembleReport) apiReassembleReport {
