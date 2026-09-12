@@ -738,6 +738,104 @@ CREATE INDEX IF NOT EXISTS idx_hive__row_source_ref
     ON hive__row_source (reference_id);
 CREATE INDEX IF NOT EXISTS idx_hive__row_source_run
     ON hive__row_source (extraction_run_id);
+
+-- hive__assembler_flag stores curator-actionable conditions the
+-- deterministic assembler emitted during the most recent reassemble.
+-- Cleared and rewritten on every reassemble so the table reflects
+-- the current Layer 2 state — no history is kept here (the
+-- extraction runs and Layer 1 assertions carry the durable audit
+-- trail).
+--
+-- kind values mirror assembler.FlagKind:
+--   ambiguous_match, unresolved_anchor, contradictory_synonymy,
+--   ambiguous_implicit_reference, missing_implicit_reference,
+--   overlay_matched_by_publication, orphaned_overlay.
+--
+-- taxon_id is populated when the flag anchors to a materialized
+-- Layer 2 taxon (e.g., an overlay-matched-by-publication flag or a
+-- concept-alignment ambiguity on a specific taxon); reference_id +
+-- mention_id are populated when the flag anchors to a paper's
+-- assertion (e.g., unresolved-anchor flags before a taxon exists).
+-- Both can be set for flags with both anchors.
+--
+-- candidates_json is a JSON array of candidate ids (taxon ids for
+-- ambiguity flags, reference ids for overlay-match flags) so the
+-- WUI can render "did you mean one of these?" affordances without
+-- a second round-trip.
+CREATE TABLE IF NOT EXISTS hive__assembler_flag (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind              TEXT NOT NULL,
+    message           TEXT NOT NULL DEFAULT '',
+    reference_id      TEXT,
+    mention_id        TEXT,
+    taxon_id          TEXT,
+    candidates_json   TEXT NOT NULL DEFAULT '[]',
+    created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__assembler_flag_taxon
+    ON hive__assembler_flag (taxon_id);
+CREATE INDEX IF NOT EXISTS idx_hive__assembler_flag_ref
+    ON hive__assembler_flag (reference_id);
+CREATE INDEX IF NOT EXISTS idx_hive__assembler_flag_kind
+    ON hive__assembler_flag (kind);
+
+-- hive__layer3_overlay holds curator-authored hypotheses that
+-- diverge from Layer 2 (the machine-assembled literature view).
+-- One row per (taxon_id, overlay_type) — a curator may hold a
+-- synonymy override AND a placement override on the same taxon,
+-- but only one of each type.
+--
+-- overlay_type values:
+--   synonymy_override        — curator disagrees with the L2 synonymy
+--                              decision (e.g., L2 says "A is syn of
+--                              B" but curator says "A is accepted").
+--   placement_override       — curator disagrees with the L2 parent /
+--                              higher-classification decision.
+--   concept_override         — curator disagrees with the L2 concept
+--                              relation (sensu qualifier, RCC5 type).
+--   other                    — free-form; claim_json carries the shape.
+--
+-- claim_json is a small JSON object describing the curator's asserted
+-- value. Shape depends on overlay_type; the [[layer3-claim-shapes]]
+-- memory documents each. Kept as JSON so overlay_type can evolve
+-- without a schema migration.
+--
+-- citation_reference_id is empty until a supporting publication
+-- appears (either curator-attached or auto-detected by the
+-- reassemble Layer 3 diff pass). A non-empty value means the
+-- overlay has become published-backed.
+--
+-- retired_at is stamped when the curator retires the overlay
+-- (either because a paper agrees with it and they promote the L2
+-- default, or because they change their mind). Retired rows stay
+-- for provenance; the reader filters them out unless asked.
+CREATE TABLE IF NOT EXISTS hive__layer3_overlay (
+    id                     TEXT PRIMARY KEY,
+    taxon_id               TEXT NOT NULL,
+    overlay_type           TEXT NOT NULL
+                             CHECK (overlay_type IN (
+                                 'synonymy_override',
+                                 'placement_override',
+                                 'concept_override',
+                                 'other')),
+    claim_json             TEXT NOT NULL DEFAULT '{}',
+    notes                  TEXT NOT NULL DEFAULT '',
+    citation_reference_id  TEXT,
+    retired_at             TEXT,
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL,
+    created_by             TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hive__layer3_overlay_unique
+    ON hive__layer3_overlay (taxon_id, overlay_type)
+    WHERE retired_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hive__layer3_overlay_taxon
+    ON hive__layer3_overlay (taxon_id);
+CREATE INDEX IF NOT EXISTS idx_hive__layer3_overlay_active
+    ON hive__layer3_overlay (retired_at)
+    WHERE retired_at IS NULL;
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
