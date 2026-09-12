@@ -1552,6 +1552,17 @@ class SfgaApp extends LitElement {
     _assimilateNodes: { state: true },
     _assimilateLoading: { state: true },
     _assimilateError: { state: true },
+    // Active color filter for the assimilate list. "" means show
+    // everything; otherwise "green" | "amber" | "red" | "blue".
+    _assimilateColorFilter: { state: true },
+    // Node currently open in the preview panel (or null when
+    // closed). Holds the whole node object so re-renders don't
+    // need a second API round-trip; refreshed by _loadAssimilateNodes.
+    _assimilatePreviewNode: { state: true },
+    // Overlays for the previewed node (fetched on open) plus the
+    // form state for creating a new overlay from the preview.
+    _assimilatePreviewOverlays: { state: true },
+    _assimilateOverlayForm: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -1854,6 +1865,182 @@ class SfgaApp extends LitElement {
     .assimilate-row .overlay-badge {
       background: color-mix(in oklab, var(--accent, #3966c9) 30%, var(--bg));
     }
+    .assimilate-row {
+      cursor: pointer;
+    }
+    .assimilate-row.row-selected {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    /* Filter-chip row. Chips are small buttons; the active one
+       gets an inverted fill via --accent. */
+    .assimilate-chips {
+      display: flex;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35em;
+      padding: 0.15em 0.55em;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      color: var(--fg);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+    .chip:hover {
+      background: color-mix(in oklab, var(--fg) 6%, var(--bg));
+    }
+    .chip-active {
+      background: color-mix(in oklab, var(--accent, #3966c9) 20%, var(--bg));
+      border-color: var(--accent);
+    }
+    .chip-count {
+      color: var(--dim);
+      font-family: var(--font-mono);
+      font-size: var(--fs-xs);
+    }
+    /* Split layout: list left, preview right. Preview collapses
+       away entirely when nothing is selected so the list can
+       expand to the full pane width. */
+    .assimilate-split {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--sp-4);
+      margin-top: var(--sp-3);
+    }
+    .assimilate-split:has(.assimilate-preview) {
+      grid-template-columns: 1fr 22rem;
+    }
+    .assimilate-preview {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in oklab, var(--fg) 2%, var(--bg));
+      padding: var(--sp-3);
+      align-self: start;
+      max-height: calc(100vh - 10rem);
+      overflow: auto;
+      display: grid;
+      gap: var(--sp-3);
+    }
+    .preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: var(--sp-2);
+    }
+    .preview-title {
+      display: flex;
+      align-items: baseline;
+      gap: 0.35em;
+      flex-wrap: wrap;
+    }
+    .preview-authorship {
+      color: var(--dim);
+    }
+    .preview-meta {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      margin-top: 0.25em;
+    }
+    .preview-meta code {
+      font-size: var(--fs-xs);
+    }
+    .preview-section h4 {
+      margin: 0 0 var(--sp-2);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .preview-count {
+      color: var(--dim);
+      font-weight: 400;
+      font-size: var(--fs-xs);
+      margin-left: 0.25em;
+    }
+    .preview-empty {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      padding: var(--sp-2);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+    }
+    .preview-flags, .preview-overlays {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: var(--sp-2);
+    }
+    .preview-flag-msg {
+      display: block;
+      color: var(--fg);
+      font-size: var(--fs-sm);
+      margin-top: 0.25em;
+    }
+    .preview-flag-cands {
+      color: var(--dim);
+      font-family: var(--font-mono);
+      font-size: var(--fs-xs);
+      margin-top: 0.1em;
+    }
+    .preview-overlay-head {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+    }
+    .preview-overlay-head .spacer { flex: 1; }
+    .preview-overlay-claim {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 3px);
+      padding: var(--sp-2);
+      margin: var(--sp-1) 0 0;
+      font-size: var(--fs-xs);
+      overflow-x: auto;
+    }
+    .preview-overlay-notes {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      margin-top: var(--sp-1);
+    }
+    .preview-field {
+      display: grid;
+      gap: 0.25em;
+    }
+    .preview-field > span {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .preview-field textarea,
+    .preview-field select {
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      padding: 0.35em 0.5em;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 3px);
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      padding: 0;
+      font-size: var(--fs-sm);
+    }
+    .link-btn:disabled {
+      color: var(--dim);
+      cursor: not-allowed;
+    }
     .stub-view {
       max-width: 40rem;
       margin: var(--sp-6) auto;
@@ -1928,6 +2115,16 @@ class SfgaApp extends LitElement {
     this._assimilateNodes = [];
     this._assimilateLoading = false;
     this._assimilateError = "";
+    this._assimilateColorFilter = "";
+    this._assimilatePreviewNode = null;
+    this._assimilatePreviewOverlays = [];
+    this._assimilateOverlayForm = {
+      overlay_type: "synonymy_override",
+      claim: `{"status": "accepted"}`,
+      notes: "",
+      submitting: false,
+      error: "",
+    };
     // Bind the top-bar source once so the combobox reference is
     // stable across renders; the closure reads `this._searchFilters`
     // live, so filter toggles pick up on the next _runSearch tick
@@ -2681,29 +2878,198 @@ class SfgaApp extends LitElement {
     }
   }
 
+  // _openAssimilatePreview opens the details panel for a node
+  // (click on a row). Also fetches the taxon's active overlays so
+  // the panel can render them alongside the "add override" form.
+  async _openAssimilatePreview(node) {
+    this._assimilatePreviewNode = node;
+    this._assimilatePreviewOverlays = [];
+    this._assimilateOverlayForm = {
+      ...this._assimilateOverlayForm,
+      submitting: false,
+      error: "",
+    };
+    try {
+      const res = await fetch(
+        `/api/taxon/${encodeURIComponent(node.taxon_id)}/overlays`,
+      );
+      if (res.ok) {
+        this._assimilatePreviewOverlays = await res.json();
+      }
+    } catch (_e) {
+      // Overlay fetch is best-effort — the preview still opens
+      // even if the list can't load.
+    }
+  }
+
+  _closeAssimilatePreview() {
+    this._assimilatePreviewNode = null;
+    this._assimilatePreviewOverlays = [];
+  }
+
+  _updateAssimilateOverlayForm(patch) {
+    this._assimilateOverlayForm = {
+      ...this._assimilateOverlayForm,
+      ...patch,
+    };
+  }
+
+  // _submitAssimilateOverlay POSTs the current form as a new
+  // overlay for the previewed taxon, then refetches both the
+  // per-taxon overlay list and the archive-wide assembler-nodes
+  // feed so the row's color flips to blue immediately.
+  async _submitAssimilateOverlay() {
+    const node = this._assimilatePreviewNode;
+    if (!node) return;
+    const f = this._assimilateOverlayForm;
+    if (!f.overlay_type) {
+      this._updateAssimilateOverlayForm({ error: "overlay_type is required" });
+      return;
+    }
+    let claim;
+    try {
+      claim = f.claim ? JSON.parse(f.claim) : {};
+    } catch (e) {
+      this._updateAssimilateOverlayForm({
+        error: `claim JSON: ${e.message || e}`,
+      });
+      return;
+    }
+    this._updateAssimilateOverlayForm({ submitting: true, error: "" });
+    try {
+      const res = await fetch(
+        `/api/taxon/${encodeURIComponent(node.taxon_id)}/overlays`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            overlay_type: f.overlay_type,
+            claim,
+            notes: f.notes || "",
+          }),
+        },
+      );
+      if (!res.ok) {
+        const problem = await res.json().catch(() => ({}));
+        throw new Error(
+          problem.detail || problem.title || `HTTP ${res.status}`,
+        );
+      }
+      // Refresh the per-taxon overlay list + the archive-wide
+      // color state.
+      const [ov, nodes] = await Promise.all([
+        fetch(`/api/taxon/${encodeURIComponent(node.taxon_id)}/overlays`).then(
+          (r) => (r.ok ? r.json() : []),
+        ),
+        fetch("/api/archive/assembler-nodes").then((r) =>
+          r.ok ? r.json() : [],
+        ),
+      ]);
+      this._assimilatePreviewOverlays = ov;
+      this._assimilateNodes = Array.isArray(nodes) ? nodes : [];
+      // Reset the claim field to the default for the (potentially
+      // unchanged) overlay type, so the curator can add another.
+      this._updateAssimilateOverlayForm({
+        claim: this._defaultClaimForType(f.overlay_type),
+        notes: "",
+        submitting: false,
+        error: "",
+      });
+    } catch (e) {
+      this._updateAssimilateOverlayForm({
+        submitting: false,
+        error: this._formatError(e),
+      });
+    }
+  }
+
+  // _retireAssimilateOverlay retires an overlay via DELETE, then
+  // refetches so the row can flip its color back.
+  async _retireAssimilateOverlay(overlayID) {
+    const node = this._assimilatePreviewNode;
+    if (!node) return;
+    try {
+      const res = await fetch(`/api/overlay/${encodeURIComponent(overlayID)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok && res.status !== 204) {
+        throw new Error(`retire: HTTP ${res.status}`);
+      }
+      const [ov, nodes] = await Promise.all([
+        fetch(`/api/taxon/${encodeURIComponent(node.taxon_id)}/overlays`).then(
+          (r) => (r.ok ? r.json() : []),
+        ),
+        fetch("/api/archive/assembler-nodes").then((r) =>
+          r.ok ? r.json() : [],
+        ),
+      ]);
+      this._assimilatePreviewOverlays = ov;
+      this._assimilateNodes = Array.isArray(nodes) ? nodes : [];
+    } catch (e) {
+      this._updateAssimilateOverlayForm({
+        error: this._formatError(e),
+      });
+    }
+  }
+
+  // _defaultClaimForType returns the boilerplate JSON body for
+  // each overlay type so the curator sees the expected shape when
+  // switching the dropdown. Matches the layer3-claim-shapes memory.
+  _defaultClaimForType(overlayType) {
+    switch (overlayType) {
+      case "synonymy_override":
+        return `{"status": "accepted"}`;
+      case "placement_override":
+        return `{"parent_taxon_id": ""}`;
+      case "concept_override":
+        return `{"rel_type_id": "EQUALS", "related_taxon_id": ""}`;
+      case "other":
+        return `{}`;
+    }
+    return `{}`;
+  }
+
   // _renderAssimilateScreen renders the Layer 2 tree flattened
   // into a per-node list, color-coded per
   // docs/2026-09-12_LITERATURE_VIEW.md § Color-coded node state.
   //
   // Slice 2 initial render is intentionally flat (not tree) so we
   // can validate the color-derivation pipeline end-to-end before
-  // committing to a specific tree renderer. Filter chips,
-  // bulk-accept, and click-to-preview land in the follow-up
-  // commit.
+  // committing to a specific tree renderer.
   _renderAssimilateScreen() {
     const nodes = this._assimilateNodes || [];
     const counts = { green: 0, amber: 0, red: 0, blue: 0 };
     for (const n of nodes) {
       if (counts[n.color] !== undefined) counts[n.color]++;
     }
+    const filtered = this._assimilateColorFilter
+      ? nodes.filter((n) => n.color === this._assimilateColorFilter)
+      : nodes;
+    const chip = (color, label) => html`
+      <button
+        type="button"
+        class="chip ${this._assimilateColorFilter === color ? "chip-active" : ""}"
+        aria-pressed=${this._assimilateColorFilter === color}
+        @click=${() =>
+          (this._assimilateColorFilter =
+            this._assimilateColorFilter === color ? "" : color)}
+        title=${color
+          ? `Show only ${label.toLowerCase()} nodes`
+          : "Show all nodes"}
+      >
+        ${color ? html`<span class="dot color-${color}"></span>` : ""} ${label}
+        ${color ? html`<span class="chip-count">${counts[color]}</span>` : ""}
+      </button>
+    `;
     return html`
       <div class="screen assimilate">
         <div class="assimilate-toolbar">
-          <div class="assimilate-counts" role="status">
-            <span class="dot color-green"></span> ${counts.green}
-            <span class="dot color-amber"></span> ${counts.amber}
-            <span class="dot color-red"></span> ${counts.red}
-            <span class="dot color-blue"></span> ${counts.blue}
+          <div class="assimilate-chips" role="toolbar" aria-label="Filter by color">
+            ${chip("", "All")}
+            ${chip("green", "Green")}
+            ${chip("amber", "Amber")}
+            ${chip("red", "Red")}
+            ${chip("blue", "Blue")}
           </div>
           <span class="spacer"></span>
           <button
@@ -2726,32 +3092,213 @@ class SfgaApp extends LitElement {
               extraction pipeline, then click reassemble.
             </div>`
           : ""}
-        <ul class="assimilate-list">
-          ${nodes.map(
-            (n) => html`
-              <li class="assimilate-row row-${n.color}">
-                <span class="dot color-${n.color}"></span>
-                <span class="canonical">${n.canonical || n.taxon_id}</span>
-                <span class="authorship">${n.authorship || ""}</span>
-                <span class="rank">${n.rank || ""}</span>
-                ${n.has_overlay
-                  ? html`<span class="badge overlay-badge" title="curator overlay active">override</span>`
-                  : ""}
-                ${(n.flags || []).map(
-                  (f) => html`
-                    <span
-                      class="badge flag-badge flag-${f.kind}"
-                      title=${f.message}
-                    >
-                      ${f.kind.replace(/_/g, " ")}
-                    </span>
+        <div class="assimilate-split">
+          <ul class="assimilate-list">
+            ${filtered.map(
+              (n) => html`
+                <li
+                  class="assimilate-row row-${n.color} ${this
+                    ._assimilatePreviewNode &&
+                  this._assimilatePreviewNode.taxon_id === n.taxon_id
+                    ? "row-selected"
+                    : ""}"
+                  tabindex="0"
+                  role="button"
+                  @click=${() => this._openAssimilatePreview(n)}
+                  @keydown=${(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      this._openAssimilatePreview(n);
+                    }
+                  }}
+                >
+                  <span class="dot color-${n.color}"></span>
+                  <span class="canonical">${n.canonical || n.taxon_id}</span>
+                  <span class="authorship">${n.authorship || ""}</span>
+                  <span class="rank">${n.rank || ""}</span>
+                  ${n.has_overlay
+                    ? html`<span class="badge overlay-badge" title="curator overlay active">override</span>`
+                    : ""}
+                  ${(n.flags || []).map(
+                    (f) => html`
+                      <span
+                        class="badge flag-badge flag-${f.kind}"
+                        title=${f.message}
+                      >
+                        ${f.kind.replace(/_/g, " ")}
+                      </span>
+                    `,
+                  )}
+                </li>
+              `,
+            )}
+          </ul>
+          ${this._assimilatePreviewNode
+            ? this._renderAssimilatePreview()
+            : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  // _renderAssimilatePreview draws the right-hand details panel
+  // when the curator clicks a row. Shows the node's identity,
+  // flags in full, active overlays with a retire button, and a
+  // form to create a new overlay.
+  _renderAssimilatePreview() {
+    const n = this._assimilatePreviewNode;
+    const overlays = this._assimilatePreviewOverlays || [];
+    const f = this._assimilateOverlayForm;
+    const readOnly = this.archive && this.archive.read_only;
+    return html`
+      <aside class="assimilate-preview" aria-label="Node details">
+        <header class="preview-header">
+          <div>
+            <div class="preview-title">
+              <span class="dot color-${n.color}"></span>
+              <strong>${n.canonical || n.taxon_id}</strong>
+              <span class="preview-authorship">${n.authorship || ""}</span>
+            </div>
+            <div class="preview-meta">
+              ${n.rank ? html`${n.rank} · ` : ""}${n.status || "accepted"}
+              · <code>${n.taxon_id}</code>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="icon-btn subtle"
+            @click=${() => this._closeAssimilatePreview()}
+            aria-label="Close preview"
+            title="Close"
+          >
+            ✕
+          </button>
+        </header>
+        ${n.flags && n.flags.length > 0
+          ? html`
+              <section class="preview-section">
+                <h4>Flags</h4>
+                <ul class="preview-flags">
+                  ${n.flags.map(
+                    (fl) => html`
+                      <li>
+                        <span class="badge flag-badge flag-${fl.kind}">
+                          ${fl.kind.replace(/_/g, " ")}
+                        </span>
+                        <span class="preview-flag-msg">${fl.message}</span>
+                        ${fl.candidates && fl.candidates.length > 0
+                          ? html`<div class="preview-flag-cands">
+                              candidates: ${fl.candidates.join(", ")}
+                            </div>`
+                          : ""}
+                      </li>
+                    `,
+                  )}
+                </ul>
+              </section>
+            `
+          : ""}
+        <section class="preview-section">
+          <h4>
+            Active overlays
+            ${overlays.length > 0
+              ? html`<span class="preview-count">(${overlays.length})</span>`
+              : ""}
+          </h4>
+          ${overlays.length === 0
+            ? html`<div class="preview-empty">
+                No overlays. Add one below to record a curator hypothesis.
+              </div>`
+            : html`<ul class="preview-overlays">
+                ${overlays.map(
+                  (o) => html`
+                    <li>
+                      <div class="preview-overlay-head">
+                        <strong>${o.overlay_type}</strong>
+                        ${o.citation_reference_id
+                          ? html`<span class="badge">
+                              cite: ${o.citation_reference_id}
+                            </span>`
+                          : ""}
+                        <span class="spacer"></span>
+                        <button
+                          type="button"
+                          class="link-btn"
+                          ?disabled=${readOnly}
+                          @click=${() => this._retireAssimilateOverlay(o.id)}
+                          title="Retire this overlay"
+                        >
+                          retire
+                        </button>
+                      </div>
+                      <pre class="preview-overlay-claim">${JSON.stringify(
+                        o.claim,
+                        null,
+                        2,
+                      )}</pre>
+                      ${o.notes
+                        ? html`<div class="preview-overlay-notes">${o.notes}</div>`
+                        : ""}
+                    </li>
                   `,
                 )}
-              </li>
-            `,
-          )}
-        </ul>
-      </div>
+              </ul>`}
+        </section>
+        <section class="preview-section">
+          <h4>Add override</h4>
+          <label class="preview-field">
+            <span>Overlay type</span>
+            <select
+              ?disabled=${readOnly || f.submitting}
+              .value=${f.overlay_type}
+              @change=${(e) => {
+                const t = e.target.value;
+                this._updateAssimilateOverlayForm({
+                  overlay_type: t,
+                  claim: this._defaultClaimForType(t),
+                });
+              }}
+            >
+              <option value="synonymy_override">synonymy_override</option>
+              <option value="placement_override">placement_override</option>
+              <option value="concept_override">concept_override</option>
+              <option value="other">other</option>
+            </select>
+          </label>
+          <label class="preview-field">
+            <span>Claim (JSON)</span>
+            <textarea
+              rows="3"
+              spellcheck="false"
+              ?disabled=${readOnly || f.submitting}
+              .value=${f.claim}
+              @input=${(e) =>
+                this._updateAssimilateOverlayForm({ claim: e.target.value })}
+            ></textarea>
+          </label>
+          <label class="preview-field">
+            <span>Notes</span>
+            <textarea
+              rows="2"
+              ?disabled=${readOnly || f.submitting}
+              .value=${f.notes}
+              @input=${(e) =>
+                this._updateAssimilateOverlayForm({ notes: e.target.value })}
+            ></textarea>
+          </label>
+          ${f.error
+            ? html`<div class="error" role="alert">${f.error}</div>`
+            : ""}
+          <button
+            type="button"
+            class="btn"
+            ?disabled=${readOnly || f.submitting}
+            @click=${() => this._submitAssimilateOverlay()}
+          >
+            ${f.submitting ? "saving…" : "add override"}
+          </button>
+        </section>
+      </aside>
     `;
   }
 
