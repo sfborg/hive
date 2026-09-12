@@ -95,6 +95,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("POST /api/archive/reassemble", s.handleReassembleArchive)
+	mux.HandleFunc("GET /api/archive/assembler-nodes", s.handleAssemblerNodes)
 	mux.HandleFunc("GET /api/vocab", s.handleVocab)
 	mux.HandleFunc("GET /api/vocab/nomen", s.handleNomenVocab)
 	mux.HandleFunc("GET /api/vocab/countries", s.handleCountriesVocab)
@@ -723,6 +724,73 @@ func (s *server) handleReassembleArchive(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, reassembleReportToAPI(report))
+}
+
+// apiAssemblerNode is the JSON projection of hive.AssemblerNode
+// returned by GET /api/archive/assembler-nodes.
+type apiAssemblerNode struct {
+	TaxonID       string             `json:"taxon_id"`
+	NameID        string             `json:"name_id"`
+	ParentTaxonID string             `json:"parent_taxon_id,omitempty"`
+	Canonical     string             `json:"canonical"`
+	Authorship    string             `json:"authorship,omitempty"`
+	Rank          string             `json:"rank,omitempty"`
+	Status        string             `json:"status,omitempty"`
+	Color         string             `json:"color"`
+	HasOverlay    bool               `json:"has_overlay"`
+	Flags         []apiAssemblerFlag `json:"flags,omitempty"`
+}
+
+// handleAssemblerNodes lists every Layer 2 taxon with per-node
+// color state derived from Layer 3 overlays and hive__assembler_flag
+// rows. Feeds the WUI's assimilate view.
+//
+// @Summary      List Layer 2 taxa with per-node color state
+// @Description  Returns every Layer 2 taxon projected to
+// @Description  {taxon_id, canonical, authorship, rank,
+// @Description  parent_taxon_id, color, has_overlay, flags[]}.
+// @Description  Color derivation: blue > red > amber > green.
+// @Description  Consumed by the assimilate view for the four-color
+// @Description  tree.
+// @Tags         archive
+// @Produce      json
+// @Success      200 {array} apiAssemblerNode
+// @Failure      500 {object} problem
+// @Router       /archive/assembler-nodes [get]
+func (s *server) handleAssemblerNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.a.ListAssemblerNodes(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	out := make([]apiAssemblerNode, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, assemblerNodeToAPI(n))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func assemblerNodeToAPI(n hive.AssemblerNode) apiAssemblerNode {
+	flags := make([]apiAssemblerFlag, 0, len(n.Flags))
+	for _, f := range n.Flags {
+		flags = append(flags, apiAssemblerFlag{
+			Kind:       f.Kind,
+			Message:    f.Message,
+			Candidates: f.Candidates,
+		})
+	}
+	return apiAssemblerNode{
+		TaxonID:       n.TaxonID,
+		NameID:        n.NameID,
+		ParentTaxonID: n.ParentTaxonID,
+		Canonical:     n.Canonical,
+		Authorship:    n.Authorship,
+		Rank:          n.Rank,
+		Status:        n.Status,
+		Color:         n.Color,
+		HasOverlay:    n.HasOverlay,
+		Flags:         flags,
+	}
 }
 
 func reassembleReportToAPI(r *hive.ReassembleReport) apiReassembleReport {
