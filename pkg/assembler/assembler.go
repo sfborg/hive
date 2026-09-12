@@ -26,6 +26,7 @@ package assembler
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sfborg/hive/pkg/conceptimport"
@@ -246,8 +247,17 @@ type MatchAction struct {
 
 // CreateTaxonAction describes an accepted-taxon insert.
 type CreateTaxonAction struct {
-	// ParentTaxonID is the existing (or previously-created-in-plan)
-	// anchor. Empty is only legal for a root taxon.
+	// LocalID is a plan-scoped identifier the planner assigns to
+	// this to-be-created taxon so subsequent actions in the same
+	// plan can reference it as a parent. Format is "plan:<n>".
+	// Empty for actions the planner doesn't need to reference again.
+	LocalID string
+
+	// ParentTaxonID is the anchor for the new taxon. Either a real
+	// archive taxon id, or a "plan:<n>" reference to a
+	// [CreateTaxonAction.LocalID] earlier in the same plan. Apply
+	// substitutes the local reference for the real id at write
+	// time. Empty is only legal for a root taxon.
 	ParentTaxonID string
 
 	// Canonical, Authorship, Rank, Status feed the new taxon /
@@ -426,40 +436,125 @@ func LoadExisting(r Reader) (Existing, error) {
 // result is invariant to storage order — see LITERATURE_VIEW.md
 // § Determinism guarantees.
 func Build(papers []PaperInput, existing Existing, rules Rules) Plan {
-	idx := newTaxonIndex(existing.Taxa)
-	plan := Plan{}
+	st := newPlanState(existing, rules)
 	for _, paper := range papers {
-		for _, nu := range paper.NameUsages {
-			acts := planMention(paper, nu, idx, rules)
-			plan.Actions = append(plan.Actions, acts...)
-		}
+		st.processPaper(paper)
 	}
-	return plan
+	return Plan{Actions: st.actions}
 }
 
-// planMention runs the per-mention rule cascade and returns the
-// resulting action(s). Called once per name_usage per paper.
-//
-// Slice 1 currently implements auto-match only. Subsequent rules
-// (cascade, bracket, synonymy, concept relations) land in
-// follow-up commits and are inserted into this cascade.
-func planMention(paper PaperInput, nu NameUsage, idx *taxonIndex, rules Rules) []Action {
+// planState holds the mutable per-Build working state: the growing
+// taxon index (existing + planned), per-paper mention indexes, the
+// resolved-mention memo, a plan-local id counter, and the
+// accumulated action list.
+type planState struct {
+	rules Rules
+	idx   *taxonIndex
+
+	// resolved memoizes each processed mention's resolution so a
+	// child's cascade lookup doesn't re-run the parent's rules.
+	// Key: paper.ReferenceID + "|" + mentionID.
+	resolved map[string]mentionResolution
+
+	// paperMentions holds the current paper's name_usages indexed by
+	// MentionID for parent-chain traversal. Reset per paper.
+	paperMentions map[string]NameUsage
+
+	// currentPaper is the paper being processed. Used by the
+	// mention-key helper.
+	currentPaper PaperInput
+
+	// nextLocalID is the ordinal for the next "plan:<n>" id minted.
+	nextLocalID int
+
+	// actions is the growing plan.
+	actions []Action
+}
+
+// mentionResolution is what a mention resolved to. Populated when
+// planState first processes the mention, memoized so subsequent
+// cascade lookups skip the work.
+type mentionResolution struct {
+	kind resolutionKind
+	// anchorID is what the mention resolves to as a parent for its
+	// own children. Real taxon id for matched; "plan:<n>" for
+	// created; "" for failed.
+	anchorID string
+}
+
+type resolutionKind int
+
+const (
+	resolvedNone     resolutionKind = iota // couldn't resolve; failed
+	resolvedMatched                        // bound to an existing taxon
+	resolvedCreated                        // created via cascade / create rule
+)
+
+// newPlanState constructs the working state for a Build call.
+func newPlanState(existing Existing, rules Rules) *planState {
+	return &planState{
+		rules:    rules,
+		idx:      newTaxonIndex(existing.Taxa),
+		resolved: make(map[string]mentionResolution),
+	}
+}
+
+// processPaper is the per-paper entry point: build the mention
+// index and process every name_usage.
+func (s *planState) processPaper(paper PaperInput) {
+	s.currentPaper = paper
+	s.paperMentions = make(map[string]NameUsage, len(paper.NameUsages))
+	for _, nu := range paper.NameUsages {
+		s.paperMentions[nu.MentionID] = nu
+	}
+	for _, nu := range paper.NameUsages {
+		s.resolveMention(nu.MentionID)
+	}
+}
+
+// mentionKey builds the resolved-memo key for a mention in the
+// current paper.
+func (s *planState) mentionKey(mentionID string) string {
+	return s.currentPaper.ReferenceID + "|" + mentionID
+}
+
+// nextPlanLocalID mints and returns the next plan-local id string.
+func (s *planState) nextPlanLocalID() string {
+	s.nextLocalID++
+	return fmt.Sprintf("plan:%d", s.nextLocalID)
+}
+
+// resolveMention runs the per-mention rule cascade. Idempotent per
+// (paper, mention) via the memo. Returns the resolution.
+func (s *planState) resolveMention(mentionID string) mentionResolution {
+	key := s.mentionKey(mentionID)
+	if r, ok := s.resolved[key]; ok {
+		return r
+	}
+	// Reserve the slot with a failed sentinel so a cycle (which
+	// shouldn't happen in a well-formed compose tree, but is worth
+	// guarding) terminates.
+	s.resolved[key] = mentionResolution{kind: resolvedNone}
+
+	nu, ok := s.paperMentions[mentionID]
+	if !ok {
+		return s.resolved[key]
+	}
 	if nu.Canonical == "" {
 		// Nothing to match; leave for a later rule (or curator).
-		return nil
+		return s.resolved[key]
 	}
-	res := idx.lookup(nu.Canonical, nu.Authorship)
-	prov := actionProv(paper, nu)
+	res := s.idx.lookup(nu.Canonical, nu.Authorship)
+	prov := actionProv(s.currentPaper, nu)
 	switch res.outcome {
 	case matchUnique:
-		// Reject the canonical-only match if the rule requires
-		// authorship and the mention carries none.
-		if rules.AutoMatchAuthorshipRequired && !res.authorshipConfirmed {
-			return []Action{flag(prov, FlagUnresolvedAnchor,
+		if s.rules.AutoMatchAuthorshipRequired && !res.authorshipConfirmed {
+			s.actions = append(s.actions, flag(prov, FlagUnresolvedAnchor,
 				"canonical-only match rejected (authorship required)",
-				[]string{res.taxonID})}
+				[]string{res.taxonID}))
+			return s.resolved[key]
 		}
-		return []Action{{
+		s.actions = append(s.actions, Action{
 			Kind:                   ActionMatch,
 			SourcePaperReferenceID: prov.ReferenceID,
 			SourceMentionID:        prov.MentionID,
@@ -467,26 +562,88 @@ func planMention(paper PaperInput, nu NameUsage, idx *taxonIndex, rules Rules) [
 				TaxonID:             res.taxonID,
 				AuthorshipConfirmed: res.authorshipConfirmed,
 			},
-		}}
+		})
+		r := mentionResolution{kind: resolvedMatched, anchorID: res.taxonID}
+		s.resolved[key] = r
+		return r
 	case matchAmbiguous:
-		return []Action{flag(prov, FlagAmbiguousMatch,
+		s.actions = append(s.actions, flag(prov, FlagAmbiguousMatch,
 			"canonical+authorship matched multiple existing taxa",
-			res.candidates)}
-	case matchNone:
-		// Later rules (cascade, bracket, create-taxon) fill this
-		// branch. For Slice 1's auto-match milestone we surface an
-		// UnresolvedAnchor flag so callers can see coverage; the
-		// cascade / bracket / create-taxon commits replace this
-		// with a real action.
-		return []Action{flag(prov, FlagUnresolvedAnchor,
-			"no existing taxon matched canonical + authorship",
-			nil)}
+			res.candidates))
+		return s.resolved[key]
 	}
-	return nil
+
+	// matchNone → cascade for an anchor by walking up the paper's
+	// own parent chain. First ancestor with a successful
+	// resolution (matched or created) becomes the parent for a
+	// new-taxon insert.
+	parent := s.cascadeParent(nu)
+	if parent == "" {
+		// TODO(slice-1 bracket): species-group names with genus
+		// gone → bracket fallback. For now, flag.
+		s.actions = append(s.actions, flag(prov, FlagUnresolvedAnchor,
+			"no existing taxon matched, and no cascade anchor found",
+			nil))
+		return s.resolved[key]
+	}
+	localID := s.nextPlanLocalID()
+	s.actions = append(s.actions, Action{
+		Kind:                   ActionCreateTaxon,
+		SourcePaperReferenceID: prov.ReferenceID,
+		SourceMentionID:        prov.MentionID,
+		CreateTaxon: CreateTaxonAction{
+			LocalID:       localID,
+			ParentTaxonID: parent,
+			Canonical:     nu.Canonical,
+			Authorship:    nu.Authorship,
+			Rank:          nu.Rank,
+			Status:        defaultStatus(nu.Status),
+		},
+	})
+	// Virtualize the new taxon into the index so subsequent
+	// mentions in the same or later paper can auto-match it. The
+	// LocalID is used as the "taxon id" in the index because Apply
+	// will remap it.
+	s.idx.add(localID, nu.Canonical, nu.Authorship)
+	r := mentionResolution{kind: resolvedCreated, anchorID: localID}
+	s.resolved[key] = r
+	return r
+}
+
+// cascadeParent walks the paper's parent chain for the given
+// mention and returns the anchor id (real taxon id or "plan:<n>")
+// of the first ancestor with a successful resolution. Empty when
+// no ancestor resolves — the caller handles that as a
+// missing-anchor condition (bracket fallback or flag).
+func (s *planState) cascadeParent(nu NameUsage) string {
+	pid := nu.ParentMentionID
+	for pid != "" {
+		res := s.resolveMention(pid)
+		if res.kind != resolvedNone && res.anchorID != "" {
+			return res.anchorID
+		}
+		parentNU, ok := s.paperMentions[pid]
+		if !ok {
+			break
+		}
+		pid = parentNU.ParentMentionID
+	}
+	return ""
+}
+
+// defaultStatus applies the "accepted" default when the paper
+// mention didn't carry a status. Any explicit status the paper
+// asserted (synonym, provisionally accepted, etc.) passes
+// through unchanged.
+func defaultStatus(s string) string {
+	if s == "" {
+		return "accepted"
+	}
+	return s
 }
 
 // actionProv builds the ActionProvenance triple used by every
-// action produced by planMention.
+// action produced by the planner.
 func actionProv(paper PaperInput, nu NameUsage) ActionProvenance {
 	return ActionProvenance{
 		ReferenceID: paper.ReferenceID,
@@ -513,11 +670,18 @@ func flag(prov ActionProvenance, kind FlagKind, msg string, candidates []string)
 // Returns the [Report] summarizing what landed. Any Writer error
 // aborts and is returned to the caller; the caller's transaction
 // determines whether to commit the partial application.
+//
+// Plan-local ids ("plan:<n>" strings) on CreateTaxonAction.LocalID
+// and other fields (ParentTaxonID, AcceptedTaxonID, AnchorTaxonID)
+// are substituted with the real ids returned by the Writer as the
+// plan is walked. An action that references an unknown local id
+// returns an error.
 func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 	if w == nil {
 		return Report{}, errors.New("assembler: Apply: nil writer")
 	}
 	report := Report{}
+	remap := make(map[string]string)
 	for _, act := range plan.Actions {
 		prov := ActionProvenance{
 			ReferenceID: act.SourcePaperReferenceID,
@@ -527,27 +691,71 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 		case ActionMatch:
 			report.Matched++
 		case ActionCreateTaxon:
-			if _, err := w.CreateTaxonForAssembler(act.CreateTaxon, prov.ReferenceID); err != nil {
+			ct := act.CreateTaxon
+			parent, err := resolveLocal(ct.ParentTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			ct.ParentTaxonID = parent
+			newID, err := w.CreateTaxonForAssembler(ct, prov.ReferenceID)
+			if err != nil {
 				return report, fmt.Errorf("assembler: create taxon: %w", err)
+			}
+			if ct.LocalID != "" {
+				remap[ct.LocalID] = newID
 			}
 			report.TaxaCreated++
 		case ActionCreateSynonym:
-			if _, err := w.CreateSynonymForAssembler(act.CreateSynonym, prov.ReferenceID); err != nil {
+			cs := act.CreateSynonym
+			acc, err := resolveLocal(cs.AcceptedTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			cs.AcceptedTaxonID = acc
+			if _, err := w.CreateSynonymForAssembler(cs, prov.ReferenceID); err != nil {
 				return report, fmt.Errorf("assembler: create synonym: %w", err)
 			}
 			report.SynonymsCreated++
 		case ActionBracket:
-			if _, err := w.CreateBracketedTaxonForAssembler(act.Bracket, prov.ReferenceID); err != nil {
+			br := act.Bracket
+			anchor, err := resolveLocal(br.AnchorTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			br.AnchorTaxonID = anchor
+			if _, err := w.CreateBracketedTaxonForAssembler(br, prov.ReferenceID); err != nil {
 				return report, fmt.Errorf("assembler: bracket fallback: %w", err)
 			}
 			report.BracketedCreated++
 		case ActionInsertConceptRel:
-			if err := w.InsertConceptRelation(act.InsertConceptRel); err != nil {
+			rel := act.InsertConceptRel
+			subj, err := resolveLocal(rel.TaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			obj, err := resolveLocal(rel.RelatedTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			rel.TaxonID = subj
+			rel.RelatedTaxonID = obj
+			if err := w.InsertConceptRelation(rel); err != nil {
 				return report, fmt.Errorf("assembler: insert concept relation: %w", err)
 			}
 			report.ConceptRelationsInserted++
 		case ActionSetConceptFields:
-			if err := applySetConceptFields(w, act.SetConceptFields); err != nil {
+			scf := act.SetConceptFields
+			t, err := resolveLocal(scf.TaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			st, err := resolveLocal(scf.SynonymTaxonID, remap)
+			if err != nil {
+				return report, err
+			}
+			scf.TaxonID = t
+			scf.SynonymTaxonID = st
+			if err := applySetConceptFields(w, scf); err != nil {
 				return report, err
 			}
 			report.ConceptFieldsSet++
@@ -562,6 +770,24 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 	}
 	_ = r
 	return report, nil
+}
+
+// resolveLocal remaps a "plan:<n>" reference into the real id the
+// Writer returned when the corresponding CreateTaxon action fired.
+// Non-plan-local ids pass through unchanged; an empty id also
+// passes through (root taxon case).
+func resolveLocal(id string, remap map[string]string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(id, "plan:") {
+		return id, nil
+	}
+	real, ok := remap[id]
+	if !ok {
+		return "", fmt.Errorf("assembler: unresolved plan-local id %q", id)
+	}
+	return real, nil
 }
 
 // applySetConceptFields dispatches an ActionSetConceptFields to the

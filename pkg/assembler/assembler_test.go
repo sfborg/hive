@@ -160,6 +160,146 @@ func TestBuild_AutoMatchNoMatch(t *testing.T) {
 	}
 }
 
+// TestBuild_CascadeAttachesToMatchedAncestor: paper introduces a
+// new species under a genus that already exists. Genus is
+// matched; species emits ActionCreateTaxon under the genus.
+func TestBuild_CascadeAttachesToMatchedAncestor(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "genus-1", Canonical: "Aus", Rank: "genus"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "g", Canonical: "Aus", Rank: "genus"},
+			{MentionID: "s", ParentMentionID: "g",
+				Canonical: "Aus novus", Authorship: "Smith, 2020",
+				Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[0].Kind != ActionMatch || plan.Actions[0].Match.TaxonID != "genus-1" {
+		t.Fatalf("expected genus to auto-match, got %#v", plan.Actions[0])
+	}
+	if plan.Actions[1].Kind != ActionCreateTaxon {
+		t.Fatalf("expected species to CreateTaxon, got %#v", plan.Actions[1])
+	}
+	ct := plan.Actions[1].CreateTaxon
+	if ct.ParentTaxonID != "genus-1" {
+		t.Errorf("expected species parent = genus-1, got %q", ct.ParentTaxonID)
+	}
+	if ct.Canonical != "Aus novus" || ct.Rank != "species" {
+		t.Errorf("wrong CreateTaxon payload: %#v", ct)
+	}
+	if ct.LocalID == "" {
+		t.Errorf("expected non-empty plan-local id for species")
+	}
+	if ct.Status != "accepted" {
+		t.Errorf("want status=accepted default, got %q", ct.Status)
+	}
+}
+
+// TestBuild_CascadeSkipsMissingIntermediates: paper's genus is not
+// in the DB, but the family is. Species should attach directly to
+// the family via cascade (genus also created in the same plan).
+func TestBuild_CascadeSkipsMissingIntermediates(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "fam-1", Canonical: "Foidae", Rank: "family"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "f", Canonical: "Foidae", Rank: "family"},
+			{MentionID: "g", ParentMentionID: "f",
+				Canonical: "Aus", Authorship: "Smith, 2020", Rank: "genus"},
+			{MentionID: "s", ParentMentionID: "g",
+				Canonical: "Aus novus", Authorship: "Smith, 2020",
+				Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 3 {
+		t.Fatalf("want 3 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	// [0] family match, [1] genus create under fam-1, [2] species
+	// create under the genus's LocalID.
+	if plan.Actions[0].Kind != ActionMatch {
+		t.Fatalf("actions[0] want ActionMatch, got %#v", plan.Actions[0])
+	}
+	if plan.Actions[1].Kind != ActionCreateTaxon || plan.Actions[1].CreateTaxon.ParentTaxonID != "fam-1" {
+		t.Fatalf("actions[1] want CreateTaxon parent=fam-1, got %#v", plan.Actions[1])
+	}
+	genusLocalID := plan.Actions[1].CreateTaxon.LocalID
+	if genusLocalID == "" {
+		t.Fatal("genus create action missing LocalID")
+	}
+	if plan.Actions[2].Kind != ActionCreateTaxon {
+		t.Fatalf("actions[2] want CreateTaxon, got %#v", plan.Actions[2])
+	}
+	if plan.Actions[2].CreateTaxon.ParentTaxonID != genusLocalID {
+		t.Errorf("species parent = %q, want the genus's plan-local id %q",
+			plan.Actions[2].CreateTaxon.ParentTaxonID, genusLocalID)
+	}
+}
+
+// TestBuild_CascadeChildBeforeParentInOrder: name_usages
+// intentionally reversed (species listed before its parent). The
+// planner memoizes via resolveMention, so processing order should
+// not affect the plan — species resolves its parent lazily.
+func TestBuild_CascadeChildBeforeParentInOrder(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "genus-1", Canonical: "Aus", Rank: "genus"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			// Species first this time.
+			{MentionID: "s", ParentMentionID: "g",
+				Canonical: "Aus novus", Rank: "species"},
+			{MentionID: "g", Canonical: "Aus", Rank: "genus"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	// Expected order (result of processing s first): resolve s
+	// recurses into g, which emits ActionMatch, then the species
+	// emits ActionCreateTaxon. The second top-level pass hits g's
+	// memoized entry and emits nothing more.
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[0].Kind != ActionMatch || plan.Actions[0].Match.TaxonID != "genus-1" {
+		t.Fatalf("actions[0] want genus match, got %#v", plan.Actions[0])
+	}
+	if plan.Actions[1].Kind != ActionCreateTaxon || plan.Actions[1].CreateTaxon.ParentTaxonID != "genus-1" {
+		t.Fatalf("actions[1] want species CreateTaxon under genus-1, got %#v", plan.Actions[1])
+	}
+}
+
+// TestBuild_CascadeAllOrphaned: nothing in the paper resolves at
+// all. Every mention flags with FlagUnresolvedAnchor.
+func TestBuild_CascadeAllOrphaned(t *testing.T) {
+	existing := Existing{}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "g", Canonical: "Aus", Rank: "genus"},
+			{MentionID: "s", ParentMentionID: "g",
+				Canonical: "Aus novus", Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	for i, a := range plan.Actions {
+		if a.Kind != ActionFlag || a.Flag.Kind != FlagUnresolvedAnchor {
+			t.Errorf("action[%d] want FlagUnresolvedAnchor, got %#v", i, a)
+		}
+	}
+}
+
 // TestBuild_Determinism: same inputs, two Build calls, identical
 // plans. Guards against map-iteration flakiness in the index.
 func TestBuild_Determinism(t *testing.T) {
