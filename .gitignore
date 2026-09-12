@@ -4,6 +4,9 @@
 # running their own hive instances.
 docker-compose.yml
 !pkg/prompts/*.md
+# Fixture .md files (fabricated test data, scenario README) also ship
+# with the repo.
+!testdata/**/*.md
 *.db
 *.db-wal
 *.db-shm
@@ -42,3 +45,7 @@ docker-compose.yml
 *.tei.xml
 *.grobid.xml
 *.meta.json
+
+# Fabricated fixture JATS documents (Order Tribbulida etc.) are
+# checked-in test data, distinct from real per-machine paper JATS.
+!testdata/**/*.jats.xml

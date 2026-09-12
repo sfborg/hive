@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fake JATS monograph for the assimilate-demo fixture.
+
+  Subject: Order Tribbulida — an entirely fictional insect-adjacent
+  order of "tribbles" drawn from Star Trek. No taxon, author,
+  institution, locality, date, or catalogue number in this document
+  refers to any real biological entity or real person. See README.md
+  for the fabrication policy and the scenario table this monograph
+  exercises.
+-->
+<article article-type="research-article" dtd-version="1.3" xml:lang="en"
+  xmlns:tp="http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
+  xmlns:gn="https://hive.sfborg.org/ns/gn/1.0"
+  xmlns:hive="https://hive.sfborg.org/ns/1.0"
+  xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <journal-meta>
+      <journal-id journal-id-type="publisher-id">iota-systematics</journal-id>
+      <journal-title-group>
+        <journal-title>Iota Systematics</journal-title>
+      </journal-title-group>
+      <issn publication-format="electronic">2999-0000</issn>
+    </journal-meta>
+    <article-meta>
+      <article-id pub-id-type="doi">10.99999/iota.demo.assimilate</article-id>
+      <title-group>
+        <article-title>A revision of the Order <tp:taxon-name full-name="Tribbulida">Tribbulida</tp:taxon-name>, with descriptions of new species and clarification of concept boundaries in <tp:taxon-name full-name="Tribbulus">Tribbulus</tp:taxon-name> and allied genera</article-title>
+      </title-group>
+      <contrib-group>
+        <contrib contrib-type="author">
+          <name><surname>Faulknerville</surname><given-names>Priya</given-names></name>
+          <email>faulknerville@fictional.example</email>
+        </contrib>
+        <contrib contrib-type="author">
+          <name><surname>Ochoa-Renn</surname><given-names>Malia</given-names></name>
+          <email>ochoa-renn@fictional.example</email>
+        </contrib>
+      </contrib-group>
+      <pub-date publication-format="electronic" date-type="pub"><year>2026</year></pub-date>
+      <volume>41</volume>
+      <issue>3</issue>
+      <fpage>101</fpage><lpage>148</lpage>
+      <abstract>
+        <p>We revise the fictional Order <tp:taxon-name full-name="Tribbulida">Tribbulida</tp:taxon-name>, describe eight new species, propose one new combination, and clarify concept boundaries for four previously described taxa. A junior synonymy in <tp:taxon-name full-name="Tribbulus multiplicans">Tribbulus multiplicans</tp:taxon-name> is proposed. The concept of <tp:taxon-name full-name="Tribbulus tribbulus">Tribbulus tribbulus</tp:taxon-name> is broadened; the concept of <tp:taxon-name full-name="Iotageminorius ferrugineus">Iotageminorius ferrugineus</tp:taxon-name> is narrowed. Every datum in this article is fabricated and the subject taxa do not correspond to any real biological entity.</p>
+      </abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec sec-type="intro">
+      <title>Introduction</title>
+      <p>The Order <tp:taxon-name full-name="Tribbulida">Tribbulida</tp:taxon-name> comprises small spherical organisms distributed across several fictional planetary systems. Earlier treatments (Marbleston 1867, Whittaker 1969, Bergwald 1996) established a baseline classification but left several nomenclatural questions unresolved. Here we address those gaps and describe additional taxa from recently examined material.</p>
+    </sec>
+    <sec sec-type="materials-and-methods">
+      <title>Materials and Methods</title>
+      <p>Specimens examined are lodged at the Museum of Fictional Taxonomy (MFT), the University of Speculative Zoology Collection (USTC), and the Kronos Herbivore Foundation collection (KHF). Coordinates are omitted; every specimen datum in this study is fabricated.</p>
+    </sec>
+    <sec sec-type="taxonomy">
+      <title>Systematics</title>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 1a: baseline new species (no picker fires) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Tribbulus novellus">Tribbulus novellus</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov.</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>Differs from congeners by a uniformly cream-colored pelage and reduced ventral tuft. Reproduction rate approximately half that of <tp:taxon-name full-name="Tribbulus multiplicans">T. multiplicans</tp:taxon-name>.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4001, adult specimen, Iota Geminorum IV, alpine tundra biome, coll. Faulknerville, no date recorded.</p>
+        </sec>
+        <sec sec-type="distribution"><title>Distribution</title>
+          <p>Iota Geminorum IV, alpine biome only.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 1b: another baseline new species -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Iotageminorius pallidus">Iotageminorius pallidus</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov.</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>Distinguished from <tp:taxon-name full-name="Iotageminorius ferrugineus">I. ferrugineus</tp:taxon-name> by pale coloration and smaller body size.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4002, adult specimen, Iota Geminorum IV, coastal biome, coll. Ochoa-Renn.</p>
+        </sec>
+        <sec sec-type="distribution"><title>Distribution</title>
+          <p>Iota Geminorum IV, coastal biome.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 2: new combination (homotypic, RCC5 auto == via basionym) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Tribbulus glomivorans">Tribbulus glomivorans</tp:taxon-name> (Coombsworth, 1972) comb. nov.</title>
+        <sec sec-type="nomenclature"><title>Nomenclature</title>
+          <p><tp:taxon-name full-name="Glommivorus glomivorans">Glommivorus glomivorans</tp:taxon-name> Coombsworth, 1972: 61 — basionym.</p>
+        </sec>
+        <sec sec-type="remarks"><title>Remarks</title>
+          <p>Molecular and morphological evidence places this species within <tp:taxon-name full-name="Tribbulus">Tribbulus</tp:taxon-name> rather than <tp:taxon-name full-name="Glommivorus">Glommivorus</tp:taxon-name>. The genus <tp:taxon-name full-name="Glommivorus">Glommivorus</tp:taxon-name> is proposed as a junior synonym of <tp:taxon-name full-name="Tribbulus">Tribbulus</tp:taxon-name> pending a broader generic revision.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 3: heterotypic == synonymy (curator confirms same concept) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Tribbulus multiplicans">Tribbulus multiplicans</tp:taxon-name> Whittaker, 1969</title>
+        <sec sec-type="nomenclature"><title>Synonymy</title>
+          <p><tp:taxon-name full-name="Tribbulus multiplicans">Tribbulus multiplicans</tp:taxon-name> Whittaker, 1969: 236.</p>
+          <p><tp:taxon-name full-name="Tribbulus fecundissimus">Tribbulus fecundissimus</tp:taxon-name> Ericksmith, 1974: 88, syn. nov.</p>
+        </sec>
+        <sec sec-type="remarks"><title>Remarks</title>
+          <p>Examination of the Ericksmith holotype (KHF-TRB-0331) shows no morphometric separation from Whittaker's type series. We treat the two names as heterotypic synonyms referring to the same concept.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 4: heterotypic < synonymy (paper's concept narrower) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Iotageminorius ferrugineus">Iotageminorius ferrugineus</tp:taxon-name> Marbleston, 1968, sensu stricto</title>
+        <sec sec-type="nomenclature"><title>Concept</title>
+          <p>We restrict <tp:taxon-name full-name="Iotageminorius ferrugineus">I. ferrugineus</tp:taxon-name> to specimens matching Marbleston's original type locality (Iota Geminorum IV, temperate biome). Marbleston's paratype series from Kronos-adjacent systems is here excluded and treated as an undescribed lineage pending a molecular study.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype (fide Marbleston 1968): MFT-TRB-0119.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 5: sensu lato marker (deterministic RCC5 hint, no ambiguity) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Tribbulus tribbulus">Tribbulus tribbulus</tp:taxon-name> Marbleston, 1867, sensu lato</title>
+        <sec sec-type="nomenclature"><title>Concept</title>
+          <p>We adopt a broader interpretation of <tp:taxon-name full-name="Tribbulus tribbulus">T. tribbulus</tp:taxon-name> that includes specimens previously assigned to <tp:taxon-name full-name="Tribbulus dubius">T. dubius</tp:taxon-name> Ericksmith, 1974, based on shared reproductive-rate profiles and pelage micro-structure. The narrower sensu stricto concept is retained for the type-locality population where necessary.</p>
+        </sec>
+        <sec sec-type="remarks"><title>Remarks</title>
+          <p><tp:taxon-name full-name="Tribbulus dubius">Tribbulus dubius</tp:taxon-name> Ericksmith, 1974 is here treated as a junior synonym of <tp:taxon-name full-name="Tribbulus tribbulus">T. tribbulus</tp:taxon-name>.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 6: sensu <author> case (ambiguity warning) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Deepspacius rainbowicus">Deepspacius rainbowicus</tp:taxon-name>, sensu Hallitonn, 2003</title>
+        <sec sec-type="nomenclature"><title>Concept</title>
+          <p>We follow Hallitonn (2003) in restricting <tp:taxon-name full-name="Deepspacius rainbowicus">D. rainbowicus</tp:taxon-name> to specimens with tetrachromatic iridescence, excluding the dichromatic morph originally illustrated by Bergwald (1996). The excluded morph awaits formal description.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 7: ambiguous synonym (same synonym under two accepted taxa) -->
+      <!-- Tribbulus dubius appears above under T. tribbulus (scenario 5),  -->
+      <!-- and now also as a synonym under T. multiplicans below.          -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Tribbulus multiplicans">Tribbulus multiplicans</tp:taxon-name> Whittaker, 1969 — additional synonymy note</title>
+        <sec sec-type="nomenclature"><title>Note</title>
+          <p>Some specimens historically referred to <tp:taxon-name full-name="Tribbulus dubius">Tribbulus dubius</tp:taxon-name> Ericksmith, 1974 (particularly the KHF paratype series) show reproductive-rate signatures consistent with <tp:taxon-name full-name="Tribbulus multiplicans">T. multiplicans</tp:taxon-name>. We propose <tp:taxon-name full-name="Tribbulus dubius">T. dubius</tp:taxon-name> as an additional junior synonym under <tp:taxon-name full-name="Tribbulus multiplicans">T. multiplicans</tp:taxon-name> for those specimens. This assignment overlaps with the disposition proposed above for the <tp:taxon-name full-name="Tribbulus tribbulus">T. tribbulus</tp:taxon-name> treatment; the two placements are not fully congruent and reflect two contested interpretations that await further study.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 8: auct. non misapplication (RCC5 |, disjoint) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Xenopsyllotribbulus parasiticus">Xenopsyllotribbulus parasiticus</tp:taxon-name> auct. non Ericksmith, 1974</title>
+        <sec sec-type="nomenclature"><title>Misapplication</title>
+          <p>Recent literature (e.g. Bergwald 2001, Faulknerville 2015) has applied the name <tp:taxon-name full-name="Xenopsyllotribbulus parasiticus">X. parasiticus</tp:taxon-name> to specimens that differ substantially from Ericksmith's holotype. We treat the recent-literature usage as a misapplication and reserve Ericksmith's name for the type-locality population only. Formal description of the misapplied taxon is deferred pending genetic sampling.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 9: homonym / duplicate (same name for two species) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Grexinia flava">Grexinia flava</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov. (montane form)</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>A yellow-pelaged species from the Cyrus III montane biome. Distinguished from other Grexinia species by a keel-like ventral ridge.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4008, adult specimen, Cyrus III, montane biome, coll. Faulknerville.</p>
+        </sec>
+      </sec>
+      <sec>
+        <title><tp:taxon-name full-name="Grexinia flava">Grexinia flava</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov. (littoral form)</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>A yellow-pelaged species from the Cyrus III littoral biome. Distinguished from the montane <tp:taxon-name full-name="Grexinia flava">G. flava</tp:taxon-name> above by smaller body size and absence of the ventral ridge. This entry uses the same specific epithet as the preceding treatment in error; correction is pending peer review.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4009, adult specimen, Cyrus III, littoral biome, coll. Ochoa-Renn.</p>
+        </sec>
+      </sec>
+
+      <!-- ============================================================ -->
+      <!-- SCENARIO 1c–1e: additional baseline new species (padding) -->
+      <!-- ============================================================ -->
+      <sec>
+        <title><tp:taxon-name full-name="Iotageminorius nigrofasciatus">Iotageminorius nigrofasciatus</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov.</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>Dark-banded pelage. Body size intermediate between <tp:taxon-name full-name="Iotageminorius ferrugineus">I. ferrugineus</tp:taxon-name> and <tp:taxon-name full-name="Iotageminorius pallidus">I. pallidus</tp:taxon-name>.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4003, adult specimen, Iota Geminorum IV, canyon biome, coll. Faulknerville.</p>
+        </sec>
+      </sec>
+
+      <sec>
+        <title><tp:taxon-name full-name="Xenopsyllotribbulus argenteus">Xenopsyllotribbulus argenteus</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov.</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>Silver-pelaged parasitic tribble. Cannot reproduce in the absence of a host.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: USTC-TRB-4005, adult specimen, Xelatian IV, associated with <tp:taxon-name full-name="Tribbulus multiplicans">T. multiplicans</tp:taxon-name> host, coll. Ochoa-Renn.</p>
+        </sec>
+      </sec>
+
+      <sec>
+        <title><tp:taxon-name full-name="Grexinia cyanella">Grexinia cyanella</tp:taxon-name> Faulknerville &amp; Ochoa-Renn, sp. nov.</title>
+        <sec sec-type="diagnosis"><title>Diagnosis</title>
+          <p>Small blue-pelaged species; the smallest known member of <tp:taxon-name full-name="Grexinia">Grexinia</tp:taxon-name>.</p>
+        </sec>
+        <sec sec-type="type-material"><title>Type material</title>
+          <p>Holotype: MFT-TRB-4010, adult specimen, Cyrus III, deep-forest biome, coll. Faulknerville.</p>
+        </sec>
+      </sec>
+    </sec>
+    <sec sec-type="acknowledgments">
+      <title>Acknowledgments</title>
+      <p>This fabricated monograph exists solely as an assimilate-flow fixture for the hive project. No specimens were examined, no fieldwork was conducted, and no funding was received.</p>
+    </sec>
+  </body>
+  <back>
+    <ref-list>
+      <ref id="ref-marb-1867"><mixed-citation>Marbleston A (1867) A monograph of the Tribbulidae. Journal of Speculative Zoology 3: 12–88.</mixed-citation></ref>
+      <ref id="ref-whit-1969"><mixed-citation>Whittaker J (1969) New Tribbulus from the Sherman deposit. Journal of Speculative Zoology 87: 233–241.</mixed-citation></ref>
+      <ref id="ref-marb-1968"><mixed-citation>Marbleston A (1968) Diagnoses of the genus Iotageminorius. Journal of Speculative Zoology 82: 141–159.</mixed-citation></ref>
+      <ref id="ref-coom-1972"><mixed-citation>Coombsworth R (1972) Predatory adaptations in Glommivorus. Journal of Speculative Zoology 104: 55–70.</mixed-citation></ref>
+      <ref id="ref-eric-1974"><mixed-citation>Ericksmith P (1974) Rapid multipliers of the Kronos-Iota corridor. Iota Systematics 4: 77–110.</mixed-citation></ref>
+      <ref id="ref-berg-1996"><mixed-citation>Bergwald H (1996) Iridescent Tribbulidae from the deep-space stations. Iota Systematics 11: 3–24.</mixed-citation></ref>
+      <ref id="ref-hall-2003"><mixed-citation>Hallitonn K (2003) A tetrachromatic revision of Deepspacius. Iota Systematics 18: 45–66.</mixed-citation></ref>
+    </ref-list>
+  </back>
+</article>
