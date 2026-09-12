@@ -113,6 +113,15 @@ const iconPaths = {
     <path d="M9 3v18" />
     <path d="M15 3v18" />
   `,
+  // download — arrow-into-tray. Currently the "export compose
+  // tree as fixture JSON" button on the Assertions tab; a hedge
+  // against docker ghost-inode losses (the browser reads through
+  // the running container). Lucide's download.
+  download: svg`
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  `,
   // combine — Assembly sidebar view. Represents combining an
   // extracted sector (subtree + attached facts) into the
   // existing taxonomy tree. Lucide's combine.
@@ -19106,6 +19115,18 @@ class SfgaReferences extends LitElement {
           >
             ${renderIcon("columns-3", 16)}
           </button>
+          <button
+            class="icon-btn"
+            type="button"
+            ?disabled=${!hasTree}
+            title=${hasTree
+              ? "Export the compose tree as a fixture-shaped JSON file"
+              : "Run a compose extraction first"}
+            aria-label="Export compose tree"
+            @click=${() => this._exportComposeTree()}
+          >
+            ${renderIcon("download", 16)}
+          </button>
         </div>
         ${this._compareMode
           ? this._renderCompareView()
@@ -19185,6 +19206,48 @@ class SfgaReferences extends LitElement {
   // compare button — need at least two compose runs to compare.
   _composeRunCount() {
     return (this._runs || []).filter((r) => r.purpose === "compose").length;
+  }
+
+  // _exportComposeTree downloads the current reference's most
+  // recent compose run as a fixture-shaped JSON file. Backed by
+  // GET /api/reference/{id}/compose-tree, which reads through the
+  // running hive process (so a docker ghost inode's contents can
+  // still be pulled out through the browser even when host-side
+  // sqlite3 tooling only sees a pristine DB).
+  async _exportComposeTree() {
+    const refID = this._selectedId;
+    if (!refID) return;
+    try {
+      const res = await fetch(
+        `/api/reference/${encodeURIComponent(refID)}/compose-tree`,
+      );
+      if (!res.ok) {
+        throw new Error(`compose-tree export: HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Prefer the server-side Content-Disposition filename when
+      // present so downloads carry a stable name that includes the
+      // reference-id prefix and the run timestamp. Fall back to a
+      // generic name otherwise.
+      const cd = res.headers.get("content-disposition") || "";
+      let filename = "compose_run.json";
+      const m = /filename="([^"]+)"/.exec(cd);
+      if (m) filename = m[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      // Attach into the light DOM so the click is dispatchable;
+      // Shadow-DOM downloads work in some browsers and fail in
+      // others.
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("export compose tree failed:", e);
+    }
   }
 
   _toggleCompareMode() {

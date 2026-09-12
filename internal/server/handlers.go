@@ -96,6 +96,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("POST /api/archive/reassemble", s.handleReassembleArchive)
 	mux.HandleFunc("GET /api/archive/assembler-nodes", s.handleAssemblerNodes)
+	mux.HandleFunc("GET /api/reference/{id}/compose-tree", s.handleExportComposeTree)
 	mux.HandleFunc("GET /api/taxon/{id}/overlays", s.handleListOverlaysForTaxon)
 	mux.HandleFunc("POST /api/taxon/{id}/overlays", s.handleCreateOverlay)
 	mux.HandleFunc("GET /api/overlay/{id}", s.handleGetOverlay)
@@ -729,6 +730,117 @@ func (s *server) handleReassembleArchive(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, reassembleReportToAPI(report))
+}
+
+// composeTreeExportEnvelope mirrors the shape of the git-committed
+// fixture at testdata/assimilate_demo/compose_run.json so a
+// downloaded file can be dropped in as a fixture with no wrapping
+// step. Keep this struct in sync with composeRunFixture in
+// tools/mkassimilatedemo — they're the same on-disk contract.
+type composeTreeExportEnvelope struct {
+	RunID       string          `json:"run_id"`
+	ReferenceID string          `json:"reference_id"`
+	Purpose     string          `json:"purpose"`
+	SourceKind  string          `json:"source_kind"`
+	SourceID    string          `json:"source_id"`
+	Notes       string          `json:"notes,omitempty"`
+	CostUSD     float64         `json:"cost_usd,omitempty"`
+	CreatedAt   string          `json:"created_at,omitempty"`
+	RawOutput   json.RawMessage `json:"raw_output"`
+}
+
+// handleExportComposeTree returns the envelope-wrapped compose
+// tree for a reference's most recent compose extraction run,
+// downloadable as a file with Content-Disposition: attachment.
+// Same shape as testdata/assimilate_demo/compose_run.json so the
+// download can seed a fresh fixture in place.
+//
+// Optional query param ?run_id= picks a specific compose run.
+// Without it, the most recent compose run for the reference is
+// selected. 404 when the reference has no compose run at all
+// (or the named run_id isn't a compose run against this
+// reference).
+//
+// Two motivations for having this: a curator inspecting a specific
+// run's raw output without spelunking SQLite, and a hedge against
+// docker ghost-inode losses (the browser reads through the running
+// container, so a ghost inode's contents come out even when host
+// tooling only sees a pristine DB).
+//
+// @Summary      Export a reference's compose tree as JSON
+// @Tags         references
+// @Produce      json
+// @Param        id     path  string true  "Reference ID"
+// @Param        run_id query string false "Specific run to export (defaults to most recent compose run)"
+// @Success      200 {object} composeTreeExportEnvelope
+// @Failure      404 {object} problem
+// @Router       /reference/{id}/compose-tree [get]
+func (s *server) handleExportComposeTree(w http.ResponseWriter, r *http.Request) {
+	refID := r.PathValue("id")
+	if refID == "" {
+		writeBadRequest(w, r, "reference id is required")
+		return
+	}
+	wantRunID := r.URL.Query().Get("run_id")
+	runs, err := s.a.ListExtractionRunsByReference(r.Context(), refID, false)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	var picked *hive.ExtractionRun
+	for i := range runs {
+		if runs[i].Purpose != "compose" {
+			continue
+		}
+		if wantRunID != "" && runs[i].RunID != wantRunID {
+			continue
+		}
+		picked = &runs[i]
+		break
+	}
+	if picked == nil {
+		msg := fmt.Sprintf("no compose extraction run for reference %q", refID)
+		if wantRunID != "" {
+			msg = fmt.Sprintf("no compose extraction run %q for reference %q",
+				wantRunID, refID)
+		}
+		writeProblem(w, r, fmt.Errorf("%s: %w", msg, hive.ErrNotFound))
+		return
+	}
+	raw := json.RawMessage(picked.RawOutputJSON)
+	if len(raw) == 0 {
+		raw = json.RawMessage("{}")
+	}
+	env := composeTreeExportEnvelope{
+		RunID:       picked.RunID,
+		ReferenceID: picked.ReferenceID,
+		Purpose:     picked.Purpose,
+		SourceKind:  picked.SourceKind,
+		SourceID:    picked.SourceID,
+		Notes:       picked.Notes,
+		CostUSD:     picked.CostUSD,
+		CreatedAt:   picked.CreatedAt.Format(time.RFC3339Nano),
+		RawOutput:   raw,
+	}
+	// Include reference id (short prefix) + timestamp in the
+	// filename so downloads from different references / runs don't
+	// collide in the browser's downloads folder.
+	shortRef := refID
+	if len(shortRef) > 8 {
+		shortRef = shortRef[:8]
+	}
+	filename := fmt.Sprintf("compose_run_%s_%s.json",
+		shortRef, picked.CreatedAt.Format("20060102-150405"))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s"`, filename))
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(env); err != nil {
+		// Response headers may already be flushed; a log entry is
+		// the best we can do at this point.
+		_ = err
+	}
 }
 
 // apiAssemblerNode is the JSON projection of hive.AssemblerNode
