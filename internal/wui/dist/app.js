@@ -1544,6 +1544,14 @@ class SfgaApp extends LitElement {
     // synonyms off = accepted-only). Kept as an affirmative here so
     // the API param maps directly: include_synonyms=this.synonyms.
     _searchFilters: { state: true },
+    // Assimilate view — cached Layer 2 nodes from
+    // /api/archive/assembler-nodes with per-node color coding.
+    // _assimilateLoading is true while a fetch or a reassemble is
+    // in flight. _assimilateError carries the last error message
+    // (empty on success).
+    _assimilateNodes: { state: true },
+    _assimilateLoading: { state: true },
+    _assimilateError: { state: true },
   };
 
   // View list — matches CLAUDE.md § keybinding conventions and the
@@ -1578,6 +1586,12 @@ class SfgaApp extends LitElement {
     // = <curator ORCID>. Publish flow attaches a citation, moving
     // the row into the reference-backed tree. See
     // project_wip_density_prioritization memory. Task #185.
+    // Assimilate: Layer 2 (literature view) with per-node color
+    // coding. Green = machine-assembled, no conflicts. Amber =
+    // machine-assembled with a review flag. Red = machine
+    // couldn't assemble. Blue = curator override active. See
+    // docs/2026-09-12_LITERATURE_VIEW.md § Slice 2 for the model.
+    { id: "assimilate", label: "Assimilate", icon: "combine", key: "a" },
     { id: "revision", label: "Revise", icon: "flag", key: "r" },
     { id: "issues", label: "Issues", icon: "triangle-alert", key: "i" },
   ];
@@ -1744,12 +1758,101 @@ class SfgaApp extends LitElement {
     }
     /* Assembly + Revision stubs share the metadata-screen shape —
        single grid track with padding — until their real layouts
-       land. Content lives inside a .stub-view centered card. */
+       land. Content lives inside a .stub-view centered card.
+       Assimilate uses the same shape but populates it with the
+       Slice 2 color-coded node list. */
     .screen.assembly,
-    .screen.revision {
+    .screen.revision,
+    .screen.assimilate {
       grid-template-columns: 1fr;
       padding: var(--sp-5);
       overflow: auto;
+    }
+    .assimilate-toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-4);
+    }
+    .assimilate-toolbar .spacer {
+      flex: 1;
+    }
+    .assimilate-counts {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      color: var(--dim);
+      font-size: var(--fs-sm);
+      font-family: var(--font-mono);
+    }
+    .assimilate-empty {
+      color: var(--dim);
+      padding: var(--sp-4);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+    }
+    /* Node-color dots + row accents use the four fixed hues from
+       LITERATURE_VIEW.md § Color-coded node state. Chosen with the
+       existing severity tokens where they line up (--sev-info for
+       amber, --sev-error for red, --accent for blue) and a plain
+       success-green for the ok path. */
+    .dot {
+      display: inline-block;
+      width: 0.75em;
+      height: 0.75em;
+      border-radius: 50%;
+      margin-right: 0.15em;
+      vertical-align: middle;
+      background: currentColor;
+    }
+    .color-green   { color: color-mix(in oklab, var(--fg) 15%, #2d8a4a); }
+    .color-amber   { color: var(--sev-warn, #b8860b); }
+    .color-red     { color: var(--sev-error, #b93b3b); }
+    .color-blue    { color: var(--accent, #3966c9); }
+    .assimilate-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: var(--sp-2);
+    }
+    .assimilate-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto;
+      gap: var(--sp-2);
+      align-items: baseline;
+      padding: var(--sp-2) var(--sp-3);
+      border: 1px solid var(--border);
+      border-left-width: 4px;
+      border-radius: var(--radius-md);
+      background: var(--bg);
+    }
+    .row-green { border-left-color: color-mix(in oklab, var(--fg) 15%, #2d8a4a); }
+    .row-amber { border-left-color: var(--sev-warn, #b8860b); }
+    .row-red   { border-left-color: var(--sev-error, #b93b3b); }
+    .row-blue  { border-left-color: var(--accent, #3966c9); }
+    .assimilate-row .canonical {
+      font-weight: 500;
+      color: var(--fg);
+    }
+    .assimilate-row .authorship,
+    .assimilate-row .rank {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+    }
+    .assimilate-row .badge {
+      display: inline-block;
+      padding: 0 var(--sp-2);
+      border-radius: var(--radius-sm, 3px);
+      font-size: var(--fs-xs);
+      font-family: var(--font-mono);
+      background: color-mix(in oklab, var(--fg) 8%, var(--bg));
+      color: var(--fg);
+      white-space: nowrap;
+    }
+    .assimilate-row .overlay-badge {
+      background: color-mix(in oklab, var(--accent, #3966c9) 30%, var(--bg));
     }
     .stub-view {
       max-width: 40rem;
@@ -1822,6 +1925,9 @@ class SfgaApp extends LitElement {
     this._pendingReferenceId = "";
     this._pendingWorkspaceTab = "";
     this._searchFilters = this._loadSearchFilters();
+    this._assimilateNodes = [];
+    this._assimilateLoading = false;
+    this._assimilateError = "";
     // Bind the top-bar source once so the combobox reference is
     // stable across renders; the closure reads `this._searchFilters`
     // live, so filter toggles pick up on the next _runSearch tick
@@ -2107,6 +2213,9 @@ class SfgaApp extends LitElement {
       changed.has("_pendingWorkspaceTab")
     ) {
       this._syncToHash();
+    }
+    if (changed.has("screen") && this.screen === "assimilate") {
+      this._loadAssimilateNodes();
     }
   }
 
@@ -2524,6 +2633,128 @@ class SfgaApp extends LitElement {
     return String(err);
   }
 
+  // _loadAssimilateNodes fetches the per-taxon color state from
+  // /api/archive/assembler-nodes and stores it on the component so
+  // _renderAssimilateScreen can render without doing async work
+  // inline. Errors surface via _assimilateError; the loading
+  // spinner shows while a fetch or a reassemble is in flight.
+  async _loadAssimilateNodes() {
+    if (this._assimilateLoading) return;
+    this._assimilateLoading = true;
+    this._assimilateError = "";
+    try {
+      const res = await fetch("/api/archive/assembler-nodes");
+      if (!res.ok) throw new Error(`assembler-nodes: HTTP ${res.status}`);
+      const nodes = await res.json();
+      this._assimilateNodes = Array.isArray(nodes) ? nodes : [];
+    } catch (e) {
+      this._assimilateError = this._formatError(e);
+    } finally {
+      this._assimilateLoading = false;
+    }
+  }
+
+  // _runReassemble POSTs to /api/archive/reassemble, then refetches
+  // the assimilate nodes. The reassemble endpoint runs the
+  // deterministic assembler over every compose extraction run,
+  // rewrites hive__assembler_flag, and runs the Layer 3 diff pass —
+  // so the color state and flag payloads change accordingly.
+  async _runReassemble() {
+    if (this._assimilateLoading) return;
+    this._assimilateLoading = true;
+    this._assimilateError = "";
+    try {
+      const res = await fetch("/api/archive/reassemble", { method: "POST" });
+      if (!res.ok) throw new Error(`reassemble: HTTP ${res.status}`);
+      // Result body carries the ReassembleReport; ignored here —
+      // the assembler-nodes fetch below re-derives the per-taxon
+      // state we render.
+      await res.json();
+      const nres = await fetch("/api/archive/assembler-nodes");
+      if (!nres.ok) throw new Error(`assembler-nodes: HTTP ${nres.status}`);
+      const nodes = await nres.json();
+      this._assimilateNodes = Array.isArray(nodes) ? nodes : [];
+    } catch (e) {
+      this._assimilateError = this._formatError(e);
+    } finally {
+      this._assimilateLoading = false;
+    }
+  }
+
+  // _renderAssimilateScreen renders the Layer 2 tree flattened
+  // into a per-node list, color-coded per
+  // docs/2026-09-12_LITERATURE_VIEW.md § Color-coded node state.
+  //
+  // Slice 2 initial render is intentionally flat (not tree) so we
+  // can validate the color-derivation pipeline end-to-end before
+  // committing to a specific tree renderer. Filter chips,
+  // bulk-accept, and click-to-preview land in the follow-up
+  // commit.
+  _renderAssimilateScreen() {
+    const nodes = this._assimilateNodes || [];
+    const counts = { green: 0, amber: 0, red: 0, blue: 0 };
+    for (const n of nodes) {
+      if (counts[n.color] !== undefined) counts[n.color]++;
+    }
+    return html`
+      <div class="screen assimilate">
+        <div class="assimilate-toolbar">
+          <div class="assimilate-counts" role="status">
+            <span class="dot color-green"></span> ${counts.green}
+            <span class="dot color-amber"></span> ${counts.amber}
+            <span class="dot color-red"></span> ${counts.red}
+            <span class="dot color-blue"></span> ${counts.blue}
+          </div>
+          <span class="spacer"></span>
+          <button
+            type="button"
+            class="btn"
+            ?disabled=${this._assimilateLoading ||
+              (this.archive && this.archive.read_only)}
+            @click=${() => this._runReassemble()}
+            title="Rerun the assembler across every compose extraction run"
+          >
+            ${this._assimilateLoading ? "reassembling…" : "reassemble"}
+          </button>
+        </div>
+        ${this._assimilateError
+          ? html`<div class="error" role="alert">${this._assimilateError}</div>`
+          : ""}
+        ${nodes.length === 0 && !this._assimilateLoading
+          ? html`<div class="assimilate-empty">
+              No Layer 2 nodes yet. Ingest a paper through the
+              extraction pipeline, then click reassemble.
+            </div>`
+          : ""}
+        <ul class="assimilate-list">
+          ${nodes.map(
+            (n) => html`
+              <li class="assimilate-row row-${n.color}">
+                <span class="dot color-${n.color}"></span>
+                <span class="canonical">${n.canonical || n.taxon_id}</span>
+                <span class="authorship">${n.authorship || ""}</span>
+                <span class="rank">${n.rank || ""}</span>
+                ${n.has_overlay
+                  ? html`<span class="badge overlay-badge" title="curator overlay active">override</span>`
+                  : ""}
+                ${(n.flags || []).map(
+                  (f) => html`
+                    <span
+                      class="badge flag-badge flag-${f.kind}"
+                      title=${f.message}
+                    >
+                      ${f.kind.replace(/_/g, " ")}
+                    </span>
+                  `,
+                )}
+              </li>
+            `,
+          )}
+        </ul>
+      </div>
+    `;
+  }
+
   render() {
     // Header title comes from the dataset metadata when present, else
     // Falls back to the literal "hive" for legacy archives without a
@@ -2672,6 +2903,8 @@ class SfgaApp extends LitElement {
             ></sfga-issues>
           </div>
         `;
+      case "assimilate":
+        return this._renderAssimilateScreen();
       case "revision":
         return html`
           <div class="screen revision">
