@@ -63,6 +63,19 @@ openapi:
 demo path='./demo.db':
     go run ./tools/mkdemo {{path}}
 
+# Generate the assimilate-demo fixture archive at
+# ./data/assimilate_demo.db (or the given path). Seeds the existing DB
+# tree from testdata/assimilate_demo/existing_tree.sql and ingests the
+# fake JATS monograph so a reference with attached JATS shows up as
+# soon as the archive opens. Default path lands under ./data/ so
+# `just docker-up assimilate_demo.db` picks it up without a copy step.
+# Idempotent: deletes the archive + its sidecar library first so
+# re-runs produce a clean fixture. See
+# testdata/assimilate_demo/README.md for the scenario table.
+assimilate-demo path='./data/assimilate_demo.db':
+    mkdir -p "$(dirname {{path}})"
+    go run ./tools/mkassimilatedemo {{path}}
+
 # Build, then open `hive view` on the demo archive (or the given archive).
 # Regenerates the demo if the path is ./demo.db and it doesn't exist yet.
 view path='./demo.db': build
