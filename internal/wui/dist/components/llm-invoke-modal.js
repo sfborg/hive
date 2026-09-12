@@ -47,6 +47,7 @@ class SfgaLlmInvokeModal extends LitElement {
     _modelsCache: { state: true },
     _loadingProviders: { state: true },
     _running: { state: true },
+    _elapsedMs: { state: true },
     _result: { state: true },
     _error: { state: true },
     // Prompt picker state. _prompts is the merged shipped +
@@ -314,8 +315,34 @@ class SfgaLlmInvokeModal extends LitElement {
       gap: var(--sp-2);
       text-align: center;
     }
+    /* Rotating ring — real animated spinner so the modal doesn't
+       look hung during a multi-minute Sonnet / Opus NER pass. Uses
+       existing sev-info tokens; no new design values. */
     .running .spinner {
-      font-size: var(--fs-xl);
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--sev-info-bg);
+      border-top-color: var(--sev-info);
+      border-radius: 50%;
+      margin: 0 auto;
+      animation: llm-spin 900ms linear infinite;
+    }
+    /* Elapsed-time counter — updates every second so the curator
+       can distinguish "still working" from "actually hung." */
+    .running .elapsed {
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+    }
+    @keyframes llm-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .running .spinner {
+        animation-duration: 3000ms;
+      }
     }
     .result {
       padding: var(--sp-3);
@@ -325,10 +352,28 @@ class SfgaLlmInvokeModal extends LitElement {
       display: grid;
       gap: var(--sp-2);
     }
+    /* Warn variant for a partial-success run (no stage failure but
+       nothing materialized, or NER JSON was malformed) — visual
+       severity has to reflect actual state, not just presence of a
+       response. */
+    .result.result--warn {
+      border-color: var(--sev-warn);
+      background: var(--sev-warn-bg);
+    }
+    .result.result--error {
+      border-color: var(--sev-error);
+      background: var(--sev-error-bg);
+    }
     .result .headline {
       font-weight: 600;
       font-size: var(--fs-md);
       color: var(--sev-info);
+    }
+    .result.result--warn .headline {
+      color: var(--sev-warn);
+    }
+    .result.result--error .headline {
+      color: var(--sev-error);
     }
     .result .step {
       display: grid;
@@ -603,6 +648,7 @@ class SfgaLlmInvokeModal extends LitElement {
     if (!this._canSubmit()) return;
     this._running = true;
     this._error = "";
+    this._startElapsedTicker();
     try {
       const body = {
         reference_id: this.referenceId,
@@ -625,7 +671,36 @@ class SfgaLlmInvokeModal extends LitElement {
       this._error = `run failed: ${this._errMsg(err)}`;
     } finally {
       this._running = false;
+      this._stopElapsedTicker();
     }
+  }
+
+  /* Elapsed-time ticker. Uses setInterval to update _elapsedMs
+     once per second while the pipeline runs; cleared on
+     completion or disconnect so we don't leak a timer. */
+  _startElapsedTicker() {
+    this._startedAt = Date.now();
+    this._elapsedMs = 0;
+    this._stopElapsedTicker();
+    this._tickHandle = setInterval(() => {
+      this._elapsedMs = Date.now() - (this._startedAt || Date.now());
+    }, 1000);
+  }
+  _stopElapsedTicker() {
+    if (this._tickHandle) {
+      clearInterval(this._tickHandle);
+      this._tickHandle = null;
+    }
+  }
+  disconnectedCallback() {
+    this._stopElapsedTicker();
+    super.disconnectedCallback();
+  }
+  _formatElapsed(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${mm}:${ss.toString().padStart(2, "0")}`;
   }
 
   _formatUSD(n) {
@@ -923,12 +998,13 @@ class SfgaLlmInvokeModal extends LitElement {
   _renderRunning() {
     return html`
       <div class="running" role="status" aria-live="polite">
-        <div class="spinner">⋯</div>
+        <div class="spinner" aria-hidden="true"></div>
         <div>Running extraction pipeline…</div>
+        <div class="elapsed">${this._formatElapsed(this._elapsedMs || 0)} elapsed</div>
         <div class="form-note">
-          NER pass first, then tree composition. This can take up
-          to a minute or two for a full paper — don't close the
-          modal.
+          NER pass first, then tree composition. Whole-paper runs
+          on larger models (Sonnet / Opus) can take several
+          minutes; don't close the modal.
         </div>
       </div>
     `;
@@ -952,8 +1028,13 @@ class SfgaLlmInvokeModal extends LitElement {
     // malformed (often truncated at max_tokens).
     const partialSuccess =
       !failed && (materializeErr || assertionsN === 0);
+    const resultClass = failed
+      ? "result result--error"
+      : partialSuccess
+        ? "result result--warn"
+        : "result";
     return html`
-      <div class="result" role="status">
+      <div class="${resultClass}" role="status">
         <div class="headline">
           ${failed
             ? `⚠ ${failed} step failed`
