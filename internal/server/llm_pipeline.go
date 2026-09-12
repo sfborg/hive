@@ -223,11 +223,20 @@ func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---------- Step 2: Compose ----------
-	// compose_v2 stops emitting the ISO `date` field (server derives
-	// it via pkg/taxonomy/labeldate) and prohibits reusing source
-	// IDs across distinct compose rows. Older archives still carry
-	// runs tagged compose_v1; that file remains embedded for
-	// provenance lookup.
+	// compose_v4 renames accordingToAuthor -> accordingTo (matching
+	// both CoLDP's taxon.col__according_to_id and TCS2's
+	// tcs:accordingTo property) and documents the implied
+	// concept-relation vocabulary as CoLDP's taxon_concept_rel_type
+	// (EQUALS / INCLUDES / INCLUDED_IN / OVERLAPS / EXCLUDES).
+	// compose_v3 added sensu-qualifier fields (namePhrase,
+	// accordingToAuthor, nomenclaturalNote) on name_usages and
+	// preserves per-mention rows so ambiguous-synonymy and
+	// primary-homonym cases don't collapse. compose_v2 stopped
+	// emitting the ISO `date` field (server derives it via
+	// pkg/taxonomy/labeldate) and prohibited reusing source IDs
+	// across distinct compose rows. Older archives still carry
+	// runs tagged compose_v1 / compose_v2 / compose_v3; those files
+	// remain embedded for provenance lookup.
 	composePromptID := body.ComposePromptID
 	if composePromptID == "" {
 		composePromptID = defaultComposePromptID
@@ -544,7 +553,7 @@ var _ = errors.New
 // lands in pkg/prompts/ that we want to make the default.
 const (
 	defaultNERPromptID     = "ner_v6"
-	defaultComposePromptID = "compose_v2"
+	defaultComposePromptID = "compose_v4"
 )
 
 // resolvePromptForRun resolves a prompt ID (curator fork UUID or
