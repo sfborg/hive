@@ -579,13 +579,43 @@ func (s *planState) resolveMention(mentionID string) mentionResolution {
 	// new-taxon insert.
 	parent := s.cascadeParent(nu)
 	if parent == "" {
-		// TODO(slice-1 bracket): species-group names with genus
-		// gone → bracket fallback. For now, flag.
 		s.actions = append(s.actions, flag(prov, FlagUnresolvedAnchor,
 			"no existing taxon matched, and no cascade anchor found",
 			nil))
 		return s.resolved[key]
 	}
+
+	// Bracket-fallback rule: species-group mention whose immediate
+	// paper-asserted parent is above genus rank (i.e., the paper
+	// jumped over the genus level, e.g. Order → Species) means the
+	// paper is genuinely uncertain about the genus. Rather than
+	// fabricate one, apply the [Aus] bus convention and mark
+	// "provisionally accepted".
+	if s.rules.BracketFallback && isSpeciesGroupRank(nu.Rank) &&
+		s.paperParentIsAboveGenus(nu) {
+		genus, species := splitBinomial(nu.Canonical)
+		if genus != "" && species != "" {
+			s.actions = append(s.actions, Action{
+				Kind:                   ActionBracket,
+				SourcePaperReferenceID: prov.ReferenceID,
+				SourceMentionID:        prov.MentionID,
+				Bracket: BracketAction{
+					AnchorTaxonID:  parent,
+					BracketedGenus: "[" + genus + "]",
+					Species:        species,
+					Authorship:     nu.Authorship,
+					Rank:           nu.Rank,
+				},
+			})
+			// Don't virtualize a bracketed taxon into the index;
+			// its identity is deliberately unresolved and future
+			// mentions shouldn't auto-match to it.
+			r := mentionResolution{kind: resolvedNone}
+			s.resolved[key] = r
+			return r
+		}
+	}
+
 	localID := s.nextPlanLocalID()
 	s.actions = append(s.actions, Action{
 		Kind:                   ActionCreateTaxon,
@@ -608,6 +638,59 @@ func (s *planState) resolveMention(mentionID string) mentionResolution {
 	r := mentionResolution{kind: resolvedCreated, anchorID: localID}
 	s.resolved[key] = r
 	return r
+}
+
+// isSpeciesGroupRank reports whether a CoLDP rank string names a
+// species-group rank (per the ICZN + ICN Codes). Case-insensitive.
+func isSpeciesGroupRank(rank string) bool {
+	switch strings.ToLower(strings.TrimSpace(rank)) {
+	case "species", "subspecies", "variety", "subvariety",
+		"form", "subform", "aggregate",
+		"section", "subsection": // rare botanical species-group ranks
+		return true
+	}
+	return false
+}
+
+// paperParentIsAboveGenus checks whether the mention's immediate
+// paper-asserted parent (if any) sits at a rank above genus. When
+// the parent mention is missing or has no rank, that also counts
+// as "above genus" for the bracket rule — no genus context means
+// no genus context.
+func (s *planState) paperParentIsAboveGenus(nu NameUsage) bool {
+	if nu.ParentMentionID == "" {
+		return true
+	}
+	parent, ok := s.paperMentions[nu.ParentMentionID]
+	if !ok {
+		return true
+	}
+	pr := strings.ToLower(strings.TrimSpace(parent.Rank))
+	if pr == "" {
+		return true
+	}
+	// Anything explicitly at genus or below is a valid genus
+	// context; anything else counts as above-genus for the
+	// bracket rule.
+	switch pr {
+	case "genus", "subgenus", "section", "subsection":
+		return false
+	}
+	return true
+}
+
+// splitBinomial extracts (genus, species) from a canonical
+// binomial. Returns ("", "") if the canonical isn't at least
+// two space-separated words.
+func splitBinomial(canonical string) (string, string) {
+	parts := strings.Fields(canonical)
+	if len(parts) < 2 {
+		return "", ""
+	}
+	// Species-group binomial or trinomial: first word is genus,
+	// remainder is species (or species + subspecific epithet the
+	// bracket rule treats as one string).
+	return parts[0], strings.Join(parts[1:], " ")
 }
 
 // cascadeParent walks the paper's parent chain for the given

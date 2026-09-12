@@ -300,6 +300,126 @@ func TestBuild_CascadeAllOrphaned(t *testing.T) {
 	}
 }
 
+// TestBuild_BracketFiresWhenPaperSkipsGenus: paper places a species
+// directly under a family (no genus mention). With bracket-fallback
+// enabled (the default), the species emits an ActionBracket
+// anchored to the family, with the genus bracketed.
+func TestBuild_BracketFiresWhenPaperSkipsGenus(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "fam-1", Canonical: "Foidae", Rank: "family"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "f", Canonical: "Foidae", Rank: "family"},
+			{MentionID: "s", ParentMentionID: "f",
+				Canonical: "Aus dubius", Authorship: "L., 1970",
+				Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[0].Kind != ActionMatch {
+		t.Fatalf("actions[0] want ActionMatch (family), got %#v", plan.Actions[0])
+	}
+	if plan.Actions[1].Kind != ActionBracket {
+		t.Fatalf("actions[1] want ActionBracket, got %#v", plan.Actions[1])
+	}
+	br := plan.Actions[1].Bracket
+	if br.AnchorTaxonID != "fam-1" {
+		t.Errorf("bracket anchor = %q, want fam-1", br.AnchorTaxonID)
+	}
+	if br.BracketedGenus != "[Aus]" {
+		t.Errorf("bracketed genus = %q, want [Aus]", br.BracketedGenus)
+	}
+	if br.Species != "dubius" {
+		t.Errorf("species = %q, want dubius", br.Species)
+	}
+	if br.Authorship != "L., 1970" {
+		t.Errorf("authorship = %q, want L., 1970", br.Authorship)
+	}
+}
+
+// TestBuild_BracketSkippedForNormalCascade: paper's genus is
+// asserted but not in the DB. Cascade creates the genus, and the
+// species falls into normal ActionCreateTaxon (NOT bracket) under
+// that plan-local genus.
+func TestBuild_BracketSkippedForNormalCascade(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "fam-1", Canonical: "Foidae", Rank: "family"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "f", Canonical: "Foidae", Rank: "family"},
+			{MentionID: "g", ParentMentionID: "f",
+				Canonical: "Aus", Authorship: "L., 1970", Rank: "genus"},
+			{MentionID: "s", ParentMentionID: "g",
+				Canonical: "Aus novus", Authorship: "L., 1970",
+				Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 3 {
+		t.Fatalf("want 3 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[2].Kind != ActionCreateTaxon {
+		t.Errorf("species should CreateTaxon under created genus, got %#v",
+			plan.Actions[2])
+	}
+}
+
+// TestBuild_BracketDisabledFlagsInstead: when the rule is off, the
+// same paper (species with family-only parent) flags instead of
+// bracketing.
+func TestBuild_BracketDisabledFlagsInstead(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "fam-1", Canonical: "Foidae", Rank: "family"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "f", Canonical: "Foidae", Rank: "family"},
+			{MentionID: "s", ParentMentionID: "f",
+				Canonical: "Aus dubius", Rank: "species"},
+		},
+	}}
+	rules := DefaultRules()
+	rules.BracketFallback = false
+	plan := Build(papers, existing, rules)
+	// Without bracket fallback: the species is auto-created as a
+	// normal taxon under the family (per the cascade rule). That
+	// isn't ideal — the genus is fabricated — but it's the
+	// non-bracket behavior. If a curator wants bracketing, they
+	// leave the default rule on.
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[1].Kind != ActionCreateTaxon {
+		t.Errorf("actions[1] want ActionCreateTaxon (no bracket), got %#v",
+			plan.Actions[1])
+	}
+}
+
+// TestBuild_BracketWithNoAnchorFlags: species mention with no
+// parent and no family-level anchor. Cascade exhausts before the
+// bracket rule can pick an anchor; the mention flags.
+func TestBuild_BracketWithNoAnchorFlags(t *testing.T) {
+	existing := Existing{}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "s", Canonical: "Aus dubius", Rank: "species"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 1 || plan.Actions[0].Kind != ActionFlag {
+		t.Fatalf("want 1 ActionFlag, got %#v", plan.Actions)
+	}
+}
+
 // TestBuild_Determinism: same inputs, two Build calls, identical
 // plans. Guards against map-iteration flakiness in the index.
 func TestBuild_Determinism(t *testing.T) {
