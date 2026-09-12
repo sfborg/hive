@@ -1,58 +1,1393 @@
 {
-  "run_id": "fixture-compose-tribbulida-1",
+  "run_id": "fixture-compose-tribbulida-sonnet-1",
   "reference_id": "00000000-0000-4000-8000-000000000001",
   "purpose": "compose",
   "source_kind": "curator",
   "source_id": "assimilate-demo-fixture",
-  "notes": "Synthetic compose tree for the assimilate-demo fixture. Not real LLM output — hand-crafted to exercise every assembler rule (auto-match, cascade to a new taxon under an existing genus, bracket fallback for a genus-unresolved species, synonymy under an existing accepted taxon, sensu-lato concept marker driving an implicit-reference lookup). Overwrite this file with real Sonnet / Opus output once you've generated it to make the fixture semantically richer.",
+  "notes": "Sonnet-generated compose tree for the assimilate-demo fixture. Produced by running the fake Tribbulida monograph through the compose_v4 prompt (~$0.78, ~7 min). source_kind is set to \"curator\" for reproducibility \u2014 the pipeline version + model id it was actually generated under are preserved in git history rather than stamped on the row, so restoring this fixture from git does not fabricate a fresh anthropic-main provenance. To regenerate: re-run the extraction pipeline on the fixture reference, then extract via `sqlite3 <archive> \"SELECT raw_output_json FROM hive__extraction_run WHERE purpose=compose ORDER BY created_at DESC LIMIT 1\"` and drop the payload into raw_output.",
   "raw_output": {
     "name_usages": [
       {
-        "id": "hive:order-tribbulida",
-        "parentID": "",
-        "status": {"value": "accepted"},
-        "scientificName": {"value": "Tribbulida"},
-        "rank": {"value": "order"}
+        "id": "hive:tribbulida",
+        "parentID": null,
+        "scientificName": {
+          "value": "Tribbulida",
+          "sources": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        "rank": {
+          "value": "order",
+          "sources": [
+            "a1",
+            "a2",
+            "a3"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a1"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a1"
+          ]
+        }
       },
       {
         "id": "hive:tribbulus",
-        "parentID": "hive:order-tribbulida",
-        "status": {"value": "accepted"},
-        "scientificName": {"value": "Tribbulus"},
-        "rank": {"value": "genus"}
+        "parentID": "hive:tribbulida",
+        "scientificName": {
+          "value": "Tribbulus",
+          "sources": [
+            "a4",
+            "a9",
+            "a35",
+            "a50",
+            "a77"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a4",
+            "a9",
+            "a35",
+            "a50",
+            "a77"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a4"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a4"
+          ]
+        }
+      },
+      {
+        "id": "hive:iotageminorius",
+        "parentID": "hive:tribbulida",
+        "scientificName": {
+          "value": "Iotageminorius",
+          "sources": [
+            "a22",
+            "a64",
+            "a131"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a22",
+            "a64",
+            "a131"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a22"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a22"
+          ]
+        }
+      },
+      {
+        "id": "hive:deepspacius",
+        "parentID": "hive:tribbulida",
+        "scientificName": {
+          "value": "Deepspacius",
+          "sources": [
+            "a85"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a85"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a85"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a85"
+          ]
+        }
+      },
+      {
+        "id": "hive:xenopsyllotribbulus",
+        "parentID": "hive:tribbulida",
+        "scientificName": {
+          "value": "Xenopsyllotribbulus",
+          "sources": [
+            "a97",
+            "a143"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a97",
+            "a143"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a97"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a97"
+          ]
+        }
+      },
+      {
+        "id": "hive:grexinia",
+        "parentID": "hive:tribbulida",
+        "scientificName": {
+          "value": "Grexinia",
+          "sources": [
+            "a106",
+            "a118",
+            "a155"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a106",
+            "a118",
+            "a155"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a106"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a106"
+          ]
+        }
+      },
+      {
+        "id": "hive:glommivorus",
+        "parentID": "hive:tribbulus",
+        "scientificName": {
+          "value": "Glommivorus",
+          "sources": [
+            "a43",
+            "a41"
+          ]
+        },
+        "rank": {
+          "value": "genus",
+          "sources": [
+            "a43",
+            "a41"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a43"
+          ]
+        },
+        "status": {
+          "value": "synonym",
+          "sources": [
+            "a44"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "junior synonym",
+          "sources": [
+            "a45"
+          ]
+        }
+      },
+      {
+        "id": "hive:tribbulus-novellus",
+        "parentID": "hive:tribbulus",
+        "scientificName": {
+          "value": "Tribbulus novellus",
+          "sources": [
+            "a8"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a7"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a5"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a5"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a6"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a6"
+          ]
+        },
+        "publishedInYear": {
+          "value": "2026",
+          "sources": [
+            "a7"
+          ]
+        }
+      },
+      {
+        "id": "hive:iotageminorius-pallidus",
+        "parentID": "hive:iotageminorius",
+        "scientificName": {
+          "value": "Iotageminorius pallidus",
+          "sources": [
+            "a21"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a20"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a18"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a18"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a19"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a19"
+          ]
+        },
+        "publishedInYear": {
+          "value": "2026",
+          "sources": [
+            "a20"
+          ]
+        }
+      },
+      {
+        "id": "hive:tribbulus-glomivorans",
+        "parentID": "hive:tribbulus",
+        "scientificName": {
+          "value": "Tribbulus glomivorans",
+          "sources": [
+            "a34"
+          ]
+        },
+        "authorship": {
+          "value": "(Coombsworth, 1972)",
+          "sources": [
+            "a33"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a31"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a31"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a32"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a32"
+          ]
+        }
+      },
+      {
+        "id": "hive:glommivorus-glomivorans",
+        "parentID": "hive:tribbulus-glomivorans",
+        "scientificName": {
+          "value": "Glommivorus glomivorans",
+          "sources": [
+            "a40"
+          ]
+        },
+        "authorship": {
+          "value": "Coombsworth, 1972",
+          "sources": [
+            "a36"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a39"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a39"
+          ]
+        },
+        "status": {
+          "value": "synonym",
+          "sources": [
+            "a42"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1972",
+          "sources": [
+            "a37"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "basionym",
+          "sources": [
+            "a38"
+          ]
+        }
+      },
+      {
+        "id": "hive:tribbulus-multiplicans",
+        "parentID": "hive:tribbulus",
+        "scientificName": {
+          "value": "Tribbulus multiplicans",
+          "sources": [
+            "a49"
+          ]
+        },
+        "authorship": {
+          "value": "Whittaker, 1969",
+          "sources": [
+            "a46",
+            "a51",
+            "a87"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a48"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a48"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a48"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1969",
+          "sources": [
+            "a47",
+            "a52",
+            "a88"
+          ]
+        }
+      },
+      {
+        "id": "hive:tribbulus-fecundissimus",
+        "parentID": "hive:tribbulus-multiplicans",
+        "scientificName": {
+          "value": "Tribbulus fecundissimus",
+          "sources": [
+            "a53"
+          ]
+        },
+        "authorship": {
+          "value": "Ericksmith, 1974",
+          "sources": [
+            "a53"
+          ]
+        },
+        "status": {
+          "value": "synonym",
+          "sources": [
+            "a55",
+            "a56"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a55"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1974",
+          "sources": [
+            "a54"
+          ]
+        }
+      },
+      {
+        "id": "hive:iotageminorius-ferrugineus",
+        "parentID": "hive:iotageminorius",
+        "scientificName": {
+          "value": "Iotageminorius ferrugineus",
+          "sources": [
+            "a63"
+          ]
+        },
+        "authorship": {
+          "value": "Marbleston, 1968",
+          "sources": [
+            "a60"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a62"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a62"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a62"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1968",
+          "sources": [
+            "a61"
+          ]
+        },
+        "namePhrase": {
+          "value": "sensu stricto",
+          "sources": [
+            "a65"
+          ]
+        }
       },
       {
         "id": "hive:tribbulus-tribbulus",
         "parentID": "hive:tribbulus",
-        "status": {"value": "accepted"},
-        "scientificName": {"value": "Tribbulus tribbulus"},
-        "authorship": {"value": "Marbleston, 1867"},
-        "rank": {"value": "species"},
-        "namePhrase": {"value": "sensu lato"}
+        "scientificName": {
+          "value": "Tribbulus tribbulus",
+          "sources": [
+            "a76"
+          ]
+        },
+        "authorship": {
+          "value": "Marbleston, 1867",
+          "sources": [
+            "a73"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a75"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a75"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a75"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1867",
+          "sources": [
+            "a74"
+          ]
+        },
+        "namePhrase": {
+          "value": "sensu lato",
+          "sources": [
+            "a78"
+          ]
+        }
       },
       {
-        "id": "hive:tribbulus-novellius",
-        "parentID": "hive:tribbulus",
-        "status": {"value": "accepted"},
-        "scientificName": {"value": "Tribbulus novellius"},
-        "authorship": {"value": "Faulknerville & Ochoa-Renn, 2026"},
-        "rank": {"value": "species"}
-      },
-      {
-        "id": "hive:tribbulus-obsoletus",
+        "id": "hive:tribbulus-dubius@tribbulus-tribbulus",
         "parentID": "hive:tribbulus-tribbulus",
-        "status": {"value": "synonym"},
-        "scientificName": {"value": "Tribbulus obsoletus"},
-        "authorship": {"value": "L., 1970"},
-        "rank": {"value": "species"}
+        "scientificName": {
+          "value": "Tribbulus dubius",
+          "sources": [
+            "a79"
+          ]
+        },
+        "authorship": {
+          "value": "Ericksmith, 1974",
+          "sources": [
+            "a79"
+          ]
+        },
+        "status": {
+          "value": "ambiguous synonym",
+          "sources": [
+            "a81"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1974",
+          "sources": [
+            "a80"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "ambiguous synonym",
+          "sources": [
+            "a81",
+            "a82"
+          ]
+        }
       },
       {
-        "id": "hive:aus-dubius",
-        "parentID": "hive:order-tribbulida",
-        "status": {"value": "accepted"},
-        "scientificName": {"value": "Aus dubius"},
-        "authorship": {"value": "Faulknerville, 2026"},
-        "rank": {"value": "species"}
+        "id": "hive:deepspacius-rainbowicus",
+        "parentID": "hive:deepspacius",
+        "scientificName": {
+          "value": "Deepspacius rainbowicus",
+          "sources": [
+            "a84"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a83"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a83"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a83"
+          ]
+        },
+        "namePhrase": {
+          "value": "sensu Hallitonn, 2003",
+          "sources": [
+            "a86"
+          ]
+        },
+        "accordingTo": {
+          "value": "Hallitonn, 2003",
+          "sources": [
+            "a86"
+          ]
+        }
+      },
+      {
+        "id": "hive:tribbulus-dubius@tribbulus-multiplicans",
+        "parentID": "hive:tribbulus-multiplicans",
+        "scientificName": {
+          "value": "Tribbulus dubius",
+          "sources": [
+            "a89"
+          ]
+        },
+        "authorship": {
+          "value": "Ericksmith, 1974",
+          "sources": [
+            "a89"
+          ]
+        },
+        "status": {
+          "value": "ambiguous synonym",
+          "sources": [
+            "a93"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1974",
+          "sources": [
+            "a90"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "ambiguous synonym",
+          "sources": [
+            "a93",
+            "a94"
+          ]
+        }
+      },
+      {
+        "id": "hive:xenopsyllotribbulus-parasiticus",
+        "parentID": "hive:xenopsyllotribbulus",
+        "scientificName": {
+          "value": "Xenopsyllotribbulus parasiticus",
+          "sources": [
+            "a96"
+          ]
+        },
+        "authorship": {
+          "value": "Ericksmith, 1974",
+          "sources": [
+            "a99"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a95"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a95"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a95"
+          ]
+        },
+        "publishedInYear": {
+          "value": "1974",
+          "sources": [
+            "a100"
+          ]
+        },
+        "namePhrase": {
+          "value": "auct. non Ericksmith, 1974",
+          "sources": [
+            "a98"
+          ]
+        },
+        "accordingTo": {
+          "value": "Ericksmith, 1974",
+          "sources": [
+            "a98"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "misapplication",
+          "sources": [
+            "a98"
+          ]
+        }
+      },
+      {
+        "id": "hive:grexinia-flava-montane",
+        "parentID": "hive:grexinia",
+        "scientificName": {
+          "value": "Grexinia flava",
+          "sources": [
+            "a105"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a104"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a102"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a102"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a103"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a103"
+          ]
+        }
+      },
+      {
+        "id": "hive:grexinia-flava-littoral",
+        "parentID": "hive:grexinia",
+        "scientificName": {
+          "value": "Grexinia flava",
+          "sources": [
+            "a117"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a116"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a114"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a114"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a115"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a115"
+          ]
+        },
+        "nomenclaturalNote": {
+          "value": "primary homonym",
+          "sources": [
+            "a119"
+          ]
+        }
+      },
+      {
+        "id": "hive:iotageminorius-nigrofasciatus",
+        "parentID": "hive:iotageminorius",
+        "scientificName": {
+          "value": "Iotageminorius nigrofasciatus",
+          "sources": [
+            "a130"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a129"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a127"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a127"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a128"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a128"
+          ]
+        }
+      },
+      {
+        "id": "hive:xenopsyllotribbulus-argenteus",
+        "parentID": "hive:xenopsyllotribbulus",
+        "scientificName": {
+          "value": "Xenopsyllotribbulus argenteus",
+          "sources": [
+            "a142"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a141"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a139"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a139"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a140"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a140"
+          ]
+        }
+      },
+      {
+        "id": "hive:grexinia-cyanella",
+        "parentID": "hive:grexinia",
+        "scientificName": {
+          "value": "Grexinia cyanella",
+          "sources": [
+            "a154"
+          ]
+        },
+        "authorship": {
+          "value": "Faulknerville & Ochoa-Renn, 2026",
+          "sources": [
+            "a153"
+          ]
+        },
+        "rank": {
+          "value": "species",
+          "sources": [
+            "a151"
+          ]
+        },
+        "code": {
+          "value": "zoological",
+          "sources": [
+            "a151"
+          ]
+        },
+        "status": {
+          "value": "accepted",
+          "sources": [
+            "a152"
+          ]
+        },
+        "nameStatus": {
+          "value": "established",
+          "sources": [
+            "a152"
+          ]
+        }
+      }
+    ],
+    "type_material": [
+      {
+        "nameID": "hive:tribbulus-novellus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a10"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a11"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4001",
+          "sources": [
+            "a12"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a13"
+          ]
+        },
+        "locality": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a14"
+          ]
+        },
+        "collector": {
+          "value": "Faulknerville",
+          "sources": [
+            "a16"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:iotageminorius-pallidus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a23"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a24"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4002",
+          "sources": [
+            "a25"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a26"
+          ]
+        },
+        "locality": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a27"
+          ]
+        },
+        "collector": {
+          "value": "Ochoa-Renn",
+          "sources": [
+            "a29"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:tribbulus-fecundissimus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a57"
+          ]
+        },
+        "institutionCode": {
+          "value": "KHF",
+          "sources": [
+            "a58"
+          ]
+        },
+        "catalogNumber": {
+          "value": "KHF-TRB-0331",
+          "sources": [
+            "a59"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:iotageminorius-ferrugineus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a70"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a71"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-0119",
+          "sources": [
+            "a72"
+          ]
+        },
+        "locality": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a66"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:iotageminorius-ferrugineus",
+        "status": {
+          "value": "paratype",
+          "sources": [
+            "a68"
+          ]
+        },
+        "locality": {
+          "value": "Kronos-adjacent systems",
+          "sources": [
+            "a69"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:tribbulus-dubius@tribbulus-multiplicans",
+        "status": {
+          "value": "paratype",
+          "sources": [
+            "a91"
+          ]
+        },
+        "institutionCode": {
+          "value": "KHF",
+          "sources": [
+            "a92"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:xenopsyllotribbulus-parasiticus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a101"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:grexinia-flava-montane",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a107"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a108"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4008",
+          "sources": [
+            "a109"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a110"
+          ]
+        },
+        "locality": {
+          "value": "Cyrus III",
+          "sources": [
+            "a111"
+          ]
+        },
+        "collector": {
+          "value": "Faulknerville",
+          "sources": [
+            "a113"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:grexinia-flava-littoral",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a120"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a121"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4009",
+          "sources": [
+            "a122"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a123"
+          ]
+        },
+        "locality": {
+          "value": "Cyrus III",
+          "sources": [
+            "a124"
+          ]
+        },
+        "collector": {
+          "value": "Ochoa-Renn",
+          "sources": [
+            "a126"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:iotageminorius-nigrofasciatus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a132"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a133"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4003",
+          "sources": [
+            "a134"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a135"
+          ]
+        },
+        "locality": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a136"
+          ]
+        },
+        "collector": {
+          "value": "Faulknerville",
+          "sources": [
+            "a138"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:xenopsyllotribbulus-argenteus",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a144"
+          ]
+        },
+        "institutionCode": {
+          "value": "USTC",
+          "sources": [
+            "a145"
+          ]
+        },
+        "catalogNumber": {
+          "value": "USTC-TRB-4005",
+          "sources": [
+            "a146"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a147"
+          ]
+        },
+        "locality": {
+          "value": "Xelatian IV",
+          "sources": [
+            "a148"
+          ]
+        },
+        "collector": {
+          "value": "Ochoa-Renn",
+          "sources": [
+            "a149"
+          ]
+        }
+      },
+      {
+        "nameID": "hive:grexinia-cyanella",
+        "status": {
+          "value": "holotype",
+          "sources": [
+            "a156"
+          ]
+        },
+        "institutionCode": {
+          "value": "MFT",
+          "sources": [
+            "a157"
+          ]
+        },
+        "catalogNumber": {
+          "value": "MFT-TRB-4010",
+          "sources": [
+            "a158"
+          ]
+        },
+        "lifeStage": {
+          "value": "adult",
+          "sources": [
+            "a159"
+          ]
+        },
+        "locality": {
+          "value": "Cyrus III",
+          "sources": [
+            "a160"
+          ]
+        },
+        "collector": {
+          "value": "Faulknerville",
+          "sources": [
+            "a162"
+          ]
+        }
+      }
+    ],
+    "distribution": [
+      {
+        "taxonID": "hive:tribbulus-novellus",
+        "area": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a17"
+          ]
+        },
+        "gazetteer": {
+          "value": "text",
+          "sources": [
+            "a17"
+          ]
+        }
+      },
+      {
+        "taxonID": "hive:iotageminorius-pallidus",
+        "area": {
+          "value": "Iota Geminorum IV",
+          "sources": [
+            "a30"
+          ]
+        },
+        "gazetteer": {
+          "value": "text",
+          "sources": [
+            "a30"
+          ]
+        }
+      }
+    ],
+    "vernacular_name": [],
+    "unresolved_assertions": [
+      {
+        "assertion_id": "a15",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a28",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a67",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a112",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a125",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a137",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a161",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:habitat)"
+      },
+      {
+        "assertion_id": "a150",
+        "reason": "DwC term maps to TaxonProperty which is out of scope for v1 (dwc:associatedTaxa, host relationship)"
+      },
+      {
+        "assertion_id": "a119",
+        "reason": "shared source across distinct name_usage rows \u2014 the primary-homonym pattern implied by this assertion (anchored in the littoral Grexinia flava mention) also applies to the montane Grexinia flava row, but no separate per-mention assertion exists for that row; re-run NER to get a montane-anchored assertion before adding nomenclaturalNote there"
       }
     ]
   }
