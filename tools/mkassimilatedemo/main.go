@@ -12,9 +12,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -24,8 +26,9 @@ import (
 )
 
 const (
-	seedPath = "testdata/assimilate_demo/existing_tree.sql"
-	jatsPath = "testdata/assimilate_demo/mini_monograph.jats.xml"
+	seedPath       = "testdata/assimilate_demo/existing_tree.sql"
+	jatsPath       = "testdata/assimilate_demo/mini_monograph.jats.xml"
+	composeRunPath = "testdata/assimilate_demo/compose_run.json"
 	// Attribution stamped on the fabricated reference + attachment.
 	// Fictional ORCID-shaped placeholder — never routes to a real
 	// contributor.
@@ -135,8 +138,21 @@ func main() {
 		die("%v", err)
 	}
 
+	// Seed the synthetic compose extraction run so a fresh
+	// assimilate-demo has enough Layer 1 material for `hive
+	// reassemble` to exercise every assembler rule out of the box.
+	// The payload lives in compose_run.json (git-committed);
+	// overwriting that file with real Sonnet/Opus output makes the
+	// fixture semantically richer without touching this tool.
+	composeCount, err := seedComposeRun(path)
+	if err != nil {
+		die("seed compose run: %v", err)
+	}
+
 	fmt.Printf("wrote %s\n", path)
 	fmt.Printf("attached paper: %s (sha %s...)\n", jatsPath, ing.SHA512[:16])
+	fmt.Printf("seeded compose run: %s (%d name usages)\n",
+		composeRunPath, composeCount)
 	fmt.Println()
 	fmt.Println("next:")
 	// When path lives under ./data/ the docker-up recipe takes just
@@ -144,6 +160,81 @@ func main() {
 	// path and has to arrange their own docker mount.
 	fmt.Printf("  just docker-down && just docker-up %s\n", filepath.Base(path))
 	fmt.Println("  open http://localhost:2365 — reference is under References")
+}
+
+// composeRunFixture is the git-committed envelope wrapping a
+// compose extraction run's raw_output JSON. The shape mirrors
+// hive__extraction_run's columns so mkassimilatedemo can INSERT
+// each field directly. RawOutput is a decoded JSON object so
+// contributors editing the file don't have to escape a
+// string-inside-string; the seeder re-marshals it before INSERT.
+type composeRunFixture struct {
+	RunID       string          `json:"run_id"`
+	ReferenceID string          `json:"reference_id"`
+	Purpose     string          `json:"purpose"`
+	SourceKind  string          `json:"source_kind"`
+	SourceID    string          `json:"source_id"`
+	Notes       string          `json:"notes,omitempty"`
+	RawOutput   json.RawMessage `json:"raw_output"`
+}
+
+// seedComposeRun reads compose_run.json and INSERTs it into
+// hive__extraction_run so `hive reassemble` finds Layer 1
+// material on a fresh archive. Returns the name-usage count for
+// the tool's summary line. Errors surface a specific message per
+// step (read / parse / insert) so the user knows whether it's a
+// fixture-content issue or a schema issue.
+func seedComposeRun(dbPath string) (int, error) {
+	raw, err := os.ReadFile(composeRunPath)
+	if err != nil {
+		return 0, fmt.Errorf("read %s: %w", composeRunPath, err)
+	}
+	var fx composeRunFixture
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		return 0, fmt.Errorf("parse %s: %w", composeRunPath, err)
+	}
+	if fx.RunID == "" || fx.ReferenceID == "" ||
+		fx.Purpose == "" || fx.SourceKind == "" || fx.SourceID == "" ||
+		len(fx.RawOutput) == 0 {
+		return 0, fmt.Errorf(
+			"%s missing required fields (run_id, reference_id, purpose, source_kind, source_id, raw_output)",
+			composeRunPath)
+	}
+
+	// Compact raw_output to a single-line JSON blob so
+	// reference-shaped diffs stay readable and downstream parsers
+	// don't choke on whitespace variance.
+	compact := &bytes.Buffer{}
+	if err := json.Compact(compact, fx.RawOutput); err != nil {
+		return 0, fmt.Errorf("compact raw_output: %w", err)
+	}
+
+	// Optional: pull the name_usages count for the summary line.
+	// Unrelated to correctness — a bad shape just yields 0.
+	var shape struct {
+		NameUsages []struct{} `json:"name_usages"`
+	}
+	_ = json.Unmarshal(compact.Bytes(), &shape)
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return 0, fmt.Errorf("open %s: %w", dbPath, err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	const q = `INSERT INTO hive__extraction_run (
+	    run_id, reference_id, purpose, source_kind, source_id,
+	    envelope_json, raw_output_json, parent_run_id,
+	    cost_usd, is_gold_standard, notes, created_at
+	) VALUES (?, ?, ?, ?, ?, '', ?, NULL, 0, 0, ?, ?)`
+	if _, err := db.Exec(q,
+		fx.RunID, fx.ReferenceID, fx.Purpose, fx.SourceKind, fx.SourceID,
+		compact.String(), fx.Notes, now,
+	); err != nil {
+		return 0, fmt.Errorf("insert hive__extraction_run: %w", err)
+	}
+	return len(shape.NameUsages), nil
 }
 
 func die(format string, args ...any) {

@@ -1,0 +1,59 @@
+{
+  "run_id": "fixture-compose-tribbulida-1",
+  "reference_id": "00000000-0000-4000-8000-000000000001",
+  "purpose": "compose",
+  "source_kind": "curator",
+  "source_id": "assimilate-demo-fixture",
+  "notes": "Synthetic compose tree for the assimilate-demo fixture. Not real LLM output — hand-crafted to exercise every assembler rule (auto-match, cascade to a new taxon under an existing genus, bracket fallback for a genus-unresolved species, synonymy under an existing accepted taxon, sensu-lato concept marker driving an implicit-reference lookup). Overwrite this file with real Sonnet / Opus output once you've generated it to make the fixture semantically richer.",
+  "raw_output": {
+    "name_usages": [
+      {
+        "id": "hive:order-tribbulida",
+        "parentID": "",
+        "status": {"value": "accepted"},
+        "scientificName": {"value": "Tribbulida"},
+        "rank": {"value": "order"}
+      },
+      {
+        "id": "hive:tribbulus",
+        "parentID": "hive:order-tribbulida",
+        "status": {"value": "accepted"},
+        "scientificName": {"value": "Tribbulus"},
+        "rank": {"value": "genus"}
+      },
+      {
+        "id": "hive:tribbulus-tribbulus",
+        "parentID": "hive:tribbulus",
+        "status": {"value": "accepted"},
+        "scientificName": {"value": "Tribbulus tribbulus"},
+        "authorship": {"value": "Marbleston, 1867"},
+        "rank": {"value": "species"},
+        "namePhrase": {"value": "sensu lato"}
+      },
+      {
+        "id": "hive:tribbulus-novellius",
+        "parentID": "hive:tribbulus",
+        "status": {"value": "accepted"},
+        "scientificName": {"value": "Tribbulus novellius"},
+        "authorship": {"value": "Faulknerville & Ochoa-Renn, 2026"},
+        "rank": {"value": "species"}
+      },
+      {
+        "id": "hive:tribbulus-obsoletus",
+        "parentID": "hive:tribbulus-tribbulus",
+        "status": {"value": "synonym"},
+        "scientificName": {"value": "Tribbulus obsoletus"},
+        "authorship": {"value": "L., 1970"},
+        "rank": {"value": "species"}
+      },
+      {
+        "id": "hive:aus-dubius",
+        "parentID": "hive:order-tribbulida",
+        "status": {"value": "accepted"},
+        "scientificName": {"value": "Aus dubius"},
+        "authorship": {"value": "Faulknerville, 2026"},
+        "rank": {"value": "species"}
+      }
+    ]
+  }
+}
