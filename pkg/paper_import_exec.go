@@ -387,6 +387,9 @@ type composeNameUsage struct {
 	ID                string       `json:"id"`
 	ParentID          string       `json:"parentID"`
 	Status            composeValue `json:"status"`
+	ScientificName    composeValue `json:"scientificName"`
+	Authorship        composeValue `json:"authorship"`
+	Rank              composeValue `json:"rank"`
 	NamePhrase        composeValue `json:"namePhrase"`
 	AccordingTo       composeValue `json:"accordingTo"`
 	AccordingToAuthor composeValue `json:"accordingToAuthor"`
