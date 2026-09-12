@@ -2,6 +2,7 @@ package assembler
 
 import (
 	"testing"
+	"time"
 )
 
 // TestBuild_AutoMatchExactWithAuthorship: mention canonical+authorship
@@ -417,6 +418,196 @@ func TestBuild_BracketWithNoAnchorFlags(t *testing.T) {
 	plan := Build(papers, existing, DefaultRules())
 	if len(plan.Actions) != 1 || plan.Actions[0].Kind != ActionFlag {
 		t.Fatalf("want 1 ActionFlag, got %#v", plan.Actions)
+	}
+}
+
+// TestBuild_SynonymUnderMatchedAccepted: single paper marks a
+// synonym under an existing accepted taxon. Expect one match for
+// the accepted, and one ActionCreateSynonym for the synonym.
+func TestBuild_SynonymUnderMatchedAccepted(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+	}}
+	papers := []PaperInput{{
+		ReferenceID: "ref-a",
+		NameUsages: []NameUsage{
+			{MentionID: "a", Canonical: "Aus bus", Authorship: "L., 1970",
+				Status: "accepted"},
+			{MentionID: "s", ParentMentionID: "a",
+				Canonical: "Aus bogus", Authorship: "Smith, 1980",
+				Status: "synonym"},
+		},
+	}}
+	plan := Build(papers, existing, DefaultRules())
+	if len(plan.Actions) != 2 {
+		t.Fatalf("want 2 actions, got %d: %#v", len(plan.Actions), plan.Actions)
+	}
+	if plan.Actions[0].Kind != ActionMatch || plan.Actions[0].Match.TaxonID != "t1" {
+		t.Fatalf("actions[0] want accepted match, got %#v", plan.Actions[0])
+	}
+	syn := plan.Actions[1]
+	if syn.Kind != ActionCreateSynonym {
+		t.Fatalf("actions[1] want ActionCreateSynonym, got %#v", syn)
+	}
+	if syn.CreateSynonym.AcceptedTaxonID != "t1" {
+		t.Errorf("synonym accepted = %q, want t1", syn.CreateSynonym.AcceptedTaxonID)
+	}
+	if syn.CreateSynonym.Canonical != "Aus bogus" {
+		t.Errorf("synonym canonical = %q", syn.CreateSynonym.Canonical)
+	}
+	if syn.CreateSynonym.Status != "synonym" {
+		t.Errorf("synonym status = %q, want synonym", syn.CreateSynonym.Status)
+	}
+}
+
+// TestBuild_SynonymyDeduplicatedAcrossPapers: two papers agree on
+// the same (synonym, accepted) pair. Only one ActionCreateSynonym
+// gets emitted (from the first-processed paper's provenance).
+func TestBuild_SynonymyDeduplicatedAcrossPapers(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+	}}
+	papers := []PaperInput{
+		{
+			ReferenceID:    "ref-a",
+			PaperCreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Aus bus", Authorship: "L., 1970",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+		{
+			ReferenceID:    "ref-b",
+			PaperCreatedAt: time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC),
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Aus bus", Authorship: "L., 1970",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+	}
+	plan := Build(papers, existing, DefaultRules())
+	synCount := 0
+	for _, a := range plan.Actions {
+		if a.Kind == ActionCreateSynonym {
+			synCount++
+		}
+	}
+	if synCount != 1 {
+		t.Errorf("want 1 ActionCreateSynonym, got %d", synCount)
+	}
+}
+
+// TestBuild_SynonymyMostRecentWins: two papers disagree on the
+// accepted taxon for the same synonym. The newer paper's
+// assertion wins.
+func TestBuild_SynonymyMostRecentWins(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+		{TaxonID: "t2", Canonical: "Cus dus", Authorship: "M., 1980"},
+	}}
+	papers := []PaperInput{
+		{
+			ReferenceID:    "ref-old",
+			PaperCreatedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Aus bus", Authorship: "L., 1970",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+		{
+			ReferenceID:    "ref-new",
+			PaperCreatedAt: time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Cus dus", Authorship: "M., 1980",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+	}
+	plan := Build(papers, existing, DefaultRules())
+	var syn *Action
+	for i := range plan.Actions {
+		if plan.Actions[i].Kind == ActionCreateSynonym {
+			syn = &plan.Actions[i]
+			break
+		}
+	}
+	if syn == nil {
+		t.Fatalf("no ActionCreateSynonym in plan: %#v", plan.Actions)
+	}
+	if syn.CreateSynonym.AcceptedTaxonID != "t2" {
+		t.Errorf("winning accepted = %q, want t2 (newer paper)",
+			syn.CreateSynonym.AcceptedTaxonID)
+	}
+	if syn.SourcePaperReferenceID != "ref-new" {
+		t.Errorf("provenance = %q, want ref-new",
+			syn.SourcePaperReferenceID)
+	}
+}
+
+// TestBuild_SynonymyTieFlagsContradiction: two papers with
+// identical dates disagree on the accepted taxon for the same
+// synonym. The winner picker returns no clear top, so the group
+// surfaces as FlagContradictorySynonymy.
+func TestBuild_SynonymyTieFlagsContradiction(t *testing.T) {
+	existing := Existing{Taxa: []ExistingTaxon{
+		{TaxonID: "t1", Canonical: "Aus bus", Authorship: "L., 1970"},
+		{TaxonID: "t2", Canonical: "Cus dus", Authorship: "M., 1980"},
+	}}
+	sameDay := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	papers := []PaperInput{
+		{
+			ReferenceID:     "ref-x",
+			ExtractionRunID: "run-1",
+			PaperCreatedAt:  sameDay,
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Aus bus", Authorship: "L., 1970",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+		{
+			ReferenceID:     "ref-y",
+			ExtractionRunID: "run-1", // identical run id triggers tie
+			PaperCreatedAt:  sameDay,
+			NameUsages: []NameUsage{
+				{MentionID: "a", Canonical: "Cus dus", Authorship: "M., 1980",
+					Status: "accepted"},
+				{MentionID: "s", ParentMentionID: "a",
+					Canonical: "Aus bogus", Authorship: "Smith, 1980",
+					Status: "synonym"},
+			},
+		},
+	}
+	plan := Build(papers, existing, DefaultRules())
+	flagFound := false
+	synFound := false
+	for _, a := range plan.Actions {
+		if a.Kind == ActionCreateSynonym {
+			synFound = true
+		}
+		if a.Kind == ActionFlag && a.Flag.Kind == FlagContradictorySynonymy {
+			flagFound = true
+		}
+	}
+	if synFound {
+		t.Errorf("no ActionCreateSynonym should land on a tied contradiction")
+	}
+	if !flagFound {
+		t.Errorf("want FlagContradictorySynonymy, got: %#v", plan.Actions)
 	}
 }
 

@@ -26,11 +26,30 @@ package assembler
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/sfborg/hive/pkg/conceptimport"
 )
+
+// sortStrings is sort.Strings under a package-local name so the
+// synonymy pass's small comparators sit alongside their callers.
+func sortStrings(v []string) { sort.Strings(v) }
+
+// sortSynonymyCandidatesDesc orders candidates newest-first:
+// PaperCreatedAt desc, then ExtractionRunID desc as a
+// deterministic tiebreak.
+func sortSynonymyCandidatesDesc(v []synonymyCandidate) {
+	sort.SliceStable(v, func(i, j int) bool {
+		ti := v[i].Paper.PaperCreatedAt
+		tj := v[j].Paper.PaperCreatedAt
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return v[i].Paper.ExtractionRunID > v[j].Paper.ExtractionRunID
+	})
+}
 
 // PaperInput is one paper's assertions as fed into [Plan]. Callers
 // materialize this from the compose extraction run for the paper.
@@ -431,15 +450,26 @@ func LoadExisting(r Reader) (Existing, error) {
 // inputs, same output.
 //
 // Papers are processed in the order supplied. Callers are
-// responsible for sorting (typically by paper publication date,
-// with extraction_run_id as a deterministic tiebreak) so the
-// result is invariant to storage order — see LITERATURE_VIEW.md
-// § Determinism guarantees.
+// responsible for sorting (typically by paper publication date
+// ascending, with extraction_run_id as a deterministic tiebreak)
+// so the result is invariant to storage order — see
+// LITERATURE_VIEW.md § Determinism guarantees.
+//
+// Two passes:
+//
+//  1. Non-synonym pass. Every accepted / provisionally-accepted /
+//     bare mention flows through resolveMention: auto-match,
+//     cascade, bracket, create-taxon.
+//  2. Synonymy pass. Synonym-status mentions are grouped across
+//     papers by (canonical, authorship). Most-recent-wins picks
+//     the surviving assertion per group; disagreements without a
+//     tiebreak surface as FlagContradictorySynonymy.
 func Build(papers []PaperInput, existing Existing, rules Rules) Plan {
 	st := newPlanState(existing, rules)
 	for _, paper := range papers {
 		st.processPaper(paper)
 	}
+	st.processSynonymies(papers)
 	return Plan{Actions: st.actions}
 }
 
@@ -500,7 +530,9 @@ func newPlanState(existing Existing, rules Rules) *planState {
 }
 
 // processPaper is the per-paper entry point: build the mention
-// index and process every name_usage.
+// index and process every non-synonym name_usage. Synonym-status
+// mentions are handled by [processSynonymies] in a second pass so
+// most-recent-wins can compare across papers.
 func (s *planState) processPaper(paper PaperInput) {
 	s.currentPaper = paper
 	s.paperMentions = make(map[string]NameUsage, len(paper.NameUsages))
@@ -508,8 +540,19 @@ func (s *planState) processPaper(paper PaperInput) {
 		s.paperMentions[nu.MentionID] = nu
 	}
 	for _, nu := range paper.NameUsages {
+		if isSynonymStatus(nu.Status) {
+			continue
+		}
 		s.resolveMention(nu.MentionID)
 	}
+}
+
+// isSynonymStatus reports whether a mention's paper-asserted status
+// puts it in the "synonym" family (heterotypic, homotypic,
+// ambiguous, misapplied). Case-insensitive substring match.
+func isSynonymStatus(status string) bool {
+	s := strings.ToLower(status)
+	return strings.Contains(s, "synonym") || strings.Contains(s, "misapplied")
 }
 
 // mentionKey builds the resolved-memo key for a mention in the
@@ -677,6 +720,196 @@ func (s *planState) paperParentIsAboveGenus(nu NameUsage) bool {
 		return false
 	}
 	return true
+}
+
+// processSynonymies is the pass-2 entry point. It walks every
+// paper again, collects synonym-status mentions grouped by
+// (canonical, authorship), and picks the winner per group.
+//
+// Most-recent-wins ordering (default with SynonymyWinnerByDate):
+// group entries sort by PaperCreatedAt desc, then
+// ExtractionRunID desc as tiebreak; the first entry after sort
+// wins.
+//
+// Contradictions (multiple entries with distinct accepted anchors
+// and identical or missing PaperCreatedAt) surface as
+// FlagContradictorySynonymy so the curator can adjudicate.
+func (s *planState) processSynonymies(papers []PaperInput) {
+	groups := s.groupSynonymies(papers)
+	// Deterministic iteration order over the group map: sort by
+	// key so the resulting Plan is stable regardless of map
+	// iteration order.
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	for _, k := range keys {
+		s.emitSynonymyForGroup(groups[k])
+	}
+}
+
+// synonymyCandidate is one paper's assertion of a synonym → accepted
+// pair, restricted to what the pass-2 winner picker needs.
+type synonymyCandidate struct {
+	Paper          PaperInput
+	Mention        NameUsage
+	AcceptedAnchor string // real taxon id or "plan:<n>"
+}
+
+// synonymyGroup collects every candidate assertion for one
+// (synonym canonical, authorship) key.
+type synonymyGroup struct {
+	Canonical  string
+	Authorship string
+	Candidates []synonymyCandidate
+}
+
+// groupSynonymies walks all papers and gathers candidate synonym
+// assertions grouped by (canonical, authorship). Skips any
+// mention whose accepted-parent didn't resolve (that's a separate
+// concern surfaced by the accepted-taxon pass).
+func (s *planState) groupSynonymies(papers []PaperInput) map[string]*synonymyGroup {
+	out := make(map[string]*synonymyGroup)
+	for _, paper := range papers {
+		s.currentPaper = paper
+		s.paperMentions = make(map[string]NameUsage, len(paper.NameUsages))
+		for _, nu := range paper.NameUsages {
+			s.paperMentions[nu.MentionID] = nu
+		}
+		for _, nu := range paper.NameUsages {
+			if !isSynonymStatus(nu.Status) {
+				continue
+			}
+			if nu.Canonical == "" || nu.ParentMentionID == "" {
+				// Missing subject or accepted anchor — the paper
+				// didn't give enough info to plan a synonym row.
+				continue
+			}
+			parentRes := s.resolveMention(nu.ParentMentionID)
+			if parentRes.anchorID == "" {
+				continue
+			}
+			key := nameKey(nu.Canonical, nu.Authorship)
+			g, ok := out[key]
+			if !ok {
+				g = &synonymyGroup{
+					Canonical:  nu.Canonical,
+					Authorship: nu.Authorship,
+				}
+				out[key] = g
+			}
+			g.Candidates = append(g.Candidates, synonymyCandidate{
+				Paper:          paper,
+				Mention:        nu,
+				AcceptedAnchor: parentRes.anchorID,
+			})
+		}
+	}
+	return out
+}
+
+// emitSynonymyForGroup runs winner selection on one group and
+// appends the corresponding Action to the plan.
+func (s *planState) emitSynonymyForGroup(g *synonymyGroup) {
+	if len(g.Candidates) == 0 {
+		return
+	}
+	// Distinct anchors decide whether we have a real contradiction.
+	distinct := make(map[string]int)
+	for _, c := range g.Candidates {
+		distinct[c.AcceptedAnchor]++
+	}
+	if len(distinct) == 1 {
+		// Everyone agrees; emit the winning ActionCreateSynonym
+		// once. Provenance comes from the first candidate for
+		// stable output.
+		s.emitCreateSynonymFromCandidate(g.Candidates[0])
+		return
+	}
+	if !s.rules.SynonymyWinnerByDate {
+		// Rule off: surface every disagreement as a flag.
+		s.emitFlagContradictorySynonymy(g)
+		return
+	}
+	winner, ok := pickSynonymyWinner(g.Candidates)
+	if !ok {
+		s.emitFlagContradictorySynonymy(g)
+		return
+	}
+	s.emitCreateSynonymFromCandidate(winner)
+}
+
+// pickSynonymyWinner sorts candidates by paper date desc, run id
+// desc, and returns the first entry — provided the top-two
+// candidates aren't tied on both fields. A true tie (same date,
+// same run id) or a top entry with a zero paper date returns
+// ok=false so the caller can flag the group instead.
+func pickSynonymyWinner(cands []synonymyCandidate) (synonymyCandidate, bool) {
+	if len(cands) == 0 {
+		return synonymyCandidate{}, false
+	}
+	sorted := make([]synonymyCandidate, len(cands))
+	copy(sorted, cands)
+	sortSynonymyCandidatesDesc(sorted)
+	top := sorted[0]
+	if top.Paper.PaperCreatedAt.IsZero() {
+		return synonymyCandidate{}, false
+	}
+	if len(sorted) > 1 {
+		second := sorted[1]
+		if second.AcceptedAnchor != top.AcceptedAnchor &&
+			second.Paper.PaperCreatedAt.Equal(top.Paper.PaperCreatedAt) &&
+			second.Paper.ExtractionRunID == top.Paper.ExtractionRunID {
+			return synonymyCandidate{}, false
+		}
+	}
+	return top, true
+}
+
+func (s *planState) emitCreateSynonymFromCandidate(c synonymyCandidate) {
+	prov := actionProv(c.Paper, c.Mention)
+	s.actions = append(s.actions, Action{
+		Kind:                   ActionCreateSynonym,
+		SourcePaperReferenceID: prov.ReferenceID,
+		SourceMentionID:        prov.MentionID,
+		CreateSynonym: CreateSynonymAction{
+			AcceptedTaxonID: c.AcceptedAnchor,
+			Canonical:       c.Mention.Canonical,
+			Authorship:      c.Mention.Authorship,
+			Status:          defaultSynonymStatus(c.Mention.Status),
+		},
+	})
+}
+
+func (s *planState) emitFlagContradictorySynonymy(g *synonymyGroup) {
+	// Pick a stable provenance from the first candidate; include
+	// every distinct accepted anchor in Candidates so the curator
+	// can see the disagreement.
+	first := g.Candidates[0]
+	prov := actionProv(first.Paper, first.Mention)
+	anchors := make(map[string]struct{})
+	for _, c := range g.Candidates {
+		anchors[c.AcceptedAnchor] = struct{}{}
+	}
+	keys := make([]string, 0, len(anchors))
+	for k := range anchors {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	s.actions = append(s.actions, flag(prov, FlagContradictorySynonymy,
+		fmt.Sprintf("papers disagree on the accepted taxon for %s %s",
+			g.Canonical, g.Authorship),
+		keys))
+}
+
+// defaultSynonymStatus normalizes empty status → "synonym" so
+// the Writer always sees a non-empty CoLDP status value.
+func defaultSynonymStatus(status string) string {
+	if strings.TrimSpace(status) == "" {
+		return "synonym"
+	}
+	return status
 }
 
 // splitBinomial extracts (genus, species) from a canonical
