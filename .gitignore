@@ -11,6 +11,7 @@ docker-compose.yml
 *.db-wal
 *.db-shm
 /hive
+/mkassimilatedemo
 /bin/
 
 # Local dev-stack secrets and mounted archive directory. .env is the
