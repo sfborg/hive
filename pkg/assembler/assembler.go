@@ -375,15 +375,61 @@ const (
 	FlagContradictorySynonymy
 	FlagAmbiguousImplicitReference
 	FlagMissingImplicitReference
+
+	// FlagOverlayMatchedByPublication fires when a reassemble
+	// detects that a published paper's assertion now agrees with a
+	// curator's Layer 3 overlay. The overlay's citation slot picks
+	// up the paper's reference id as a candidate; the curator
+	// reviews and either retires the overlay (promoting the L2
+	// default) or keeps it with the citation attached.
+	FlagOverlayMatchedByPublication
+
+	// FlagOrphanedOverlay fires when a Layer 2 recompute removed the
+	// taxon a Layer 3 overlay pointed at. The overlay needs curator
+	// intervention (delete or re-anchor).
+	FlagOrphanedOverlay
 )
+
+// String returns the stable snake_case name of a flag kind. Used
+// as the JSON discriminator on API responses and as the value
+// stored in hive__assembler_flag.kind so every consumer (WUI,
+// hive__ table readers, HTTP handlers) shares one vocabulary.
+func (k FlagKind) String() string {
+	switch k {
+	case FlagAmbiguousMatch:
+		return "ambiguous_match"
+	case FlagUnresolvedAnchor:
+		return "unresolved_anchor"
+	case FlagContradictorySynonymy:
+		return "contradictory_synonymy"
+	case FlagAmbiguousImplicitReference:
+		return "ambiguous_implicit_reference"
+	case FlagMissingImplicitReference:
+		return "missing_implicit_reference"
+	case FlagOverlayMatchedByPublication:
+		return "overlay_matched_by_publication"
+	case FlagOrphanedOverlay:
+		return "orphaned_overlay"
+	}
+	return "unknown"
+}
 
 // FlagAction records a curator-actionable condition the assembler
 // couldn't resolve on its own.
 type FlagAction struct {
 	Kind    FlagKind
 	Message string
-	// Optional context references.
-	Candidates []string // e.g. taxon ids for ambiguous match
+
+	// TaxonID is the materialized Layer 2 taxon the flag anchors
+	// to, when known. Populated for overlay-matched-by-publication
+	// and orphaned-overlay flags (and any future flag that fires
+	// against an existing taxon rather than a paper mention).
+	TaxonID string
+
+	// Candidates carries context ids depending on the flag kind:
+	// taxon ids for ambiguity flags, reference ids for
+	// overlay-matched flags. Empty when there's nothing to point at.
+	Candidates []string
 }
 
 // Reader is the read-side interface the caller implements against

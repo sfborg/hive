@@ -739,28 +739,12 @@ func reassembleReportToAPI(r *hive.ReassembleReport) apiReassembleReport {
 	}
 	for _, f := range r.AssemblerReport.Flags {
 		out.Flags = append(out.Flags, apiAssemblerFlag{
-			Kind:       assemblerFlagKindString(f.Kind),
+			Kind:       f.Kind.String(),
 			Message:    f.Message,
 			Candidates: f.Candidates,
 		})
 	}
 	return out
-}
-
-func assemblerFlagKindString(k assembler.FlagKind) string {
-	switch k {
-	case assembler.FlagAmbiguousMatch:
-		return "ambiguous_match"
-	case assembler.FlagUnresolvedAnchor:
-		return "unresolved_anchor"
-	case assembler.FlagContradictorySynonymy:
-		return "contradictory_synonymy"
-	case assembler.FlagAmbiguousImplicitReference:
-		return "ambiguous_implicit_reference"
-	case assembler.FlagMissingImplicitReference:
-		return "missing_implicit_reference"
-	}
-	return "unknown"
 }
 
 // handleRoots is a paginated projection of root-level taxa. Alias of

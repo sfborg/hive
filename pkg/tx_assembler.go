@@ -143,19 +143,59 @@ func (t *Tx) CreateBracketedTaxonForAssembler(a assembler.BracketAction, referen
 	return t.CreateTaxon(tx)
 }
 
-// RecordAssemblerFlag logs the flag for now. Persistent storage
-// (hive__assembler_flag) is planned but not yet in place — the
-// AssembleReport returned by ExecuteReassemble already carries the
-// full flag list, so callers can surface them to curators via the
-// HTTP / CLI response.
+// RecordAssemblerFlag persists a flag into hive__assembler_flag.
+// [ExecuteReassemble] clears the table at the start of each run so
+// the persisted rows always reflect the current Layer 2 state.
+//
+// The flag also lands in the returned AssembleReport so callers
+// that want to react immediately (HTTP/CLI) don't need a round
+// trip through the table.
 func (t *Tx) RecordAssemblerFlag(f assembler.FlagAction, prov assembler.ActionProvenance) error {
-	slog.Info("assembler.flag",
-		"kind", f.Kind,
+	candidatesJSON := "[]"
+	if len(f.Candidates) > 0 {
+		b, err := json.Marshal(f.Candidates)
+		if err != nil {
+			return fmt.Errorf("core: marshal assembler flag candidates: %w", err)
+		}
+		candidatesJSON = string(b)
+	}
+	// Debug-log flags too so operators tailing the server logs still
+	// see them alongside the HTTP response.
+	slog.Debug("assembler.flag",
+		"kind", f.Kind.String(),
 		"message", f.Message,
 		"reference_id", prov.ReferenceID,
 		"mention_id", prov.MentionID,
+		"taxon_id", f.TaxonID,
 		"candidates", f.Candidates,
 	)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	const q = `INSERT INTO hive__assembler_flag (
+	    kind, message, reference_id, mention_id, taxon_id,
+	    candidates_json, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	if _, err := t.tx.ExecContext(t.ctx, q,
+		f.Kind.String(),
+		f.Message,
+		nullIfEmpty(prov.ReferenceID),
+		nullIfEmpty(prov.MentionID),
+		nullIfEmpty(f.TaxonID),
+		candidatesJSON, now,
+	); err != nil {
+		return fmt.Errorf("core: insert hive__assembler_flag: %w", err)
+	}
+	return nil
+}
+
+// DeleteAllAssemblerFlags clears hive__assembler_flag. Called at
+// the start of each reassemble so the persisted table matches the
+// current Layer 2 state — no history is kept here (extraction runs
+// and Layer 1 assertions carry the durable audit trail).
+func (t *Tx) DeleteAllAssemblerFlags() error {
+	if _, err := t.tx.ExecContext(t.ctx,
+		`DELETE FROM hive__assembler_flag`); err != nil {
+		return fmt.Errorf("core: clear hive__assembler_flag: %w", err)
+	}
 	return nil
 }
 
@@ -214,6 +254,12 @@ type ReassembleReport struct {
 // as tiebreak, matching LITERATURE_VIEW.md § Determinism
 // guarantees.
 func (t *Tx) ExecuteReassemble(rules assembler.Rules) (*ReassembleReport, error) {
+	// Sweep prior flag rows so the persisted table matches the
+	// current Layer 2 state — Apply's RecordAssemblerFlag calls
+	// re-populate it as the run walks the plan.
+	if err := t.DeleteAllAssemblerFlags(); err != nil {
+		return nil, err
+	}
 	papers, report, err := t.loadPapersForAssembler()
 	if err != nil {
 		return nil, err
