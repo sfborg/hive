@@ -15666,6 +15666,27 @@ class SfgaReferences extends LitElement {
       background: color-mix(in oklab, hsl(0, 65%, 50%) 15%, transparent);
       color: hsl(0, 65%, 50%);
     }
+    /* Mapping-mode badge distinguishes assembler-decided
+       (match_mode = auto-*) rows from curator-picked overrides
+       so the tree of facts communicates provenance at a glance. */
+    .mapping-mode-badge {
+      display: inline-block;
+      padding: 0 0.4em;
+      border-radius: 999px;
+      font-size: var(--fs-xs);
+      color: var(--dim);
+      background: color-mix(in oklab, var(--fg) 6%, var(--bg));
+    }
+    .assembly-mention.mode-curator-picked .mapping-mode-badge {
+      background: color-mix(in oklab, var(--accent, #3966c9) 25%, var(--bg));
+      color: var(--fg);
+    }
+    /* When a target is selected, mapped mentions also invite
+       re-binding — mirror the .can-bind hover of unmapped
+       mentions but keep the mapped baseline styling. */
+    .assembly-mention.mapped.can-bind:hover {
+      background: color-mix(in oklab, var(--accent, #3966c9) 8%, var(--bg));
+    }
     .assertions-toolbar {
       display: flex;
       align-items: center;
@@ -17358,11 +17379,13 @@ class SfgaReferences extends LitElement {
             type="button"
             ?disabled=${this._assemblyImporting || mappedCount === 0}
             title=${mappedCount === 0
-              ? "Map at least one mention before importing"
-              : "Materialize this paper's facts into the mapped taxa"}
+              ? "Map at least one mention before attaching extensions"
+              : `Re-attach extension rows (type material, distribution, vernacular) for every mapped mention in this paper — ${mappedCount} in total. Idempotent: prior rows for this reference are swept before the fresh insert.`}
             @click=${() => this._assemblyExecuteImport()}
           >
-            ${this._assemblyImporting ? "importing…" : "import"}
+            ${this._assemblyImporting
+              ? "attaching…"
+              : `re-attach extensions (${mappedCount})`}
           </button>
         </div>
         ${this._assemblyImportResult
@@ -17487,21 +17510,37 @@ class SfgaReferences extends LitElement {
     const name = this._unwrapValue(mention.scientificName);
     const auth = this._unwrapValue(mention.authorship);
     const rank = this._unwrapValue(mention.rank);
-    const canBind = !!this._assemblySelectedKey && !mapping;
+    // A click can rebind whenever a target is selected — no matter
+    // whether the mention was previously unmapped, auto-mapped by
+    // the assembler, or curator-picked. Curator's most recent
+    // click wins; upsertPaperImportMapping handles the ON CONFLICT
+    // case by recording match_mode=curator-picked.
+    const canBind = !!this._assemblySelectedKey;
+    const modeLabel = mapping
+      ? mapping.match_mode === "curator-picked"
+        ? "curator-picked"
+        : mapping.match_mode === "auto-canonical-auth"
+          ? "auto (canonical + authorship)"
+          : mapping.match_mode === "auto-canonical"
+            ? "auto (canonical only)"
+            : mapping.match_mode
+      : "";
+    const titleText = mapping
+      ? canBind
+        ? `Mapped to ${mapping.target_taxon_id} · ${modeLabel}. Click to rebind to the selected target.`
+        : `Mapped to ${mapping.target_taxon_id} · ${modeLabel}. Select a target on the left to rebind.`
+      : canBind
+        ? "Click to map this mention to the selected target"
+        : "Select a target on the left, then click to map";
     return html`
       <li
-        class="assembly-mention ${mapping ? "mapped" : "unmapped"} ${canBind
-          ? "can-bind"
-          : ""}"
+        class="assembly-mention ${mapping ? "mapped" : "unmapped"} ${
+          mapping ? `mode-${mapping.match_mode}` : ""
+        } ${canBind ? "can-bind" : ""}"
         role="button"
         tabindex="0"
-        title=${mapping
-          ? `Mapped to ${mapping.target_taxon_id}`
-          : canBind
-            ? "Click to map this mention to the selected target"
-            : "Select a target on the left, then click to map"}
+        title=${titleText}
         @click=${() => {
-          if (mapping) return;
           if (this._assemblySelectedKey) {
             this._assemblyMapMention(key, this._assemblySelectedKey);
           }
@@ -17514,7 +17553,13 @@ class SfgaReferences extends LitElement {
         </div>
         ${mapping
           ? html`<div class="mention-mapping">
-              → <code>${mapping.target_taxon_id.slice(0, 8)}</code>
+              →
+              <code>${mapping.target_taxon_id.slice(0, 8)}</code>
+              <span class="mapping-mode-badge" title=${modeLabel}
+                >${mapping.match_mode === "curator-picked"
+                  ? "curator"
+                  : "auto"}</span
+              >
               <button
                 class="mention-unmap"
                 type="button"
