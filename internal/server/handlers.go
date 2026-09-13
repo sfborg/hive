@@ -678,16 +678,20 @@ func (s *server) handleArchive(w http.ResponseWriter, r *http.Request) {
 // apiReassembleReport is the JSON projection of
 // hive.ReassembleReport returned by POST /api/archive/reassemble.
 type apiReassembleReport struct {
-	PapersLoaded            int      `json:"papers_loaded"`
-	PapersSkipped           int      `json:"papers_skipped"`
-	Warnings                []string `json:"warnings,omitempty"`
-	Matched                 int      `json:"matched"`
-	TaxaCreated             int      `json:"taxa_created"`
-	SynonymsCreated         int      `json:"synonyms_created"`
-	BracketedCreated        int      `json:"bracketed_created"`
-	ConceptRelationsAdded   int      `json:"concept_relations_added"`
-	ConceptFieldsSet        int      `json:"concept_fields_set"`
-	Flags                   []apiAssemblerFlag `json:"flags,omitempty"`
+	PapersLoaded          int                `json:"papers_loaded"`
+	PapersSkipped         int                `json:"papers_skipped"`
+	Warnings              []string           `json:"warnings,omitempty"`
+	Matched               int                `json:"matched"`
+	TaxaCreated           int                `json:"taxa_created"`
+	SynonymsCreated       int                `json:"synonyms_created"`
+	BracketedCreated      int                `json:"bracketed_created"`
+	ConceptRelationsAdded int                `json:"concept_relations_added"`
+	ConceptFieldsSet      int                `json:"concept_fields_set"`
+	TypeMaterialInserted  int                `json:"type_material_inserted"`
+	DistributionInserted  int                `json:"distribution_inserted"`
+	VernacularInserted    int                `json:"vernacular_inserted"`
+	ExtensionRowsReplaced int                `json:"extension_rows_replaced"`
+	Flags                 []apiAssemblerFlag `json:"flags,omitempty"`
 }
 
 // apiAssemblerFlag mirrors assembler.FlagAction in the response.
@@ -1141,6 +1145,10 @@ func reassembleReportToAPI(r *hive.ReassembleReport) apiReassembleReport {
 		BracketedCreated:      r.AssemblerReport.BracketedCreated,
 		ConceptRelationsAdded: r.AssemblerReport.ConceptRelationsInserted,
 		ConceptFieldsSet:      r.AssemblerReport.ConceptFieldsSet,
+		TypeMaterialInserted:  r.TypeMaterialInserted,
+		DistributionInserted:  r.DistributionInserted,
+		VernacularInserted:    r.VernacularInserted,
+		ExtensionRowsReplaced: r.ExtensionRowsReplaced,
 	}
 	for _, f := range r.AssemblerReport.Flags {
 		out.Flags = append(out.Flags, apiAssemblerFlag{

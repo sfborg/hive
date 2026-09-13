@@ -272,7 +272,8 @@ func provisionalFromStatus(status string) sql.NullBool {
 
 // ReassembleReport is the result of ExecuteReassemble: the raw
 // assembler.Report plus per-orchestrator counts (papers loaded,
-// compose runs skipped, JSON parse errors).
+// compose runs skipped, JSON parse errors) and aggregate
+// extension-attachment counters across every paper processed.
 type ReassembleReport struct {
 	// PapersLoaded is the count of compose runs that produced a
 	// PaperInput. Runs with empty raw_output_json or a missing
@@ -292,6 +293,15 @@ type ReassembleReport struct {
 	// AssemblerReport is the pkg/assembler.Report returned by
 	// Apply.
 	AssemblerReport assembler.Report
+
+	// Extension-attachment aggregates across every paper the
+	// reassemble touched. Mirror the per-paper counters on
+	// ExecutePaperImportResult; summed here so the WUI /
+	// CLI have one number per extension category.
+	TypeMaterialInserted  int
+	DistributionInserted  int
+	VernacularInserted    int
+	ExtensionRowsReplaced int // sum of per-paper .Removed counters
 }
 
 // ExecuteReassemble is the archive-wide entry point for Slice 1:
@@ -333,7 +343,86 @@ func (t *Tx) ExecuteReassemble(rules assembler.Rules) (*ReassembleReport, error)
 	}
 	ar.Flags = append(ar.Flags, l3Flags...)
 	report.AssemblerReport = ar
+
+	// Extension attachment pass. Layer 2's taxa now exist and
+	// hive__paper_import carries assembler-decided mention →
+	// taxon mappings (from the RecordAssemblerMapping calls
+	// during Apply). Walk each compose run and attach the
+	// type_material / distribution / vernacular_name rows to
+	// the mapped taxa via the same helper the per-paper
+	// import button uses.
+	if err := t.attachExtensionsForAllPapers(report); err != nil {
+		return nil, err
+	}
+
 	return report, nil
+}
+
+// attachExtensionsForAllPapers walks every compose run in the
+// archive, loads the (assembler-populated) paper_import mappings
+// for its reference, parses the full compose tree, and calls
+// attachExtensionsForReference to materialize the extension rows.
+//
+// One delete-then-reinsert sweep per reference across all its
+// runs (via the helper's DeleteRowSourcesForReference call at the
+// top of each attachExtensionsForReference invocation). The
+// current fixture-shaped case of one compose run per reference
+// works cleanly; the chunked-monograph case (multiple compose
+// runs per reference) needs a follow-up to consolidate extensions
+// across runs before the sweep — see the corpus-hunt brief's
+// chunking-approach section.
+func (t *Tx) attachExtensionsForAllPapers(report *ReassembleReport) error {
+	const q = `SELECT run_id, reference_id, raw_output_json
+	             FROM hive__extraction_run
+	            WHERE purpose = 'compose'
+	              AND deleted_at IS NULL
+	              AND reference_id IS NOT NULL
+	              AND raw_output_json != ''
+	         ORDER BY created_at ASC, run_id ASC`
+	rows, err := t.tx.QueryContext(t.ctx, q)
+	if err != nil {
+		return fmt.Errorf("core: load compose runs for extension attach: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID, refID, rawJSON string
+		if err := rows.Scan(&runID, &refID, &rawJSON); err != nil {
+			return fmt.Errorf("core: scan compose run for extension attach: %w", err)
+		}
+		var tree composeTreeShape
+		if err := json.Unmarshal([]byte(rawJSON), &tree); err != nil {
+			report.Warnings = append(report.Warnings,
+				fmt.Sprintf("compose run %s: parse for extension attach: %v", runID, err))
+			continue
+		}
+		mappings, err := t.listPaperImportMappings(t.ctx, refID)
+		if err != nil {
+			return err
+		}
+		if len(mappings) == 0 {
+			// Assembler couldn't decide any mappings for this
+			// paper. Uncommon but possible when every mention
+			// hit a red-node condition. Extension attachment
+			// has nothing to hang on to; skip silently.
+			continue
+		}
+		targetByKey := make(map[string]string, len(mappings))
+		for _, m := range mappings {
+			targetByKey[m.PaperNameKey] = m.TargetTaxonID
+		}
+		perPaper := &ExecutePaperImportResult{}
+		if err := t.attachExtensionsForReference(
+			t.ctx, refID, runID, &tree, targetByKey, perPaper,
+		); err != nil {
+			return err
+		}
+		report.TypeMaterialInserted += perPaper.TypeMaterialInserted
+		report.DistributionInserted += perPaper.DistributionInserted
+		report.VernacularInserted += perPaper.VernacularInserted
+		report.ExtensionRowsReplaced += perPaper.Removed
+		report.Warnings = append(report.Warnings, perPaper.Warnings...)
+	}
+	return rows.Err()
 }
 
 // emitLayer3DiffFlags is the pass-3 (Layer 3 diff) helper. Loads

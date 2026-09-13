@@ -1168,10 +1168,21 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 		}
 		switch act.Kind {
 		case ActionMatch:
+			// Match.TaxonID may be a plan-local id when the mention
+			// matched a taxon virtualized into the index by an
+			// earlier CreateTaxon action in the same run (two
+			// mentions sharing canonical + authorship — e.g., a
+			// paper describing two forms of the same species as
+			// distinct mentions). Resolve before recording so the
+			// mapping table stores real ids.
+			resolved, err := resolveLocal(act.Match.TaxonID, remap)
+			if err != nil {
+				return report, err
+			}
 			if prov.ReferenceID != "" && prov.MentionID != "" &&
-				act.Match.TaxonID != "" {
+				resolved != "" {
 				if err := w.RecordAssemblerMapping(
-					prov.ReferenceID, prov.MentionID, act.Match.TaxonID,
+					prov.ReferenceID, prov.MentionID, resolved,
 					act.Match.AuthorshipConfirmed,
 				); err != nil {
 					return report, fmt.Errorf("assembler: record match mapping: %w", err)
@@ -1210,6 +1221,22 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 			cs.AcceptedTaxonID = acc
 			if _, err := w.CreateSynonymForAssembler(cs, prov.ReferenceID); err != nil {
 				return report, fmt.Errorf("assembler: create synonym: %w", err)
+			}
+			// Record a mapping so extension attachment can find
+			// this mention. Synonym mention → accepted taxon
+			// matches how the per-paper Assembly UI treats a
+			// curator dragging a synonym mention onto an accepted
+			// target: type_material / distribution / vernacular
+			// rows attach to the accepted taxon's name row via
+			// the existing resolveTaxonNameID hop.
+			if prov.ReferenceID != "" && prov.MentionID != "" &&
+				acc != "" {
+				if err := w.RecordAssemblerMapping(
+					prov.ReferenceID, prov.MentionID, acc,
+					cs.Authorship != "",
+				); err != nil {
+					return report, fmt.Errorf("assembler: record synonym mapping: %w", err)
+				}
 			}
 			report.SynonymsCreated++
 		case ActionBracket:

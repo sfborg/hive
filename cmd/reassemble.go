@@ -67,6 +67,10 @@ func printReassembleReport(r *hive.ReassembleReport) {
 	fmt.Fprintf(os.Stdout, "bracketed:       %d\n", r.AssemblerReport.BracketedCreated)
 	fmt.Fprintf(os.Stdout, "concept rels:    %d\n", r.AssemblerReport.ConceptRelationsInserted)
 	fmt.Fprintf(os.Stdout, "concept fields:  %d\n", r.AssemblerReport.ConceptFieldsSet)
+	fmt.Fprintf(os.Stdout, "type material:   %d\n", r.TypeMaterialInserted)
+	fmt.Fprintf(os.Stdout, "distributions:   %d\n", r.DistributionInserted)
+	fmt.Fprintf(os.Stdout, "vernaculars:     %d\n", r.VernacularInserted)
+	fmt.Fprintf(os.Stdout, "extensions replaced: %d\n", r.ExtensionRowsReplaced)
 	if len(r.Warnings) > 0 {
 		fmt.Fprintln(os.Stdout, "\nwarnings:")
 		for _, w := range r.Warnings {
