@@ -103,123 +103,10 @@ func (t *Tx) ExecutePaperImport(
 		targetByKey[m.PaperNameKey] = m.TargetTaxonID
 	}
 
-	// Sweep prior imports for this reference before re-inserting.
-	// The sweep also returns the (table, id) pairs so we can
-	// delete the SFGA rows themselves.
-	prior, err := t.DeleteRowSourcesForReference(referenceID)
-	if err != nil {
+	if err := t.attachExtensionsForReference(
+		ctx, referenceID, extractionRunID, &tree, targetByKey, result,
+	); err != nil {
 		return nil, err
-	}
-	for _, pair := range prior {
-		table, id := pair[0], pair[1]
-		if err := t.deleteExtensionRow(table, id); err != nil {
-			// Log-only — a missing prior row shouldn't block the
-			// fresh import.
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("prior %s row %s: %v", table, id, err))
-			continue
-		}
-		result.Removed++
-	}
-
-	actor := ActorFromContext(t.ctx)
-
-	// Type material: keyed by nameID → look up target taxon's
-	// name_id (type material belongs to a NAME, not a taxon).
-	for _, tm := range tree.TypeMaterial {
-		targetTaxonID, ok := targetByKey[tm.NameID]
-		if !ok {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("type_material for %q: no mapping (skipped)", tm.NameID))
-			continue
-		}
-		nameID, err := t.resolveTaxonNameID(ctx, targetTaxonID)
-		if err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("type_material for %q → taxon %q: %v",
-					tm.NameID, targetTaxonID, err))
-			continue
-		}
-		rowid, err := t.insertTypeMaterialFromCompose(nameID, referenceID, tm)
-		if err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("insert type_material for %q: %v", tm.NameID, err))
-			continue
-		}
-		if err := t.InsertRowSource(RowSource{
-			EntityTable:     "type_material",
-			EntityID:        fmt.Sprintf("%d", rowid),
-			ReferenceID:     referenceID,
-			ExtractionRunID: extractionRunID,
-			CreatedBy:       actor,
-		}); err != nil {
-			return nil, err
-		}
-		result.TypeMaterialInserted++
-	}
-
-	// Distributions: keyed by taxonID directly (attach to taxon).
-	for _, d := range tree.Distribution {
-		targetTaxonID, ok := targetByKey[d.TaxonID.v]
-		if !ok {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("distribution for %q: no mapping (skipped)", d.TaxonID))
-			continue
-		}
-		if _, err := t.getTaxonExists(ctx, targetTaxonID); err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("distribution for %q → taxon %q: %v",
-					d.TaxonID, targetTaxonID, err))
-			continue
-		}
-		rowid, err := t.insertDistributionFromCompose(targetTaxonID, referenceID, d)
-		if err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("insert distribution for %q: %v", d.TaxonID, err))
-			continue
-		}
-		if err := t.InsertRowSource(RowSource{
-			EntityTable:     "distribution",
-			EntityID:        fmt.Sprintf("%d", rowid),
-			ReferenceID:     referenceID,
-			ExtractionRunID: extractionRunID,
-			CreatedBy:       actor,
-		}); err != nil {
-			return nil, err
-		}
-		result.DistributionInserted++
-	}
-
-	// Vernaculars: also taxon-keyed.
-	for _, v := range tree.VernacularName {
-		targetTaxonID, ok := targetByKey[v.TaxonID.v]
-		if !ok {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("vernacular for %q: no mapping (skipped)", v.TaxonID))
-			continue
-		}
-		if _, err := t.getTaxonExists(ctx, targetTaxonID); err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("vernacular for %q → taxon %q: %v",
-					v.TaxonID, targetTaxonID, err))
-			continue
-		}
-		rowid, err := t.insertVernacularFromCompose(targetTaxonID, referenceID, v)
-		if err != nil {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("insert vernacular for %q: %v", v.TaxonID, err))
-			continue
-		}
-		if err := t.InsertRowSource(RowSource{
-			EntityTable:     "vernacular",
-			EntityID:        fmt.Sprintf("%d", rowid),
-			ReferenceID:     referenceID,
-			ExtractionRunID: extractionRunID,
-			CreatedBy:       actor,
-		}); err != nil {
-			return nil, err
-		}
-		result.VernacularInserted++
 	}
 
 	// Concept-import: walk name_usages, populate namePhrase on
@@ -636,4 +523,145 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// attachExtensionsForReference is the shared extension-attachment
+// step used by both ExecutePaperImport (per-paper import button)
+// and ExecuteReassemble (project-level reassemble). Given the
+// paper's compose tree and a mention → target-taxon map, it:
+//
+//  1. Sweeps prior hive__row_source rows for the reference and
+//     deletes the corresponding extension rows (delete-then-
+//     reinsert cycle, so re-runs are idempotent).
+//  2. Walks the compose tree's type_material array, resolves each
+//     mention to its target taxon's name_id, and inserts a
+//     type_material row.
+//  3. Walks the distribution array; each row attaches to the
+//     mapped target taxon directly.
+//  4. Walks the vernacular_name array; same shape as distribution.
+//  5. Stamps hive__row_source rows for every insert so the
+//     provenance chain (reference_id + extraction_run_id) is
+//     preserved.
+//
+// Skips silently when a mention has no mapping — the caller
+// (per-paper or project-level) decides whether that's a warning
+// or expected behavior; both push the message into result.Warnings.
+func (t *Tx) attachExtensionsForReference(
+	ctx context.Context,
+	referenceID, extractionRunID string,
+	tree *composeTreeShape,
+	targetByKey map[string]string,
+	result *ExecutePaperImportResult,
+) error {
+	prior, err := t.DeleteRowSourcesForReference(referenceID)
+	if err != nil {
+		return err
+	}
+	for _, pair := range prior {
+		table, id := pair[0], pair[1]
+		if err := t.deleteExtensionRow(table, id); err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("prior %s row %s: %v", table, id, err))
+			continue
+		}
+		result.Removed++
+	}
+
+	actor := ActorFromContext(t.ctx)
+
+	for _, tm := range tree.TypeMaterial {
+		targetTaxonID, ok := targetByKey[tm.NameID]
+		if !ok {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("type_material for %q: no mapping (skipped)", tm.NameID))
+			continue
+		}
+		nameID, err := t.resolveTaxonNameID(ctx, targetTaxonID)
+		if err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("type_material for %q → taxon %q: %v",
+					tm.NameID, targetTaxonID, err))
+			continue
+		}
+		rowid, err := t.insertTypeMaterialFromCompose(nameID, referenceID, tm)
+		if err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("insert type_material for %q: %v", tm.NameID, err))
+			continue
+		}
+		if err := t.InsertRowSource(RowSource{
+			EntityTable:     "type_material",
+			EntityID:        fmt.Sprintf("%d", rowid),
+			ReferenceID:     referenceID,
+			ExtractionRunID: extractionRunID,
+			CreatedBy:       actor,
+		}); err != nil {
+			return err
+		}
+		result.TypeMaterialInserted++
+	}
+
+	for _, d := range tree.Distribution {
+		targetTaxonID, ok := targetByKey[d.TaxonID.v]
+		if !ok {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("distribution for %q: no mapping (skipped)", d.TaxonID))
+			continue
+		}
+		if _, err := t.getTaxonExists(ctx, targetTaxonID); err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("distribution for %q → taxon %q: %v",
+					d.TaxonID, targetTaxonID, err))
+			continue
+		}
+		rowid, err := t.insertDistributionFromCompose(targetTaxonID, referenceID, d)
+		if err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("insert distribution for %q: %v", d.TaxonID, err))
+			continue
+		}
+		if err := t.InsertRowSource(RowSource{
+			EntityTable:     "distribution",
+			EntityID:        fmt.Sprintf("%d", rowid),
+			ReferenceID:     referenceID,
+			ExtractionRunID: extractionRunID,
+			CreatedBy:       actor,
+		}); err != nil {
+			return err
+		}
+		result.DistributionInserted++
+	}
+
+	for _, v := range tree.VernacularName {
+		targetTaxonID, ok := targetByKey[v.TaxonID.v]
+		if !ok {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("vernacular for %q: no mapping (skipped)", v.TaxonID))
+			continue
+		}
+		if _, err := t.getTaxonExists(ctx, targetTaxonID); err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("vernacular for %q → taxon %q: %v",
+					v.TaxonID, targetTaxonID, err))
+			continue
+		}
+		rowid, err := t.insertVernacularFromCompose(targetTaxonID, referenceID, v)
+		if err != nil {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("insert vernacular for %q: %v", v.TaxonID, err))
+			continue
+		}
+		if err := t.InsertRowSource(RowSource{
+			EntityTable:     "vernacular",
+			EntityID:        fmt.Sprintf("%d", rowid),
+			ReferenceID:     referenceID,
+			ExtractionRunID: extractionRunID,
+			CreatedBy:       actor,
+		}); err != nil {
+			return err
+		}
+		result.VernacularInserted++
+	}
+
+	return nil
 }
