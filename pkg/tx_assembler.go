@@ -187,6 +187,54 @@ func (t *Tx) RecordAssemblerFlag(f assembler.FlagAction, prov assembler.ActionPr
 	return nil
 }
 
+// RecordAssemblerMapping writes a hive__paper_import row for an
+// assembler-decided mention → taxon binding so downstream flows
+// (per-paper extension attachment, the paper-level Assembly tab)
+// don't need to re-derive the mapping. Curator-picked mappings
+// take precedence: this method skips silently if a
+// curator-picked row already exists for the same (referenceID,
+// mentionID).
+//
+// authorshipConfirmed selects the match_mode:
+//   true  → "auto-canonical-auth" (canonical + authorship match)
+//   false → "auto-canonical" (canonical-only or authorship unknown)
+func (t *Tx) RecordAssemblerMapping(
+	referenceID, mentionID, targetTaxonID string,
+	authorshipConfirmed bool,
+) error {
+	if referenceID == "" || mentionID == "" || targetTaxonID == "" {
+		return errors.New("core: RecordAssemblerMapping: referenceID / mentionID / targetTaxonID all required")
+	}
+	matchMode := "auto-canonical"
+	if authorshipConfirmed {
+		matchMode = "auto-canonical-auth"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// ON CONFLICT clause preserves any curator-picked row; only
+	// upgrades an existing auto-* row or inserts fresh. The WHERE
+	// clause on the DO UPDATE branch is what enforces the "never
+	// overwrite curator-picked" rule — SQLite runs the WHERE
+	// after resolving the conflict.
+	const q = `INSERT INTO hive__paper_import (
+	    reference_id, paper_name_key, target_taxon_id,
+	    match_mode, match_confidence, last_synced_at,
+	    created_at, updated_at, created_by
+	) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+	ON CONFLICT (reference_id, paper_name_key) DO UPDATE SET
+	    target_taxon_id = excluded.target_taxon_id,
+	    match_mode      = excluded.match_mode,
+	    updated_at      = excluded.updated_at
+	WHERE hive__paper_import.match_mode != 'curator-picked'`
+	if _, err := t.tx.ExecContext(t.ctx, q,
+		referenceID, mentionID, targetTaxonID,
+		matchMode, now, now, t.actor,
+	); err != nil {
+		return fmt.Errorf("core: RecordAssemblerMapping(%s,%s): %w",
+			referenceID, mentionID, err)
+	}
+	return nil
+}
+
 // DeleteAllAssemblerFlags clears hive__assembler_flag. Called at
 // the start of each reassemble so the persisted table matches the
 // current Layer 2 state — no history is kept here (extraction runs

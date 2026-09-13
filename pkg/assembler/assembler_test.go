@@ -744,6 +744,9 @@ func (s *stubReaderWriter) RecordAssemblerFlag(f FlagAction, _ ActionProvenance)
 	s.flags = append(s.flags, f)
 	return nil
 }
+func (s *stubReaderWriter) RecordAssemblerMapping(_, _, _ string, _ bool) error {
+	return nil
+}
 
 // TestApply_ResolveImplicitInsertsWhenUnique: given a single
 // candidate, Apply materializes the concept relation via the

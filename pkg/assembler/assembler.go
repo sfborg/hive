@@ -480,6 +480,23 @@ type Writer interface {
 	// lives (a hive__assembler_flag table, a warnings log, etc.);
 	// Apply just delegates.
 	RecordAssemblerFlag(f FlagAction, source ActionProvenance) error
+
+	// RecordAssemblerMapping records the assembler's decision to
+	// bind a paper mention to a target taxon so downstream flows
+	// (per-paper extension attachment, curator UI) can look up the
+	// mapping without re-running the assembler. Called from Apply
+	// for each ActionMatch, ActionCreateTaxon, and ActionBracket.
+	//
+	// authorshipConfirmed distinguishes the two auto- match modes:
+	// true → match_mode = "auto-canonical-auth", false →
+	// match_mode = "auto-canonical". Implementations should skip
+	// silently if a curator-picked mapping already exists for
+	// the same (referenceID, mentionID) — the assembler never
+	// overwrites curator decisions.
+	RecordAssemblerMapping(
+		referenceID, mentionID, targetTaxonID string,
+		authorshipConfirmed bool,
+	) error
 }
 
 // ActionProvenance carries the source-paper coordinates of a flag
@@ -1151,6 +1168,15 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 		}
 		switch act.Kind {
 		case ActionMatch:
+			if prov.ReferenceID != "" && prov.MentionID != "" &&
+				act.Match.TaxonID != "" {
+				if err := w.RecordAssemblerMapping(
+					prov.ReferenceID, prov.MentionID, act.Match.TaxonID,
+					act.Match.AuthorshipConfirmed,
+				); err != nil {
+					return report, fmt.Errorf("assembler: record match mapping: %w", err)
+				}
+			}
 			report.Matched++
 		case ActionCreateTaxon:
 			ct := act.CreateTaxon
@@ -1165,6 +1191,14 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 			}
 			if ct.LocalID != "" {
 				remap[ct.LocalID] = newID
+			}
+			if prov.ReferenceID != "" && prov.MentionID != "" {
+				if err := w.RecordAssemblerMapping(
+					prov.ReferenceID, prov.MentionID, newID,
+					ct.Authorship != "",
+				); err != nil {
+					return report, fmt.Errorf("assembler: record create mapping: %w", err)
+				}
 			}
 			report.TaxaCreated++
 		case ActionCreateSynonym:
@@ -1185,8 +1219,17 @@ func Apply(w Writer, r Reader, plan Plan) (Report, error) {
 				return report, err
 			}
 			br.AnchorTaxonID = anchor
-			if _, err := w.CreateBracketedTaxonForAssembler(br, prov.ReferenceID); err != nil {
+			newID, err := w.CreateBracketedTaxonForAssembler(br, prov.ReferenceID)
+			if err != nil {
 				return report, fmt.Errorf("assembler: bracket fallback: %w", err)
+			}
+			if prov.ReferenceID != "" && prov.MentionID != "" {
+				if err := w.RecordAssemblerMapping(
+					prov.ReferenceID, prov.MentionID, newID,
+					br.Authorship != "",
+				); err != nil {
+					return report, fmt.Errorf("assembler: record bracket mapping: %w", err)
+				}
 			}
 			report.BracketedCreated++
 		case ActionInsertConceptRel:
