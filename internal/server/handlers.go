@@ -5108,6 +5108,13 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// curator waste time filling out fields.
 	attached := s.attachedReferencesForSHA(r.Context(), res.SHA512)
 
+	// Look up references by extracted DOI. When the DOI matches
+	// an existing reference row but the sha is new, this is the
+	// multi-format case (JATS after PDF, EPUB after PDF, etc.).
+	// Clients use MatchedByDOI to offer "attach to existing" so
+	// each paper stays as one reference with N format sidecars.
+	matched := s.matchedByDOI(r.Context(), doi, attached)
+
 	writeJSON(w, http.StatusCreated, apiReferenceUpload{
 		SHA512:              res.SHA512,
 		Ext:                 res.Ext,
@@ -5119,7 +5126,41 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		AnnotationStatus:    annotStatus,
 		AnnotationNameCount: annotCount,
 		AttachedReferences:  attached,
+		MatchedByDOI:        matched,
 	})
+}
+
+// matchedByDOI returns compact reference summaries for every row
+// whose col__doi matches the given DOI, excluding entries that
+// are already in the same-sha `attached` list (they would appear
+// there anyway).
+func (s *server) matchedByDOI(ctx context.Context, doi string, attached []apiAttachedReference) []apiAttachedReference {
+	if strings.TrimSpace(doi) == "" {
+		return nil
+	}
+	refs, err := s.a.FindReferencesByDOI(ctx, doi)
+	if err != nil || len(refs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(attached))
+	for _, a := range attached {
+		seen[a.ID] = struct{}{}
+	}
+	out := make([]apiAttachedReference, 0, len(refs))
+	for _, r := range refs {
+		if _, dup := seen[r.ID]; dup {
+			continue
+		}
+		out = append(out, apiAttachedReference{
+			ID:       r.ID,
+			Citation: r.Citation,
+			Title:    r.Title,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // attachedReferencesForSHA returns compact summaries of every

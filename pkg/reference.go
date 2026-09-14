@@ -510,6 +510,55 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 //
 //   - Missing reference → ErrNotFound.
 //   - Any dependent row → ErrConflict with the offending table name.
+// FindReferencesByDOI returns every reference row whose
+// col__doi matches (case-insensitive) the given DOI. The DOI is
+// normalized before comparison: leading "doi:" is stripped and
+// a leading "https://doi.org/" or "http://doi.org/" prefix is
+// dropped. Returns an empty slice when nothing matches.
+//
+// Used by the upload path to dedup multi-format uploads: dropping
+// the JATS for a paper whose PDF is already ingested lands the
+// JATS as a sidecar attachment on the existing reference row
+// instead of minting a duplicate reference.
+func (a *Archive) FindReferencesByDOI(ctx context.Context, doi string) ([]coldp.Reference, error) {
+	if doi == "" {
+		return nil, nil
+	}
+	needle := strings.TrimSpace(doi)
+	needle = strings.TrimPrefix(needle, "https://doi.org/")
+	needle = strings.TrimPrefix(needle, "http://doi.org/")
+	needle = strings.TrimPrefix(needle, "doi:")
+	if needle == "" {
+		return nil, nil
+	}
+	// Multi-row match is rare (would indicate an existing
+	// duplicate in the archive); we return every match so the
+	// caller can surface the ambiguity rather than pick
+	// arbitrarily.
+	const q = `SELECT col__id, COALESCE(col__citation, ''), COALESCE(col__title, ''), COALESCE(col__doi, '')
+	    FROM reference
+	    WHERE LOWER(REPLACE(REPLACE(REPLACE(
+	        COALESCE(col__doi, ''),
+	        'https://doi.org/', ''),
+	        'http://doi.org/', ''),
+	        'doi:', '')) = LOWER(?)
+	    ORDER BY col__id ASC`
+	rows, err := a.db.QueryContext(ctx, q, needle)
+	if err != nil {
+		return nil, fmt.Errorf("core: FindReferencesByDOI(%s): %w", needle, err)
+	}
+	defer rows.Close()
+	var out []coldp.Reference
+	for rows.Next() {
+		var r coldp.Reference
+		if err := rows.Scan(&r.ID, &r.Citation, &r.Title, &r.DOI); err != nil {
+			return nil, fmt.Errorf("core: FindReferencesByDOI scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // AttachReferencePDF associates a sidecar-library sha512 with a
 // reference row. Idempotent — repeat attachments with the same
 // (reference_id, sha512) are no-ops. Stamps attached_at + the

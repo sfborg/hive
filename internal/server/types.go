@@ -1076,6 +1076,14 @@ type apiReferenceUpload struct {
 	// existing reference instead of walking the curator through
 	// a fresh bibliographic-entry flow they'd end up discarding.
 	AttachedReferences []apiAttachedReference `json:"attached_references,omitempty"`
+
+	// MatchedByDOI lists reference rows whose col__doi matches
+	// the DOI extracted from this upload. Same-DOI-different-sha
+	// is the multi-format case: dropping the JATS for a paper
+	// whose PDF is already ingested. Clients (WUI upload dialog,
+	// hive ingest CLI) should offer to attach this sha to one of
+	// the matched references rather than mint a duplicate.
+	MatchedByDOI []apiAttachedReference `json:"matched_by_doi,omitempty"`
 }
 
 // apiAttachedReference is a compact reference summary — enough to
