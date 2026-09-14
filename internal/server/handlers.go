@@ -179,6 +179,8 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
 	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
 	mux.HandleFunc("POST /api/reference/{id}/attach-pdf", s.handleAttachReferencePDF)
+	mux.HandleFunc("GET /api/reference/{id}/license", s.handleGetReferenceLicense)
+	mux.HandleFunc("PUT /api/reference/{id}/license", s.handleSetReferenceLicense)
 	mux.HandleFunc("DELETE /api/reference/{id}/attached-pdf/{sha}", s.handleDetachReferencePDF)
 	// Corrections — bbox-add, text-tag, xref-fix, chip-feedback.
 	// Slice 1 supports bbox-add for figures/tables only. See
@@ -5100,6 +5102,21 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// DOI (for auto-hop to the DOI tab) and the full header
 	// metadata (for the Manual-tab fallback).
 	teiStatus, doi, meta := s.tryGrobidConvert(r.Context(), res, ext)
+	// GROBID handles PDF only. For JATS uploads the DOI + basic
+	// metadata live in the file itself as XML — pull them out
+	// with a lightweight parse so DOI-based dedup works for
+	// JATS-first ingestion (multi-format workflows drop the
+	// publisher-native XML before the PDF).
+	if ext == "xml" || ext == "jats" {
+		if xdoi, xmeta := extractJATSMeta(res.Path); xdoi != "" || xmeta != nil {
+			if doi == "" {
+				doi = xdoi
+			}
+			if meta == nil {
+				meta = xmeta
+			}
+		}
+	}
 	annotStatus, annotCount := s.tryAnnotate(r.Context(), res, teiStatus)
 
 	// Enumerate any references already attached to this sha so
@@ -5128,6 +5145,282 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 		AttachedReferences:  attached,
 		MatchedByDOI:        matched,
 	})
+}
+
+// apiReferenceLicense is the JSON projection of
+// hive.ReferenceLicense used by the license endpoints.
+type apiReferenceLicense struct {
+	ReferenceID string `json:"reference_id"`
+	License     string `json:"license"`
+	SourceURL   string `json:"source_url,omitempty"`
+	VerifiedAt  string `json:"verified_at,omitempty"`
+	VerifiedBy  string `json:"verified_by,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+}
+
+// apiSetLicenseReq is the PUT body.
+type apiSetLicenseReq struct {
+	License   string `json:"license"`
+	SourceURL string `json:"source_url,omitempty"`
+}
+
+func referenceLicenseToAPI(rl hive.ReferenceLicense) apiReferenceLicense {
+	out := apiReferenceLicense{
+		ReferenceID: rl.ReferenceID,
+		License:     rl.License,
+		SourceURL:   rl.SourceURL,
+		VerifiedBy:  rl.VerifiedBy,
+	}
+	if !rl.VerifiedAt.IsZero() {
+		out.VerifiedAt = rl.VerifiedAt.Format(time.RFC3339Nano)
+	}
+	if !rl.UpdatedAt.IsZero() {
+		out.UpdatedAt = rl.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+// handleGetReferenceLicense returns the license row for a
+// reference. Missing rows return a synthetic "unknown" row so
+// clients don't have to distinguish "no row yet" from "explicitly
+// unknown" when rendering.
+//
+// @Summary      Get the verified license of a reference
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiReferenceLicense
+// @Router       /reference/{id}/license [get]
+func (s *server) handleGetReferenceLicense(w http.ResponseWriter, r *http.Request) {
+	refID := r.PathValue("id")
+	rl, err := s.a.GetReferenceLicense(r.Context(), refID)
+	if err != nil {
+		if errors.Is(err, hive.ErrNotFound) {
+			writeJSON(w, http.StatusOK, apiReferenceLicense{
+				ReferenceID: refID,
+				License:     hive.LicenseUnknown,
+			})
+			return
+		}
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, referenceLicenseToAPI(*rl))
+}
+
+// handleSetReferenceLicense upserts the license for a reference.
+//
+// @Summary      Record the verified license of a reference
+// @Tags         references
+// @Accept       json
+// @Produce      json
+// @Param        id   path string             true "Reference ID"
+// @Param        body body apiSetLicenseReq   true "License payload"
+// @Success      200 {object} apiReferenceLicense
+// @Failure      400 {object} problem
+// @Router       /reference/{id}/license [put]
+func (s *server) handleSetReferenceLicense(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	refID := r.PathValue("id")
+	var body apiSetLicenseReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeBadRequest(w, r, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(body.License) == "" {
+		writeBadRequest(w, r, "license is required")
+		return
+	}
+	err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+		return tx.SetReferenceLicense(hive.ReferenceLicense{
+			ReferenceID: refID,
+			License:     body.License,
+			SourceURL:   body.SourceURL,
+		})
+	})
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	fresh, err := s.a.GetReferenceLicense(r.Context(), refID)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, referenceLicenseToAPI(*fresh))
+}
+
+// extractJATSMeta pulls DOI + basic bibliographic metadata out
+// of a JATS XML file for the reference-upload path. GROBID
+// handles PDFs; JATS carries the same fields natively and
+// doesn't need a converter. Returns empty DOI + nil metadata
+// when the file can't be parsed (malformed XML, non-JATS shape,
+// etc.) — callers treat it as "no metadata extracted" without
+// failing the upload.
+//
+// Deliberately lightweight — reads the whole file (JATS papers
+// are usually 100-500 KB; the 100 MB upload cap enforces the
+// worst case) and walks the DOM to pull four fields. Not a
+// general JATS parser; hive has richer parsers in
+// pkg/refmanager/jatsconv for the ingestion pipeline itself.
+func extractJATSMeta(path string) (string, *apiUploadBibHeader) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil
+	}
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	dec.Strict = false
+	dec.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
+
+	var (
+		doi           string
+		title         string
+		firstAuthor   string
+		year          string
+		inTitleGroup  bool
+		inArticleMeta bool
+		inSurname     bool
+		inGivenNames  bool
+		inYear        bool
+		wantAuthor    bool
+		curSurname    string
+		curGiven      string
+		captureID     bool
+	)
+	for {
+		tok, err := dec.Token()
+		if tok == nil || errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			// Malformed XML — return whatever we have.
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "article-meta", "book-meta":
+				inArticleMeta = true
+			case "title-group":
+				if inArticleMeta {
+					inTitleGroup = true
+				}
+			case "article-id":
+				pubType := ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "pub-id-type" {
+						pubType = a.Value
+					}
+				}
+				if pubType == "doi" {
+					captureID = true
+				}
+			case "article-title":
+				if inTitleGroup && title == "" {
+					captureID = false
+					title = ""
+					// use a small helper collector
+				}
+			case "contrib":
+				if firstAuthor == "" {
+					wantAuthor = true
+				}
+			case "surname":
+				if wantAuthor {
+					inSurname = true
+				}
+			case "given-names":
+				if wantAuthor {
+					inGivenNames = true
+				}
+			case "year":
+				if year == "" {
+					inYear = true
+				}
+			}
+			// Grab title inline — treated as chardata below via the
+			// captureTitle state.
+			if t.Name.Local == "article-title" && inTitleGroup {
+				captureTitleStart(&title, dec)
+				inTitleGroup = false
+			}
+		case xml.CharData:
+			if captureID {
+				doi = strings.TrimSpace(string(t))
+				captureID = false
+			}
+			if inSurname {
+				curSurname = strings.TrimSpace(string(t))
+			}
+			if inGivenNames {
+				curGiven = strings.TrimSpace(string(t))
+			}
+			if inYear {
+				year = strings.TrimSpace(string(t))
+				inYear = false
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "article-meta", "book-meta":
+				inArticleMeta = false
+			case "title-group":
+				inTitleGroup = false
+			case "surname":
+				inSurname = false
+			case "given-names":
+				inGivenNames = false
+			case "contrib":
+				if wantAuthor && curSurname != "" {
+					if curGiven != "" {
+						firstAuthor = curSurname + ", " + curGiven
+					} else {
+						firstAuthor = curSurname
+					}
+					wantAuthor = false
+					curSurname = ""
+					curGiven = ""
+				}
+			}
+		}
+		if doi != "" && title != "" && firstAuthor != "" && year != "" {
+			break
+		}
+	}
+	if doi == "" && title == "" && firstAuthor == "" && year == "" {
+		return "", nil
+	}
+	return doi, &apiUploadBibHeader{
+		Title:  title,
+		Author: firstAuthor,
+		Issued: year,
+	}
+}
+
+// captureTitleStart reads text content up to the closing
+// </article-title> and writes it into *dst. Skips inline
+// markup elements (italic, bold, xref, etc.) — only their
+// character data enters the title string.
+func captureTitleStart(dst *string, dec *xml.Decoder) {
+	var b strings.Builder
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if tok == nil || err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			b.Write(t)
+		}
+	}
+	*dst = strings.Join(strings.Fields(b.String()), " ")
 }
 
 // matchedByDOI returns compact reference summaries for every row
