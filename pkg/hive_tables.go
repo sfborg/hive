@@ -836,6 +836,38 @@ CREATE INDEX IF NOT EXISTS idx_hive__layer3_overlay_taxon
 CREATE INDEX IF NOT EXISTS idx_hive__layer3_overlay_active
     ON hive__layer3_overlay (retired_at)
     WHERE retired_at IS NULL;
+
+-- hive__reference_license records the verified open-access
+-- license of a reference alongside where the verification came
+-- from and who did it. One active row per reference; a re-verify
+-- upserts. Kept separate from the reference row so hive can add
+-- license bookkeeping without depending on future coldp.Reference
+-- schema evolution.
+--
+-- license values (curator picks from a controlled vocabulary):
+--   CC-BY, CC-BY-SA, CC-BY-NC, CC0, PD, PD-BHL, other-verified,
+--   unknown. "unknown" is the safe default when the license
+--   status genuinely can't be verified from the source — never
+--   default to a permissive license.
+--
+-- source_url is where the license was verified (publisher page,
+-- Crossref record, BHL item metadata). Empty is legal for
+-- offline verifications with a paper trail.
+CREATE TABLE IF NOT EXISTS hive__reference_license (
+    reference_id      TEXT PRIMARY KEY,
+    license           TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (license IN (
+                            'CC-BY', 'CC-BY-SA', 'CC-BY-NC',
+                            'CC0', 'PD', 'PD-BHL',
+                            'other-verified', 'unknown')),
+    source_url        TEXT NOT NULL DEFAULT '',
+    verified_at       TEXT,
+    verified_by       TEXT NOT NULL DEFAULT '',
+    updated_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive__reference_license_license
+    ON hive__reference_license (license);
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata
