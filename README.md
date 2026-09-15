@@ -1,6 +1,6 @@
 # hive
 
-**hive assembles taxonomic databases from open-access literature.**
+**hive assembles taxonomic databases from taxonomic literature.**
 
 Drop a pile of taxonomy PDFs (or JATS XML, or EPUB) into hive
 and, through a mostly-automated pipeline, get out a curated
@@ -110,7 +110,7 @@ hive ingest ~/papers/
 # recurse into subdirectories
 hive ingest --recurse ~/papers/
 
-# with a verified OA license (applied to every reference in the
+# with a verified license (applied to every reference in the
 # batch — split by license if your pile is mixed)
 hive ingest --license CC-BY --license-source "https://europepmc.org/…" \
   ~/papers/
