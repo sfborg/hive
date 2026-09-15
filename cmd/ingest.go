@@ -119,8 +119,10 @@ func groupIngestFiles(paths []string) []ingestGroup {
 }
 
 // ingestBasename returns the filename with its extension(s)
-// stripped so multi-format uploads for one paper collapse to a
-// shared group key. Compound extensions:
+// AND publisher versioning suffix stripped so multi-format
+// uploads for one paper collapse to a shared group key.
+//
+// Compound extensions:
 //   "foo.jats.xml" → "foo"
 //   "foo.tei.xml"  → "foo"
 //   "foo.grobid.xml" → "foo"
@@ -128,6 +130,18 @@ func groupIngestFiles(paths []string) []ingestGroup {
 //   "foo.pdf" → "foo"
 //   "foo.epub" → "foo"
 //   "foo.html" → "foo"
+// Publisher versioning suffix (MDPI ships v2/v3 corrections
+// alongside the original):
+//   "plants-12-01835-v2.pdf" + "plants-12-01835.pdf" +
+//   "plants-12-01835.xml" → all group under "plants-12-01835"
+//
+// Only "-v<digits>" gets stripped — "-<digits>" alone would
+// collide with MDPI journal slugs like "plants-11-02445" which
+// end in a hyphen-digits pattern that is part of the paper id,
+// not a versioning suffix. Browser-added download-duplicate
+// suffixes ("srep25367-1.pdf") land as separate groups but
+// resolve to the same reference via sha dedup (identical content)
+// or DOI dedup (identical DOI) during the second upload.
 func ingestBasename(p string) string {
 	name := filepath.Base(p)
 	// Strip up to two extension segments, but only when the
@@ -138,9 +152,34 @@ func ingestBasename(p string) string {
 	trimmed := strings.TrimSuffix(name, ext)
 	inner := filepath.Ext(trimmed)
 	if inner == ".jats" || inner == ".tei" || inner == ".grobid" {
-		return strings.TrimSuffix(trimmed, inner)
+		trimmed = strings.TrimSuffix(trimmed, inner)
 	}
+	// Strip trailing -v<digits> to fold MDPI's v2/v3 corrections
+	// into the base group. Regex-free since Go's filepath package
+	// doesn't ship one — walk the tail character by character.
+	trimmed = stripVersionSuffix(trimmed)
 	return trimmed
+}
+
+// stripVersionSuffix removes a trailing "-v<digits>" from s and
+// returns the remainder. Only strips when the digit run is 1-3
+// characters (real version numbers) so a filename that happens
+// to end in "-v20260913" isn't misidentified as versioned.
+func stripVersionSuffix(s string) string {
+	// Walk backward past the digits.
+	i := len(s)
+	for i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
+		i--
+	}
+	digits := len(s) - i
+	if digits == 0 || digits > 3 {
+		return s
+	}
+	// Expect "-v" immediately before the digits.
+	if i < 2 || s[i-2] != '-' || (s[i-1] != 'v' && s[i-1] != 'V') {
+		return s
+	}
+	return s[:i-2]
 }
 
 // uploadOrder ranks formats for the primary-upload choice.
