@@ -44,9 +44,34 @@ license through the WUI later.`,
 		license, _ := cmd.Flags().GetString("license")
 		licenseSource, _ := cmd.Flags().GetString("license-source")
 		quiet, _ := cmd.Flags().GetBool("quiet")
+		recurse, _ := cmd.Flags().GetBool("recurse")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 		server = strings.TrimRight(server, "/")
-		groups := groupIngestFiles(args)
+		files, err := expandIngestArgs(args, recurse)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("no supported files found in %v", args)
+		}
+		groups := groupIngestFiles(files)
+		if !quiet {
+			fmt.Fprintf(os.Stdout, "found %d file(s) in %d arg(s) → %d group(s)\n",
+				len(files), len(args), len(groups))
+		}
+		if dryRun {
+			// Preview mode — print each group + its files and stop.
+			// Useful for verifying grouping before spending time on
+			// GROBID / GNfinder + rate-limited HTTP round-trips.
+			for _, g := range groups {
+				fmt.Fprintf(os.Stdout, "%s\n", g.base)
+				for _, f := range g.files {
+					fmt.Fprintf(os.Stdout, "  %s\n", f)
+				}
+			}
+			return nil
+		}
 
 		client := &http.Client{Timeout: 5 * time.Minute}
 		summary := &ingestSummary{}
@@ -95,6 +120,93 @@ type ingestSummary struct {
 type ingestGroup struct {
 	base  string
 	files []string // ordered by uploadOrder(ext)
+}
+
+// expandIngestArgs turns the raw args into a flat file list.
+// Individual files pass through unchanged; directory args get
+// walked and every entry with a supported extension gets picked
+// up. When recurse is true, the walk descends into
+// subdirectories; otherwise only top-level entries are read.
+//
+// Deduplicates entries so `hive ingest ~/algae foo.pdf` doesn't
+// upload foo.pdf twice when it lives in ~/algae.
+func expandIngestArgs(args []string, recurse bool) ([]string, error) {
+	seen := make(map[string]struct{}, len(args))
+	var out []string
+	add := func(p string) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		if _, dup := seen[abs]; dup {
+			return
+		}
+		seen[abs] = struct{}{}
+		out = append(out, p)
+	}
+	for _, a := range args {
+		info, err := os.Stat(a)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", a, err)
+		}
+		if !info.IsDir() {
+			// Individual file — accept even without extension
+			// filter so the user can pass whatever they mean.
+			// The server will reject unsupported types anyway.
+			add(a)
+			continue
+		}
+		if recurse {
+			err = filepath.WalkDir(a, func(path string, d os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if d.IsDir() {
+					return nil
+				}
+				if !isSupportedIngestExt(path) {
+					return nil
+				}
+				add(path)
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("walk %s: %w", a, err)
+			}
+		} else {
+			entries, err := os.ReadDir(a)
+			if err != nil {
+				return nil, fmt.Errorf("read %s: %w", a, err)
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				p := filepath.Join(a, e.Name())
+				if !isSupportedIngestExt(p) {
+					continue
+				}
+				add(p)
+			}
+		}
+	}
+	return out, nil
+}
+
+// isSupportedIngestExt reports whether the file's extension is
+// in hive's ingest whitelist. Handles the "jats.xml" compound.
+func isSupportedIngestExt(path string) bool {
+	lower := strings.ToLower(filepath.Base(path))
+	switch {
+	case strings.HasSuffix(lower, ".pdf"),
+		strings.HasSuffix(lower, ".epub"),
+		strings.HasSuffix(lower, ".jats.xml"),
+		strings.HasSuffix(lower, ".xml"),
+		strings.HasSuffix(lower, ".html"),
+		strings.HasSuffix(lower, ".htm"):
+		return true
+	}
+	return false
 }
 
 func groupIngestFiles(paths []string) []ingestGroup {
@@ -480,5 +592,7 @@ func init() {
 	ingestCmd.Flags().String("license", "", "license to record on each reference (CC-BY, CC0, PD, PD-BHL, other-verified, unknown)")
 	ingestCmd.Flags().String("license-source", "", "URL where the license was verified (optional)")
 	ingestCmd.Flags().Bool("quiet", false, "suppress per-file progress output")
+	ingestCmd.Flags().Bool("recurse", false, "when a directory is passed, walk its subdirectories too (default: top-level entries only)")
+	ingestCmd.Flags().Bool("dry-run", false, "preview groups without uploading — useful for verifying grouping before spending time on a large batch")
 	rootCmd.AddCommand(ingestCmd)
 }

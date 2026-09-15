@@ -1,6 +1,10 @@
 package cmd
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestIngestBasename covers the grouping heuristic against the
 // real filename patterns hive's users produce — publisher
@@ -61,6 +65,102 @@ func TestIngestBasename(t *testing.T) {
 					tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestExpandIngestArgs covers the directory-walking behavior:
+// flat-directory reads (default), --recurse walks, individual
+// files pass through, unsupported extensions are filtered, and
+// duplicate args dedupe.
+func TestExpandIngestArgs(t *testing.T) {
+	dir := t.TempDir()
+	// Flat entries at the top level.
+	touch(t, filepath.Join(dir, "paper1.pdf"))
+	touch(t, filepath.Join(dir, "paper1.xml"))
+	touch(t, filepath.Join(dir, "notes.txt")) // unsupported
+	// One paper in a subdirectory.
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, filepath.Join(sub, "paper2.pdf"))
+	touch(t, filepath.Join(sub, "paper2.jats.xml"))
+
+	// Non-recursive walk picks up top-level only.
+	got, err := expandIngestArgs([]string{dir}, false)
+	if err != nil {
+		t.Fatalf("non-recurse: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("non-recurse got %d, want 2 (paper1.pdf + paper1.xml)", len(got))
+	}
+
+	// Recursive walk picks up the sub-dir too.
+	got, err = expandIngestArgs([]string{dir}, true)
+	if err != nil {
+		t.Fatalf("recurse: %v", err)
+	}
+	if len(got) != 4 {
+		t.Errorf("recurse got %d, want 4 (paper1.pdf, paper1.xml, sub/paper2.pdf, sub/paper2.jats.xml)", len(got))
+	}
+
+	// Individual file arg with dir arg — no duplicate.
+	got, err = expandIngestArgs(
+		[]string{dir, filepath.Join(dir, "paper1.pdf")}, false)
+	if err != nil {
+		t.Fatalf("dedup: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("dedup got %d, want 2", len(got))
+	}
+
+	// Individual file arg only.
+	got, err = expandIngestArgs(
+		[]string{filepath.Join(dir, "paper1.xml")}, false)
+	if err != nil {
+		t.Fatalf("single-file: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("single-file got %d, want 1", len(got))
+	}
+
+	// Unsupported extension is filtered on directory walk (not on
+	// direct file args — those pass through).
+	got, err = expandIngestArgs([]string{filepath.Join(dir, "notes.txt")}, false)
+	if err != nil {
+		t.Fatalf("txt direct: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("txt direct got %d, want 1 (pass through)", len(got))
+	}
+}
+
+// TestIsSupportedIngestExt covers the extension whitelist.
+func TestIsSupportedIngestExt(t *testing.T) {
+	cases := map[string]bool{
+		"paper.pdf":       true,
+		"paper.PDF":       true,
+		"paper.xml":       true,
+		"paper.jats.xml":  true,
+		"paper.epub":      true,
+		"paper.html":      true,
+		"paper.htm":       true,
+		"paper.txt":       false,
+		"paper.docx":      false,
+		"paper":           false,
+		".hiddenfile.pdf": true,
+	}
+	for name, want := range cases {
+		if got := isSupportedIngestExt(name); got != want {
+			t.Errorf("isSupportedIngestExt(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func touch(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 
