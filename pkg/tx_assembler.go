@@ -603,13 +603,29 @@ func candidateRefs(overlayID, refID string) []string {
 // loadPapersForAssembler walks hive__extraction_run for every
 // compose run, parses the raw output for name_usages, and
 // materializes PaperInputs.
+//
+// PaperCreatedAt drives the most-recent-paper-wins rule for
+// synonymy adjudication. We prefer the paper's actual
+// publication date from reference.col__issued; only when that's
+// missing or unparseable does the extraction_run's created_at
+// (when the LLM ran) stand in. Otherwise "most recent" would
+// mean "most recently processed" rather than "most recently
+// published," which is meaningless taxonomically.
+//
+// col__issued formats seen in the wild: "2026" (year only),
+// "2026-09" (year-month), "2026-09-15" (ISO date). All parsed
+// as the start of the given interval (so a year-only entry
+// sorts before any dated entry in the same year, which is the
+// safe conservative default when we can't tell precisely).
 func (t *Tx) loadPapersForAssembler() ([]assembler.PaperInput, *ReassembleReport, error) {
 	report := &ReassembleReport{}
-	const q = `SELECT run_id, COALESCE(reference_id, ''),
-	                  COALESCE(raw_output_json, ''), created_at
-	             FROM hive__extraction_run
-	            WHERE purpose = 'compose'
-	         ORDER BY created_at ASC, run_id ASC`
+	const q = `SELECT e.run_id, COALESCE(e.reference_id, ''),
+	                  COALESCE(e.raw_output_json, ''), e.created_at,
+	                  COALESCE(r.col__issued, '')
+	             FROM hive__extraction_run e
+	             LEFT JOIN reference r ON r.col__id = e.reference_id
+	            WHERE e.purpose = 'compose'
+	         ORDER BY r.col__issued ASC, e.created_at ASC, e.run_id ASC`
 	rows, err := t.tx.QueryContext(t.ctx, q)
 	if err != nil {
 		return nil, nil, fmt.Errorf("core: load compose runs: %w", err)
@@ -617,8 +633,8 @@ func (t *Tx) loadPapersForAssembler() ([]assembler.PaperInput, *ReassembleReport
 	defer rows.Close()
 	var out []assembler.PaperInput
 	for rows.Next() {
-		var runID, refID, rawJSON, createdAtStr string
-		if err := rows.Scan(&runID, &refID, &rawJSON, &createdAtStr); err != nil {
+		var runID, refID, rawJSON, createdAtStr, issuedStr string
+		if err := rows.Scan(&runID, &refID, &rawJSON, &createdAtStr, &issuedStr); err != nil {
 			return nil, nil, fmt.Errorf("core: scan compose run: %w", err)
 		}
 		if refID == "" || rawJSON == "" {
@@ -634,16 +650,50 @@ func (t *Tx) loadPapersForAssembler() ([]assembler.PaperInput, *ReassembleReport
 				fmt.Sprintf("compose run %s: parse: %v", runID, err))
 			continue
 		}
-		createdAt, _ := time.Parse(time.RFC3339Nano, createdAtStr)
+		paperCreatedAt, ok := parsePublicationDate(issuedStr)
+		if !ok {
+			// Fall back to extraction_run.created_at when the
+			// reference has no parseable publication date.
+			paperCreatedAt, _ = time.Parse(time.RFC3339Nano, createdAtStr)
+		}
 		out = append(out, assembler.PaperInput{
 			ReferenceID:     refID,
 			ExtractionRunID: runID,
-			PaperCreatedAt:  createdAt,
+			PaperCreatedAt:  paperCreatedAt,
 			NameUsages:      nus,
 		})
 		report.PapersLoaded++
 	}
 	return out, report, rows.Err()
+}
+
+// parsePublicationDate parses col__issued values in the shapes
+// hive sees: bare year, year-month, ISO date, or full RFC3339
+// timestamp. Returns (parsed, true) on success and (zero, false)
+// when nothing matches so the caller can fall back to another
+// date source.
+//
+// Year-only values parse as January 1 of that year — an entry
+// dated "2026" sorts before any "2026-XX-XX" entry, which is
+// the safe conservative default for "we know the year but not
+// the month/day."
+func parsePublicationDate(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02",
+		"2006-01",
+		"2006",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // decodeComposeNameUsages parses a compose-v4 raw_output_json blob
