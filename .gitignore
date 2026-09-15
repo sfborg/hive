@@ -7,6 +7,8 @@ docker-compose.yml
 # Fixture .md files (fabricated test data, scenario README) also ship
 # with the repo.
 !testdata/**/*.md
+# The public README lives in the code repo and needs to be tracked.
+!README.md
 *.db
 *.db-wal
 *.db-shm
