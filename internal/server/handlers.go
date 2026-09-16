@@ -3805,15 +3805,27 @@ func (s *server) handleDetachReferencePDF(w http.ResponseWriter, r *http.Request
 		warnings = append(warnings, "cascade corrections: "+err.Error())
 	}
 	sidecarDir := sidecar.Dir(s.archivePath)
-	for _, ext := range []string{"pdf", "tei.xml", "jats.xml", "meta.json"} {
-		path := filepath.Join(sidecarDir, sha+"."+ext)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			warnings = append(warnings, "remove "+ext+": "+err.Error())
+	// Glob every file that shares this sha's prefix — captures the
+	// raw source (pdf/epub/xml/jats), every derived artifact
+	// (tei.xml, jats.xml), and meta.json in one pass, so an
+	// added upload format never leaves an orphan file behind.
+	// The .figures directory needs a separate RemoveAll.
+	matches, _ := filepath.Glob(filepath.Join(sidecarDir, sha+".*"))
+	for _, path := range matches {
+		info, err := os.Lstat(path)
+		if err != nil {
+			warnings = append(warnings, "stat "+filepath.Base(path)+": "+err.Error())
+			continue
 		}
-	}
-	figuresDir := filepath.Join(sidecarDir, sha+".figures")
-	if err := os.RemoveAll(figuresDir); err != nil {
-		warnings = append(warnings, "remove figures/: "+err.Error())
+		if info.IsDir() {
+			if err := os.RemoveAll(path); err != nil {
+				warnings = append(warnings, "remove "+filepath.Base(path)+"/: "+err.Error())
+			}
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			warnings = append(warnings, "remove "+filepath.Base(path)+": "+err.Error())
+		}
 	}
 	writeJSON(w, http.StatusOK, apiDetachPDFResponse{
 		Deleted:      true,
