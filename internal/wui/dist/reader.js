@@ -71,6 +71,13 @@ class SfgaReader extends LitElement {
     _reannotating: { state: true },
     _doc: { state: true },
     _sha: { state: true },
+    // Sha of the reference's PDF attachment, when one exists.
+    // Distinct from _sha because the active reader sha may be a
+    // JATS/XML upload with no viewable rendition of its own; the
+    // Show-PDF toggle needs to point at the reference's PDF (or
+    // disable itself if none is attached). Empty string when the
+    // reference has no PDF.
+    _pdfSha: { state: true },
     _showExpanded: { state: true },
     // Side-by-side PDF pane: when enabled, the PDF loads on the
     // left half of the viewport and the reader text on the right,
@@ -965,6 +972,7 @@ class SfgaReader extends LitElement {
     this._activeTool = "read";
     const params = new URLSearchParams(location.search);
     this._sha = params.get("sha") || "";
+    this._pdfSha = params.get("pdf") || "";
   }
 
   connectedCallback() {
@@ -1794,10 +1802,11 @@ class SfgaReader extends LitElement {
             />
             Expand abbreviations
           </label>
-          <label>
+          <label title=${this._pdfSha ? "Show the source PDF instead of the augmented text" : "No PDF attached to this reference"}>
             <input
               type="checkbox"
-              .checked=${this._showPDF}
+              .checked=${this._showPDF && !!this._pdfSha}
+              ?disabled=${!this._pdfSha}
               @change=${(e) => {
                 this._showPDF = e.target.checked;
                 // PDF pane preempts paginated layout — the
@@ -1847,10 +1856,10 @@ class SfgaReader extends LitElement {
       ${this._renderExtractionWarning()}
       ${this._renderRefWarning()}
       ${this._doc
-        ? this._showPDF
+        ? this._showPDF && this._pdfSha
           ? html`<iframe
               class="pdf-full"
-              src=${`/api/reference/library/${encodeURIComponent(this._sha)}/source#page=1`}
+              src=${`/api/reference/library/${encodeURIComponent(this._pdfSha)}/source#page=1`}
               title="Source PDF"
             ></iframe>`
           : html`
@@ -1993,10 +2002,13 @@ class SfgaReader extends LitElement {
       );
       return;
     }
-    // Standalone-reader fallback: open PDF in a new tab at the page.
-    if (this._sha && pageNum) {
+    // Standalone-reader fallback: open PDF in a new tab at the
+    // page. Uses _pdfSha (the reference's PDF sha) rather than
+    // _sha because the active reader sha may be a JATS/XML upload
+    // whose /source stream is not a PDF.
+    if (this._pdfSha && pageNum) {
       window.open(
-        `/api/reference/library/${encodeURIComponent(this._sha)}/source#page=${pageNum}`,
+        `/api/reference/library/${encodeURIComponent(this._pdfSha)}/source#page=${pageNum}`,
         "_blank",
       );
     }
@@ -3414,8 +3426,8 @@ class SfgaReader extends LitElement {
     const imgURL = this._sha
       ? `/api/reference/library/${encodeURIComponent(this._sha)}/figures/${encodeURIComponent(this._modalFigID)}`
       : "";
-    const pdfURL = page && this._sha
-      ? `/api/reference/library/${encodeURIComponent(this._sha)}/source#page=${page}`
+    const pdfURL = page && this._pdfSha
+      ? `/api/reference/library/${encodeURIComponent(this._pdfSha)}/source#page=${page}`
       : "";
     // Digitized tab requires structured content: a table-wrap with
     // a real <table> child (rendered as HTML in _renderTableWrap).

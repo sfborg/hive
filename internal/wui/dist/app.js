@@ -19025,8 +19025,14 @@ class SfgaReferences extends LitElement {
       (this._current.attached_files || []).find((f) => f.ext === "pdf") || null;
     const pdfSha = pdfEntry ? pdfEntry.sha512 : hasReader ? this._current.attached_pdf_shas[0] : "";
     const hasPDF = !!pdfSha;
+    // pdf=<sha> tells the reader iframe which sha its "Show PDF"
+    // toggle should target — needed because the reader's own
+    // active sha (the currently-viewed attachment) may be a
+    // JATS/XML upload with no PDF rendition. Empty when the
+    // reference has no PDF; the reader disables Show PDF then.
     const readerSrc = hasReader
-      ? `/read.html?sha=${encodeURIComponent(activeSha)}`
+      ? `/read.html?sha=${encodeURIComponent(activeSha)}` +
+        (pdfSha ? `&pdf=${encodeURIComponent(pdfSha)}` : "")
       : "";
     const pdfSrc = hasPDF
       ? `/api/reference/library/${encodeURIComponent(pdfSha)}/source#page=${this._pdfPage || 1}`
