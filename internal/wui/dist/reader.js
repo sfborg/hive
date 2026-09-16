@@ -67,7 +67,7 @@ class SfgaReader extends LitElement {
   static properties = {
     _busy: { state: true },
     _error: { state: true },
-    _missingAugmented: { state: true },
+    _needsReannotate: { state: true },
     _reannotating: { state: true },
     _doc: { state: true },
     _sha: { state: true },
@@ -946,7 +946,7 @@ class SfgaReader extends LitElement {
     super();
     this._busy = false;
     this._error = "";
-    this._missingAugmented = false;
+    this._needsReannotate = false;
     this._reannotating = false;
     this._doc = null;
     this._showExpanded = false;
@@ -1670,7 +1670,7 @@ class SfgaReader extends LitElement {
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         this._error = `Reannotate failed: ${body.detail || body.title || r.status}`;
-        this._missingAugmented = false;
+        this._needsReannotate = false;
         return;
       }
       const result = await r.json();
@@ -1678,13 +1678,13 @@ class SfgaReader extends LitElement {
         this._error =
           `Reannotate returned status "${result.status}"` +
           (result.error ? ": " + result.error : "");
-        this._missingAugmented = false;
+        this._needsReannotate = false;
         return;
       }
       await this._load();
     } catch (e) {
       this._error = `Reannotate failed: ${e.message || e}`;
-      this._missingAugmented = false;
+      this._needsReannotate = false;
     } finally {
       this._reannotating = false;
     }
@@ -1693,14 +1693,14 @@ class SfgaReader extends LitElement {
   async _load() {
     this._busy = true;
     this._error = "";
-    this._missingAugmented = false;
+    this._needsReannotate = false;
     try {
       const res = await fetch(
         `/api/reference/library/${encodeURIComponent(this._sha)}/taxpub`,
       );
       if (res.status === 404) {
         this._error = "no augmented XML for this reference — either the upload predated the annotator or the annotation pass failed";
-        this._missingAugmented = true;
+        this._needsReannotate = true;
         return;
       }
       if (!res.ok) {
@@ -1713,6 +1713,12 @@ class SfgaReader extends LitElement {
       const err = doc.querySelector("parsererror");
       if (err) {
         this._error = "XML parse error: " + err.textContent;
+        // A stored augmented file that fails to parse (e.g. the
+        // duplicate-xmlns bug in older annotator output) is fixable
+        // by regenerating — the reannotate endpoint overwrites the
+        // sidecar unconditionally, so the "Run annotation" button
+        // applies here just as it does in the 404 case.
+        this._needsReannotate = true;
         return;
       }
       this._doc = doc;
@@ -1826,7 +1832,7 @@ class SfgaReader extends LitElement {
       ${this._error
         ? html`<div class="error" role="alert">
             <p>${this._error}</p>
-            ${this._missingAugmented
+            ${this._needsReannotate
               ? html`<button
                   type="button"
                   class="error-action"
