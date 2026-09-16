@@ -15109,6 +15109,12 @@ class SfgaReferences extends LitElement {
     // observe the change and re-render the iframe with the new
     // src fragment so the PDF viewer scrolls to the target page.
     _pdfPage: { state: true },
+    // _activeReaderSha is the sha the right-pane document viewer
+    // should render. Empty string means "use the first attached
+    // sha" (the default sort puts PDF ahead of JATS/EPUB/etc.).
+    // Set by clicking an attachment row in the Bibliography tab.
+    // Cleared when the selected reference changes.
+    _activeReaderSha: { state: true },
     // Sort order for the reference list. "recent" (default)
     // orders by col__modified desc — newly-imported and recently-
     // edited references land at the top, the useful landing view
@@ -16662,6 +16668,11 @@ class SfgaReferences extends LitElement {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
     }
+    .attached-pdf-row.active {
+      background: color-mix(in oklab, var(--accent) 10%, var(--bg));
+      border-left: 3px solid var(--accent);
+      padding-left: calc(var(--sp-2) - 3px);
+    }
     .attached-pdf-sha {
       color: var(--fg);
       flex: 1;
@@ -17262,6 +17273,12 @@ class SfgaReferences extends LitElement {
     // reference's PDF iframe would open at whatever page the
     // previous reference was last showing.
     this._pdfPage = 1;
+    // Clear active-reader sha so the reader falls back to the
+    // reference's default first attachment (PDF, per the sort in
+    // buildAttachedFiles). Otherwise a curator who last clicked
+    // the JATS on Reference A would find the reader trying to
+    // load that same sha on Reference B — where it doesn't exist.
+    this._activeReaderSha = "";
     // Announce so the shell can clear its pending-select state; this
     // matters when the same id is routed twice (a second click on the
     // same Issues row should still reveal it, even if the property
@@ -18984,11 +19001,24 @@ class SfgaReferences extends LitElement {
       this._current &&
       this._current.attached_pdf_shas &&
       this._current.attached_pdf_shas.length > 0;
+    // Active reader sha: what the curator clicked in the
+    // Attached Files list (if anything), falling back to the
+    // reference's first-in-sort sha (PDF-preferred). Confirm the
+    // clicked sha is actually attached to this reference before
+    // using it — a stale _activeReaderSha from a previous
+    // reference would just be ignored.
+    const attachedSet = new Set(this._current.attached_pdf_shas || []);
+    const activeSha =
+      this._activeReaderSha && attachedSet.has(this._activeReaderSha)
+        ? this._activeReaderSha
+        : hasReader
+          ? this._current.attached_pdf_shas[0]
+          : "";
     const readerSrc = hasReader
-      ? `/read.html?sha=${encodeURIComponent(this._current.attached_pdf_shas[0])}`
+      ? `/read.html?sha=${encodeURIComponent(activeSha)}`
       : "";
     const pdfSrc = hasReader
-      ? `/api/reference/library/${encodeURIComponent(this._current.attached_pdf_shas[0])}/source#page=${this._pdfPage || 1}`
+      ? `/api/reference/library/${encodeURIComponent(activeSha)}/source#page=${this._pdfPage || 1}`
       : "";
     // Tabs are always present so curators discover the alternative
     // side-by-side workflows (digitize, assertion-review) without
@@ -20902,24 +20932,19 @@ class SfgaReferences extends LitElement {
                 }))
             ).map(
               (af) => html`<div
-                class="attached-pdf-row"
+                class="attached-pdf-row ${(this._activeReaderSha ||
+                  ((r.attached_files || [])[0] || {}).sha512 ||
+                  (r.attached_pdf_shas || [])[0]) === af.sha512
+                  ? "active"
+                  : ""}"
                 role="button"
                 tabindex="0"
-                title="Click to view this file in a new tab · sha ${af.sha512}"
-                @click=${() =>
-                  window.open(
-                    `/api/reference/library/${encodeURIComponent(af.sha512)}/source`,
-                    "_blank",
-                    "noopener",
-                  )}
+                title="Click to view this file in the right-pane reader · sha ${af.sha512}"
+                @click=${() => (this._activeReaderSha = af.sha512)}
                 @keydown=${(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    window.open(
-                      `/api/reference/library/${encodeURIComponent(af.sha512)}/source`,
-                      "_blank",
-                      "noopener",
-                    );
+                    this._activeReaderSha = af.sha512;
                   }
                 }}
               >
