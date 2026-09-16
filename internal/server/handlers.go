@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	httppprof "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -85,6 +86,23 @@ type server struct {
 
 func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// Debug pprof — enabled when HIVE_DEBUG_PPROF=1 in the
+	// environment. Off by default so it doesn't leak diagnostics
+	// on a shared instance. Endpoints under /debug/pprof/ include
+	// /goroutine (stack dump), /profile (30s CPU), /heap.
+	if os.Getenv("HIVE_DEBUG_PPROF") == "1" {
+		mux.HandleFunc("GET /debug/pprof/", httppprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", httppprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", httppprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", httppprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", httppprof.Trace)
+		mux.HandleFunc("GET /debug/pprof/goroutine", httppprof.Handler("goroutine").ServeHTTP)
+		mux.HandleFunc("GET /debug/pprof/heap", httppprof.Handler("heap").ServeHTTP)
+		mux.HandleFunc("GET /debug/pprof/allocs", httppprof.Handler("allocs").ServeHTTP)
+		mux.HandleFunc("GET /debug/pprof/block", httppprof.Handler("block").ServeHTTP)
+		mux.HandleFunc("GET /debug/pprof/mutex", httppprof.Handler("mutex").ServeHTTP)
+	}
 
 	// OpenAPI spec + Docs UI. The spec is regenerated from swaggo
 	// annotations by `just openapi`. /docs boots the vendored RapiDoc

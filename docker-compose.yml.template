@@ -85,6 +85,10 @@ services:
       # Attribution for edits. Real deployments set this to the
       # operator's ORCID iD or use --orcid on the command line.
       HIVE_ORCID: "0000-0000-0000-0000"
+      # Set to 1 to expose Go's net/http/pprof at /debug/pprof/
+      # (goroutine dumps, CPU profiles, heap). Off by default so
+      # diagnostics don't leak on a shared instance.
+      HIVE_DEBUG_PPROF: ${HIVE_DEBUG_PPROF:-}
       # LLM provider API keys. Compose reads these from .env in this
       # directory (see .env.template for the checked-in starting
       # point) or from the shell environment, and forwards them into
