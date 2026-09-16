@@ -72,11 +72,15 @@ func parseBBoxXHTML(src []byte) ([]WordPage, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			// pdftotext's XHTML sometimes has quirks; tolerate them.
-			continue
+			// EOF is the expected termination; any other error means
+			// the decoder is wedged on a malformed span. `continue`
+			// used to be here on the theory that pdftotext quirks
+			// were skippable, but the decoder's offset does not
+			// advance on error — so the same error re-fires on the
+			// next call and the loop spins forever, pegging a core.
+			// Bail with what we've collected so far; downstream
+			// alignment is tolerant of a short/incomplete stream.
+			break
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
