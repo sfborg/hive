@@ -67,6 +67,8 @@ class SfgaReader extends LitElement {
   static properties = {
     _busy: { state: true },
     _error: { state: true },
+    _missingAugmented: { state: true },
+    _reannotating: { state: true },
     _doc: { state: true },
     _sha: { state: true },
     _showExpanded: { state: true },
@@ -800,6 +802,27 @@ class SfgaReader extends LitElement {
       font-style: normal;
       font-family: var(--font-mono);
     }
+    .error p {
+      margin: 0 0 var(--sp-3);
+    }
+    .error-action {
+      font: inherit;
+      font-family: var(--font-sans, inherit);
+      font-size: var(--fs-sm);
+      padding: var(--sp-1) var(--sp-3);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .error-action:hover:not(:disabled) {
+      border-color: var(--accent);
+    }
+    .error-action:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
     .legend {
       display: flex;
       gap: var(--sp-2);
@@ -923,6 +946,8 @@ class SfgaReader extends LitElement {
     super();
     this._busy = false;
     this._error = "";
+    this._missingAugmented = false;
+    this._reannotating = false;
     this._doc = null;
     this._showExpanded = false;
     this._showPDF = false;
@@ -1629,15 +1654,53 @@ class SfgaReader extends LitElement {
     article.style.transform = `translateX(-${offset}px)`;
   }
 
+  // _reannotateFromError posts to the reannotate endpoint and re-
+  // runs _load on success. Wired to the "Run annotation" button
+  // that appears inline with the "no augmented XML" banner so the
+  // curator does not have to know about the sparkles action in the
+  // parent Attached Files list.
+  async _reannotateFromError() {
+    if (!this._sha || this._reannotating) return;
+    this._reannotating = true;
+    try {
+      const r = await fetch(
+        `/api/reference/library/${encodeURIComponent(this._sha)}/reannotate`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        this._error = `Reannotate failed: ${body.detail || body.title || r.status}`;
+        this._missingAugmented = false;
+        return;
+      }
+      const result = await r.json();
+      if (result.status !== "annotated") {
+        this._error =
+          `Reannotate returned status "${result.status}"` +
+          (result.error ? ": " + result.error : "");
+        this._missingAugmented = false;
+        return;
+      }
+      await this._load();
+    } catch (e) {
+      this._error = `Reannotate failed: ${e.message || e}`;
+      this._missingAugmented = false;
+    } finally {
+      this._reannotating = false;
+    }
+  }
+
   async _load() {
     this._busy = true;
     this._error = "";
+    this._missingAugmented = false;
     try {
       const res = await fetch(
         `/api/reference/library/${encodeURIComponent(this._sha)}/taxpub`,
       );
       if (res.status === 404) {
         this._error = "no augmented XML for this reference — either the upload predated the annotator or the annotation pass failed";
+        this._missingAugmented = true;
         return;
       }
       if (!res.ok) {
@@ -1761,7 +1824,19 @@ class SfgaReader extends LitElement {
       </header>
       ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}
       ${this._error
-        ? html`<p class="error" role="alert">${this._error}</p>`
+        ? html`<div class="error" role="alert">
+            <p>${this._error}</p>
+            ${this._missingAugmented
+              ? html`<button
+                  type="button"
+                  class="error-action"
+                  ?disabled=${this._reannotating}
+                  @click=${() => this._reannotateFromError()}
+                >
+                  ${this._reannotating ? "Running annotation…" : "Run annotation"}
+                </button>`
+              : nothing}
+          </div>`
         : nothing}
       ${this._renderExtractionWarning()}
       ${this._renderRefWarning()}
