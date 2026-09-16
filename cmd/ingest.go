@@ -196,15 +196,20 @@ func expandIngestArgs(args []string, recurse bool) ([]string, error) {
 
 // isSupportedIngestExt reports whether the file's extension is
 // in hive's ingest whitelist. Handles the "jats.xml" compound.
+// HTML is intentionally not supported: publisher HTML is wrapped
+// in per-publisher templates and interactive chrome that varies
+// wildly per site, with the article body often loaded via
+// client-side script. Extracting clean article content is closer
+// to browser scraping than to file conversion, and hive already
+// has a supported first-class path (PDF via GROBID) for every
+// article that ships an HTML view.
 func isSupportedIngestExt(path string) bool {
 	lower := strings.ToLower(filepath.Base(path))
 	switch {
 	case strings.HasSuffix(lower, ".pdf"),
 		strings.HasSuffix(lower, ".epub"),
 		strings.HasSuffix(lower, ".jats.xml"),
-		strings.HasSuffix(lower, ".xml"),
-		strings.HasSuffix(lower, ".html"),
-		strings.HasSuffix(lower, ".htm"):
+		strings.HasSuffix(lower, ".xml"):
 		return true
 	}
 	return false
@@ -242,7 +247,6 @@ func groupIngestFiles(paths []string) []ingestGroup {
 // Single extensions:
 //   "foo.pdf" → "foo"
 //   "foo.epub" → "foo"
-//   "foo.html" → "foo"
 // Publisher versioning suffix (MDPI ships v2/v3 corrections
 // alongside the original):
 //   "plants-12-01835-v2.pdf" + "plants-12-01835.pdf" +
@@ -299,8 +303,8 @@ func stripVersionSuffix(s string) string {
 // JATS wins because it carries the richest structured metadata
 // (title, authors, DOI, publisher) so the server-side reference
 // row lands with the best-quality metadata. PDF comes next
-// (GROBID extracts what it can). EPUB and HTML round out the
-// order.
+// (GROBID extracts what it can). EPUB carries Dublin Core
+// metadata but not the full body structure JATS provides.
 func uploadOrder(path string) int {
 	name := strings.ToLower(filepath.Base(path))
 	switch {
@@ -313,9 +317,6 @@ func uploadOrder(path string) int {
 		return 2
 	case strings.HasSuffix(name, ".epub"):
 		return 3
-	case strings.HasSuffix(name, ".html"),
-		strings.HasSuffix(name, ".htm"):
-		return 4
 	}
 	return 9
 }

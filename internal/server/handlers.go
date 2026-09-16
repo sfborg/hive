@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"database/sql"
@@ -5148,11 +5149,11 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 	// sidecar but the pipeline won't know how to convert them —
 	// better to reject up front with a clear message.
 	switch ext {
-	case "pdf", "epub", "html", "htm", "xml", "jats":
+	case "pdf", "epub", "xml", "jats":
 		// OK — supported input formats. xml + jats treated as JATS.
 	default:
 		writeBadRequest(w, r,
-			"unsupported file type '"+ext+"' — hive accepts pdf, epub, html, jats/xml")
+			"unsupported file type '"+ext+"' — hive accepts pdf, epub, jats/xml")
 		return
 	}
 	mime := header.Header.Get("Content-Type")
@@ -5184,6 +5185,20 @@ func (s *server) handleReferenceUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			if meta == nil {
 				meta = xmeta
+			}
+		}
+	}
+	// EPUB carries the same bibliographic fields as JATS but in
+	// its container.xml → content.opf Dublin Core block. Parse
+	// it so an EPUB-only upload lands as a properly-titled
+	// reference row instead of "Untitled (bulk ingest)".
+	if ext == "epub" {
+		if edoi, emeta := extractEPUBMeta(res.Path); edoi != "" || emeta != nil {
+			if doi == "" {
+				doi = edoi
+			}
+			if meta == nil {
+				meta = emeta
 			}
 		}
 	}
@@ -5467,6 +5482,218 @@ func extractJATSMeta(path string) (string, *apiUploadBibHeader) {
 		Author: firstAuthor,
 		Issued: year,
 	}
+}
+
+// extractEPUBMeta pulls DOI + basic bibliographic metadata out
+// of an EPUB file for the reference-upload path. EPUBs are zip
+// archives whose META-INF/container.xml points at a content.opf
+// carrying standard Dublin Core metadata (title, creator, date,
+// identifier, publisher). Returns empty DOI + nil metadata when
+// the archive is malformed or missing the OPF — callers treat
+// it as "no metadata extracted" without failing the upload.
+//
+// EPUB identifiers may carry a DOI in several conventions:
+//   - "doi:10.1234/xyz"
+//   - "urn:doi:10.1234/xyz"
+//   - a plain "10.1234/xyz" when scheme metadata says DOI
+// Any of those get normalized to the bare DOI.
+func extractEPUBMeta(path string) (string, *apiUploadBibHeader) {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return "", nil
+	}
+	defer zr.Close()
+
+	// Step 1: read META-INF/container.xml to find the OPF path.
+	// EPUB spec fixes this location, so any archive that doesn't
+	// have it is not a valid EPUB — treat as no metadata.
+	var opfPath string
+	for _, f := range zr.File {
+		if f.Name == "META-INF/container.xml" {
+			rc, err := f.Open()
+			if err != nil {
+				return "", nil
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				return "", nil
+			}
+			// The rootfile is inside <rootfiles><rootfile full-path="..." ... />
+			dec := xml.NewDecoder(bytes.NewReader(data))
+			for {
+				tok, err := dec.Token()
+				if tok == nil || err != nil {
+					break
+				}
+				if se, ok := tok.(xml.StartElement); ok && se.Name.Local == "rootfile" {
+					for _, a := range se.Attr {
+						if a.Name.Local == "full-path" {
+							opfPath = a.Value
+							break
+						}
+					}
+					break
+				}
+			}
+			break
+		}
+	}
+	if opfPath == "" {
+		return "", nil
+	}
+
+	// Step 2: read the OPF file and pull Dublin Core metadata.
+	var opfBytes []byte
+	for _, f := range zr.File {
+		if f.Name == opfPath {
+			rc, err := f.Open()
+			if err != nil {
+				return "", nil
+			}
+			opfBytes, err = io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				return "", nil
+			}
+			break
+		}
+	}
+	if len(opfBytes) == 0 {
+		return "", nil
+	}
+
+	// Walk the OPF's metadata block. Match by local name so
+	// namespace-prefix variation ("dc:" vs default namespace) both
+	// work. Not a full OPF parser; four fields is plenty here.
+	dec := xml.NewDecoder(bytes.NewReader(opfBytes))
+	dec.Strict = false
+	dec.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
+
+	var (
+		doi         string
+		title       string
+		firstAuthor string
+		year        string
+		publisher   string
+	)
+	// Track the scheme attribute on the current <dc:identifier> so
+	// we can pick a DOI even when the value has no doi: prefix.
+	var currentIDScheme string
+	for {
+		tok, err := dec.Token()
+		if tok == nil || err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch se.Name.Local {
+		case "identifier":
+			currentIDScheme = ""
+			for _, a := range se.Attr {
+				if a.Name.Local == "scheme" {
+					currentIDScheme = strings.ToLower(a.Value)
+				}
+			}
+			text := readCharData(dec, se.Name.Local)
+			if doi == "" {
+				doi = normalizeEPUBDOI(text, currentIDScheme)
+			}
+		case "title":
+			text := readCharData(dec, se.Name.Local)
+			if title == "" {
+				title = strings.TrimSpace(text)
+			}
+		case "creator":
+			text := readCharData(dec, se.Name.Local)
+			if firstAuthor == "" {
+				firstAuthor = strings.TrimSpace(text)
+			}
+		case "date":
+			text := readCharData(dec, se.Name.Local)
+			if year == "" {
+				// dc:date can be "2026", "2026-09", "2026-09-16",
+				// or a longer ISO 8601 form. Take the leading
+				// 4-digit year.
+				t := strings.TrimSpace(text)
+				if len(t) >= 4 {
+					year = t[:4]
+				}
+			}
+		case "publisher":
+			text := readCharData(dec, se.Name.Local)
+			if publisher == "" {
+				publisher = strings.TrimSpace(text)
+			}
+		}
+	}
+	if doi == "" && title == "" && firstAuthor == "" && year == "" && publisher == "" {
+		return "", nil
+	}
+	return doi, &apiUploadBibHeader{
+		Title:     title,
+		Author:    firstAuthor,
+		Issued:    year,
+		Publisher: publisher,
+	}
+}
+
+// readCharData collects character data up to the closing tag of
+// the given element local name and returns it as a string. Used
+// by extractEPUBMeta to consume <dc:title>text</dc:title> without
+// pulling the full DOM.
+func readCharData(dec *xml.Decoder, localName string) string {
+	var b strings.Builder
+	for {
+		tok, err := dec.Token()
+		if tok == nil || err != nil {
+			return b.String()
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			b.Write(t)
+		case xml.EndElement:
+			if t.Name.Local == localName {
+				return b.String()
+			}
+		}
+	}
+}
+
+// normalizeEPUBDOI extracts a DOI from a dc:identifier value.
+// EPUBs write DOIs in several conventions; peel them all back to
+// the bare "10.NNNN/rest" form. Returns "" when the value is not
+// a DOI.
+func normalizeEPUBDOI(value, scheme string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	lower := strings.ToLower(v)
+	switch {
+	case strings.HasPrefix(lower, "urn:doi:"):
+		v = v[len("urn:doi:"):]
+	case strings.HasPrefix(lower, "doi:"):
+		v = v[len("doi:"):]
+	case strings.HasPrefix(lower, "https://doi.org/"):
+		v = v[len("https://doi.org/"):]
+	case strings.HasPrefix(lower, "http://doi.org/"):
+		v = v[len("http://doi.org/"):]
+	case scheme == "doi":
+		// Bare value + explicit scheme — trust it.
+	default:
+		// No DOI marker — accept only if it looks like a DOI.
+		if !strings.HasPrefix(v, "10.") || !strings.Contains(v, "/") {
+			return ""
+		}
+	}
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "10.") && strings.Contains(v, "/") {
+		return v
+	}
+	return ""
 }
 
 // captureTitleStart reads text content up to the closing
