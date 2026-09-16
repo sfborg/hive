@@ -331,6 +331,13 @@ func runIngestGroup(
 		return "", nil
 	}
 	primary := g.files[0]
+	if !quiet {
+		// Emit a "starting" line before the upload blocks on GROBID
+		// so the user can see which paper is being processed while
+		// they wait — the citation-shaped line only prints after the
+		// server round-trip returns.
+		fmt.Fprintf(os.Stdout, "processing %s\n", filepath.Base(primary))
+	}
 	res, err := uploadFile(client, server, primary)
 	if err != nil {
 		return "", fmt.Errorf("upload %s: %w", primary, err)
