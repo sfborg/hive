@@ -4694,6 +4694,7 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 	out := referenceToAPI(fresh)
 	if attachSha != "" {
 		out.AttachedPDFShas = []string{attachSha}
+		out.AttachedFiles = s.buildAttachedFiles([]string{attachSha})
 		out.HasSourceDoc = true
 	}
 	if fresh.Modified != "" {
@@ -4959,10 +4960,59 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 	// the references-screen reader pane knows which sha (if any)
 	// to fetch. Empty slice is elided by omitempty.
 	if shas, err := s.a.ReferencePDFs(r.Context(), id); err == nil && len(shas) > 0 {
-		out.AttachedPDFShas = shas
+		out.AttachedFiles = s.buildAttachedFiles(shas)
+		// Re-derive the legacy attached_pdf_shas from the sorted
+		// AttachedFiles so downstream consumers (reader iframe
+		// picker) default to the PDF sha before falling back to
+		// non-PDF attachments.
+		out.AttachedPDFShas = make([]string, 0, len(out.AttachedFiles))
+		for _, af := range out.AttachedFiles {
+			out.AttachedPDFShas = append(out.AttachedPDFShas, af.SHA512)
+		}
 		out.HasSourceDoc = true
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// buildAttachedFiles enriches a bare sha slice with the primary
+// upload extension for each sha (read from the sidecar's
+// meta.json). Sorts the result so PDFs come first — hive's WUI
+// reader defaults to the first sha, and a paper's PDF is almost
+// always the more useful default view than its publisher JATS
+// or EPUB for bibliography verification and digitization work.
+//
+// Missing meta.json falls back to the raw sha with empty ext so
+// the sha still surfaces in the WUI even when the sidecar is
+// incomplete (e.g., an older upload predating meta.json).
+func (s *server) buildAttachedFiles(shas []string) []apiAttachedFile {
+	out := make([]apiAttachedFile, 0, len(shas))
+	for _, sha := range shas {
+		af := apiAttachedFile{SHA512: sha}
+		if m, err := sidecar.ReadMeta(s.archivePath, sha); err == nil && m != nil {
+			af.Ext = m.Ext
+		}
+		out = append(out, af)
+	}
+	// Stable ordering: PDF first, then everything else by original
+	// order. Using a rank helper keeps the sort deterministic even
+	// when multiple non-PDF formats are present.
+	rank := func(ext string) int {
+		if ext == "pdf" {
+			return 0
+		}
+		return 1
+	}
+	for i := 1; i < len(out); i++ {
+		if rank(out[i].Ext) < rank(out[i-1].Ext) {
+			out[i], out[i-1] = out[i-1], out[i]
+			// One-pass insertion is enough because we're only
+			// promoting a single "pdf" past non-pdfs.
+			for j := i; j > 1 && rank(out[j].Ext) < rank(out[j-1].Ext); j-- {
+				out[j], out[j-1] = out[j-1], out[j]
+			}
+		}
+	}
+	return out
 }
 
 // handlePatchReference applies a partial update to a reference row.

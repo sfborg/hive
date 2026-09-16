@@ -16601,9 +16601,53 @@ class SfgaReferences extends LitElement {
       gap: var(--sp-2);
       font-size: var(--fs-sm);
       font-family: var(--font-mono);
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .attached-pdf-row:hover {
+      background: color-mix(in oklab, var(--fg) 6%, var(--bg));
+    }
+    .attached-pdf-row:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
     }
     .attached-pdf-sha {
       color: var(--fg);
+      flex: 1;
+    }
+    /* Format badge — small monospace pill next to each attachment
+       so curators can see at a glance which sha is which format
+       (PDF vs. publisher JATS vs. EPUB) in multi-format papers. */
+    .attached-format-badge {
+      display: inline-block;
+      padding: 0.05em 0.4em;
+      border-radius: 999px;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      background: color-mix(in oklab, var(--fg) 10%, var(--bg));
+      color: var(--fg);
+      min-width: 3.5em;
+      text-align: center;
+    }
+    .attached-format-badge.ext-pdf {
+      background: color-mix(in oklab, hsl(0, 65%, 50%) 20%, var(--bg));
+      color: hsl(0, 45%, 35%);
+    }
+    .attached-format-badge.ext-xml,
+    .attached-format-badge.ext-jats {
+      background: color-mix(in oklab, hsl(210, 65%, 50%) 22%, var(--bg));
+      color: hsl(210, 55%, 30%);
+    }
+    .attached-format-badge.ext-epub {
+      background: color-mix(in oklab, hsl(160, 55%, 45%) 20%, var(--bg));
+      color: hsl(160, 55%, 25%);
+    }
+    .attached-format-badge.ext-html,
+    .attached-format-badge.ext-htm {
+      background: color-mix(in oklab, hsl(30, 65%, 55%) 22%, var(--bg));
+      color: hsl(30, 55%, 30%);
     }
     .empty { color: var(--dim); padding: var(--sp-2); }
     .error { color: var(--error); font-family: var(--font-mono); padding: var(--sp-2); }
@@ -20771,20 +20815,57 @@ class SfgaReferences extends LitElement {
       ${r.citation && r.citation !== r.title
         ? html`<div class="citation">${r.citation}</div>`
         : ""}
-      ${r.attached_pdf_shas && r.attached_pdf_shas.length > 0
+      ${(r.attached_files && r.attached_files.length > 0) ||
+      (r.attached_pdf_shas && r.attached_pdf_shas.length > 0)
         ? html`<div class="attached-pdfs">
-            <div class="attached-pdfs-title">Attached PDF</div>
-            ${r.attached_pdf_shas.map(
-              (sha) => html`<div class="attached-pdf-row">
-                <span class="attached-pdf-sha" title=${sha}
-                  >${sha.slice(0, 12)}…</span
-                >
+            <div class="attached-pdfs-title">Attached Files</div>
+            ${(r.attached_files && r.attached_files.length > 0
+              ? r.attached_files
+              : (r.attached_pdf_shas || []).map((sha) => ({
+                  sha512: sha,
+                  ext: "",
+                }))
+            ).map(
+              (af) => html`<div
+                class="attached-pdf-row"
+                role="button"
+                tabindex="0"
+                title="Click to view this file in a new tab · sha ${af.sha512}"
+                @click=${() =>
+                  window.open(
+                    `/api/reference/library/${encodeURIComponent(af.sha512)}/source`,
+                    "_blank",
+                    "noopener",
+                  )}
+                @keydown=${(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    window.open(
+                      `/api/reference/library/${encodeURIComponent(af.sha512)}/source`,
+                      "_blank",
+                      "noopener",
+                    );
+                  }
+                }}
+              >
+                ${af.ext
+                  ? html`<span class="attached-format-badge ext-${af.ext.replace(
+                      /\./g,
+                      "-",
+                    )}"
+                      >${af.ext.toUpperCase()}</span
+                    >`
+                  : ""}
+                <span class="attached-pdf-sha">${af.sha512.slice(0, 12)}…</span>
                 <button
                   class="icon-btn danger"
                   type="button"
-                  title="Detach this PDF — removes the attachment, all extraction corrections for it, and (if not shared with another reference) the sidecar files on disk"
-                  aria-label="Detach PDF"
-                  @click=${() => this._detachPDF(sha)}
+                  title="Detach this file — removes the attachment, all extraction corrections for it, and (if not shared with another reference) the sidecar files on disk"
+                  aria-label="Detach file"
+                  @click=${(e) => {
+                    e.stopPropagation();
+                    this._detachPDF(af.sha512);
+                  }}
                 >
                   ${renderIcon("trash-2", 16)}
                 </button>

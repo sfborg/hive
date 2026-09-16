@@ -780,7 +780,20 @@ type apiReference struct {
 	// entry (one PDF per reference); the references-screen reader
 	// pane loads the first sha. Empty when no source document has
 	// been attached.
-	AttachedPDFShas []string `json:"attached_pdf_shas,omitempty"`
+	AttachedPDFShas []string           `json:"attached_pdf_shas,omitempty"`
+	AttachedFiles   []apiAttachedFile  `json:"attached_files,omitempty"`
+}
+
+// apiAttachedFile is one row of apiReference.AttachedFiles — a
+// sidecar-library attachment on a reference. Superset of the
+// legacy attached_pdf_shas contract: carries the primary
+// upload format (pdf / xml / jats / epub / html) alongside the
+// sha so the WUI can render a format badge without a second
+// round-trip. The legacy string-array field stays populated for
+// backwards compat.
+type apiAttachedFile struct {
+	SHA512 string `json:"sha512"`
+	Ext    string `json:"ext"`
 }
 
 func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
