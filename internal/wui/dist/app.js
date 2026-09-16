@@ -20957,12 +20957,12 @@ class SfgaReferences extends LitElement {
                     >`
                   : ""}
                 <span class="attached-pdf-sha">${af.sha512.slice(0, 12)}…</span>
-                ${af.ext === "pdf"
+                ${af.ext === "pdf" || af.ext === "xml" || af.ext === "jats"
                   ? html`<button
                       class="icon-btn"
                       type="button"
-                      title="Re-run the TEI → JATS + GNfinder annotation for this attachment. Useful when the reader shows 'no augmented XML' — usually a transient failure during the initial ingest."
-                      aria-label="Retry annotation"
+                      title="Run the GNfinder annotation pass on this attachment. For PDFs: TEI → JATS → GNfinder. For publisher XML / JATS uploads: run GNfinder directly on the source. Useful when the reader shows 'no augmented XML' — publisher-JATS uploads currently need this triggered manually."
+                      aria-label="Run annotation"
                       @click=${(e) => {
                         e.stopPropagation();
                         this._reannotate(af.sha512);

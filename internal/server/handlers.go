@@ -5596,55 +5596,68 @@ func (s *server) handleReferenceLibraryReannotate(w http.ResponseWriter, r *http
 		})
 		return
 	}
-	tei, err := sidecar.Read(s.archivePath, sha, "tei.xml")
-	if err != nil || tei == nil {
-		writeJSON(w, http.StatusOK, apiReannotateResult{
-			SHA512: sha, Status: "no_tei",
-			Error: "sidecar has no tei.xml — re-ingest the source PDF to produce it",
-		})
-		return
-	}
+	// Two input paths: PDF (via TEI) vs. raw JATS/XML upload.
+	// Publisher JATS is often higher-quality than GROBID output
+	// and deserves the same GNfinder annotation pass as
+	// PDF-derived JATS. Check the sidecar meta.json to learn
+	// which one we're dealing with.
+	var jats []byte
 	var jatsOpts jatsconv.Options
-	pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
-	if _, statErr := os.Stat(pdfPath); statErr == nil {
-		if words, err := pdftext.WordPages(pdfPath); err == nil && len(words) > 0 {
-			jatsOpts.WordPages = words
-			if journalPage1 := pdftext.JournalPageOfPDFPage1(words); journalPage1 > 1 {
-				jatsOpts.PageOffset = journalPage1 - 1
-			}
-		}
+	meta, _ := sidecar.ReadMeta(s.archivePath, sha)
+	primaryExt := ""
+	if meta != nil {
+		primaryExt = meta.Ext
 	}
-	jats, err := jatsconv.TEIToJATSOpts(tei, jatsOpts)
-	if err != nil {
-		writeJSON(w, http.StatusOK, apiReannotateResult{
-			SHA512: sha, Status: "failed", Error: "TEI→JATS: " + err.Error(),
-		})
-		return
-	}
-	augmented, err := s.annotator.Annotate(r.Context(), jats)
-	if err != nil {
-		// The page-marker splicing (WordPages opt) can produce
-		// malformed XML for certain TEI patterns — e.g. inserting
-		// a marker that leaks past an <xref> boundary. When the
-		// annotator's strict XML parse rejects it, retry once
-		// without WordPages so the paper at least gets a valid
-		// (page-marker-less) augmented JATS. Deeper jatsconv fix
-		// tracked separately.
-		if jatsOpts.WordPages != nil {
-			slog.Warn("reannotate: retrying without page markers",
-				"sha", sha[:12], "err", err)
-			plainJATS, plainErr := jatsconv.TEIToJATS(tei)
-			if plainErr == nil {
-				augmented, err = s.annotator.Annotate(r.Context(), plainJATS)
-			}
-		}
-		if err != nil {
+	switch primaryExt {
+	case "xml", "jats":
+		raw, err := sidecar.Read(s.archivePath, sha, primaryExt)
+		if err != nil || raw == nil {
 			writeJSON(w, http.StatusOK, apiReannotateResult{
-				SHA512: sha, Status: "failed",
-				Error: "annotate: " + err.Error() + " (retry-without-page-markers also failed)",
+				SHA512: sha, Status: "no_input",
+				Error: "sidecar has no " + primaryExt + " content",
 			})
 			return
 		}
+		jats = raw
+	default:
+		// PDF (or unknown ext falling back to the TEI path).
+		tei, err := sidecar.Read(s.archivePath, sha, "tei.xml")
+		if err != nil || tei == nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "no_tei",
+				Error: "sidecar has no tei.xml — re-ingest the source PDF to produce it",
+			})
+			return
+		}
+		pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
+		if _, statErr := os.Stat(pdfPath); statErr == nil {
+			if words, err := pdftext.WordPages(pdfPath); err == nil && len(words) > 0 {
+				jatsOpts.WordPages = words
+				if journalPage1 := pdftext.JournalPageOfPDFPage1(words); journalPage1 > 1 {
+					jatsOpts.PageOffset = journalPage1 - 1
+				}
+			}
+		}
+		jats, err = jatsconv.TEIToJATSOpts(tei, jatsOpts)
+		if err != nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "failed", Error: "TEI→JATS: " + err.Error(),
+			})
+			return
+		}
+	}
+	augmented, err := s.annotator.Annotate(r.Context(), jats)
+	if err != nil {
+		// The page-marker splicing bug that motivated the earlier
+		// retry-without-page-markers fallback was fixed at the
+		// source in pkg/refmanager/jatsconv. Any remaining errors
+		// here are real (malformed publisher JATS, GNfinder
+		// upstream issues) and worth surfacing directly.
+		writeJSON(w, http.StatusOK, apiReannotateResult{
+			SHA512: sha, Status: "failed",
+			Error: "annotate: " + err.Error(),
+		})
+		return
 	}
 	augmented = s.reapplyCorrectionsForSHA(r.Context(), sha, augmented)
 	if err := sidecar.Store(s.archivePath, sha, "jats.xml", augmented); err != nil {
@@ -5662,14 +5675,40 @@ func (s *server) handleReferenceLibraryReannotate(w http.ResponseWriter, r *http
 }
 
 func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, teiStatus string) (string, int) {
-	if teiStatus != "stored" {
-		return "skipped", 0
-	}
 	if s.annotator == nil {
 		return "skipped", 0
 	}
 	if existing, err := sidecar.Read(s.archivePath, res.SHA512, "jats.xml"); err == nil && existing != nil {
 		return "already_exists", countTaxonNameElements(existing)
+	}
+	// Publisher JATS / raw XML uploads bypass GROBID + TEI entirely
+	// but still deserve GNfinder annotation — running GNfinder over
+	// authoritative publisher structure often produces better
+	// taxonomic markup than the PDF-derived path. Detect and
+	// annotate directly.
+	if res.Ext == "xml" || res.Ext == "jats" {
+		raw, err := sidecar.Read(s.archivePath, res.SHA512, res.Ext)
+		if err != nil || raw == nil {
+			slog.Warn("annotate: raw JATS input unreadable",
+				"sha", res.SHA512[:12], "ext", res.Ext, "err", err)
+			return "failed", 0
+		}
+		augmented, err := s.annotator.Annotate(ctx, raw)
+		if err != nil {
+			slog.Warn("annotate: GNfinder pass on raw JATS failed",
+				"sha", res.SHA512[:12], "err", err)
+			return "failed", 0
+		}
+		augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
+		if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+			slog.Warn("annotate: augmented JATS store failed",
+				"sha", res.SHA512[:12], "err", err)
+			return "failed", 0
+		}
+		return "annotated", countTaxonNameElements(augmented)
+	}
+	if teiStatus != "stored" {
+		return "skipped", 0
 	}
 	tei, err := sidecar.Read(s.archivePath, res.SHA512, "tei.xml")
 	if err != nil || tei == nil {
