@@ -1787,7 +1787,13 @@ class SfgaReader extends LitElement {
   render() {
     return html`
       <header>
-        <h1>${this._sha ? this._sha.slice(0, 16) + "…" : "(no sha)"}</h1>
+        <h1 title=${this._sha || ""}>
+          ${this._paginated && this._doc
+            ? html`<span class="page-indicator"
+                >Page ${this._page + 1} of ${this._pageCount}</span
+              >`
+            : nothing}
+        </h1>
         <div class="controls">
           <div class="legend" aria-label="chip legend">
             <span class="swatch"><span class="dot verified"></span> verified</span>
@@ -1830,11 +1836,6 @@ class SfgaReader extends LitElement {
             />
             Columned view
           </label>
-          ${this._paginated
-            ? html`<span class="page-indicator">
-                Page ${this._page + 1} of ${this._pageCount}
-              </span>`
-            : nothing}
         </div>
       </header>
       ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}
