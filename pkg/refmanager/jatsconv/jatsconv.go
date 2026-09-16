@@ -1359,32 +1359,57 @@ func stripXMLTags(src []byte) string {
 // whitespace convention as strings.Fields so the index passed in
 // aligns with the paragraph's stripXMLTags output.
 //
-// The splice closes the current <p>, emits the marker <p>, then
-// reopens a fresh <p> so the paragraph stays JATS-valid on both
-// sides of every insertion.
+// The splice needs to keep the surrounding XML well-formed even
+// when the word boundary falls inside an inline element (a
+// citation <xref rid="…"> that spans a page break, an italic
+// species name that runs across two pages, etc.). Naively
+// closing the current <p> in that case produces malformed
+// output — an <xref> gets "closed" by the freshly-emitted </p>,
+// the parser's next token is a new <xref> opening that never
+// gets closed, and the whole document fails validation.
+//
+// The correct pattern is a mirrored close-and-reopen. If a word
+// boundary lands with an inline stack like [p, xref], the
+// splicer emits </xref></p>…</p><p><xref rid="…"> — the same
+// inlines close in reverse (LIFO) and reopen in original order
+// with their attributes preserved. Downstream tooling
+// (GNfinder's strict XML parser, ID-preserving revisers) then
+// sees valid XML on both sides of every page break.
 func insertPageBreakMarkers(src []byte, transitions []pageTransition) []byte {
 	if len(transitions) == 0 {
 		return src
 	}
 	var out bytes.Buffer
-	out.Grow(len(src) + len(transitions)*100)
+	out.Grow(len(src) + len(transitions)*200)
 	wordIndex := 0
 	inTag := false
 	inWord := false
 	transIdx := 0
+	// tagBuf accumulates the interior of the current <…> so its
+	// name + attributes can be recorded on the open stack.
+	var tagBuf strings.Builder
+	// openStack is the stack of currently-open elements, each
+	// preserving the raw opening-tag content (name + attributes)
+	// so reopens after a page-break splice keep every attribute
+	// the original tag carried — critical for xref rid, italic
+	// classes, and namespaced tp:/gn:/hive: markup.
+	var openStack []openElement
 	for i := 0; i < len(src); i++ {
 		b := src[i]
 		if b == '<' {
 			inTag = true
+			tagBuf.Reset()
 			out.WriteByte(b)
 			continue
 		}
 		if b == '>' {
 			inTag = false
 			out.WriteByte(b)
+			trackElementBoundary(tagBuf.String(), &openStack)
 			continue
 		}
 		if inTag {
+			tagBuf.WriteByte(b)
 			out.WriteByte(b)
 			continue
 		}
@@ -1411,11 +1436,7 @@ func insertPageBreakMarkers(src []byte, transitions []pageTransition) []byte {
 					if t.Approximate {
 						attrs = ` placement="approximate"`
 					}
-					marker := fmt.Sprintf(
-						`</p><p content-type="hive-page-break"><hive:page-break page="%d"%s/></p><p>`,
-						t.Page, attrs,
-					)
-					out.WriteString(marker)
+					out.WriteString(buildPageBreakSplice(openStack, t.Page, attrs))
 					transIdx++
 				}
 				inWord = true
@@ -1433,6 +1454,112 @@ func insertPageBreakMarkers(src []byte, transitions []pageTransition) []byte {
 	// last word triggers a break we haven't hit yet in the walk).
 	// Skip; nothing meaningful to append at document end.
 	return out.Bytes()
+}
+
+// openElement records the raw opening-tag content of an
+// element currently on the open stack. name is the element's
+// local name (used for LIFO pop matching); raw is the full
+// interior of the opening tag ("xref rid=\"b13\"") so a
+// reopen preserves every attribute the original tag carried.
+type openElement struct {
+	name string
+	raw  string
+}
+
+// trackElementBoundary parses one tag's interior (bytes
+// between < and >, exclusive) and updates the open-element
+// stack. Handles opens, closes, and self-closing tags. Robust
+// to slight tag/close mismatches — pops the most recent match
+// for the closing name, ignores a close for a name not on the
+// stack (protects against malformed input skewing the stack).
+func trackElementBoundary(tagContent string, stack *[]openElement) {
+	trimmed := strings.TrimSpace(tagContent)
+	if trimmed == "" || strings.HasPrefix(trimmed, "!") ||
+		strings.HasPrefix(trimmed, "?") {
+		return // Comment / PI / DOCTYPE — not an element.
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		name := elementLocalName(strings.TrimSpace(trimmed[1:]))
+		for i := len(*stack) - 1; i >= 0; i-- {
+			if (*stack)[i].name == name {
+				*stack = (*stack)[:i]
+				return
+			}
+		}
+		return
+	}
+	if strings.HasSuffix(trimmed, "/") {
+		return // Self-closing — no stack change.
+	}
+	*stack = append(*stack, openElement{
+		name: elementLocalName(trimmed),
+		raw:  trimmed,
+	})
+}
+
+// elementLocalName returns the tag's element name — the leading
+// run before the first whitespace or attribute separator. The
+// namespace prefix (tp:, gn:, hive:) stays part of the name so
+// open/close pairs match exactly.
+func elementLocalName(s string) string {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+// buildPageBreakSplice generates a well-formed page-break splice
+// that respects the currently-open element stack. The output:
+//   1. Closes every inline currently open above the innermost <p>
+//      (LIFO order).
+//   2. Closes the <p>.
+//   3. Emits the hive:page-break paragraph.
+//   4. Reopens a fresh <p>.
+//   5. Reopens each previously-open inline in original order,
+//      preserving its attributes.
+//
+// Falls back to a bare-marker splice when no <p> is currently
+// open — the naive shape would produce malformed nesting from
+// outside a paragraph context. This shouldn't happen in practice
+// since transitions are aligned to paragraph words, but a
+// defensive fallback keeps the function total.
+func buildPageBreakSplice(openStack []openElement, page int, attrs string) string {
+	pIdx := -1
+	for i := len(openStack) - 1; i >= 0; i-- {
+		if openStack[i].name == "p" {
+			pIdx = i
+			break
+		}
+	}
+	if pIdx < 0 {
+		return fmt.Sprintf(
+			`<p content-type="hive-page-break"><hive:page-break page="%d"%s/></p>`,
+			page, attrs)
+	}
+	inlines := openStack[pIdx+1:]
+	var b strings.Builder
+	// Close inlines LIFO.
+	for i := len(inlines) - 1; i >= 0; i-- {
+		b.WriteString("</")
+		b.WriteString(inlines[i].name)
+		b.WriteString(">")
+	}
+	// Close <p>, splice the break paragraph, reopen <p>.
+	fmt.Fprintf(&b,
+		`</p><p content-type="hive-page-break"><hive:page-break page="%d"%s/></p><p>`,
+		page, attrs)
+	// Reopen inlines in original order — raw carries the exact
+	// interior of each opening tag so attributes survive
+	// (xref rid=…, italic class=…, etc.).
+	for _, ie := range inlines {
+		b.WriteString("<")
+		b.WriteString(ie.raw)
+		b.WriteString(">")
+	}
+	return b.String()
 }
 
 // convertInline is the inline-content counterpart of convertContainer.

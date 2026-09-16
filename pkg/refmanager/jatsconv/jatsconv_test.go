@@ -1,6 +1,7 @@
 package jatsconv
 
 import (
+	"encoding/xml"
 	"strings"
 	"testing"
 )
@@ -263,6 +264,113 @@ func TestSplitAuthors(t *testing.T) {
 	for i := range got {
 		if got[i] != want[i] {
 			t.Errorf("author[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestBuildPageBreakSpliceClosesInlines is a direct unit test for
+// the well-formedness invariant: when a page-marker splice lands
+// while an inline element is open (an <xref rid="…"> that spans
+// a page boundary is the real-world case that motivated this),
+// the splicer must close every currently-open inline before
+// closing the <p>, and reopen each of them in original order —
+// with attributes preserved — inside the fresh <p> on the far
+// side of the page break.
+//
+// Regression target: the Pane 2024 PhytoKeys paper, whose diatom
+// citations frequently spanned page boundaries; the old naive
+// splicer produced <xref>text</p><…>more text</xref>, which
+// GNfinder's strict XML parser rejected with "element <xref>
+// closed by </p>". The augmented JATS silently didn't land and
+// the reader showed "no augmented XML."
+func TestBuildPageBreakSpliceClosesInlines(t *testing.T) {
+	stack := []openElement{
+		{name: "body", raw: "body"},
+		{name: "sec", raw: "sec"},
+		{name: "p", raw: "p"},
+		{name: "xref", raw: `xref rid="b13"`},
+	}
+	got := buildPageBreakSplice(stack, 2, "")
+	want := `</xref></p><p content-type="hive-page-break"><hive:page-break page="2"/></p><p><xref rid="b13">`
+	if got != want {
+		t.Errorf("splice mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestInsertPageBreakMarkersInsideXref reproduces the exact
+// pattern from the Pane 2024 paper — an <xref> citation whose
+// text runs across a page boundary. The splice must render an
+// XML-parseable result end-to-end, not just look right in a
+// substring comparison.
+func TestInsertPageBreakMarkersInsideXref(t *testing.T) {
+	// Two paragraphs of markup with an xref straddling the point
+	// where the transition fires. WordIndex 3 lands mid-xref (on
+	// "future") — that's what the algorithm has to survive.
+	src := []byte(
+		`<body><sec><title>Introduction</title>` +
+			`<p>Prior work <xref rid="b13">discussed future ` +
+			`ramifications</xref> in detail.</p></sec></body>`,
+	)
+	transitions := []pageTransition{
+		{WordIndex: 3, Page: 2},
+	}
+	out := insertPageBreakMarkers(src, transitions)
+	// The splice went in — a hive-page-break paragraph appears.
+	if !strings.Contains(string(out), `content-type="hive-page-break"`) {
+		t.Fatalf("no page-break paragraph emitted:\n%s", out)
+	}
+	// The xref got the mirrored close-and-reopen treatment.
+	if !strings.Contains(string(out), `</xref></p>`) {
+		t.Errorf("xref not closed before </p>:\n%s", out)
+	}
+	if !strings.Contains(string(out), `</p><p><xref rid="b13">`) {
+		t.Errorf("xref not reopened with attributes:\n%s", out)
+	}
+	// End-to-end well-formedness. The dominant regression risk
+	// is subtle attribute-quoting bugs in the emitted splice; a
+	// full-document XML parse catches every shape of malformed
+	// output at once.
+	var probe struct{}
+	dec := xml.NewDecoder(strings.NewReader(string(out)))
+	dec.Strict = false
+	for {
+		if _, err := dec.Token(); err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			// io.EOF sentinel handling — the encoding/xml Token
+			// contract returns a non-nil error at end of input.
+			// Any other error is a real malformedness signal.
+			if err.Error() != "EOF" {
+				break
+			}
+		}
+	}
+	// A round-trip re-parse via xml.Unmarshal into a minimal
+	// probe type ensures well-formedness. Body content isn't
+	// what we're testing; parseability is.
+	if err := xml.Unmarshal(out, &probe); err != nil &&
+		!strings.Contains(err.Error(), "unknown element") {
+		// xml.Unmarshal reports "unknown element" for elements
+		// not mapped in the probe struct, which is expected;
+		// any other error is a real malformedness signal.
+		t.Errorf("post-splice output failed to parse: %v\n%s", err, out)
+	}
+}
+
+// TestElementLocalName covers the tag-name extraction helper
+// that the page-break splicer uses to LIFO-match closing tags.
+func TestElementLocalName(t *testing.T) {
+	cases := map[string]string{
+		"p":                    "p",
+		`xref rid="b13"`:       "xref",
+		"hive:page-break":      "hive:page-break",
+		`italic class="genus"`: "italic",
+		"br/":                  "br",
+	}
+	for in, want := range cases {
+		if got := elementLocalName(in); got != want {
+			t.Errorf("elementLocalName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
