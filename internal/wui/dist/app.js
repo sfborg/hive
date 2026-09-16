@@ -20935,13 +20935,22 @@ class SfgaReferences extends LitElement {
       (r.attached_pdf_shas && r.attached_pdf_shas.length > 0)
         ? html`<div class="attached-pdfs">
             <div class="attached-pdfs-title">Attached Files</div>
-            ${(r.attached_files && r.attached_files.length > 0
-              ? r.attached_files
-              : (r.attached_pdf_shas || []).map((sha) => ({
-                  sha512: sha,
-                  ext: "",
-                }))
-            ).map(
+            ${(() => {
+              // Attachment display rule: when a PDF is present it is
+              // the only row shown. Non-PDF formats (JATS/XML/EPUB/
+              // HTML) surface only for references that have no PDF
+              // uploaded — the reader still uses whichever augmented
+              // JATS was produced from the visible sha. Pipeline
+              // stores both formats regardless.
+              const all =
+                r.attached_files && r.attached_files.length > 0
+                  ? r.attached_files
+                  : (r.attached_pdf_shas || []).map((sha) => ({
+                      sha512: sha,
+                      ext: "",
+                    }));
+              const hasPDF = all.some((af) => af.ext === "pdf");
+              return (hasPDF ? all.filter((af) => af.ext === "pdf") : all).map(
               (af) => html`<div
                 class="attached-pdf-row ${(this._activeReaderSha ||
                   ((r.attached_files || [])[0] || {}).sha512 ||
@@ -20995,7 +21004,8 @@ class SfgaReferences extends LitElement {
                   ${renderIcon("trash-2", 16)}
                 </button>
               </div>`,
-            )}
+            );
+            })()}
           </div>`
         : nothing}
     `;
