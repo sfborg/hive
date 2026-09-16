@@ -15696,6 +15696,56 @@ class SfgaReferences extends LitElement {
       background: color-mix(in oklab, var(--fg) 3%, var(--bg));
       font-size: var(--fs-sm);
     }
+    /* Bibliography toolbar mirrors the assertions toolbar shape:
+       copy buttons flush-left, spacer takes the middle, test-set
+       toggle and action icons (add / edit / delete) flush-right.
+       Frees the title row for full-width use — science paper
+       titles are traditionally long enough that fighting for
+       right-side controls space crops the title text. */
+    .bibliography-toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklab, var(--fg) 3%, var(--bg));
+      font-size: var(--fs-sm);
+      flex-wrap: wrap;
+    }
+    .bibliography-toolbar .spacer {
+      flex: 1 1 auto;
+    }
+    .bibliography-toolbar .toolbar-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-1) var(--sp-2);
+      color: var(--fg);
+      cursor: pointer;
+      font-size: var(--fs-sm);
+    }
+    .bibliography-toolbar .toolbar-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .bibliography-toolbar .test-set-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35em;
+      color: var(--dim);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .bibliography-toolbar .test-set-toggle input[type="checkbox"] {
+      cursor: pointer;
+    }
+    .bibliography-title {
+      margin: var(--sp-4) 0 var(--sp-3);
+      padding: 0 var(--sp-3);
+      font-size: var(--fs-xl);
+      line-height: 1.3;
+      color: var(--fg);
+    }
     .assertions-toolbar .count {
       color: var(--dim);
     }
@@ -20753,51 +20803,76 @@ class SfgaReferences extends LitElement {
         : html`<dt>${label}</dt>
             <dd><a href=${value} target="_blank" rel="noopener">${value}</a></dd>`;
     return html`
-      <div class="detail-header">
-        <h2>${r.title || r.citation || r.id}</h2>
-        <div class="header-actions">
-          <label
-            class="test-set-toggle"
-            title="Papers in the evaluation test set anchor gold-standard scoring. Toggle on to mark this paper for rigorous annotation."
-          >
-            <input
-              type="checkbox"
-              ?checked=${this._inTestSet === true}
-              ?disabled=${this._inTestSet === null}
-              @change=${(e) => this._toggleTestSet(e.target.checked)}
-            />
-            <span>in test set</span>
-          </label>
-          <button
-            class="icon-btn"
-            type="button"
-            @click=${() => (this._addingNew = true)}
-            title="Add reference"
-            aria-label="Add reference"
-          >
-            ${renderIcon("plus", 16)}
-          </button>
-          <button
-            class="icon-btn"
-            type="button"
-            @click=${() => this._openEdit()}
-            title="Edit reference"
-            aria-label="Edit reference"
-          >
-            ${renderIcon("pencil", 16)}
-          </button>
-          <button
-            class="icon-btn danger"
-            type="button"
-            @click=${() => this._deleteReference()}
-            title="Delete reference"
-            aria-label="Delete reference"
-          >
-            ${renderIcon("trash-2", 16)}
-          </button>
-        </div>
+      <div class="bibliography-toolbar">
+        <button
+          class="toolbar-btn"
+          @click=${(e) => this._copy(r.citation || r.title || "", e)}
+        >
+          Copy citation
+        </button>
+        <button
+          class="toolbar-btn"
+          @click=${(e) => this._copy(this._buildCSLJSON(r), e)}
+        >
+          Copy CSL-JSON
+        </button>
+        <button
+          class="toolbar-btn"
+          @click=${(e) => this._copy(this._buildBibTeX(r), e)}
+        >
+          Copy BibTeX
+        </button>
+        ${r.doi
+          ? html`<button
+              class="toolbar-btn"
+              @click=${(e) =>
+                this._copy(`https://doi.org/${r.doi}`, e)}
+            >
+              Copy DOI URL
+            </button>`
+          : nothing}
+        <span class="spacer"></span>
+        <label
+          class="test-set-toggle"
+          title="Papers in the evaluation test set anchor gold-standard scoring. Toggle on to mark this paper for rigorous annotation."
+        >
+          <input
+            type="checkbox"
+            ?checked=${this._inTestSet === true}
+            ?disabled=${this._inTestSet === null}
+            @change=${(e) => this._toggleTestSet(e.target.checked)}
+          />
+          <span>in test set</span>
+        </label>
+        <button
+          class="icon-btn"
+          type="button"
+          @click=${() => (this._addingNew = true)}
+          title="Add reference"
+          aria-label="Add reference"
+        >
+          ${renderIcon("plus", 16)}
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          @click=${() => this._openEdit()}
+          title="Edit reference"
+          aria-label="Edit reference"
+        >
+          ${renderIcon("pencil", 16)}
+        </button>
+        <button
+          class="icon-btn danger"
+          type="button"
+          @click=${() => this._deleteReference()}
+          title="Delete reference"
+          aria-label="Delete reference"
+        >
+          ${renderIcon("trash-2", 16)}
+        </button>
       </div>
-      <hr />
+      <h2 class="bibliography-title">${r.title || r.citation || r.id}</h2>
       <dl>
         ${row("Author", r.author)} ${row("Issued", r.issued)}
         ${row("Type", r.type)} ${row("Container", r.container_title)}
@@ -20873,22 +20948,6 @@ class SfgaReferences extends LitElement {
             )}
           </div>`
         : nothing}
-      <div class="cite-toolbar">
-        <button @click=${(e) => this._copy(r.citation || r.title || "", e)}>
-          Copy citation
-        </button>
-        <button @click=${(e) => this._copy(this._buildCSLJSON(r), e)}>
-          Copy CSL-JSON
-        </button>
-        <button @click=${(e) => this._copy(this._buildBibTeX(r), e)}>
-          Copy BibTeX
-        </button>
-        ${r.doi
-          ? html`<button @click=${(e) => this._copy(`https://doi.org/${r.doi}`, e)}>
-              Copy DOI URL
-            </button>`
-          : nothing}
-      </div>
     `;
   }
 
