@@ -19,6 +19,7 @@ package pandoc
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -96,9 +97,16 @@ func (c *Client) EpubToJATS(ctx context.Context, path string) ([]byte, error) {
 	// than reflowing at 72 columns — makes byte-offset splices
 	// (from the annotator) less fragile against pandoc's own
 	// formatting.
+	// --standalone asks pandoc to emit a complete document with a
+	// single root element instead of a fragment; without it,
+	// pandoc's default EPUB → JATS output emits siblings at the
+	// top level (frontmatter <boxed-text>, then chapter <sec>s)
+	// with no wrapping <article>, and XML parsers reject that as
+	// "junk after document element".
 	cmd := exec.CommandContext(subCtx, bin,
 		"-f", "epub",
 		"-t", "jats",
+		"--standalone",
 		"--wrap=preserve",
 		"-o", "-",
 		path,
@@ -118,7 +126,97 @@ func (c *Client) EpubToJATS(ctx context.Context, path string) ([]byte, error) {
 	if stdout.Len() == 0 {
 		return nil, fmt.Errorf("pandoc: EpubToJATS %s: empty output", path)
 	}
-	return stdout.Bytes(), nil
+	return ensureSingleRoot(stdout.Bytes()), nil
+}
+
+// ensureSingleRoot defensively wraps pandoc output in a synthetic
+// <article><body>…</body></article> when it lacks a single XML
+// root element. Older pandoc versions (or edge inputs) emit
+// fragments even with --standalone; the annotator only needs a
+// well-formed root with a walkable <body> subtree, so wrapping
+// with a minimal JATS scaffold makes the pipeline robust to
+// pandoc-version drift without normalizing the interior.
+func ensureSingleRoot(out []byte) []byte {
+	trimmed := bytes.TrimSpace(out)
+	// Skip past any XML prolog and DOCTYPE the emitter attached
+	// before the first element start; those are legal and do not
+	// count as a root element for the "junk after document
+	// element" check.
+	body := trimmed
+	body = skipXMLProlog(body)
+	if isSingleRooted(body) {
+		return out
+	}
+	// Wrap. Keep the original prolog / DOCTYPE from pandoc, then
+	// synthesize an article envelope around the remaining bytes.
+	var wrapped bytes.Buffer
+	prologLen := len(trimmed) - len(body)
+	wrapped.Write(trimmed[:prologLen])
+	wrapped.WriteString(`<article xml:lang="en"><body>`)
+	wrapped.Write(body)
+	wrapped.WriteString(`</body></article>`)
+	return wrapped.Bytes()
+}
+
+// skipXMLProlog returns src with any leading XML prolog
+// (<?xml…?>) and DOCTYPE declaration stripped. Case-sensitive on
+// the tag markers; whitespace between chunks is skipped.
+func skipXMLProlog(src []byte) []byte {
+	for {
+		src = bytes.TrimLeft(src, " \t\r\n")
+		switch {
+		case bytes.HasPrefix(src, []byte("<?xml")):
+			end := bytes.Index(src, []byte("?>"))
+			if end < 0 {
+				return src
+			}
+			src = src[end+2:]
+		case bytes.HasPrefix(src, []byte("<!DOCTYPE")):
+			end := bytes.IndexByte(src, '>')
+			if end < 0 {
+				return src
+			}
+			src = src[end+1:]
+		case bytes.HasPrefix(src, []byte("<!--")):
+			end := bytes.Index(src, []byte("-->"))
+			if end < 0 {
+				return src
+			}
+			src = src[end+3:]
+		default:
+			return src
+		}
+	}
+}
+
+// isSingleRooted reports whether src (with prolog / DOCTYPE
+// already stripped) parses cleanly as a single-root XML document.
+// Uses encoding/xml's decoder, which is what the reader-side
+// browser parser also enforces — if the Go parser hits the "junk
+// after root element" case, the browser will too.
+func isSingleRooted(src []byte) bool {
+	dec := xml.NewDecoder(bytes.NewReader(src))
+	dec.Strict = false
+	depth := 0
+	sawRoot := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return depth == 0 && sawRoot
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if sawRoot {
+					return false
+				}
+				sawRoot = true
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
 }
 
 func (c *Client) binary() string {

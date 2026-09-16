@@ -2,6 +2,7 @@ package pandoc
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -9,6 +10,40 @@ import (
 	"strings"
 	"testing"
 )
+
+// TestEnsureSingleRootWrapsFragment covers the case that hit the
+// reader in production: pandoc emitted two top-level siblings
+// (a boxed-text frontmatter followed by a sec), the browser XML
+// parser rejected the second sibling as "junk after document
+// element". The wrapper must produce a single-rooted document.
+func TestEnsureSingleRootWrapsFragment(t *testing.T) {
+	in := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<boxed-text id="frontmatter"><p>preface</p></boxed-text>
+<sec id="chapter1"><title>Introduction</title><p>Body.</p></sec>`)
+	out := ensureSingleRoot(in)
+	if !isSingleRooted(skipXMLProlog(bytes.TrimSpace(out))) {
+		t.Errorf("wrapper output still not single-rooted:\n%s", out)
+	}
+	if !strings.Contains(string(out), "<article") {
+		t.Errorf("expected synthesized <article> envelope; got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "boxed-text") ||
+		!strings.Contains(string(out), "chapter1") {
+		t.Errorf("original content dropped during wrap:\n%s", out)
+	}
+}
+
+// TestEnsureSingleRootPreservesValid confirms an already-valid
+// single-root document passes through untouched — the wrapper
+// must not re-wrap output that pandoc already emitted correctly.
+func TestEnsureSingleRootPreservesValid(t *testing.T) {
+	in := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<article><body><p>Text.</p></body></article>`)
+	out := ensureSingleRoot(in)
+	if !bytes.Equal(out, in) {
+		t.Errorf("valid input mutated; want unchanged.\nin:  %s\nout: %s", in, out)
+	}
+}
 
 // TestPingWithoutBinary reports ENOENT-ish when pandoc is not on
 // PATH. Confirms Ping surfaces a real error rather than silently
