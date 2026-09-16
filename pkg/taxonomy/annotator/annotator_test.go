@@ -46,6 +46,35 @@ func TestFindNamesWrapsHits(t *testing.T) {
 	}
 }
 
+// TestFindNamesPublisherJATSPreservesTPBinding — when a publisher
+// JATS already binds the "tp" prefix (to its own URI, e.g. the
+// plazi.org/taxpub URI many Pensoft-style pipelines use),
+// FindNames must not emit a second xmlns:tp declaration. Two
+// xmlns:tp attributes on one element is a duplicate-attribute
+// XML parse error under Namespaces in XML 1.0, and the reader
+// then can't display the augmented output at all.
+func TestFindNamesPublisherJATSPreservesTPBinding(t *testing.T) {
+	jats := []byte(`<?xml version="1.0"?>
+<article xmlns:tp="http://www.plazi.org/taxpub">
+  <front/>
+  <body>
+    <p>Panthera onca is a big cat.</p>
+  </body>
+</article>`)
+	a := New()
+	out, err := a.FindNames(jats)
+	if err != nil {
+		t.Fatalf("FindNames: %v", err)
+	}
+	s := string(out)
+	if n := strings.Count(s, "xmlns:tp="); n != 1 {
+		t.Errorf("expected exactly one xmlns:tp binding, got %d:\n%s", n, s)
+	}
+	if !strings.Contains(s, `xmlns:tp="http://www.plazi.org/taxpub"`) {
+		t.Errorf("publisher tp URI dropped:\n%s", s)
+	}
+}
+
 // TestFindNamesSkipsHeader — GNfinder should not run on content
 // outside <body>, so a scientific-name-shaped string in the front-
 // matter (title, author, journal) stays plain. Only body content

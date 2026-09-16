@@ -144,11 +144,13 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 	// byte-identical to the input.
 	var edits []insertion
 	// Insert xmlns:tp on the root open tag when the input does not
-	// already declare it. jatsconv emits the declaration up front so
-	// annotator output stays byte-stable across annotated / un-
-	// annotated inputs; a raw JATS document (e.g. a test fixture)
-	// still needs the declaration injected.
-	if !bytes.Contains(jats, []byte(`xmlns:`+TaxPubPrefix+`="`+TaxPubNamespace+`"`)) {
+	// already bind the tp prefix. Publisher JATS often ships with
+	// its own tp binding (plazi.org/taxpub) — matching by prefix
+	// (not URI) avoids emitting a second xmlns:tp with our URI
+	// and yielding a duplicate-attribute XML parse error. Our
+	// <tp:taxon-name> insertions inherit whichever URI the file
+	// already declares.
+	if !hasNamespacePrefixBinding(jats, TaxPubPrefix) {
 		rootAttrPos, err := rootOpenTagAttrPos(jats)
 		if err != nil {
 			return nil, err
@@ -289,6 +291,34 @@ func rootOpenTagAttrPos(src []byte) (int64, error) {
 			end--
 		}
 		return beforeOffset + int64(end), nil
+	}
+}
+
+// hasNamespacePrefixBinding reports whether the input already
+// declares an xmlns binding for the given prefix on the root
+// element — matched by prefix rather than URI so a publisher-
+// supplied JATS that binds "tp" to plazi.org/taxpub is treated
+// as already-declared and we do not emit a second xmlns:tp with
+// our own URI (a duplicate-attribute XML parse error). Only the
+// root open tag is scanned; deeper occurrences don't matter for
+// our root-tag insertions.
+func hasNamespacePrefixBinding(src []byte, prefix string) bool {
+	dec := xml.NewDecoder(bytes.NewReader(src))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		for _, a := range se.Attr {
+			if a.Name.Space == "xmlns" && a.Name.Local == prefix {
+				return true
+			}
+		}
+		return false
 	}
 }
 
@@ -595,7 +625,7 @@ func rewriteFullNames(
 	verifyResults map[string]*vlib.Name,
 ) ([]byte, error) {
 	var edits []insertion
-	if !bytes.Contains(augmented, []byte(`xmlns:`+GNPrefix+`="`+GNNamespace+`"`)) {
+	if !hasNamespacePrefixBinding(augmented, GNPrefix) {
 		rootAttrPos, err := rootOpenTagAttrPos(augmented)
 		if err != nil {
 			return nil, err
@@ -790,7 +820,7 @@ func rewriteAbbreviations(
 	// annotator output stays byte-stable across annotated and
 	// un-annotated inputs).
 	var edits []insertion
-	if !bytes.Contains(augmented, []byte(`xmlns:`+GNPrefix+`="`+GNNamespace+`"`)) {
+	if !hasNamespacePrefixBinding(augmented, GNPrefix) {
 		rootAttrPos, err := rootOpenTagAttrPos(augmented)
 		if err != nil {
 			return nil, err
