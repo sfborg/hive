@@ -46,6 +46,7 @@ license through the WUI later.`,
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		recurse, _ := cmd.Flags().GetBool("recurse")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		timeout, _ := cmd.Flags().GetDuration("timeout")
 
 		server = strings.TrimRight(server, "/")
 		files, err := expandIngestArgs(args, recurse)
@@ -73,7 +74,7 @@ license through the WUI later.`,
 			return nil
 		}
 
-		client := &http.Client{Timeout: 5 * time.Minute}
+		client := &http.Client{Timeout: timeout}
 		summary := &ingestSummary{}
 
 		for _, g := range groups {
@@ -594,5 +595,6 @@ func init() {
 	ingestCmd.Flags().Bool("quiet", false, "suppress per-file progress output")
 	ingestCmd.Flags().Bool("recurse", false, "when a directory is passed, walk its subdirectories too (default: top-level entries only)")
 	ingestCmd.Flags().Bool("dry-run", false, "preview groups without uploading — useful for verifying grouping before spending time on a large batch")
+	ingestCmd.Flags().Duration("timeout", 30*time.Minute, "per-file HTTP timeout; raise for large review papers where GROBID takes longer (e.g. --timeout 60m)")
 	rootCmd.AddCommand(ingestCmd)
 }
