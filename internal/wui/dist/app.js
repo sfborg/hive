@@ -17177,10 +17177,12 @@ class SfgaReferences extends LitElement {
       this._current &&
       this._workspaceTab === "digitize"
     ) {
-      const hasReader =
+      const hasPDF = (this._current.attached_files || []).some((f) => f.ext === "pdf");
+      const legacyHasReader =
+        !this._current.attached_files &&
         this._current.attached_pdf_shas &&
         this._current.attached_pdf_shas.length > 0;
-      if (!hasReader) this._workspaceTab = "bibliography";
+      if (!hasPDF && !legacyHasReader) this._workspaceTab = "bibliography";
     }
     // The infinite-scroll sentinel lives inside a lit template
     // branch that only renders when _hits is non-empty. Re-observe
@@ -19014,11 +19016,20 @@ class SfgaReferences extends LitElement {
         : hasReader
           ? this._current.attached_pdf_shas[0]
           : "";
+    // Digitize tab always needs a PDF for the source pane, even
+    // when the reader is showing a JATS attachment; find the
+    // first pdf-ext entry in attached_files, or fall back to
+    // the legacy first-sha (assumed PDF for old records without
+    // attached_files).
+    const pdfEntry =
+      (this._current.attached_files || []).find((f) => f.ext === "pdf") || null;
+    const pdfSha = pdfEntry ? pdfEntry.sha512 : hasReader ? this._current.attached_pdf_shas[0] : "";
+    const hasPDF = !!pdfSha;
     const readerSrc = hasReader
       ? `/read.html?sha=${encodeURIComponent(activeSha)}`
       : "";
-    const pdfSrc = hasReader
-      ? `/api/reference/library/${encodeURIComponent(activeSha)}/source#page=${this._pdfPage || 1}`
+    const pdfSrc = hasPDF
+      ? `/api/reference/library/${encodeURIComponent(pdfSha)}/source#page=${this._pdfPage || 1}`
       : "";
     // Tabs are always present so curators discover the alternative
     // side-by-side workflows (digitize, assertion-review) without
@@ -19045,8 +19056,8 @@ class SfgaReferences extends LitElement {
             role="tab"
             aria-selected=${this._workspaceTab === "digitize"}
             class=${this._workspaceTab === "digitize" ? "active" : ""}
-            ?disabled=${!hasReader}
-            title=${hasReader
+            ?disabled=${!hasPDF}
+            title=${hasPDF
               ? "Compare the augmented JATS reader with the source PDF"
               : "No PDF attached to this reference"}
             @click=${() => {
@@ -19093,7 +19104,7 @@ class SfgaReferences extends LitElement {
           </button>
         </div>
         <div class="workspace-panes">
-          ${this._renderWorkspaceContent(hasReader, readerSrc, pdfSrc)}
+          ${this._renderWorkspaceContent(hasReader, hasPDF, readerSrc, pdfSrc)}
         </div>
       </div>
     `;
@@ -19110,7 +19121,7 @@ class SfgaReferences extends LitElement {
   // (Lit re-renders when this._current changes; iframe srcs point
   // at the new sha, forcing a fresh load) — which is the intended
   // "different reference = clean slate" behavior.
-  _renderWorkspaceContent(hasReader, readerSrc, pdfSrc) {
+  _renderWorkspaceContent(hasReader, hasPDF, readerSrc, pdfSrc) {
     return html`
       <div
         class="tab-content"
@@ -19128,7 +19139,7 @@ class SfgaReferences extends LitElement {
         class="tab-content digitize"
         ?hidden=${this._workspaceTab !== "digitize"}
       >
-        ${hasReader
+        ${hasPDF
           ? html`
               <div class="digitize-grid">
                 <div class="reader-column">

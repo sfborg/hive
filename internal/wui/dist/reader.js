@@ -237,12 +237,6 @@ class SfgaReader extends LitElement {
       font-size: var(--fs-md);
       line-height: 1.6;
     }
-    /* Paper header — title / authors / abstract. Centered so
-       the paper's identity reads as a formal title block. Copy
-       buttons for citation formats live in the top nav bar
-       (.cite-toolbar), not here, so they stay accessible while
-       the reader body scrolls without cluttering the paper's
-       title area. */
     .paper-header {
       margin-bottom: var(--sp-4);
       padding-bottom: var(--sp-4);
@@ -271,31 +265,6 @@ class SfgaReader extends LitElement {
     .paper-abstract p {
       margin: var(--sp-1) 0;
       color: var(--fg);
-    }
-    /* Citation copy toolbar in the sticky top nav — sits with
-       the other reader controls, wraps to a new row when narrow. */
-    .cite-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--sp-1);
-    }
-    .cite-toolbar button {
-      font: inherit;
-      font-size: var(--fs-sm);
-      padding: var(--sp-1) var(--sp-2);
-      background: var(--bg);
-      color: var(--fg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      cursor: pointer;
-    }
-    .cite-toolbar button:hover {
-      border-color: var(--accent);
-    }
-    /* "Copied" feedback: accent border + accent text for ~1.5s. */
-    .cite-toolbar button.copied {
-      border-color: var(--accent);
-      color: var(--accent);
     }
     article h2 {
       font-size: var(--fs-lg);
@@ -1739,10 +1708,6 @@ class SfgaReader extends LitElement {
   }
 
   render() {
-    // Compute paper metadata once per render so the top nav's
-    // copy buttons and the article header share a single source
-    // of truth. Cheap (single XML walk); no need to memoize.
-    const meta = this._doc ? this._extractPaperMeta() : null;
     return html`
       <header>
         <h1>${this._sha ? this._sha.slice(0, 16) + "…" : "(no sha)"}</h1>
@@ -1791,18 +1756,6 @@ class SfgaReader extends LitElement {
             ? html`<span class="page-indicator">
                 Page ${this._page + 1} of ${this._pageCount}
               </span>`
-            : nothing}
-          ${meta && meta.plain
-            ? html`
-                <div class="cite-toolbar" aria-label="copy citation">
-                  <button @click=${(e) => this._copy(meta.plain, e)}>Copy citation</button>
-                  <button @click=${(e) => this._copy(meta.cslJSON, e)}>Copy CSL-JSON</button>
-                  <button @click=${(e) => this._copy(meta.bibtex, e)}>Copy BibTeX</button>
-                  ${meta.doiURL
-                    ? html`<button @click=${(e) => this._copy(meta.doiURL, e)}>Copy DOI URL</button>`
-                    : nothing}
-                </div>
-              `
             : nothing}
         </div>
       </header>
