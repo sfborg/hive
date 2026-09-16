@@ -31,6 +31,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/labels"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
 	"github.com/sfborg/hive/pkg/refmanager/openalex"
+	"github.com/sfborg/hive/pkg/refmanager/pandoc"
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
@@ -59,6 +60,14 @@ type server struct {
 	// upload handler retries GROBID after an OCR pass to give
 	// scanned papers a text layer.
 	ocr *ocr.Client
+	// pandoc is the subprocess adapter for EPUB → JATS conversion.
+	// nil when the pandoc binary is unavailable at startup — EPUB
+	// uploads then land with metadata only and the reader shows a
+	// "no augmented XML" state for the EPUB sha; a PDF companion,
+	// if present, still drives the reader. When set, EPUB uploads
+	// run through the same downstream JATS annotation pipeline as
+	// PDF and publisher-XML uploads.
+	pandoc *pandoc.Client
 	// annotator wraps GNfinder + GNverifier. Loaded lazily on the
 	// first upload so a hive process that never sees a PDF doesn't
 	// pay the several-MB dictionary + Bayes-weight load cost. One
@@ -5876,6 +5885,31 @@ func (s *server) handleReferenceLibraryReannotate(w http.ResponseWriter, r *http
 			return
 		}
 		jats = raw
+	case "epub":
+		if s.pandoc == nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "pandoc_unconfigured",
+				Error: "pandoc is not installed — install it in the hive container to enable EPUB → JATS conversion",
+			})
+			return
+		}
+		epubPath := sidecar.Path(s.archivePath, sha, "epub")
+		if _, statErr := os.Stat(epubPath); statErr != nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "no_input",
+				Error: "sidecar has no epub content",
+			})
+			return
+		}
+		out, err := s.pandoc.EpubToJATS(r.Context(), epubPath)
+		if err != nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "failed",
+				Error: "pandoc EPUB→JATS: " + err.Error(),
+			})
+			return
+		}
+		jats = out
 	default:
 		// PDF (or unknown ext falling back to the TEI path).
 		tei, err := sidecar.Read(s.archivePath, sha, "tei.xml")
@@ -5953,6 +5987,41 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 		augmented, err := s.annotator.Annotate(ctx, raw)
 		if err != nil {
 			slog.Warn("annotate: GNfinder pass on raw JATS failed",
+				"sha", res.SHA512[:12], "err", err)
+			return "failed", 0
+		}
+		augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
+		if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+			slog.Warn("annotate: augmented JATS store failed",
+				"sha", res.SHA512[:12], "err", err)
+			return "failed", 0
+		}
+		return "annotated", countTaxonNameElements(augmented)
+	}
+	// EPUB path: pandoc converts the archive to JATS, then the
+	// same annotator pass runs on the result. Requires the pandoc
+	// adapter to be initialized at startup — when it is nil, EPUB
+	// stays at metadata-only and the reader shows an "annotation
+	// unavailable" state for the EPUB sha rather than a hard error.
+	if res.Ext == "epub" {
+		if s.pandoc == nil {
+			return "skipped", 0
+		}
+		epubPath := sidecar.Path(s.archivePath, res.SHA512, "epub")
+		if _, statErr := os.Stat(epubPath); statErr != nil {
+			slog.Warn("annotate: EPUB sidecar missing",
+				"sha", res.SHA512[:12], "err", statErr)
+			return "failed", 0
+		}
+		jats, err := s.pandoc.EpubToJATS(ctx, epubPath)
+		if err != nil {
+			slog.Warn("annotate: pandoc EPUB→JATS failed",
+				"sha", res.SHA512[:12], "err", err)
+			return "failed", 0
+		}
+		augmented, err := s.annotator.Annotate(ctx, jats)
+		if err != nil {
+			slog.Warn("annotate: GNfinder pass on pandoc JATS failed",
 				"sha", res.SHA512[:12], "err", err)
 			return "failed", 0
 		}

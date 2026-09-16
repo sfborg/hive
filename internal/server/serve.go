@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/ocr"
+	"github.com/sfborg/hive/pkg/refmanager/pandoc"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
 )
 
@@ -186,6 +188,22 @@ func Run(archivePath string, opts Options) error {
 	// get an ocrmypdf pass and a re-run through GROBID.
 	if url := os.Getenv("HIVE_OCR_URL"); url != "" {
 		s.ocr = ocr.NewClient(url)
+	}
+	// Pandoc adapter for EPUB → JATS conversion. Enabled when
+	// the pandoc binary is invocable — probed once at startup so a
+	// deployment without pandoc (local dev, minimal Docker image)
+	// simply leaves EPUB uploads at metadata-only rather than
+	// failing at first click. Set HIVE_DISABLE_PANDOC=1 to force
+	// it off even when pandoc is on PATH (useful for tests that
+	// don't want a real subprocess call in the path).
+	if os.Getenv("HIVE_DISABLE_PANDOC") != "1" {
+		pc := pandoc.NewClient()
+		if err := pc.Ping(context.Background()); err == nil {
+			s.pandoc = pc
+		} else {
+			slog.Info("pandoc unavailable; EPUB → JATS conversion disabled",
+				"err", err)
+		}
 	}
 	// Annotator (GNfinder + GNverifier). Cheap to construct; the
 	// expensive dictionary + Bayes-weight load happens on the first
