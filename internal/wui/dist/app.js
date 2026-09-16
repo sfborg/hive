@@ -20957,6 +20957,20 @@ class SfgaReferences extends LitElement {
                     >`
                   : ""}
                 <span class="attached-pdf-sha">${af.sha512.slice(0, 12)}…</span>
+                ${af.ext === "pdf"
+                  ? html`<button
+                      class="icon-btn"
+                      type="button"
+                      title="Re-run the TEI → JATS + GNfinder annotation for this attachment. Useful when the reader shows 'no augmented XML' — usually a transient failure during the initial ingest."
+                      aria-label="Retry annotation"
+                      @click=${(e) => {
+                        e.stopPropagation();
+                        this._reannotate(af.sha512);
+                      }}
+                    >
+                      ${renderIcon("sparkles", 16)}
+                    </button>`
+                  : nothing}
                 <button
                   class="icon-btn danger"
                   type="button"
@@ -20985,6 +20999,48 @@ class SfgaReferences extends LitElement {
   //
   // Confirms first — this is destructive and the curator's bboxes
   // for this PDF disappear.
+  // _reannotate re-runs the TEI → JATS + GNfinder annotation
+  // pass for one sidecar sha. Handles the case where the
+  // initial upload's annotation step failed transiently (a
+  // container blip, brief timeout) and the reader shows the
+  // red "no augmented XML" banner. Reads the existing TEI on
+  // disk and produces a fresh augmented JATS from it — no need
+  // to re-ingest the source PDF and re-run GROBID.
+  async _reannotate(sha) {
+    if (!sha) return;
+    try {
+      const r = await fetch(
+        `/api/reference/library/${encodeURIComponent(sha)}/reannotate`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        alert(`Reannotate failed: ${body.detail || body.title || r.status}`);
+        return;
+      }
+      const result = await r.json();
+      if (result.status === "annotated") {
+        alert(
+          `Annotated: ${result.annotation_name_count} taxon-name elements. Reload the reader (click the file row) to see the augmented XML.`,
+        );
+        // Force the reader iframe to reload by nudging active sha.
+        // Clearing then re-setting kicks Lit's reactivity so the
+        // <read.html?sha=...> iframe re-fetches instead of using
+        // its browser cache.
+        const prev = this._activeReaderSha;
+        this._activeReaderSha = "";
+        await this.updateComplete;
+        this._activeReaderSha = prev || sha;
+      } else {
+        alert(
+          `Reannotate returned status "${result.status}"${result.error ? ": " + result.error : ""}`,
+        );
+      }
+    } catch (e) {
+      alert(`Reannotate failed: ${e.message || e}`);
+    }
+  }
+
   async _detachPDF(sha) {
     if (!this._selectedId || !sha) return;
     if (

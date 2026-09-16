@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -213,6 +214,7 @@ func (s *server) routes() *http.ServeMux {
 	// form. Content-Type is derived from the extension recorded in
 	// the sidecar's meta.json.
 	mux.HandleFunc("GET /api/reference/library/{sha}/source", s.handleReferenceLibrarySource)
+	mux.HandleFunc("POST /api/reference/library/{sha}/reannotate", s.handleReferenceLibraryReannotate)
 	mux.HandleFunc("GET /api/reference/library/{sha}/taxpub", s.handleReferenceLibraryTaxpub)
 	mux.HandleFunc("GET /api/reference/library/{sha}/figures/{id}", s.handleReferenceLibraryFigure)
 	mux.HandleFunc("GET /api/reference/library/{sha}/regions", s.handleReferenceLibraryRegions)
@@ -5550,6 +5552,115 @@ func (s *server) attachedReferencesForSHA(ctx context.Context, sha string) []api
 // don't propagate to the upload response — the raw source and TEI
 // are still stored, and the curator can retry the annotation pass
 // separately.
+// apiReannotateResult is the JSON response for
+// POST /api/reference/library/{sha}/reannotate.
+type apiReannotateResult struct {
+	SHA512              string `json:"sha512"`
+	Status              string `json:"status"`
+	AnnotationNameCount int    `json:"annotation_name_count,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+// handleReferenceLibraryReannotate re-runs the TEI → JATS +
+// GNfinder annotation pass for an existing sidecar sha. Fixes
+// the case where the initial upload's annotation step failed
+// transiently (container pressure, brief timeout) and left the
+// sha with a TEI but no augmented JATS — the user sees a red
+// "no augmented XML" banner in the reader.
+//
+// Requires the sha's .tei.xml to already exist on disk (from
+// the initial GROBID pass). Returns an error otherwise —
+// callers can re-ingest the source PDF to reproduce the TEI.
+//
+// @Summary      Re-run TEI → JATS annotation for a sidecar sha
+// @Tags         references
+// @Produce      json
+// @Param        sha path string true "sha512 of the sidecar attachment"
+// @Success      200 {object} apiReannotateResult
+// @Failure      404 {object} problem
+// @Failure      500 {object} problem
+// @Router       /reference/library/{sha}/reannotate [post]
+func (s *server) handleReferenceLibraryReannotate(w http.ResponseWriter, r *http.Request) {
+	if s.a.IsReadOnly() {
+		writeProblem(w, r, hive.ErrReadOnly)
+		return
+	}
+	sha := r.PathValue("sha")
+	if sha == "" {
+		writeBadRequest(w, r, "sha required")
+		return
+	}
+	if s.annotator == nil {
+		writeJSON(w, http.StatusOK, apiReannotateResult{
+			SHA512: sha, Status: "annotator_unconfigured",
+		})
+		return
+	}
+	tei, err := sidecar.Read(s.archivePath, sha, "tei.xml")
+	if err != nil || tei == nil {
+		writeJSON(w, http.StatusOK, apiReannotateResult{
+			SHA512: sha, Status: "no_tei",
+			Error: "sidecar has no tei.xml — re-ingest the source PDF to produce it",
+		})
+		return
+	}
+	var jatsOpts jatsconv.Options
+	pdfPath := sidecar.Path(s.archivePath, sha, "pdf")
+	if _, statErr := os.Stat(pdfPath); statErr == nil {
+		if words, err := pdftext.WordPages(pdfPath); err == nil && len(words) > 0 {
+			jatsOpts.WordPages = words
+			if journalPage1 := pdftext.JournalPageOfPDFPage1(words); journalPage1 > 1 {
+				jatsOpts.PageOffset = journalPage1 - 1
+			}
+		}
+	}
+	jats, err := jatsconv.TEIToJATSOpts(tei, jatsOpts)
+	if err != nil {
+		writeJSON(w, http.StatusOK, apiReannotateResult{
+			SHA512: sha, Status: "failed", Error: "TEI→JATS: " + err.Error(),
+		})
+		return
+	}
+	augmented, err := s.annotator.Annotate(r.Context(), jats)
+	if err != nil {
+		// The page-marker splicing (WordPages opt) can produce
+		// malformed XML for certain TEI patterns — e.g. inserting
+		// a marker that leaks past an <xref> boundary. When the
+		// annotator's strict XML parse rejects it, retry once
+		// without WordPages so the paper at least gets a valid
+		// (page-marker-less) augmented JATS. Deeper jatsconv fix
+		// tracked separately.
+		if jatsOpts.WordPages != nil {
+			slog.Warn("reannotate: retrying without page markers",
+				"sha", sha[:12], "err", err)
+			plainJATS, plainErr := jatsconv.TEIToJATS(tei)
+			if plainErr == nil {
+				augmented, err = s.annotator.Annotate(r.Context(), plainJATS)
+			}
+		}
+		if err != nil {
+			writeJSON(w, http.StatusOK, apiReannotateResult{
+				SHA512: sha, Status: "failed",
+				Error: "annotate: " + err.Error() + " (retry-without-page-markers also failed)",
+			})
+			return
+		}
+	}
+	augmented = s.reapplyCorrectionsForSHA(r.Context(), sha, augmented)
+	if err := sidecar.Store(s.archivePath, sha, "jats.xml", augmented); err != nil {
+		writeJSON(w, http.StatusOK, apiReannotateResult{
+			SHA512: sha, Status: "failed", Error: "store: " + err.Error(),
+		})
+		return
+	}
+	s.tryExtractFigures(sha, augmented)
+	writeJSON(w, http.StatusOK, apiReannotateResult{
+		SHA512:              sha,
+		Status:              "annotated",
+		AnnotationNameCount: countTaxonNameElements(augmented),
+	})
+}
+
 func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, teiStatus string) (string, int) {
 	if teiStatus != "stored" {
 		return "skipped", 0
@@ -5588,10 +5699,14 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	}
 	jats, err := jatsconv.TEIToJATSOpts(tei, jatsOpts)
 	if err != nil {
+		slog.Warn("annotate: TEI→JATS conversion failed",
+			"sha", res.SHA512[:12], "err", err)
 		return "failed", 0
 	}
 	augmented, err := s.annotator.Annotate(ctx, jats)
 	if err != nil {
+		slog.Warn("annotate: GNfinder pass failed",
+			"sha", res.SHA512[:12], "err", err)
 		return "failed", 0
 	}
 	// Re-apply active bbox-add corrections attached to this sha
@@ -5601,6 +5716,8 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	// GROBID JATS overwrites the curator work with a clean slate.
 	augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
 	if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+		slog.Warn("annotate: augmented JATS store failed",
+			"sha", res.SHA512[:12], "err", err)
 		return "failed", 0
 	}
 	// Extract figure/table image crops opportunistically. Failures
