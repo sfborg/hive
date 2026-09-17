@@ -37,6 +37,20 @@ type ProviderConfig struct {
 	// Credential describes how the API key is resolved. See
 	// [CredentialConfig].
 	Credential CredentialConfig `yaml:"credential"`
+
+	// DisableCacheControl turns off the cache_control:ephemeral
+	// marker on the system prompt when this provider is an
+	// OpenAI-compat endpoint. Default (false) sends the marker so
+	// gateways that support Anthropic-style prompt caching
+	// (notably OpenRouter routing to Anthropic) get the cache-
+	// read discount transparently; providers that don't recognize
+	// the field ignore it. Set to true only for strict
+	// OpenAI-compat endpoints (some Ollama configs, older
+	// mimics) that reject unknown fields.
+	//
+	// Ignored by the Anthropic adapter, which uses its native
+	// cache_control mechanism unconditionally.
+	DisableCacheControl bool `yaml:"disable_cache_control,omitempty"`
 }
 
 // NewProvider constructs a Provider from cfg. Returns an error when
@@ -64,7 +78,8 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 		if cfg.BaseURL == "" {
 			return nil, fmt.Errorf("llm provider %q: base_url is required for %s", cfg.Name, cfg.Kind)
 		}
-		return NewOpenAICompat(cfg.Name, cfg.BaseURL, cfg.DefaultModel, cred), nil
+		return NewOpenAICompatWithOptions(cfg.Name, cfg.BaseURL, cfg.DefaultModel, cred,
+			OpenAICompatOptions{DisableCacheControl: cfg.DisableCacheControl}), nil
 	case KindAnthropic:
 		return NewAnthropic(cfg.Name, cfg.BaseURL, cfg.DefaultModel, cred), nil
 	case "":

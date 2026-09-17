@@ -21,28 +21,50 @@ import (
 // (which models exist, what headers they want) live in config,
 // not code.
 type OpenAICompat struct {
-	name         string
-	baseURL      string
-	defaultModel string
-	cred         Credential
-	client       *http.Client
+	name                string
+	baseURL             string
+	defaultModel        string
+	cred                Credential
+	client              *http.Client
+	disableCacheControl bool
 }
 
-// NewOpenAICompat builds an OpenAI-compatible provider. baseURL is
-// the API root (e.g. "https://api.openai.com/v1",
+// OpenAICompatOptions carries adapter-tuning knobs that don't fit
+// the four required NewOpenAICompat args. Zero value is fine — all
+// fields default to the recommended behavior.
+type OpenAICompatOptions struct {
+	// DisableCacheControl turns off the cache_control:ephemeral
+	// marker on the system prompt. Default (false) sends the
+	// marker so OpenRouter routing to Anthropic keeps the
+	// cache-read discount; other providers ignore the field. Set
+	// to true only for strict OpenAI-compat endpoints that reject
+	// unknown fields.
+	DisableCacheControl bool
+}
+
+// NewOpenAICompat builds an OpenAI-compatible provider with default
+// options. Kept for backward compatibility with call sites that
+// don't need cache-control or other tuning.
+func NewOpenAICompat(name, baseURL, defaultModel string, cred Credential) *OpenAICompat {
+	return NewOpenAICompatWithOptions(name, baseURL, defaultModel, cred, OpenAICompatOptions{})
+}
+
+// NewOpenAICompatWithOptions is the options-taking constructor.
+// baseURL is the API root (e.g. "https://api.openai.com/v1",
 // "http://localhost:11434/v1" for Ollama). Trailing slashes are
 // trimmed so callers don't have to be precise.
-func NewOpenAICompat(name, baseURL, defaultModel string, cred Credential) *OpenAICompat {
+func NewOpenAICompatWithOptions(name, baseURL, defaultModel string, cred Credential, opts OpenAICompatOptions) *OpenAICompat {
 	return &OpenAICompat{
-		name:         name,
-		baseURL:      strings.TrimRight(baseURL, "/"),
-		defaultModel: defaultModel,
-		cred:         cred,
+		name:                name,
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		defaultModel:        defaultModel,
+		cred:                cred,
+		disableCacheControl: opts.DisableCacheControl,
 		// 20-minute HTTP timeout — see the matching comment in
 		// anthropic.go for the reasoning. Larger models on
 		// whole-paper NER regularly exceed 5 minutes even when the
 		// call ultimately succeeds.
-		client:       &http.Client{Timeout: 20 * time.Minute},
+		client: &http.Client{Timeout: 20 * time.Minute},
 	}
 }
 
@@ -52,9 +74,33 @@ func (o *OpenAICompat) Name() string { return o.name }
 // Kind implements Provider.
 func (o *OpenAICompat) Kind() string { return KindOpenAICompat }
 
+// openaiMessage carries a chat-completions message. Content is
+// `any` because two shapes are valid on the wire:
+//   - a plain string (the OpenAI default and the shape used when
+//     cache_control is not requested)
+//   - an array of content blocks (used when cache_control is
+//     requested so the block-level "cache_control":"ephemeral"
+//     marker attaches to the system prompt for OpenRouter's
+//     Anthropic passthrough)
+// The response-parsing path also has to accept both shapes for
+// robustness — some gateways always echo content as blocks.
 type openaiMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
+}
+
+// openaiContentBlock is one entry in the content-blocks array
+// shape. type="text" is the only value this adapter emits;
+// cache_control is Anthropic-compatible and understood by gateways
+// like OpenRouter that pass it through to the underlying model.
+type openaiContentBlock struct {
+	Type         string                     `json:"type"`
+	Text         string                     `json:"text,omitempty"`
+	CacheControl *openaiBlockCacheControl   `json:"cache_control,omitempty"`
+}
+
+type openaiBlockCacheControl struct {
+	Type string `json:"type"` // "ephemeral"
 }
 
 type openaiRespFormat struct {
@@ -69,14 +115,29 @@ type openaiRequest struct {
 	ResponseFormat *openaiRespFormat `json:"response_format,omitempty"`
 }
 
+// openaiResponse maps the standard chat-completions response
+// shape. Usage carries the OpenAI-style token counts plus optional
+// sub-fields for prompt-caching detail (`cached_tokens` on OpenAI/
+// DeepSeek/Cerebras, `cache_creation_input_tokens` and
+// `cache_read_input_tokens` on Anthropic-through-OpenRouter). Both
+// are optional so a gateway that reports neither still decodes
+// cleanly.
 type openaiResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
-		Message openaiMessage `json:"message"`
+		Message struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -95,7 +156,25 @@ func (o *OpenAICompat) Complete(ctx context.Context, req Request) (Response, err
 
 	msgs := make([]openaiMessage, 0, 2)
 	if req.System != "" {
-		msgs = append(msgs, openaiMessage{Role: "system", Content: req.System})
+		if o.disableCacheControl {
+			msgs = append(msgs, openaiMessage{Role: "system", Content: req.System})
+		} else {
+			// Content-blocks shape with a cache_control marker on
+			// the system prompt. Default on so gateways that
+			// support Anthropic-style prompt caching (OpenRouter
+			// routing to Anthropic) get the cache-read discount
+			// transparently. Providers that don't understand the
+			// field ignore it; strict endpoints that reject
+			// unknown fields opt out via DisableCacheControl.
+			msgs = append(msgs, openaiMessage{
+				Role: "system",
+				Content: []openaiContentBlock{{
+					Type:         "text",
+					Text:         req.System,
+					CacheControl: &openaiBlockCacheControl{Type: "ephemeral"},
+				}},
+			})
+		}
 	}
 	msgs = append(msgs, openaiMessage{Role: "user", Content: req.User})
 
@@ -144,12 +223,47 @@ func (o *OpenAICompat) Complete(ctx context.Context, req Request) (Response, err
 		return Response{}, errors.New("openai_compat: response had no choices")
 	}
 
+	text, err := decodeOpenAIContent(out.Choices[0].Message.Content)
+	if err != nil {
+		return Response{}, fmt.Errorf("openai_compat decode content: %w", err)
+	}
 	return Response{
-		Text:           out.Choices[0].Message.Content,
+		Text:           text,
 		ModelVersionID: out.Model,
 		InputTokens:    out.Usage.PromptTokens,
 		OutputTokens:   out.Usage.CompletionTokens,
 	}, nil
+}
+
+// decodeOpenAIContent accepts either the string content shape or
+// the content-blocks array shape that some gateways echo back
+// (especially when cache_control was used on the request). For
+// the array shape, only text-typed blocks contribute to the
+// combined string — images and other block types are ignored.
+func decodeOpenAIContent(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	// Try string first (the common case).
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString, nil
+	}
+	// Fall back to array of blocks.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", fmt.Errorf("content is neither string nor content-blocks array: %w", err)
+	}
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String(), nil
 }
 
 // openaiModelsResponse covers both the plain OpenAI /v1/models

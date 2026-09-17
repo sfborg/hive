@@ -21,17 +21,19 @@ func TestOpenAICompatWireFormat(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &gotBody)
 
-		resp := openaiResponse{Model: "gpt-x-2026-01"}
-		resp.Choices = append(resp.Choices, struct {
-			Message openaiMessage `json:"message"`
-		}{Message: openaiMessage{Role: "assistant", Content: "reply text"}})
-		resp.Usage.PromptTokens = 100
-		resp.Usage.CompletionTokens = 20
-		_ = json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{
+			"model": "gpt-x-2026-01",
+			"choices": [{"message": {"role": "assistant", "content": "reply text"}}],
+			"usage": {"prompt_tokens": 100, "completion_tokens": 20}
+		}`))
 	}))
 	defer srv.Close()
 
-	p := NewOpenAICompat("test", srv.URL, "gpt-x", PlainCredential{Secret: "sk-test"})
+	// DisableCacheControl for this baseline test so the wire body
+	// stays in the plain-string form the assertions below check.
+	p := NewOpenAICompatWithOptions("test", srv.URL, "gpt-x",
+		PlainCredential{Secret: "sk-test"},
+		OpenAICompatOptions{DisableCacheControl: true})
 	got, err := p.Complete(context.Background(), Request{
 		System:         "system prompt",
 		User:           "user input",
@@ -87,11 +89,11 @@ func TestOpenAICompatOmitsSystemWhenEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &gotBody)
-		resp := openaiResponse{Model: "m"}
-		resp.Choices = append(resp.Choices, struct {
-			Message openaiMessage `json:"message"`
-		}{Message: openaiMessage{Content: "ok"}})
-		_ = json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{
+			"model": "m",
+			"choices": [{"message": {"role": "assistant", "content": "ok"}}],
+			"usage": {"prompt_tokens": 5, "completion_tokens": 2}
+		}`))
 	}))
 	defer srv.Close()
 
@@ -109,6 +111,92 @@ func TestOpenAICompatRejectsMissingModel(t *testing.T) {
 	_, err := p.Complete(context.Background(), Request{User: "u"})
 	if err == nil || !strings.Contains(err.Error(), "no model set") {
 		t.Fatalf("expected model-missing error, got %v", err)
+	}
+}
+
+// TestOpenAICompatCacheControlDefault confirms the system prompt
+// goes on the wire as a content-blocks array with a
+// cache_control:ephemeral marker when the adapter is used with
+// its default options — this is the flag that lets OpenRouter
+// keep Anthropic caching working transparently. The user asked
+// for this to be on by default so a curator running --provider
+// openrouter --model anthropic/claude-... doesn't silently lose
+// the cache-read discount they'd have gotten with a direct
+// Anthropic provider entry.
+func TestOpenAICompatCacheControlDefault(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat("t", srv.URL, "m", PlainCredential{Secret: "k"})
+	if _, err := p.Complete(context.Background(), Request{
+		System: "sys prompt content",
+		User:   "u",
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	msgs, ok := gotBody["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("missing messages: %+v", gotBody)
+	}
+	sys, ok := msgs[0].(map[string]any)
+	if !ok || sys["role"] != "system" {
+		t.Fatalf("first message not a system role: %+v", msgs[0])
+	}
+	blocks, ok := sys["content"].([]any)
+	if !ok {
+		t.Fatalf("system content is not an array (should be blocks when cache_control is on): %T = %v", sys["content"], sys["content"])
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(blocks))
+	}
+	block, _ := blocks[0].(map[string]any)
+	if block["type"] != "text" || block["text"] != "sys prompt content" {
+		t.Errorf("block text or type wrong: %+v", block)
+	}
+	cache, ok := block["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing cache_control on block: %+v", block)
+	}
+	if cache["type"] != "ephemeral" {
+		t.Errorf("cache_control.type = %v, want ephemeral", cache["type"])
+	}
+}
+
+// TestOpenAICompatCacheControlDisabled verifies the escape hatch:
+// when DisableCacheControl is set (for strict endpoints that
+// reject unknown fields), the system prompt goes on the wire as a
+// plain string and no cache_control markers appear.
+func TestOpenAICompatCacheControlDisabled(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatWithOptions("t", srv.URL, "m",
+		PlainCredential{Secret: "k"},
+		OpenAICompatOptions{DisableCacheControl: true})
+	if _, err := p.Complete(context.Background(), Request{
+		System: "sys prompt content",
+		User:   "u",
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	msgs := gotBody["messages"].([]any)
+	sys := msgs[0].(map[string]any)
+	if _, isString := sys["content"].(string); !isString {
+		t.Fatalf("system content is not a string (DisableCacheControl should force plain-string form): %T = %v", sys["content"], sys["content"])
+	}
+	if b, _ := json.Marshal(gotBody); strings.Contains(string(b), "cache_control") {
+		t.Errorf("cache_control leaked into disabled request:\n%s", b)
 	}
 }
 
