@@ -143,8 +143,11 @@ func TestIsSupportedIngestExt(t *testing.T) {
 		"paper.xml":       true,
 		"paper.jats.xml":  true,
 		"paper.epub":      true,
-		"paper.html":      true,
-		"paper.htm":       true,
+		// HTML is deliberately unsupported — publisher HTML is
+		// per-site templated with client-side-loaded body content
+		// and there is no viable general conversion path.
+		"paper.html":      false,
+		"paper.htm":       false,
 		"paper.txt":       false,
 		"paper.docx":      false,
 		"paper":           false,
