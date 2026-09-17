@@ -258,9 +258,10 @@ func confirmRun(headline, provider, model string) error {
 			"  Provider: %s\n"+
 			"  Model:    %s\n\n"+
 			"⚠  Warning: this will invoke LLM API calls and cost money.\n"+
-			"   Spending limits must be set and monitored with your\n"+
-			"   service provider (Anthropic dashboard, OpenAI usage\n"+
-			"   caps, etc.). You are responsible for all incurred costs.\n\n"+
+			"   You are responsible for all incurred costs.\n\n"+
+			"   It is strongly recommended that you set spending limits with\n"+
+			"   your LLM service provider and vigilantly monitor your spending.\n\n"+
+			"   You can terminate the process with Ctrl+C at any time.\n\n"+
 			"Continue? (yes/no): ",
 		headline, provider, orDash(model),
 	)
