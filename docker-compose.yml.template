@@ -107,6 +107,7 @@ services:
       # than sending a bogus header. Add more provider keys here and
       # in .env.template as needed (OPENAI_API_KEY, etc.).
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       # Hive writes its config file to ~/.config/sfborg/hive/config.yml.
       # The container runs as UID from the `user:` line above, which
       # has no /etc/passwd entry inside the image, so $HOME defaults
