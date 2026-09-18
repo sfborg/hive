@@ -55,10 +55,38 @@ var limitsTable = map[string]Limits{
 
 	// Google Gemini 2.x — significantly larger context than the
 	// others, which makes it the practical choice for monograph-
-	// scale papers until hive grows a chunking pipeline.
-	"gemini-2.5-pro":        {ContextWindow: 2_000_000, MaxOutputTokens: 8_192},
-	"gemini-2.5-flash":      {ContextWindow: 1_000_000, MaxOutputTokens: 8_192},
-	"gemini-2.5-flash-lite": {ContextWindow: 1_000_000, MaxOutputTokens: 8_192},
+	// scale papers until hive grows a chunking pipeline. Output caps
+	// updated to Google's actual 65_536 per Gemini 2.5 docs; the
+	// prior 8_192 was a stale conservative default.
+	"gemini-2.5-pro":        {ContextWindow: 2_000_000, MaxOutputTokens: 65_536},
+	"gemini-2.5-flash":      {ContextWindow: 1_000_000, MaxOutputTokens: 65_536},
+	"gemini-2.5-flash-lite": {ContextWindow: 1_000_000, MaxOutputTokens: 65_536},
+
+	// OpenRouter model IDs — the same underlying models exposed
+	// under provider-prefixed slugs. Duplicating rather than
+	// aliasing so hive-side lookups match whatever the caller
+	// actually passed as --model, and so a future provider-specific
+	// tweak (an OpenRouter-only override) has somewhere to land.
+	"google/gemini-2.5-pro":        {ContextWindow: 2_000_000, MaxOutputTokens: 65_536},
+	"google/gemini-2.5-flash":      {ContextWindow: 1_000_000, MaxOutputTokens: 65_536},
+	"google/gemini-2.5-flash-lite": {ContextWindow: 1_000_000, MaxOutputTokens: 65_536},
+	"google/gemini-flash-latest":   {ContextWindow: 1_000_000, MaxOutputTokens: 65_536},
+	"google/gemini-pro-latest":     {ContextWindow: 2_000_000, MaxOutputTokens: 65_536},
+
+	"anthropic/claude-opus-5":    {ContextWindow: 200_000, MaxOutputTokens: 32_000},
+	"anthropic/claude-sonnet-5":  {ContextWindow: 200_000, MaxOutputTokens: 64_000},
+	"anthropic/claude-haiku-4-5": {ContextWindow: 200_000, MaxOutputTokens: 8_192},
+
+	"openai/gpt-4o":      {ContextWindow: 128_000, MaxOutputTokens: 16_384},
+	"openai/gpt-4o-mini": {ContextWindow: 128_000, MaxOutputTokens: 16_384},
+	"openai/o1":          {ContextWindow: 200_000, MaxOutputTokens: 100_000},
+	"openai/o3-mini":     {ContextWindow: 200_000, MaxOutputTokens: 100_000},
+
+	// DeepSeek V3 (deepseek-chat) — 8K output cap without beta
+	// output extension. If the beta long-output header is
+	// wired later, bump this.
+	"deepseek/deepseek-chat":     {ContextWindow: 128_000, MaxOutputTokens: 8_192},
+	"deepseek/deepseek-reasoner": {ContextWindow: 128_000, MaxOutputTokens: 32_768},
 }
 
 // LookupLimits returns the [Limits] entry for model. Second return
