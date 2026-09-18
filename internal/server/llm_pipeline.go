@@ -510,13 +510,23 @@ func unwrapValueAndSources(field any) (string, []any) {
 // defaultMaxForModel returns a per-call output-token cap tuned to
 // the model's own MaxOutputTokens limit. Prevents mid-JSON
 // truncation on a full-paper NER pass when the caller doesn't
-// specify max_tokens. Falls back to 8192 (the safe Haiku ceiling)
-// when the model isn't in the limits table.
+// specify max_tokens.
+//
+// When the model isn't in the limits table, fall back to 32_768 —
+// high enough to cover most modern frontier models (Gemini 2.5
+// Flash/Pro, Sonnet 5, Opus 5, o3-mini, DeepSeek Reasoner) so an
+// unknown-to-hive model with a real 32K+ cap doesn't silently
+// truncate. Models with lower true caps (older Haiku at 8K, GPT-4o
+// at 16K, DeepSeek Chat at 8K) still work correctly because they
+// have explicit entries in the limits table; the fallback only
+// applies to model IDs hive has never seen. If such a model has
+// a lower cap than the fallback, the provider returns a 400 —
+// loud diagnostic, cheaper failure mode than silent truncation.
 func defaultMaxForModel(model string) int {
 	if lim, ok := llm.LookupLimits(model); ok && lim.MaxOutputTokens > 0 {
 		return lim.MaxOutputTokens
 	}
-	return 8192
+	return 32_768
 }
 
 // resolveModel returns the model name to use for a step —
