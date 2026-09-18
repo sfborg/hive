@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -459,4 +460,64 @@ func mustMarshal(v any) []byte {
 		return []byte(fmt.Sprintf(`{"error":"marshal failed: %s"}`, err.Error()))
 	}
 	return b
+}
+
+// latestPromptForPurpose queries the server's prompt catalog and
+// returns the highest-versioned prompt name for the given purpose
+// ("ner", "compose", "translate"). Version is parsed from a
+// strict `_v<int>` suffix at the end of the name — names without
+// that shape are ignored. When no match exists, returns an error
+// so callers can fail loud rather than silently using nothing.
+//
+// The server is the source of truth for what prompts exist —
+// both shipped/embedded prompts and any DB-added ones show up
+// in /api/prompt. Auto-picking the latest means adding
+// ner_v9.md to pkg/prompts and rebuilding the container is
+// enough for hive ner (no --prompt flag) to pick it up.
+func latestPromptForPurpose(ctx context.Context, c *http.Client, server, purpose string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server+"/api/prompt", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("list prompts: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("list prompts: server returned %d", resp.StatusCode)
+	}
+	var body struct {
+		Items []struct {
+			Name    string `json:"name"`
+			Purpose string `json:"purpose"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("decode prompts: %w", err)
+	}
+	bestName := ""
+	bestVersion := -1
+	for _, item := range body.Items {
+		if item.Purpose != purpose {
+			continue
+		}
+		// Strict `_v<int>` suffix. Everything before the `_v` is
+		// the base name (e.g., "ner"). Only unqualified integer
+		// versions win — a hypothetical `ner_v9_experimental`
+		// stays off the auto-latest track.
+		idx := strings.LastIndex(item.Name, "_v")
+		if idx < 0 {
+			continue
+		}
+		v, err := strconv.Atoi(item.Name[idx+2:])
+		if err != nil {
+			continue
+		}
+		if v > bestVersion {
+			bestVersion = v
+			bestName = item.Name
+		}
+	}
+	if bestName == "" {
+		return "", fmt.Errorf("no versioned prompt found for purpose %q", purpose)
+	}
+	return bestName, nil
 }

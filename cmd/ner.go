@@ -60,8 +60,13 @@ func runNER(cmd *cobra.Command, args []string) error {
 	if provider == "" {
 		return fmt.Errorf("--provider is required (see `hive ner --help`)")
 	}
+	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	if prompt == "" {
-		prompt = "ner_v8"
+		latest, err := latestPromptForPurpose(cmd.Context(), httpClient, server, "ner")
+		if err != nil {
+			return fmt.Errorf("resolve latest ner prompt: %w", err)
+		}
+		prompt = latest
 	}
 	if concurrency < 1 {
 		concurrency = 1
@@ -73,7 +78,6 @@ func runNER(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("supply one or more ref-ids or use --all")
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	refs, err := resolveRefs(cmd.Context(), httpClient, server, args, all)
 	if err != nil {
 		return err
@@ -129,7 +133,7 @@ func init() {
 	nerCmd.Flags().String("server", "http://127.0.0.1:2365", "base URL of the running hive server")
 	nerCmd.Flags().String("provider", "", "provider name (matches an entry in your llm_providers config)")
 	nerCmd.Flags().String("model", "", "model override; empty means the provider's configured default")
-	nerCmd.Flags().String("prompt", "", "override the shipped default (ner_v8)")
+	nerCmd.Flags().String("prompt", "", "shipped prompt name (default: highest-versioned ner_v* prompt on the server)")
 	nerCmd.Flags().Int("concurrency", 1, "number of parallel invoke calls; default 1 avoids accidentally slamming the provider")
 	nerCmd.Flags().Bool("all", false, "run against every reference in the archive")
 	nerCmd.Flags().Bool("yes", false, "skip the interactive confirmation prompt (for scripting)")

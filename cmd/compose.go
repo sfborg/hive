@@ -97,11 +97,20 @@ func runCompose(cmd *cobra.Command, args []string) error {
 	if provider == "" {
 		return fmt.Errorf("--provider is required (see `hive compose --help`)")
 	}
+	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	if prompt == "" {
-		prompt = "compose_v4"
+		latest, err := latestPromptForPurpose(cmd.Context(), httpClient, server, "compose")
+		if err != nil {
+			return fmt.Errorf("resolve latest compose prompt: %w", err)
+		}
+		prompt = latest
 	}
 	if nerPrompt == "" {
-		nerPrompt = "ner_v8"
+		latest, err := latestPromptForPurpose(cmd.Context(), httpClient, server, "ner")
+		if err != nil {
+			return fmt.Errorf("resolve latest ner prompt: %w", err)
+		}
+		nerPrompt = latest
 	}
 	if nerProvider == "" {
 		nerProvider = provider
@@ -119,7 +128,6 @@ func runCompose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("supply one or more ref-ids or use --all")
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	refs, err := resolveRefs(cmd.Context(), httpClient, server, args, all)
 	if err != nil {
 		return err
@@ -389,7 +397,7 @@ func init() {
 	composeCmd.Flags().String("server", "http://127.0.0.1:2365", "base URL of the running hive server")
 	composeCmd.Flags().String("provider", "", "provider name for the compose call")
 	composeCmd.Flags().String("model", "", "model override for compose; empty means the provider's configured default")
-	composeCmd.Flags().String("prompt", "", "override the shipped compose prompt (default: compose_v4)")
+	composeCmd.Flags().String("prompt", "", "shipped compose prompt name (default: highest-versioned compose_v* prompt on the server)")
 	composeCmd.Flags().Int("concurrency", 1, "number of parallel invoke calls per phase")
 	composeCmd.Flags().Bool("all", false, "run against every reference in the archive")
 	composeCmd.Flags().Bool("yes", false, "skip the interactive confirmation prompt (for scripting)")
@@ -397,7 +405,7 @@ func init() {
 	composeCmd.Flags().Bool("json", false, "emit one NDJSON row per completed reference instead of the rolling progress line")
 	composeCmd.Flags().Bool("quiet", false, "suppress the progress line and end-of-run summary")
 	composeCmd.Flags().Bool("ner", false, "run NER first for refs missing a prior NER run (otherwise those refs are loudly skipped)")
-	composeCmd.Flags().String("ner-prompt", "", "override the shipped NER prompt when --ner is set (default: ner_v8)")
+	composeCmd.Flags().String("ner-prompt", "", "shipped NER prompt name when --ner is set (default: highest-versioned ner_v* prompt on the server)")
 	composeCmd.Flags().String("ner-provider", "", "provider for the NER phase when --ner is set (default: same as --provider)")
 	composeCmd.Flags().String("ner-model", "", "model for the NER phase when --ner is set (default: same as --model)")
 	rootCmd.AddCommand(composeCmd)
