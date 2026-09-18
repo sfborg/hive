@@ -220,15 +220,15 @@ func (t *Tx) MaterializeAssertionsFromRun(ctx context.Context, run ExtractionRun
 		return 0, fmt.Errorf("core: clear prior run assertions: %w", err)
 	}
 
-	var out nerOutput
-	if err := json.Unmarshal([]byte(run.RawOutputJSON), &out); err != nil {
+	assertions, err := parseNEROutput(run.RawOutputJSON)
+	if err != nil {
 		return 0, fmt.Errorf("core: parse NER output: %w", err)
 	}
 
 	assertedBy := "llm-run:" + run.RunID
 	createdBy := assertedBy
 	inserted := 0
-	for _, a := range out.Assertions {
+	for _, a := range assertions {
 		payload, err := json.Marshal(a)
 		if err != nil {
 			return inserted, fmt.Errorf("core: marshal assertion payload: %w", err)
@@ -256,15 +256,135 @@ func (t *Tx) MaterializeAssertionsFromRun(ctx context.Context, run ExtractionRun
 	return inserted, nil
 }
 
-// nerOutput mirrors the shape ner_v5 emits: an assertions array
-// plus tag_reviews. Only assertions become hive__reference_assertion
-// rows — tag_reviews are advisory (marks the curator sees on names
-// GNfinder flagged); they don't become facts.
+// nerOutput mirrors the wrapping-object shape ner_v5 / ner_v6 /
+// ner_v7 emits: an assertions array plus tag_reviews. Only
+// assertions become hive__reference_assertion rows — tag_reviews
+// are advisory (marks the curator sees on names GNfinder
+// flagged); they don't become facts.
 type nerOutput struct {
 	Assertions []nerAssertion `json:"assertions"`
 	// TagReviews are intentionally captured but not materialized —
 	// they're display metadata, not extracted facts.
 	TagReviews []map[string]any `json:"tag_reviews,omitempty"`
+}
+
+// parseNEROutput returns the assertions found in the run's raw
+// output, tolerant of both the wrapping-object shape (ner_v5
+// through ner_v7) and the NDJSON shape ner_v8+ emits.
+//
+// NDJSON handling is truncation-tolerant: any incomplete last
+// line is dropped rather than failing the whole materialize
+// call. The prompt-schema header line, tag_review lines, and any
+// unrecognized-kind lines are also silently skipped. Only
+// assertion lines contribute to the returned slice.
+//
+// Detection: the first non-whitespace character decides. `{`
+// followed by a newline before the closing brace = NDJSON. `{`
+// with no newline before the object closes = wrapping object.
+// The single-line-wrapping-object case is degenerate but works
+// under both paths.
+func parseNEROutput(raw string) ([]nerAssertion, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if looksLikeNDJSON(trimmed) {
+		return parseNDJSONNEROutput(trimmed), nil
+	}
+	var out nerOutput
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out.Assertions, nil
+}
+
+// looksLikeNDJSON reports whether the first substantive line of
+// the input looks like a standalone JSON object that closes
+// before the next line — the defining shape of NDJSON. False for
+// a multi-line pretty-printed wrapping object, since its first
+// line would just be `{` with the closing brace many lines
+// later.
+func looksLikeNDJSON(s string) bool {
+	nl := strings.IndexByte(s, '\n')
+	if nl < 0 {
+		// Single line — could be either format; the JSON parser
+		// handles both cases, so the wrapping-object path is fine.
+		return false
+	}
+	firstLine := strings.TrimSpace(s[:nl])
+	if firstLine == "" {
+		return false
+	}
+	// Cheap check: any complete JSON object on one line ends with
+	// a matching `}`. If the first line has balanced braces, it's
+	// self-contained → NDJSON. If it opens `{` without a matching
+	// close, it's the opening of a multi-line wrapping object.
+	depth := 0
+	inString := false
+	escaped := false
+	for _, c := range firstLine {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	return depth == 0 && strings.HasPrefix(firstLine, "{")
+}
+
+// parseNDJSONNEROutput walks the input line by line, parsing
+// each line as a JSON object and collecting the ones with
+// kind="assertion". Incomplete last lines (from max_tokens
+// truncation) and unparseable lines are silently skipped —
+// truncation tolerance is the whole point of the NDJSON
+// migration.
+func parseNDJSONNEROutput(raw string) []nerAssertion {
+	var out []nerAssertion
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			// Malformed line — either truncated tail or model
+			// hiccup. Skip.
+			continue
+		}
+		var kind string
+		if k, ok := obj["kind"]; ok {
+			_ = json.Unmarshal(k, &kind)
+		}
+		if kind != "assertion" {
+			// Header, tag_review, or unknown kind — not our concern.
+			continue
+		}
+		var a nerAssertion
+		if err := json.Unmarshal([]byte(line), &a); err != nil {
+			// Assertion shape doesn't parse cleanly — skip and
+			// carry on. Prompt-drift diagnostic; downstream
+			// curator can inspect raw_output_json to see what
+			// the model actually emitted.
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 type nerAssertion struct {

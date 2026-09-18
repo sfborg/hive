@@ -357,3 +357,63 @@ func TestMaterializeSkipsNonNERRuns(t *testing.T) {
 		t.Errorf("compose materialize count = %d, want 0 (not implemented yet)", count)
 	}
 }
+
+// TestParseNEROutputWrappingObject covers the ner_v5..v7 shape.
+func TestParseNEROutputWrappingObject(t *testing.T) {
+	raw := `{
+	  "assertions": [
+	    {"id":"a1","type":"dwc:family","text":"Sebdeniaceae","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":10,"end":22},"confidence":"high"},
+	    {"id":"a2","type":"dwc:genus","text":"Crassitegula","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":24,"end":36},"confidence":"high"}
+	  ],
+	  "tag_reviews": []
+	}`
+	got, err := parseNEROutput(raw)
+	if err != nil {
+		t.Fatalf("parseNEROutput: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("assertions = %d, want 2", len(got))
+	}
+	if got[0].Type != "dwc:family" || got[1].Type != "dwc:genus" {
+		t.Errorf("assertion types wrong: %+v", got)
+	}
+}
+
+// TestParseNEROutputNDJSON covers the ner_v8 shape.
+func TestParseNEROutputNDJSON(t *testing.T) {
+	raw := `{"kind":"header","schema_version":"ner_v8"}
+{"kind":"assertion","id":"a1","type":"dwc:family","text":"Sebdeniaceae","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":10,"end":22},"confidence":"high"}
+{"kind":"assertion","id":"a2","type":"dwc:genus","text":"Crassitegula","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":24,"end":36},"confidence":"high"}
+{"kind":"tag_review","tp_taxon_name_text":"Wettst.","verdict":"false_positive","confidence":"high","notes":"author abbreviation, not a taxon"}
+`
+	got, err := parseNEROutput(raw)
+	if err != nil {
+		t.Fatalf("parseNEROutput: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("assertions = %d, want 2 (header + tag_review should be filtered):\n%+v", len(got), got)
+	}
+	if got[0].ID != "a1" || got[1].ID != "a2" {
+		t.Errorf("assertion ids wrong: %v, %v", got[0].ID, got[1].ID)
+	}
+}
+
+// TestParseNEROutputNDJSONTruncationTolerant is the whole reason
+// ner_v8 exists — a mid-object truncation of the last line must
+// not lose the complete assertions before it.
+func TestParseNEROutputNDJSONTruncationTolerant(t *testing.T) {
+	raw := `{"kind":"header","schema_version":"ner_v8"}
+{"kind":"assertion","id":"a1","type":"dwc:family","text":"Sebdeniaceae","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":10,"end":22},"confidence":"high"}
+{"kind":"assertion","id":"a2","type":"dwc:genus","text":"Crassitegula","subject":"Crassitegula bouchetii","evidence":"stated","anchor":{"start":24,"end":36},"confidence":"high"}
+{"kind":"assertion","id":"a3","type":"dwc:scientificNameAuthorship","text":"Wettst`
+	got, err := parseNEROutput(raw)
+	if err != nil {
+		t.Fatalf("parseNEROutput: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("assertions = %d, want 2 complete lines (truncated a3 dropped)", len(got))
+	}
+	if got[0].ID != "a1" || got[1].ID != "a2" {
+		t.Errorf("complete assertions wrong: %+v", got)
+	}
+}
