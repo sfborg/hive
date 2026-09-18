@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sfborg/hive/pkg/llm"
 )
 
 var composeCmd = &cobra.Command{
@@ -54,12 +56,26 @@ Guardrails:
 }
 
 // nerRunInfo carries what compose needs about a ref's most-recent
-// NER run: the run_id (for parent_run_id linking) and the raw
-// output JSON (for the compose input's second section).
+// NER run: the run_id (for parent_run_id linking), the raw output
+// JSON (for the compose input's second section), and the NER
+// call's reported output token count (used to predict whether
+// compose would fit under the compose model's output cap).
 type nerRunInfo struct {
-	RunID     string
-	RawOutput string
+	RunID           string
+	RawOutput       string
+	NEROutputTokens int
 }
+
+// composeOutputRatio scales the NER call's output-token count to
+// a compose-output prediction. Compose emits a coherent tree
+// structure that consolidates NER assertions with added
+// relationships and per-field provenance — usually the compose
+// output is similar in size to the NER output, but larger papers
+// can generate more relationship-graph overhead than NER's flat
+// assertion list. A ratio of 1.3 gives ~30% headroom for that
+// structural inflation while flagging the papers that are
+// genuinely at risk of truncation.
+const composeOutputRatio = 1.3
 
 func runCompose(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
@@ -132,33 +148,75 @@ func runCompose(cmd *cobra.Command, args []string) error {
 		}
 		nerByRef[id] = info
 	}
-	ready := len(refs) - len(missing)
+
+	// Size-based split: predict compose output for each NER-ready
+	// ref as (NER output tokens * composeOutputRatio) and compare
+	// against the compose model's declared output cap. Refs whose
+	// predicted output would exceed the cap are marked "too big"
+	// and skipped rather than burning tokens on a truncated tree.
+	// When the compose model is not in the limits table
+	// (composeModelCap returns 0), the guardrail is disabled and
+	// every NER-ready ref is treated as fitting.
+	cap := composeModelCap(model)
+	var tooBig []string
+	if cap > 0 {
+		for id, info := range nerByRef {
+			predicted := int(float64(info.NEROutputTokens) * composeOutputRatio)
+			if predicted > cap {
+				tooBig = append(tooBig, id)
+			}
+		}
+	}
+	tooBigSet := make(map[string]struct{}, len(tooBig))
+	for _, id := range tooBig {
+		tooBigSet[id] = struct{}{}
+	}
+	fitCount := len(nerByRef) - len(tooBig)
 
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"Would run compose (prompt %q) against %d reference(s)\n"+
 				"  Provider: %s\n  Model:    %s\n\n"+
-				"  NER-ready:  %d\n"+
+				"  NER-ready + fit for model: %d\n"+
+				"  NER-ready but too big for model: %d\n"+
 				"  Missing NER: %d%s\n",
 			prompt, len(refs), provider, orDash(model),
-			ready, len(missing),
+			fitCount, len(tooBig), len(missing),
 			ifThen(runNerFirst, " (would run NER first via --ner)", " (would be skipped)"))
 		for _, id := range refs {
-			marker := " (has NER)"
-			if _, ok := nerByRef[id]; !ok {
+			var marker string
+			if info, ok := nerByRef[id]; ok {
+				predicted := int(float64(info.NEROutputTokens) * composeOutputRatio)
+				if _, big := tooBigSet[id]; big {
+					marker = fmt.Sprintf(" (has NER — TOO BIG for model: NER emitted %d output tokens; predicted compose ~%d > %d cap)",
+						info.NEROutputTokens, predicted, cap)
+				} else {
+					marker = fmt.Sprintf(" (has NER, fits: NER emitted %d output tokens; predicted compose ~%d ≤ %d cap)",
+						info.NEROutputTokens, predicted, cap)
+				}
+			} else {
 				marker = " (needs NER)"
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "  "+id+marker)
+		}
+		if cap == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(),
+				"\nNote: compose model has no entry in the limits table; size-based skipping is disabled.")
 		}
 		return nil
 	}
 
 	if !yes {
+		tooBigNote := ""
+		if len(tooBig) > 0 {
+			tooBigNote = fmt.Sprintf("\n  Too big for model:   %d ref(s)  (skipped — pick a bigger-output model to include these)", len(tooBig))
+		}
 		headline := fmt.Sprintf("Ready to run compose (prompt %q) over %d reference(s)\n"+
-			"  NER-ready:   %d ref(s)\n"+
-			"  Missing NER: %d ref(s)%s",
-			prompt, len(refs), ready, len(missing),
-			ifThen(runNerFirst, " (will run NER first — extra tokens)", " (will be loudly skipped)"))
+			"  NER-ready + fit:    %d ref(s)\n"+
+			"  Missing NER:        %d ref(s)%s%s",
+			prompt, len(refs), fitCount, len(missing),
+			ifThen(runNerFirst, " (will run NER first — extra tokens)", " (will be loudly skipped)"),
+			tooBigNote)
 		if err := confirmRun(headline, provider, model); err != nil {
 			return err
 		}
@@ -229,6 +287,14 @@ func runCompose(cmd *cobra.Command, args []string) error {
 			if !ok {
 				return "", "", "no NER run for this reference; pass --ner to run NER first", nil
 			}
+			if _, big := tooBigSet[refID]; big {
+				return "", "", fmt.Sprintf(
+					"NER output was %d tokens; predicted compose output (%d) exceeds model cap (%d) — pick a bigger-output model to include this ref",
+					info.NEROutputTokens,
+					int(float64(info.NEROutputTokens)*composeOutputRatio),
+					cap,
+				), nil
+			}
 			jats, err := fetchAugmentedJATS(ctx, llmBatchOpts{
 				HTTPClient: httpClient, Server: server,
 			}, refID)
@@ -275,6 +341,9 @@ func fetchLatestNERRun(ctx context.Context, c *http.Client, server, refID string
 			RunID     string          `json:"run_id"`
 			Purpose   string          `json:"purpose"`
 			RawOutput json.RawMessage `json:"raw_output"`
+			Envelope  struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"envelope"`
 		} `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -283,12 +352,30 @@ func fetchLatestNERRun(ctx context.Context, c *http.Client, server, refID string
 	for _, item := range body.Items {
 		if item.Purpose == "ner" {
 			return &nerRunInfo{
-				RunID:     item.RunID,
-				RawOutput: string(item.RawOutput),
+				RunID:           item.RunID,
+				RawOutput:       string(item.RawOutput),
+				NEROutputTokens: item.Envelope.OutputTokens,
 			}, nil
 		}
 	}
 	return nil, nil
+}
+
+// composeModelCap returns the compose model's declared output cap
+// (from the shared limits table). Returns 0 when the model isn't
+// in the table — in that case, size-based skipping is disabled
+// and the batch proceeds without the guardrail. Callers should
+// prefer picking a model that IS in the limits table so the
+// guardrail is active.
+func composeModelCap(model string) int {
+	if model == "" {
+		return 0
+	}
+	lim, known := llm.LookupLimits(model)
+	if !known {
+		return 0
+	}
+	return lim.MaxOutputTokens
 }
 
 func ifThen(cond bool, whenTrue, whenFalse string) string {
