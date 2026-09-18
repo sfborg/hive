@@ -101,7 +101,7 @@ func runCompose(cmd *cobra.Command, args []string) error {
 		prompt = "compose_v4"
 	}
 	if nerPrompt == "" {
-		nerPrompt = "ner_v6"
+		nerPrompt = "ner_v8"
 	}
 	if nerProvider == "" {
 		nerProvider = provider
@@ -397,7 +397,7 @@ func init() {
 	composeCmd.Flags().Bool("json", false, "emit one NDJSON row per completed reference instead of the rolling progress line")
 	composeCmd.Flags().Bool("quiet", false, "suppress the progress line and end-of-run summary")
 	composeCmd.Flags().Bool("ner", false, "run NER first for refs missing a prior NER run (otherwise those refs are loudly skipped)")
-	composeCmd.Flags().String("ner-prompt", "", "override the shipped NER prompt when --ner is set (default: ner_v6)")
+	composeCmd.Flags().String("ner-prompt", "", "override the shipped NER prompt when --ner is set (default: ner_v8)")
 	composeCmd.Flags().String("ner-provider", "", "provider for the NER phase when --ner is set (default: same as --provider)")
 	composeCmd.Flags().String("ner-model", "", "model for the NER phase when --ner is set (default: same as --model)")
 	rootCmd.AddCommand(composeCmd)
