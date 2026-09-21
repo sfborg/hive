@@ -243,6 +243,7 @@ func (s *server) handleEstimateLLM(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} apiLLMInvokeResponse
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
+// @Failure      502 {object} problem "Provider refused on account grounds (spend limit, credits, API key); type urn:hive:error:provider-account-limit"
 // @Router       /llm/invoke [post]
 func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 	if s.llmRunner == nil {
@@ -303,6 +304,15 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 		llm.WithResponseFormat(body.ResponseFormat),
 	)
 	if err != nil {
+		// Spend limit reached, credits exhausted or key rejected:
+		// every further request would be refused the same way, so
+		// batch callers key on this type to stop sending.
+		if reason, ok := llm.AccountLimit(err); ok {
+			writeProblemDetail(w, r, http.StatusBadGateway,
+				problemPrefix+"provider-account-limit",
+				"LLM provider refused the request: "+reason, err.Error())
+			return
+		}
 		writeProblem(w, r, err)
 		return
 	}

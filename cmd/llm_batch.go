@@ -52,6 +52,29 @@ type runResult struct {
 	AssertionsMaterialized int
 }
 
+// problemProviderAccountLimit is the problem type the server returns
+// from /api/llm/invoke when the LLM provider refuses a request on
+// account grounds: spend limit reached, credits exhausted or API key
+// rejected.
+const problemProviderAccountLimit = "urn:hive:error:provider-account-limit"
+
+// maxConsecutiveInvokeFailures stops a batch after this many invoke
+// failures in a row. It covers providers whose limit errors the
+// server can't classify: once a provider starts refusing every
+// request, the remaining references would fail the same way.
+const maxConsecutiveInvokeFailures = 5
+
+// providerLimitError is an invoke failure of type
+// problemProviderAccountLimit.
+type providerLimitError struct {
+	title  string
+	detail string
+}
+
+func (e *providerLimitError) Error() string {
+	return "invoke: " + e.title + ": " + e.detail
+}
+
 // runBatch fans the refs out across N workers, aggregates
 // provider-reported token counts, and renders progress. Never
 // computes a dollar figure — the summary and per-line JSON both
@@ -100,9 +123,32 @@ func runBatch(ctx context.Context, opts llmBatchOpts) error {
 		}()
 	}
 
-	for _, id := range opts.Refs {
-		wg.Add(1)
+	// Dispatch stops after an account-level refusal from the provider
+	// or maxConsecutiveInvokeFailures failed invokes in a row: every
+	// later request would be refused the same way. Calls already in
+	// flight run to completion; the provider has accepted them.
+	var (
+		halted      atomic.Bool
+		haltOnce    sync.Once
+		haltErr     error
+		consecutive atomic.Int64
+	)
+	halt := func(err error) {
+		haltOnce.Do(func() {
+			haltErr = err
+			halted.Store(true)
+		})
+	}
+
+	var notAttempted []string
+	for i, id := range opts.Refs {
 		sem <- struct{}{}
+		if halted.Load() {
+			<-sem
+			notAttempted = opts.Refs[i:]
+			break
+		}
+		wg.Add(1)
 		go func(refID string) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -125,8 +171,16 @@ func runBatch(ctx context.Context, opts llmBatchOpts) error {
 			if err != nil {
 				failed.Add(1)
 				emitFailure(opts, jsonCh, refID, err)
+				var limit *providerLimitError
+				if errors.As(err, &limit) {
+					halt(err)
+				} else if consecutive.Add(1) >= maxConsecutiveInvokeFailures {
+					halt(fmt.Errorf("%d consecutive requests failed; last error: %w",
+						maxConsecutiveInvokeFailures, err))
+				}
 				return
 			}
+			consecutive.Store(0)
 			succeeded.Add(1)
 			inTokens.Add(int64(result.InputTokens))
 			outTokens.Add(int64(result.OutputTokens))
@@ -145,16 +199,27 @@ func runBatch(ctx context.Context, opts llmBatchOpts) error {
 	close(stop)
 
 	if opts.JSONOut {
+		for _, id := range notAttempted {
+			jsonCh <- mustMarshal(map[string]any{
+				"reference_id":  id,
+				"not_attempted": "run stopped",
+			})
+		}
 		close(jsonCh)
 		<-jsonDone
 	}
 
 	if !opts.Quiet && !opts.JSONOut {
-		renderProgress(total, total, inTokens.Load(), outTokens.Load(), start)
+		renderProgress(int(processed.Load()), total, inTokens.Load(), outTokens.Load(), start)
 		fmt.Fprintln(os.Stderr)
 	}
 
 	if !opts.JSONOut {
+		if halted.Load() {
+			fmt.Fprintf(os.Stderr,
+				"\nStopped early; %d reference(s) not attempted:\n  %s\n",
+				len(notAttempted), haltErr)
+		}
 		fmt.Fprintf(os.Stderr,
 			"\nDone. %d succeeded, %d skipped, %d failed (of %d total).\n\n"+
 				"Provider-reported token usage:\n"+
@@ -167,6 +232,10 @@ func runBatch(ctx context.Context, opts llmBatchOpts) error {
 		)
 	}
 
+	if halted.Load() {
+		return fmt.Errorf("stopped early, %d reference(s) not attempted: %w",
+			len(notAttempted), haltErr)
+	}
 	if failed.Load() > 0 {
 		return fmt.Errorf("%d reference(s) failed", failed.Load())
 	}
@@ -222,6 +291,14 @@ func invokeLLM(ctx context.Context, opts llmBatchOpts, refID, input, parentRunID
 	defer postResp.Body.Close()
 	if postResp.StatusCode >= 400 {
 		msg, _ := io.ReadAll(postResp.Body)
+		var p struct {
+			Type   string `json:"type"`
+			Title  string `json:"title"`
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(msg, &p) == nil && p.Type == problemProviderAccountLimit {
+			return nil, &providerLimitError{title: p.Title, detail: p.Detail}
+		}
 		return nil, fmt.Errorf("invoke: server returned %d: %s",
 			postResp.StatusCode, strings.TrimSpace(string(msg)))
 	}

@@ -212,7 +212,7 @@ func (o *OpenAICompat) Complete(ctx context.Context, req Request) (Response, err
 
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("openai_compat http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return Response{}, &ProviderError{Adapter: KindOpenAICompat, Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	var out openaiResponse

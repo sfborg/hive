@@ -176,7 +176,7 @@ func (a *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(resp.Body)
-		return Response{}, fmt.Errorf("anthropic http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return Response{}, &ProviderError{Adapter: KindAnthropic, Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	var out anthropicResponse
