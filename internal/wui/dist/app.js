@@ -530,6 +530,50 @@ const severityChipStyles = css`
   .sev-chip .sev-glyph { font-weight: 700; }
 `;
 
+// External identifier badges. ORCID iDs are shown with ORCID's own icon,
+// per ORCID's display guidelines. Every other scope gets a disc in that
+// organisation's brand colour carrying a single glyph, drawn by hive
+// rather than taken from the organisation's logo. Disc fills are sampled
+// from each organisation's published icon. The glyph is dark rather than
+// white because it is text, not a logotype, and white fails WCAG AA on
+// these fills (ROR: 2.36:1 for white, 6.99:1 for #1f1f1f).
+const idBadgeStyles = css`
+  .idlink {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    color: inherit;
+    text-decoration: none;
+    /* Identifiers contain hyphens, which are line-break opportunities;
+       an iD split across lines is unreadable and uncopyable. */
+    white-space: nowrap;
+  }
+  .idlink:hover .idvalue { text-decoration: underline; }
+  .idlink img {
+    flex: 0 0 auto;
+    width: 1.15em;
+    height: 1.15em;
+  }
+  /* The disc sets a smaller font-size for its glyph, so its size is
+     expressed in that em: 1.6 x 0.72 ~= 1.15em of the surrounding text,
+     matching the ORCID icon. */
+  .idmark {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 1.6em;
+    height: 1.6em;
+    border-radius: 50%;
+    background: var(--surface-2, #e6e6e6);
+    color: #1f1f1f;
+    font-size: 0.72em;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .idmark.ror { background: #53baa1; }
+  .idnote { color: var(--dim); }
+`;
+
 // Shared button vocabulary. Included in every component that renders
 // buttons via `static styles = [buttonStyles, ...]`. Variants per
 // DESIGN.md § Buttons: default (secondary/neutral), .primary (main
@@ -788,13 +832,57 @@ function trapFocus(container, opts = {}) {
   };
 }
 
-// orcidLink turns a bare ORCID iD (0000-0002-1825-0097) into an anchor to
-// orcid.org. Non-ORCID scrutinizer strings fall through unchanged.
-const orcidRE = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/;
-function orcidLink(value) {
+// External identifier scopes. `name` feeds the accessible label and
+// tooltip. `icon` points at a vendored mark for a scope whose owner asks
+// integrators to display it; otherwise `glyph` is drawn on a
+// brand-colour disc (colours live in idBadgeStyles). Glyphs are chosen
+// per scope rather than derived from the name, because initials collide
+// (ROR/ResearcherID, ISNI/IPNI). `valid` lets malformed values fall
+// through as plain text instead of becoming broken links.
+const ID_SCOPES = {
+  orcid: {
+    name: "ORCID",
+    alt: "ORCID iD",
+    icon: "/vendor/orcid/ORCID-iD_icon_unauth_vector.svg",
+    resolve: (v) => `https://orcid.org/${v}`,
+    valid: (v) => /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(v),
+    // hive's iDs come from ingested papers, curator entry and imports
+    // from other systems, where authentication status is unknown --
+    // ORCID's definition of unauthenticated. The authenticated icon is
+    // vendored alongside for iDs verified through ORCID sign-in.
+    unauthenticated: true,
+  },
+  ror: {
+    name: "ROR",
+    glyph: "R",
+    resolve: (v) => `https://ror.org/${v}`,
+  },
+};
+
+// idBadge renders an external identifier as its scope mark plus the
+// identifier, linked to that scope's resolver -- ORCID's "compact" format,
+// applied to every scope. Unauthenticated ORCID iDs carry the
+// "(unauthenticated)" suffix the guidelines call for. Unknown scopes, and
+// values that fail their scope's validator, fall through as plain text.
+function idBadge(scope, value) {
   if (!value) return "";
-  if (!orcidRE.test(value)) return value;
-  return html`<a href="https://orcid.org/${value}" target="_blank" rel="noopener">${value}</a>`;
+  const s = ID_SCOPES[scope];
+  if (!s || (s.valid && !s.valid(value))) return value;
+  const mark = s.icon
+    ? html`<img src="${s.icon}" alt="${s.alt}" />`
+    : html`<span class="idmark ${scope}" aria-hidden="true">${s.glyph}</span>`;
+  const link = html`<a
+    class="idlink"
+    href="${s.resolve(value)}"
+    target="_blank"
+    rel="noopener"
+    title="${s.name}"
+    aria-label="View ${s.name} record - ${value}"
+    >${mark}<span class="idvalue">${value}</span></a
+  >`;
+  return s.unauthenticated
+    ? html`${link} <span class="idnote">(unauthenticated)</span>`
+    : link;
 }
 
 // renderStars produces a filled/empty star row plus a numeric readout.
@@ -4712,7 +4800,7 @@ class SfgaDetail extends LitElement {
     _editRefID: { state: true },
   };
 
-  static styles = [severityChipStyles, buttonStyles, formFieldStyles, css`
+  static styles = [severityChipStyles, buttonStyles, formFieldStyles, idBadgeStyles, css`
     :host {
       display: block;
       font-family: var(--font-body);
@@ -9127,17 +9215,17 @@ class SfgaDetail extends LitElement {
         ${row("Name phrase", t.name_phrase)}
         ${t.scrutinizer
           ? html`<dt>Scrutinizer</dt>
-              <dd>${t.scrutinizer}${t.scrutinizer_id ? html` (${orcidLink(t.scrutinizer_id)})` : ""}</dd>`
+              <dd>${t.scrutinizer}${t.scrutinizer_id ? (ID_SCOPES.orcid.valid(t.scrutinizer_id) ? html` ${idBadge("orcid", t.scrutinizer_id)}` : html` (${t.scrutinizer_id})`) : ""}</dd>`
           : ""}
         ${rowLink("Link", t.link)} ${row("Remarks", t.remarks)}
         <!-- Audit trail -->
         <dt>Modified</dt>
         <dd>${t.modified}</dd>
-        ${row("By", orcidLink(t.modified_by))}
+        ${row("By", idBadge("orcid", t.modified_by))}
         ${n && n.modified && n.modified !== t.modified
           ? html`<dt>Name modified</dt>
                 <dd>${n.modified}</dd>
-                ${row("Name mod. by", orcidLink(n.modified_by))}`
+                ${row("Name mod. by", idBadge("orcid", n.modified_by))}`
           : ""}
       </dl>
       </section>
@@ -21963,7 +22051,7 @@ class SfgaAgentCard extends LitElement {
     issueSeverity: { attribute: false },
   };
 
-  static styles = css`
+  static styles = [idBadgeStyles, css`
     /* Host is a grid cell (see SfgaAgentSection .cards). Grid stretch
        is on by default so the host fills the row height; the .card
        inside also stretches to fill the host so its border and hit
@@ -22019,17 +22107,14 @@ class SfgaAgentCard extends LitElement {
       align-items: center;
       gap: var(--sp-1);
     }
-    /* Badge icons sit next to the ORCID / ROR id text; sizing them
-       em-relative keeps them proportional to the card's text height
-       instead of dominating the row at a fixed 14/16px. */
-    .line img {
-      flex: 0 0 auto;
-      width: 1em;
-      height: 1em;
-    }
-    .line img.ror {
-      width: 1.15em;
-      height: 1.15em;
+    /* Identifier rows wrap as whole units rather than ellipsizing, so a
+       narrow card drops the "(unauthenticated)" suffix to a second line
+       instead of clipping it; the identifier itself never breaks
+       (see idBadgeStyles). */
+    .card > .line {
+      flex-wrap: wrap;
+      row-gap: 0;
+      white-space: normal;
     }
     .dim { color: var(--dim); }
     .note {
@@ -22053,7 +22138,7 @@ class SfgaAgentCard extends LitElement {
     .sev-badge.sev-warn  { color: var(--sev-warn); }
     .sev-badge.sev-info  { color: var(--sev-info); }
     .sev-badge.sev-debug { color: var(--sev-debug); }
-  `;
+  `];
 
   _onClick() {
     this.dispatchEvent(
@@ -22083,15 +22168,11 @@ class SfgaAgentCard extends LitElement {
           : ""}
         ${parts ? html`<span class="name">${parts}</span>` : ""}
         ${a.orcid
-          ? html`<span class="line"
-              ><img src="/vendor/logos/orcid.png" alt="ORCID" />${a.orcid}</span
-            >`
+          ? html`<span class="line">${idBadge("orcid", a.orcid)}</span>`
           : ""}
         ${a.organisation ? html`<span>${a.organisation}</span>` : ""}
         ${a.rorid
-          ? html`<span class="line"
-              ><img class="ror" src="/vendor/logos/ror.png" alt="ROR" />${a.rorid}</span
-            >`
+          ? html`<span class="line">${idBadge("ror", a.rorid)}</span>`
           : ""}
         ${a.department ? html`<span>${a.department}</span>` : ""}
         ${locale ? html`<span class="dim">${locale}</span>` : ""}
