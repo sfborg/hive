@@ -121,7 +121,19 @@ vendor-lit:
 
 # Remove build outputs and demo archives (including SQLite WAL sidecars).
 clean:
-    rm -rf bin
-    rm -f demo.db demo.db-wal demo.db-shm
+    rm -rf bin dist
+    rm -f demo.db demo.db-wal demo.db-shm THIRD_PARTY_NOTICES.txt
+
+# Write THIRD_PARTY_NOTICES.txt for the linked modules and vendored assets.
+notices:
+    go run ./tools/mknotices -o THIRD_PARTY_NOTICES.txt
+
+# Validate .goreleaser.yaml.
+release-check:
+    go run github.com/goreleaser/goreleaser/v2@v2.18.2 check
+
+# Build the release archives into ./dist without publishing anything.
+release-snapshot:
+    go run github.com/goreleaser/goreleaser/v2@v2.18.2 release --snapshot --clean
 
 

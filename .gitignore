@@ -16,6 +16,10 @@ docker-compose.yml
 /mkassimilatedemo
 /bin/
 
+# Release build output (GoReleaser) and the notices file it generates.
+/dist/
+/THIRD_PARTY_NOTICES.txt
+
 # Local dev-stack secrets and mounted archive directory. .env is the
 # real file docker compose reads; .env.template is the checked-in
 # starting point. data/ is the bind-mounted archive + sidecar library
@@ -25,10 +29,7 @@ docker-compose.yml
 
 /docs/
 
-# `go mod vendor` output — generated fresh for `just docker-build`
-# (gsvalidator is currently a local `replace` in go.mod, so vendoring
-# is how the Docker build gets the code into its build context).
-# Not committed — regenerated whenever docker-build runs.
+# `go mod vendor` output. Not committed.
 /vendor/
 
 # Sidecar library directories and everything derived from an attached
