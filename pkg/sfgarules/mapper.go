@@ -18,7 +18,7 @@ import (
 // columns, gn__ GlobalNames cache, sf__ species-file fields) and
 // the archive-wide col__id primary-key convention.
 //
-// A truly generic gsvalidator (per SchemaCommons design) reads
+// A truly generic gsvalidator reads
 // relations from a bundle's `relations` block rather than
 // requiring a Go-hardcoded mapper. This mapper stays until that
 // loader lands.

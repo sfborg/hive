@@ -308,7 +308,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
+      "warning_message": "This ORCID iD may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -324,7 +324,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
+      "warning_message": "This ORCID iD may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -340,7 +340,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
+      "warning_message": "This ORCID iD may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -356,7 +356,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
+      "warning_message": "This ORCID iD may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },
@@ -372,7 +372,7 @@
         "algorithm": "orcid"
       },
       "error_message": "",
-      "warning_message": "This ORCID may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
+      "warning_message": "This ORCID iD may be invalid — its check digit doesn't match. Usually that means one character is wrong or two are swapped.",
       "is_active": true,
       "priority": 30
     },

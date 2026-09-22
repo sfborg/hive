@@ -3,7 +3,7 @@ package hive
 import (
 	"fmt"
 
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // referenceUncitedValidator fires when a reference row is not cited by
@@ -13,10 +13,8 @@ import (
 // deleted. The rule surfaces the row in the Issues view so the curator
 // can decide whether to delete it or keep it around for future use.
 //
-// See feedback_inclusive_terminology for the language choice: "uncited"
-// rather than the previous convention "orphaned" reference — clearer
-// technically (the reference itself is fine, it just has no incoming
-// citations) and avoids the metaphor.
+// "Uncited" names the condition directly: the reference itself is
+// valid; it only has no incoming citations.
 type referenceUncitedValidator struct{}
 
 func newReferenceUncitedValidator() *referenceUncitedValidator {

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/gdower/gsvalidator/domain"
 	"github.com/gnames/gnparser"
 	"github.com/gnames/gnparser/ent/parsed"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // infraspecificMarkerValidator flags an infraspecific name whose
@@ -143,9 +143,8 @@ func (v *infraspecificMarkerValidator) Validate(
 // normalizes to for a given sfga rank id. Empty return means "not an
 // infraspecific rank this validator covers." The list intentionally
 // omits ABERRATION / RACE / GREX / NATIO / MORPH / KLEPTON and other
-// historical ranks — gnparser handles them inconsistently and the
-// user opted to defer marker enforcement there (see CLAUDE.md-adjacent
-// discussion). Add entries as those ranks become worth enforcing.
+// historical ranks; marker enforcement for them is deferred. Add
+// entries as those ranks become worth enforcing.
 func expectedMarkerForRank(rankID string) string {
 	switch rankID {
 	case "SUBSPECIES":

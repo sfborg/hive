@@ -6,10 +6,10 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/gdower/gsvalidator v0.0.0-00010101000000-000000000000
 	github.com/gnames/gnlib v0.64.0
 	github.com/gnames/gnparser v1.15.0
 	github.com/google/uuid v1.6.0
+	github.com/sfborg/gsvalidator v0.0.1
 	github.com/sfborg/sflib v0.6.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.45.0
@@ -76,5 +76,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/gdower/gsvalidator => /home/gdo/src/github.com/sfborg/gsvalidator

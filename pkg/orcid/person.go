@@ -74,7 +74,7 @@ type orcidName struct {
 	CreditName orcidValue `json:"credit-name"`
 }
 
-// orcidValue wraps ORCID's `{"value": "..."}` envelope. The wrapper
+// orcidValue wraps the ORCID API `{"value": "..."}` envelope. The wrapper
 // is nullable — an unset field arrives as JSON null, which decodes
 // to a zero-valued struct here.
 type orcidValue struct {

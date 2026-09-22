@@ -1,9 +1,53 @@
 *.md
+# Prompts are code-adjacent shipped assets — carve them out of the
+# blanket *.md rule so they land in the binary and reach collaborators
+# running their own hive instances.
+docker-compose.yml
+!pkg/prompts/*.md
+# Fixture .md files (fabricated test data, scenario README) also ship
+# with the repo.
+!testdata/**/*.md
+# The public README lives in the code repo and needs to be tracked.
+!README.md
 *.db
 *.db-wal
 *.db-shm
 /hive
+/mkassimilatedemo
 /bin/
 
-# Local-only survey notes
+# Local dev-stack secrets and mounted archive directory. .env is the
+# real file docker compose reads; .env.template is the checked-in
+# starting point. data/ is the bind-mounted archive + sidecar library
+# root for the docker stack — contents are per-machine.
+/.env
+/data/
+
 /docs/
+
+# `go mod vendor` output — generated fresh for `just docker-build`
+# (gsvalidator is currently a local `replace` in go.mod, so vendoring
+# is how the Docker build gets the code into its build context).
+# Not committed — regenerated whenever docker-build runs.
+/vendor/
+
+# Sidecar library directories and everything derived from an attached
+# source document — PDFs, EPUBs, JATS/TEI conversions, extracted
+# figures, and provenance metadata. Everything under <archive>.library/
+# is covered by the directory pattern; the extension patterns catch
+# stray copies that land elsewhere in the tree. Attached sources and
+# their conversions are per-machine and are not distributed through
+# the repository. Mirrors the .dockerignore entries.
+*.library/
+*.pdfs/
+*.figures/
+*.pdf
+*.epub
+*.jats.xml
+*.tei.xml
+*.grobid.xml
+*.meta.json
+
+# Fabricated fixture JATS documents (Order Tribbulida etc.) are
+# checked-in test data, distinct from real per-machine paper JATS.
+!testdata/**/*.jats.xml

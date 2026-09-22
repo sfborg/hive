@@ -709,7 +709,7 @@ type apiReferenceHit struct {
 	// filed against this reference row. Zero → elided from JSON so
 	// the wire shape stays flat; front-ends render a warn badge on
 	// picker results when > 0 and route a click to the reference-
-	// quick-fix modal (feedback_no_side_quests).
+	// quick-fix modal.
 	IssueCount int `json:"issue_count,omitempty"`
 	// MaxSeverity is the highest severity among the record's open
 	// issues ("error" / "warn" / "info" / "debug"). Empty when
@@ -717,15 +717,10 @@ type apiReferenceHit struct {
 	// validationSeverityBadge helper so every picker/list surface
 	// renders the same signal.
 	MaxSeverity string `json:"max_severity,omitempty"`
-	// HasSourceDoc is true when the reference has an ingested source
-	// document available in the archive's sidecar directory (PDF
-	// → JATS conversion complete, ready for annotation and
-	// AI-assisted extraction — see REFERENCE_PDF_PLAN.md).
-	// Drives the gold-star tier of the reference-picker badge:
-	// structured-metadata + source-attached → curator has fully
-	// upgraded this reference. Elided from JSON (omitempty) so a
-	// legacy row with no source document doesn't clutter the wire
-	// shape. Falsy today until PDF ingest slice lands.
+	// HasSourceDoc reports whether a source document is attached to
+	// the reference. It selects the gold-star tier of the
+	// reference-picker badge. Nothing sets it currently, so it is
+	// always false and omitted from JSON.
 	HasSourceDoc bool `json:"has_source_doc,omitempty"`
 }
 
@@ -766,9 +761,7 @@ type apiReference struct {
 	Remarks             string `json:"remarks,omitempty"`
 	Modified            string `json:"modified,omitempty"`
 	ModifiedBy          string `json:"modified_by,omitempty"`
-	// HasSourceDoc mirrors the field on apiReferenceHit — true when
-	// the ingested source document is available in the sidecar.
-	// See apiReferenceHit for the full rationale.
+	// HasSourceDoc mirrors the field on apiReferenceHit.
 	//
 	// (Issue count + max severity are NOT mirrored here — the
 	// resolver on the WUI side fetches /api/issue directly and

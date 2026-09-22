@@ -1,7 +1,7 @@
 package hive
 
 import (
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // referenceMetadataValidator flags reference rows whose free-text
@@ -20,7 +20,7 @@ import (
 // Soft-warn only — some legacy corpora carry citation-only references
 // intentionally and hive shouldn't block a save on the pattern.
 // Curators fix them via the reference-quick-fix modal that opens
-// from the citation picker's warning badge (feedback_no_side_quests).
+// from the citation picker's warning badge.
 //
 // Rule fires when col__citation is non-empty AND EITHER col__author
 // is empty OR col__issued is empty. Both-empty means the reference is

@@ -58,13 +58,13 @@ func validChecksum(digits string) bool {
 	return digits[15] == want
 }
 
-// SanitizeSearchTerm strips characters that ORCID's Solr-backed search
+// SanitizeSearchTerm strips characters that the ORCID Solr-backed search
 // grammar treats as operators (`+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ /`)
 // from an untrusted string, making it safe to splice into a
 // [Client.Search] query without letting a caller inject additional
 // clauses.
 //
-// ORCID's search does not document a per-character escape mechanism
+// The ORCID search does not document a per-character escape mechanism
 // with wide client-library support, so injection safety here relies on
 // stripping rather than escaping — a user-supplied literal ":" cannot
 // be represented inside a query term.

@@ -15,11 +15,9 @@ import (
 // Two naming conventions coexist:
 //
 //   - __gsvalidator_* — canonical shape shared with any other
-//     gsvalidator-using tool (GrandSchema, future consumers). A
-//     hive archive validated by hive can be opened in another
-//     gsvalidator-aware tool and its issues render immediately.
-//     See SCHEMA_COMMONS_REFACTOR.md § "Canonical results table"
-//     for the rationale.
+//     gsvalidator-using tool. A hive archive validated by hive can
+//     be opened in another gsvalidator-aware tool and its issues
+//     render immediately.
 //   - hive__* — hive-specific extensions (e.g. metadata modification
 //     timestamps that sfga's metadata table lacks). These are hive's
 //     own concern, not part of the gsvalidator ecosystem.
@@ -47,14 +45,14 @@ const hiveSchemaDDL = `
 --   message                 — emit-time text
 --   actual_value / expected_value — best-effort string forms of
 --                             what the rule saw vs what it wanted
---   is_resolved / resolved_at — resolution model (from GrandSchema):
+--   is_resolved / resolved_at — resolution model:
 --                             the underlying data was fixed
---   acknowledged_by / acknowledged_at — acknowledgment model (from
---                             hive): a human decided this specific
+--   acknowledged_by / acknowledged_at — acknowledgment model: a
+--                             human decided this specific
 --                             violation is intentional and should
 --                             be muted without fixing the data
 --   ruleset_package / ruleset_version — origin tracking: which
---                             SchemaCommons bundle authored this rule
+--                             rule bundle authored this rule
 --                             (blank until the bundle-loader lands)
 --
 -- Resolution and acknowledgment are separate concepts. "Resolved"

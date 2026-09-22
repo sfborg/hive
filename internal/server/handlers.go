@@ -2577,10 +2577,10 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 // Tx.UpdateReference — the core primitive that carries the actual
 // write.
 //
-// Backs the reference-quick-fix modal (Slice D) that opens over the
-// create/edit taxon pane when a reference has a validation warning
-// on missing structured metadata. See feedback_no_side_quests for
-// the UX principle motivating in-context fixes.
+// Backs the reference-quick-fix modal that opens over the create/edit
+// taxon pane when a reference has a validation warning on missing
+// structured metadata, so the curator can fix the reference without
+// leaving the taxon they are editing.
 func (s *server) handlePatchReference(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var patch apiReferencePatch

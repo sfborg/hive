@@ -15,7 +15,7 @@ func TestNormalize(t *testing.T) {
 		in, want string
 		wantErr  bool
 	}{
-		// Josiah Carberry — ORCID's canonical demo iD.
+		// Josiah Carberry — the canonical ORCID demo iD.
 		{"0000-0002-1825-0097", "0000-0002-1825-0097", false},
 		{"0000000218250097", "0000-0002-1825-0097", false},
 		{"https://orcid.org/0000-0002-1825-0097", "0000-0002-1825-0097", false},

@@ -6,11 +6,11 @@ import (
 	_ "embed"
 	"fmt"
 
-	"github.com/gdower/gsvalidator/adapter/repository"
-	"github.com/gdower/gsvalidator/domain"
-	"github.com/gdower/gsvalidator/usecase"
-	"github.com/gdower/gsvalidator/usecase/joins"
-	"github.com/gdower/gsvalidator/usecase/validator"
+	"github.com/sfborg/gsvalidator/adapter/repository"
+	"github.com/sfborg/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/usecase"
+	"github.com/sfborg/gsvalidator/usecase/joins"
+	"github.com/sfborg/gsvalidator/usecase/validator"
 	"github.com/sfborg/hive/pkg/sfgarules"
 )
 
@@ -140,10 +140,10 @@ func newHiveValidator(db *sql.DB) (*usecase.ValidateRecordUseCase, *repository.B
 	registry.Register(newCombinationMatchesBasionymValidator())
 	// Hive-native: soft-warn when a reference has a free-text
 	// citation but is missing structured author or issued (year).
-	// Surfaces the data-quality gap that breaks the WUI citation-pick
-	// backfill on CoL-derived data. See feedback_no_side_quests for
-	// the inline-quick-fix UX that resolves flagged rows without a
-	// side quest to the References screen.
+	// The WUI's citation-pick backfill needs those fields; archives
+	// derived from CoL often carry only the free-text citation.
+	// Flagged rows can be fixed inline, without switching to the
+	// References screen.
 	registry.Register(newReferenceMetadataValidator())
 	// Hive-native: soft-warn when an infraspecific name lacks its
 	// rank marker (var., f., subsp., subvar., subf.) in the scientific

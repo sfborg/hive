@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/gdower/gsvalidator/domain"
 	"github.com/gnames/gnparser"
 	"github.com/gnames/gnparser/ent/parsed"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // parseTailValidator flags a name whose verbatim scientific name has

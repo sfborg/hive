@@ -1,7 +1,7 @@
 package hive
 
 import (
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // speciesInteractionNeedsRelatedValidator fires when a

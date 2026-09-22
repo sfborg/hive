@@ -7,10 +7,9 @@
 // Not built into the hive binary. Run manually when the TW source
 // changes and commit the resulting JSON alongside nomen.owl.
 //
-// Usage:  go run ./tools/mknomen [taxonworks-checkout]
+// Usage:  go run ./tools/mknomen <taxonworks-checkout>
 //
-// Default checkout path is /home/gdo/taxonworks. Output goes to
-// pkg/nomen_tw.json.
+// Output goes to pkg/nomen_tw.json.
 package main
 
 import (
@@ -49,10 +48,11 @@ var (
 )
 
 func main() {
-	twRoot := "/home/gdo/taxonworks"
-	if len(os.Args) > 1 {
-		twRoot = os.Args[1]
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: go run ./tools/mknomen <taxonworks-checkout>")
+		os.Exit(2)
 	}
+	twRoot := os.Args[1]
 	out := "pkg/nomen_tw.json"
 
 	var entries []Entry

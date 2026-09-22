@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gdower/gsvalidator/domain"
-	"github.com/gdower/gsvalidator/usecase/validator"
 	"github.com/google/uuid"
+	"github.com/sfborg/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/usecase/validator"
 )
 
 // syncIssues runs syncIssuesLocal on the record, then propagates
@@ -477,7 +477,7 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 			},
 		},
 		{
-			// Creator carries per-agent ORCIDs (and other identifier
+			// Creator carries per-agent ORCID iDs (and other identifier
 			// fields) that benefit from check-digit rules. Reindex
 			// walks its rows; per-mutation sync is a follow-up.
 			name:  "creator",

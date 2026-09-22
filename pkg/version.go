@@ -2,11 +2,12 @@ package hive
 
 import "github.com/gnames/gnlib/ent/gnvers"
 
-// Version is set at build time via -ldflags "-X ...Version=vX.Y.Z" or
-// kept in sync manually until a release script lands. Build carries
-// the commit SHA / date the same way.
+// Version and Build identify the binary. Release builds set them at
+// link time with -ldflags "-X github.com/sfborg/hive/pkg.Version=<tag>
+// -X github.com/sfborg/hive/pkg.Build=<commit>"; other builds use the
+// defaults below. Update Version for each release.
 var (
-	Version = "v0.1.0"
+	Version = "v0.0.1"
 	Build   = "n/a"
 )
 

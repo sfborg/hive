@@ -83,8 +83,8 @@ const iconPaths = {
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
   `,
   // star — five-pointed star → "reference is fully solid" badge on
-  // the reference picker (structured metadata + JATS sidecar
-  // available for annotation). Lucide's star. Rendered filled via
+  // the reference picker (structured metadata + attached source
+  // document). Lucide's star. Rendered filled via
   // the .variant-solid CSS treatment.
   star: svg`
     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -175,8 +175,8 @@ const iconPathsFilled = {
 
 // readAtomizedPref / writeAtomizedPref persist the "show atomized
 // fields" toggle across taxa and sessions. Some curators always want
-// to see the parser's atomization to verify edge cases; forcing them
-// to re-toggle it on every navigation is user-hostile. Single boolean
+// to see the parser's atomization to verify edge cases, so the
+// setting persists instead of resetting on every navigation. Single boolean
 // key covers both the edit form and the create form's step-1 preview
 // since a curator wanting one usually wants the other.
 function readAtomizedPref() {
@@ -201,8 +201,8 @@ function writeAtomizedPref(v) {
 // backdrop when isTopModal(id) is false. Stack changes fire
 // subscribeModalStack callbacks so open modals re-render.
 //
-// See feedback_unbounded_modal_nesting — depth is intentionally
-// unbounded; reload-window is the escape hatch.
+// Depth is intentionally unbounded; reloading the page clears the
+// stack.
 const _modalStack = [];
 const _modalStackListeners = new Set();
 
@@ -465,6 +465,50 @@ const severityChipStyles = css`
   .sev-chip .sev-glyph { font-weight: 700; }
 `;
 
+// External identifier badges. ORCID iDs are shown with the ORCID iD icon,
+// per the ORCID iD Display Guidelines. Every other scope gets a disc in that
+// organisation's brand colour carrying a single glyph, drawn by hive
+// rather than taken from the organisation's logo. Disc fills are sampled
+// from each organisation's published icon. The glyph is dark rather than
+// white because it is text, not a logotype, and white fails WCAG AA on
+// these fills (ROR: 2.36:1 for white, 6.99:1 for #1f1f1f).
+const idBadgeStyles = css`
+  .idlink {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    color: inherit;
+    text-decoration: none;
+    /* Identifiers contain hyphens, which are line-break opportunities;
+       an iD split across lines is unreadable and uncopyable. */
+    white-space: nowrap;
+  }
+  .idlink:hover .idvalue { text-decoration: underline; }
+  .idlink img {
+    flex: 0 0 auto;
+    width: 1.15em;
+    height: 1.15em;
+  }
+  /* The disc sets a smaller font-size for its glyph, so its size is
+     expressed in that em: 1.6 x 0.72 ~= 1.15em of the surrounding text,
+     matching the ORCID icon. */
+  .idmark {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 1.6em;
+    height: 1.6em;
+    border-radius: 50%;
+    background: var(--surface-2, #e6e6e6);
+    color: #1f1f1f;
+    font-size: 0.72em;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .idmark.ror { background: #53baa1; }
+  .idnote { color: var(--dim); }
+`;
+
 // Shared button vocabulary. Included in every component that renders
 // buttons via `static styles = [buttonStyles, ...]`. Variants per
 // DESIGN.md § Buttons: default (secondary/neutral), .primary (main
@@ -713,13 +757,57 @@ function trapFocus(container, opts = {}) {
   };
 }
 
-// orcidLink turns a bare ORCID iD (0000-0002-1825-0097) into an anchor to
-// orcid.org. Non-ORCID scrutinizer strings fall through unchanged.
-const orcidRE = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/;
-function orcidLink(value) {
+// External identifier scopes. `name` feeds the accessible label and
+// tooltip. `icon` points at a vendored mark for a scope whose owner asks
+// integrators to display it; otherwise `glyph` is drawn on a
+// brand-colour disc (colours live in idBadgeStyles). Glyphs are chosen
+// per scope rather than derived from the name, because initials collide
+// (ROR/ResearcherID, ISNI/IPNI). `valid` lets malformed values fall
+// through as plain text instead of becoming broken links.
+const ID_SCOPES = {
+  orcid: {
+    name: "ORCID",
+    alt: "ORCID iD",
+    icon: "/vendor/orcid/ORCID-iD_icon_unauth_vector.svg",
+    resolve: (v) => `https://orcid.org/${v}`,
+    valid: (v) => /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(v),
+    // hive's iDs come from curator entry and imports from other
+    // systems, where authentication status is unknown -- the ORCID
+    // definition of unauthenticated. The authenticated icon is
+    // vendored alongside for iDs verified through ORCID sign-in.
+    unauthenticated: true,
+  },
+  ror: {
+    name: "ROR",
+    glyph: "R",
+    resolve: (v) => `https://ror.org/${v}`,
+  },
+};
+
+// idBadge renders an external identifier as its scope mark plus the
+// identifier, linked to that scope's resolver -- the ORCID "compact" format,
+// applied to every scope. Unauthenticated ORCID iDs carry the
+// "(unauthenticated)" suffix the guidelines call for. Unknown scopes, and
+// values that fail their scope's validator, fall through as plain text.
+function idBadge(scope, value) {
   if (!value) return "";
-  if (!orcidRE.test(value)) return value;
-  return html`<a href="https://orcid.org/${value}" target="_blank" rel="noopener">${value}</a>`;
+  const s = ID_SCOPES[scope];
+  if (!s || (s.valid && !s.valid(value))) return value;
+  const mark = s.icon
+    ? html`<img src="${s.icon}" alt="${s.alt}" />`
+    : html`<span class="idmark ${scope}" aria-hidden="true">${s.glyph}</span>`;
+  const link = html`<a
+    class="idlink"
+    href="${s.resolve(value)}"
+    target="_blank"
+    rel="noopener"
+    title="${s.name}"
+    aria-label="View ${s.name} record - ${value}"
+    >${mark}<span class="idvalue">${value}</span></a
+  >`;
+  return s.unauthenticated
+    ? html`${link} <span class="idnote">(unauthenticated)</span>`
+    : link;
 }
 
 // renderStars produces a filled/empty star row plus a numeric readout.
@@ -895,11 +983,9 @@ function childRankSource(allowed) {
 // natural default carries the same signal":
 //
 //   Redundant "valid" markers — blank col__status_id already means
-//   "valid" across all four codes. NOMEN-OWL round-tripping into
-//   ChecklistBank once mapped "ICZN valid" onto CoLDP's
-//   POTENTIALLY_VALID, which read as "not valid yet" and upset
-//   zoological taxonomists. Convention since then: leave status
-//   empty for valid names.
+//   "valid" across all four codes. Mapping NOMEN's "ICZN valid" to
+//   CoLDP's POTENTIALLY_VALID reads as "not yet valid", so the
+//   convention is to leave status empty for valid names.
 //
 //   Fossil markers — CoLDP models fossil-ness as a taxon-level
 //   `extinct` flag, not a name-level status. A name-level fossil
@@ -982,8 +1068,7 @@ async function referenceSource(q) {
       // per-row sync required). This lets the warning surface
       // instantly on large archives that haven't been through a
       // full validation reindex. has_source_doc drives the gold-
-      // star tier when the JATS sidecar is attached (Slice 3 of
-      // REFERENCE_PDF_PLAN.md; falsy today until PDF ingest lands).
+      // star tier when a source document is attached.
       // max_severity from the server's batched issue-summary lookup
       // colors the triangle when count > 0 (via validationSeverityBadge).
       badge: referenceEditBadge(
@@ -1087,7 +1172,7 @@ function normalizeSeverity(s) {
 // Gold-star gamifies the "make this reference solid" workflow:
 // curators start with all books / warnings, learn the click flow,
 // and watch the pane fill with stars as they upgrade references
-// with structured metadata + ingested source PDFs.
+// with structured metadata + attached source documents.
 //
 // Design rationale for the icons: pencil was rejected because it
 // reads as "edit the picker" rather than "edit the referenced
@@ -3633,7 +3718,6 @@ class SfgaDetail extends LitElement {
     // reference picker. Scoped to the fields most likely to need
     // fixing (author, issued, title, doi, type); full-fidelity
     // editing lives in the dedicated References screen.
-    // See feedback_no_side_quests + REFERENCE_PDF_PLAN.md.
     // Non-empty when the reference-edit modal is open; the modal
     // (sfga-add-reference-modal in edit mode) owns all the working
     // state internally, so the pane only needs to know which
@@ -3641,7 +3725,7 @@ class SfgaDetail extends LitElement {
     _editRefID: { state: true },
   };
 
-  static styles = [severityChipStyles, buttonStyles, formFieldStyles, css`
+  static styles = [severityChipStyles, buttonStyles, formFieldStyles, idBadgeStyles, css`
     :host {
       display: block;
       font-family: var(--font-body);
@@ -6732,7 +6816,7 @@ class SfgaDetail extends LitElement {
         <label>Scrutinizer ID</label>
         <input
           type="text"
-          placeholder="ORCID or other identifier"
+          placeholder="ORCID iD or other identifier"
           .value=${d.scrutinizer_id || ""}
           @input=${set("scrutinizer_id")}
         />
@@ -7975,17 +8059,17 @@ class SfgaDetail extends LitElement {
         ${row("Name phrase", t.name_phrase)}
         ${t.scrutinizer
           ? html`<dt>Scrutinizer</dt>
-              <dd>${t.scrutinizer}${t.scrutinizer_id ? html` (${orcidLink(t.scrutinizer_id)})` : ""}</dd>`
+              <dd>${t.scrutinizer}${t.scrutinizer_id ? (ID_SCOPES.orcid.valid(t.scrutinizer_id) ? html` ${idBadge("orcid", t.scrutinizer_id)}` : html` (${t.scrutinizer_id})`) : ""}</dd>`
           : ""}
         ${rowLink("Link", t.link)} ${row("Remarks", t.remarks)}
         <!-- Audit trail -->
         <dt>Modified</dt>
         <dd>${t.modified}</dd>
-        ${row("By", orcidLink(t.modified_by))}
+        ${row("By", idBadge("orcid", t.modified_by))}
         ${n && n.modified && n.modified !== t.modified
           ? html`<dt>Name modified</dt>
                 <dd>${n.modified}</dd>
-                ${row("Name mod. by", orcidLink(n.modified_by))}`
+                ${row("Name mod. by", idBadge("orcid", n.modified_by))}`
           : ""}
       </dl>
       </section>
@@ -9891,9 +9975,8 @@ class SfgaAddReferenceModal extends LitElement {
     // existing reference, defaults to the Manual tab, hydrates the
     // form with the loaded values, and PATCHes on save instead of
     // POST-creating a new row. Curator can still switch to any other
-    // tab, though (for now) the metadata-lookup tabs in edit mode
-    // still POST-create rather than PATCH-replace — Slice 2 wires
-    // those. See REFERENCE_PDF_PLAN.md.
+    // tab, though the metadata-lookup tabs in edit mode POST-create
+    // rather than PATCH-replace.
     editID: { attribute: false },
     _tab: { state: true }, // 0..4
     // Tab 0 (project) — inline DOI preview when the local search
@@ -10995,9 +11078,8 @@ class SfgaAddReferenceModal extends LitElement {
   // Persistent issues banner between the modal header and the tab
   // row. Only renders in edit mode when the loaded reference has
   // open validation issues — curators see the same problem list
-  // regardless of which tab they're on, which matches the "fix
-  // in-context, don't send them elsewhere" principle
-  // (feedback_no_side_quests).
+  // regardless of which tab they're on, and fix it here rather than
+  // on another screen.
   _renderIssuesBanner() {
     const items = this._issues || [];
     if (items.length === 0) return "";
@@ -11087,7 +11169,7 @@ class SfgaCombobox extends LitElement {
     // Shape: {icon, tooltip, kind} where kind is passed through in
     // the badge-click event so the parent can route (e.g. open the
     // reference-quick-fix modal for kind="reference-issue"). null =
-    // no badge for the current value. See feedback_no_side_quests.
+    // no badge for the current value.
     _valueBadge: { state: true },
   };
 
@@ -11146,7 +11228,7 @@ class SfgaCombobox extends LitElement {
        and info (view/edit-anyway affordance for clean references).
        Both open the same fix modal on click. Always-present when
        the source/resolver attaches a badge — the picker never looks
-       non-interactive for a resolved value (see feedback_no_side_quests). */
+       non-interactive for a resolved value. */
     button.value-badge {
       position: absolute;
       right: 1.9rem;
@@ -11196,8 +11278,8 @@ class SfgaCombobox extends LitElement {
     button.value-badge.variant-info:hover {
       color: var(--fg);
     }
-    /* Gold star: reference has structured metadata AND a source
-       document ready in the sidecar. Filled + gold to read at a
+    /* Gold star: reference has structured metadata AND an attached
+       source document. Filled + gold to read at a
        glance as "you've upgraded this reference all the way".
        Star svg is a polygon; the svg selector below fills it via
        fill: currentColor. */
@@ -13596,7 +13678,7 @@ class SfgaAgentCard extends LitElement {
     issueSeverity: { attribute: false },
   };
 
-  static styles = css`
+  static styles = [idBadgeStyles, css`
     /* Host is a grid cell (see SfgaAgentSection .cards). Grid stretch
        is on by default so the host fills the row height; the .card
        inside also stretches to fill the host so its border and hit
@@ -13652,17 +13734,14 @@ class SfgaAgentCard extends LitElement {
       align-items: center;
       gap: var(--sp-1);
     }
-    /* Badge icons sit next to the ORCID / ROR id text; sizing them
-       em-relative keeps them proportional to the card's text height
-       instead of dominating the row at a fixed 14/16px. */
-    .line img {
-      flex: 0 0 auto;
-      width: 1em;
-      height: 1em;
-    }
-    .line img.ror {
-      width: 1.15em;
-      height: 1.15em;
+    /* Identifier rows wrap as whole units rather than ellipsizing, so a
+       narrow card drops the "(unauthenticated)" suffix to a second line
+       instead of clipping it; the identifier itself never breaks
+       (see idBadgeStyles). */
+    .card > .line {
+      flex-wrap: wrap;
+      row-gap: 0;
+      white-space: normal;
     }
     .dim { color: var(--dim); }
     .note {
@@ -13686,7 +13765,7 @@ class SfgaAgentCard extends LitElement {
     .sev-badge.sev-warn  { color: var(--sev-warn); }
     .sev-badge.sev-info  { color: var(--sev-info); }
     .sev-badge.sev-debug { color: var(--sev-debug); }
-  `;
+  `];
 
   _onClick() {
     this.dispatchEvent(
@@ -13716,15 +13795,11 @@ class SfgaAgentCard extends LitElement {
           : ""}
         ${parts ? html`<span class="name">${parts}</span>` : ""}
         ${a.orcid
-          ? html`<span class="line"
-              ><img src="/vendor/logos/orcid.png" alt="ORCID" />${a.orcid}</span
-            >`
+          ? html`<span class="line">${idBadge("orcid", a.orcid)}</span>`
           : ""}
         ${a.organisation ? html`<span>${a.organisation}</span>` : ""}
         ${a.rorid
-          ? html`<span class="line"
-              ><img class="ror" src="/vendor/logos/ror.png" alt="ROR" />${a.rorid}</span
-            >`
+          ? html`<span class="line">${idBadge("ror", a.rorid)}</span>`
           : ""}
         ${a.department ? html`<span>${a.department}</span>` : ""}
         ${locale ? html`<span class="dim">${locale}</span>` : ""}

@@ -7,12 +7,9 @@
 //     ranks above the parent within its own group are excluded via
 //     TW's truncateAtRank logic. TW's UI does this via
 //     setParentAndRanks.js + truncateAtRank.js in the Vue store.
-//  2. Ranks that declare a `valid_parents_override` are ALWAYS
-//     honored — TW's UI ignores overrides at display time (it uses
-//     group truncation + typical_use only), which is why TW's
-//     picker offers subspecies under a genus. Hive treats the
-//     override as authoritative so subspecies only shows under
-//     species, variety only under species/subspecies, etc.
+//  2. Ranks that declare a `valid_parents_override` are always
+//     honored when building the list, so subspecies only shows
+//     under species, variety only under species/subspecies, etc.
 //
 // Data shape per code:
 //   * ranks — every rank valid under that code, each with:
@@ -263,10 +260,10 @@ func validParentIDs(codeTW string, r rankRow) map[string]bool {
 //   1. Group-level truncation (TW's truncateAtRank + isMajor):
 //      exclude groups above the parent's group; within the parent's
 //      own group exclude ranks at or above the parent's position.
-//   2. valid_parents_override enforcement (hive tightening): a rank
-//      with an explicit override list is only valid under those
-//      parents, regardless of the group-truncation result. Prevents
-//      e.g. subspecies-under-genus that TW's UI accidentally allows.
+//   2. valid_parents_override enforcement: a rank with an explicit
+//      override list is only valid under those parents, regardless
+//      of the group-truncation result (e.g. subspecies is offered
+//      under species but not under genus).
 //
 // Empty codeSfga, unmapped code, or an unresolvable parent rank all
 // return nil, signaling "no filter" — callers show every rank in the
@@ -310,8 +307,8 @@ func ValidChildRanks(codeSfga, parentRankID string) []ChildRank {
 				continue
 			}
 		}
-		// (2) Honor valid_parents_override strictly — hive is
-		// stricter than TW here.
+		// (2) Honor valid_parents_override: only the listed parents
+		// are valid.
 		parents := validParentIDs(codeTW, r)
 		if !parents[parentCanonical] {
 			continue
