@@ -3,7 +3,7 @@
 Hive is a viewer and editor for [SFGA](https://github.com/sfborg/sfga)
 taxonomic archives (SQLite). It opens an archive in a terminal interface
 or in the browser, checks it against validation rules, and stamps edits
-with the editor's ORCID™ iD.
+with the editor's [ORCID™ iD](https://orcid.org).
 
 > **Status:** v0.0.1 is an early prototype. Expect rough edges and
 > changes between releases, and keep backups of archives you edit.
