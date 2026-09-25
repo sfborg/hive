@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 	"github.com/gnames/gnparser"
 	"github.com/gnames/gnparser/ent/parsed"
 )

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )
 

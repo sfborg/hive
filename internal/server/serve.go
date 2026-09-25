@@ -181,6 +181,9 @@ func Run(archivePath string, opts Options) error {
 	// e.g. http://grobid:8070 when running the docker-compose stack.
 	if url := os.Getenv("HIVE_GROBID_URL"); url != "" {
 		s.grobid = grobid.NewClient(url)
+	} else {
+		slog.Info("GROBID not configured; PDF uploads are stored without conversion",
+			"hint", "run the Docker stack (just docker-up) or set HIVE_GROBID_URL")
 	}
 	// OCR fallback for image-only PDFs. Optional — when unset,
 	// scanned papers land in the sidecar library but GROBID
@@ -245,11 +248,11 @@ func Run(archivePath string, opts Options) error {
 		return fmt.Errorf("wui/dist embed: %w", err)
 	}
 	// Cache-Control: no-cache tells browsers to revalidate with the server
-	// on every request before using the cached copy. Prevents the "old
-	// reader.js served from cache after container rebuild" foot-gun we
-	// hit repeatedly during development — especially painful for iframe
-	// content because Firefox caches nested-iframe resources across
-	// parent-page reloads. The revalidation is cheap (server-side embed
+	// on every request before using the cached copy, so a stale
+	// reader.js is not served from cache after a container rebuild.
+	// This matters most for iframe content, because Firefox caches
+	// nested-iframe resources across parent-page reloads. The
+	// revalidation is cheap (server-side embed
 	// is in-memory) and correct behavior for a self-updating dev tool
 	// where every restart may ship changed assets.
 	fileServer := http.FileServer(http.FS(staticFS))

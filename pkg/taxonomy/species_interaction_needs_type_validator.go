@@ -1,7 +1,7 @@
 package taxonomy
 
 import (
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // speciesInteractionNeedsTypeValidator fires when a species_interaction

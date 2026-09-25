@@ -30,7 +30,7 @@ type SearchOptions struct {
 	Start int
 }
 
-// Search runs ORCID's expanded-search against the free-text query and
+// Search runs the ORCID expanded-search against the free-text query and
 // returns matching hits. The query grammar is Solr-style — fielded
 // terms like "family-name:Smith AND given-names:Jane" are legal; an
 // unqualified string matches across name, keyword, and email fields.

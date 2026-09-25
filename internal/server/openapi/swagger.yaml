@@ -81,6 +81,42 @@ definitions:
       schema_version:
         type: string
     type: object
+  server.apiAssemblerFlag:
+    properties:
+      candidates:
+        items:
+          type: string
+        type: array
+      kind:
+        type: string
+      message:
+        type: string
+    type: object
+  server.apiAssemblerNode:
+    properties:
+      authorship:
+        type: string
+      canonical:
+        type: string
+      color:
+        type: string
+      flags:
+        items:
+          $ref: '#/definitions/server.apiAssemblerFlag'
+        type: array
+      has_overlay:
+        type: boolean
+      name_id:
+        type: string
+      parent_taxon_id:
+        type: string
+      rank:
+        type: string
+      status:
+        type: string
+      taxon_id:
+        type: string
+    type: object
   server.apiAssertion:
     properties:
       asserted_by:
@@ -159,6 +195,13 @@ definitions:
       reject_reason:
         type: string
       status:
+        type: string
+    type: object
+  server.apiAttachedFile:
+    properties:
+      ext:
+        type: string
+      sha512:
         type: string
     type: object
   server.apiAttachedReference:
@@ -276,6 +319,14 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  server.apiCreateOverlayReq:
+    properties:
+      claim: {}
+      notes:
+        type: string
+      overlay_type:
+        type: string
     type: object
   server.apiDetachPDFResponse:
     properties:
@@ -661,6 +712,28 @@ definitions:
       html:
         type: string
       text:
+        type: string
+    type: object
+  server.apiLayer3Overlay:
+    properties:
+      citation_reference_id:
+        type: string
+      claim: {}
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      notes:
+        type: string
+      overlay_type:
+        type: string
+      retired_at:
+        type: string
+      taxon_id:
+        type: string
+      updated_at:
         type: string
     type: object
   server.apiMetadata:
@@ -1363,6 +1436,52 @@ definitions:
       content:
         type: string
     type: object
+  server.apiReannotateResult:
+    properties:
+      annotation_name_count:
+        type: integer
+      error:
+        type: string
+      sha512:
+        type: string
+      status:
+        type: string
+    type: object
+  server.apiReassembleReport:
+    properties:
+      bracketed_created:
+        type: integer
+      concept_fields_set:
+        type: integer
+      concept_relations_added:
+        type: integer
+      distribution_inserted:
+        type: integer
+      extension_rows_replaced:
+        type: integer
+      flags:
+        items:
+          $ref: '#/definitions/server.apiAssemblerFlag'
+        type: array
+      matched:
+        type: integer
+      papers_loaded:
+        type: integer
+      papers_skipped:
+        type: integer
+      synonyms_created:
+        type: integer
+      taxa_created:
+        type: integer
+      type_material_inserted:
+        type: integer
+      vernacular_inserted:
+        type: integer
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
   server.apiRef:
     properties:
       id:
@@ -1378,6 +1497,10 @@ definitions:
         type: string
       alternative_id:
         type: string
+      attached_files:
+        items:
+          $ref: '#/definitions/server.apiAttachedFile'
+        type: array
       attached_pdf_shas:
         description: |-
           AttachedPDFShas lists the sidecar-library sha512s associated
@@ -1524,6 +1647,21 @@ definitions:
       year:
         type: string
     type: object
+  server.apiReferenceLicense:
+    properties:
+      license:
+        type: string
+      reference_id:
+        type: string
+      source_url:
+        type: string
+      updated_at:
+        type: string
+      verified_at:
+        type: string
+      verified_by:
+        type: string
+    type: object
   server.apiReferencePatch:
     properties:
       accessed:
@@ -1617,6 +1755,17 @@ definitions:
         type: string
       ext:
         type: string
+      matched_by_doi:
+        description: |-
+          MatchedByDOI lists reference rows whose col__doi matches
+          the DOI extracted from this upload. Same-DOI-different-sha
+          is the multi-format case: dropping the JATS for a paper
+          whose PDF is already ingested. Clients (WUI upload dialog,
+          hive ingest CLI) should offer to attach this sha to one of
+          the matched references rather than mint a duplicate.
+        items:
+          $ref: '#/definitions/server.apiAttachedReference'
+        type: array
       metadata:
         $ref: '#/definitions/server.apiUploadBibHeader'
       sha512:
@@ -1683,10 +1832,31 @@ definitions:
           $ref: '#/definitions/server.apiRowSource'
         type: array
     type: object
+  server.apiServices:
+    properties:
+      grobid:
+        type: string
+      ocr:
+        type: string
+      pandoc:
+        type: string
+    type: object
   server.apiSetGoldStandardRequest:
     properties:
       gold:
         type: boolean
+    type: object
+  server.apiSetLicenseReq:
+    properties:
+      license:
+        type: string
+      source_url:
+        type: string
+    type: object
+  server.apiSetOverlayCitationReq:
+    properties:
+      citation_reference_id:
+        type: string
     type: object
   server.apiSpeciesInteraction:
     properties:
@@ -2147,6 +2317,27 @@ definitions:
       symmetrical:
         type: boolean
     type: object
+  server.composeTreeExportEnvelope:
+    properties:
+      cost_usd:
+        type: number
+      created_at:
+        type: string
+      notes:
+        type: string
+      purpose:
+        type: string
+      raw_output:
+        type: object
+      reference_id:
+        type: string
+      run_id:
+        type: string
+      source_id:
+        type: string
+      source_kind:
+        type: string
+    type: object
   server.createTaxonBody:
     properties:
       authorship:
@@ -2559,6 +2750,54 @@ paths:
       summary: Archive identity
       tags:
       - system
+  /archive/assembler-nodes:
+    get:
+      description: |-
+        Returns every Layer 2 taxon projected to
+        {taxon_id, canonical, authorship, rank,
+        parent_taxon_id, color, has_overlay, flags[]}.
+        Color derivation: blue > red > amber > green.
+        Consumed by the assimilate view for the four-color
+        tree.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/server.apiAssemblerNode'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: List Layer 2 taxa with per-node color state
+      tags:
+      - archive
+  /archive/reassemble:
+    post:
+      description: |-
+        Runs the deterministic assembler across every
+        compose run in the archive. Materializes matched /
+        created taxa, synonyms, [bracket]ed species, and
+        sensu-derived concept relations. Returns per-paper
+        and per-action counters plus any curator-actionable
+        flags.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReassembleReport'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Reassemble literature view from Layer 1 assertions
+      tags:
+      - archive
   /assertion/{id}/correction:
     post:
       consumes:
@@ -2863,6 +3102,11 @@ paths:
             $ref: '#/definitions/server.problem'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+        "502":
+          description: Provider refused on account grounds (spend limit, credits,
+            API key); type urn:hive:error:provider-account-limit
           schema:
             $ref: '#/definitions/server.problem'
       summary: Invoke an LLM prompt
@@ -3562,6 +3806,73 @@ paths:
       summary: OpenAPI spec (YAML)
       tags:
       - docs
+  /overlay/{id}:
+    delete:
+      parameters:
+      - description: Overlay ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Retire a Layer 3 overlay
+      tags:
+      - overlays
+    get:
+      parameters:
+      - description: Overlay ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLayer3Overlay'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Get a Layer 3 overlay
+      tags:
+      - overlays
+  /overlay/{id}/citation:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Overlay ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Citation reference
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiSetOverlayCitationReq'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiLayer3Overlay'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Set the citation reference on an overlay
+      tags:
+      - overlays
   /prompt:
     get:
       description: Merged list of shipped built-in prompts and curator forks. Filter
@@ -4021,6 +4332,32 @@ paths:
       summary: Detach PDF from reference
       tags:
       - references
+  /reference/{id}/compose-tree:
+    get:
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Specific run to export (defaults to most recent compose run)
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.composeTreeExportEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Export a reference's compose tree as JSON
+      tags:
+      - references
   /reference/{id}/corrections:
     get:
       description: Every correction attached to the given reference, both active and
@@ -4047,6 +4384,53 @@ paths:
           schema:
             $ref: '#/definitions/server.problem'
       summary: List corrections for a reference
+      tags:
+      - references
+  /reference/{id}/license:
+    get:
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReferenceLicense'
+      summary: Get the verified license of a reference
+      tags:
+      - references
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: License payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiSetLicenseReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReferenceLicense'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Record the verified license of a reference
       tags:
       - references
   /reference/{id}/llm-runs:
@@ -4357,6 +4741,32 @@ paths:
           schema:
             $ref: '#/definitions/server.problem'
       summary: Stream a figure/table PNG crop
+      tags:
+      - references
+  /reference/library/{sha}/reannotate:
+    post:
+      parameters:
+      - description: sha512 of the sidecar attachment
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiReannotateResult'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Re-run TEI → JATS annotation for a sidecar sha
       tags:
       - references
   /reference/library/{sha}/regions:
@@ -4711,6 +5121,22 @@ paths:
       summary: Reindex validation issues
       tags:
       - issues
+  /services:
+    get:
+      description: |-
+        Status of the optional services used to process uploaded papers:
+        "ok", "not_configured" (not set up) or "unavailable" (set up
+        but not responding). PDF conversion needs GROBID.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiServices'
+      summary: Document-processing services
+      tags:
+      - system
   /species-interaction/{id}:
     delete:
       description: Delete a species-interaction row by rowid.
@@ -5490,6 +5916,55 @@ paths:
       summary: Nomenclatural history
       tags:
       - taxa
+  /taxon/{id}/overlays:
+    get:
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/server.apiLayer3Overlay'
+            type: array
+      summary: List Layer 3 overlays for a taxon
+      tags:
+      - overlays
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Taxon ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Overlay request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.apiCreateOverlayReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.apiLayer3Overlay'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Create a Layer 3 overlay for a taxon
+      tags:
+      - overlays
   /taxon/{id}/row-sources:
     get:
       description: Every hive__row_source row attached to the taxon's type_material,

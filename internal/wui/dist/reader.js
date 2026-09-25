@@ -1067,9 +1067,8 @@ class SfgaReader extends LitElement {
     // Try main body first.
     if (this._flashRangeIfFound(anchor)) return;
     // Fallback: text may live inside a fig/table-wrap caption
-    // (either legitimately in a figure caption, or in a paragraph
-    // GROBID misclassified into a caption block due to poor
-    // publisher typesetting). Find the enclosing fig id in the
+    // (either in a figure caption, or in a paragraph that GROBID
+    // placed in a caption block). Find the enclosing fig id in the
     // JATS source, open its modal, then retry the search — the
     // modal renders caption content into the DOM.
     const figID = this._findFigIDContainingText(anchor.text);

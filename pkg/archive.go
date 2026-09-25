@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/gdower/gsvalidator/adapter/repository"
-	"github.com/gdower/gsvalidator/usecase"
+	"github.com/sfborg/gsvalidator/adapter/repository"
+	"github.com/sfborg/gsvalidator/usecase"
 	"github.com/gnames/gnparser"
 	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/hiveext"

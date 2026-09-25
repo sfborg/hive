@@ -3,7 +3,7 @@ package taxonomy
 import (
 	"fmt"
 
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // combinationMatchesBasionymValidator fires when a name row has

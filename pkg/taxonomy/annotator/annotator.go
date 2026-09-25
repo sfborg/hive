@@ -134,8 +134,8 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 		return nil, err
 	}
 	// Byte-offset-based rewrite. We don't want to re-encode the
-	// input via xml.Encoder — Go's encoding/xml mangles namespace
-	// declarations when the input carries prefixed attrs, producing
+	// input via xml.Encoder — Go's encoding/xml does not round-trip
+	// namespace declarations when the input carries prefixed attrs, producing
 	// duplicate xmlns= attributes and stray _xmlns:X aliasing that
 	// browsers reject as malformed XML. Instead: walk the input to
 	// identify text-node byte ranges, run GNfinder on each, and
@@ -806,8 +806,8 @@ func expansionCandidates(abbrev string, fullGenera map[string]bool) []string {
 // ranges of each <tp:taxon-name> opening tag, and rewrites those
 // tags in place with expanded full-name + gn:source/score/candidates
 // attributes. Byte-based (not xml.Encoder-based) for the same
-// reason FindNames is: encoding/xml re-serialization mangles
-// namespace declarations on complex inputs. Everything outside the
+// reason FindNames is: encoding/xml re-serialization does not
+// preserve namespace declarations on complex inputs. Everything outside the
 // rewritten tags is preserved byte-perfectly.
 func rewriteAbbreviations(
 	augmented []byte,

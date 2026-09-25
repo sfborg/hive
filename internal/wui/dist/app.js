@@ -220,8 +220,8 @@ const iconPathsFilled = {
 
 // readAtomizedPref / writeAtomizedPref persist the "show atomized
 // fields" toggle across taxa and sessions. Some curators always want
-// to see the parser's atomization to verify edge cases; forcing them
-// to re-toggle it on every navigation is user-hostile. Single boolean
+// to see the parser's atomization to verify edge cases, so the
+// setting persists instead of resetting on every navigation. Single boolean
 // key covers both the edit form and the create form's step-1 preview
 // since a curator wanting one usually wants the other.
 function readAtomizedPref() {
@@ -530,8 +530,8 @@ const severityChipStyles = css`
   .sev-chip .sev-glyph { font-weight: 700; }
 `;
 
-// External identifier badges. ORCID iDs are shown with ORCID's own icon,
-// per ORCID's display guidelines. Every other scope gets a disc in that
+// External identifier badges. ORCID iDs are shown with the ORCID iD icon,
+// per the ORCID iD Display Guidelines. Every other scope gets a disc in that
 // organisation's brand colour carrying a single glyph, drawn by hive
 // rather than taken from the organisation's logo. Disc fills are sampled
 // from each organisation's published icon. The glyph is dark rather than
@@ -848,7 +848,7 @@ const ID_SCOPES = {
     valid: (v) => /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(v),
     // hive's iDs come from ingested papers, curator entry and imports
     // from other systems, where authentication status is unknown --
-    // ORCID's definition of unauthenticated. The authenticated icon is
+    // the ORCID definition of unauthenticated. The authenticated icon is
     // vendored alongside for iDs verified through ORCID sign-in.
     unauthenticated: true,
   },
@@ -860,7 +860,7 @@ const ID_SCOPES = {
 };
 
 // idBadge renders an external identifier as its scope mark plus the
-// identifier, linked to that scope's resolver -- ORCID's "compact" format,
+// identifier, linked to that scope's resolver -- the ORCID "compact" format,
 // applied to every scope. Unauthenticated ORCID iDs carry the
 // "(unauthenticated)" suffix the guidelines call for. Unknown scopes, and
 // values that fail their scope's validator, fall through as plain text.
@@ -1058,11 +1058,9 @@ function childRankSource(allowed) {
 // natural default carries the same signal":
 //
 //   Redundant "valid" markers — blank col__status_id already means
-//   "valid" across all four codes. NOMEN-OWL round-tripping into
-//   ChecklistBank once mapped "ICZN valid" onto CoLDP's
-//   POTENTIALLY_VALID, which read as "not valid yet" and upset
-//   zoological taxonomists. Convention since then: leave status
-//   empty for valid names.
+//   "valid" across all four codes. Mapping NOMEN's "ICZN valid" to
+//   CoLDP's POTENTIALLY_VALID reads as "not yet valid", so the
+//   convention is to leave status empty for valid names.
 //
 //   Fossil markers — CoLDP models fossil-ness as a taxon-level
 //   `extinct` flag, not a name-level status. A name-level fossil
@@ -7939,7 +7937,7 @@ class SfgaDetail extends LitElement {
         <label>Scrutinizer ID</label>
         <input
           type="text"
-          placeholder="ORCID or other identifier"
+          placeholder="ORCID iD or other identifier"
           .value=${d.scrutinizer_id || ""}
           @input=${set("scrutinizer_id")}
         />
@@ -11195,10 +11193,14 @@ class SfgaAddReferenceModal extends LitElement {
     _uploadBusy: { state: true },
     _uploadError: { state: true },
     _uploadResult: { state: true },
+    // _services is the GET /api/services result. The File tab warns
+    // before an upload when GROBID isn't available, since PDFs are
+    // then stored unconverted.
+    _services: { state: true },
     // _rejectedDOI holds a DOI GROBID pulled from the TEI header
     // that resolved to an OpenAlex paper with a very different
     // title — typically a citation in the paper text (a database
-    // credit, a "see also" reference) that GROBID misclassified as
+    // credit, a "see also" reference) that GROBID reported as
     // this paper's own DOI. Surfaced as a hint on the File tab so
     // the curator sees why we didn't auto-hop to the DOI tab.
     _rejectedDOI: { state: true },
@@ -11861,6 +11863,9 @@ class SfgaAddReferenceModal extends LitElement {
     } else {
       this._tab = SfgaAddReferenceModal._tabIndex(this.defaultTab);
     }
+    // Service check for the File tab's warning. On failure the field
+    // stays unset and no warning shows.
+    api.services().then((s) => { this._services = s; }).catch(() => {});
     // Escape dismisses via the same guarded path as the × button and
     // the footer close, so a stray key doesn't discard a fetched
     // preview or a long BibTeX paste.
@@ -12602,6 +12607,7 @@ class SfgaAddReferenceModal extends LitElement {
         metadata + a DOI. If a DOI is found, you'll auto-hop to the
         DOI tab with the reference pre-populated.
       </p>
+      ${this._renderServicesWarning()}
       <div
         class=${"file-drop" + (this._dragActive ? " active" : "")}
         @click=${() => this._openFilePicker()}
@@ -12686,6 +12692,29 @@ class SfgaAddReferenceModal extends LitElement {
     this._close();
   }
 
+  // _renderServicesWarning tells the curator before an upload that PDFs
+  // won't be processed because the server has no working GROBID. Other
+  // formats don't need GROBID, so the File tab stays usable.
+  _renderServicesWarning() {
+    const grobid = this._services && this._services.grobid;
+    if (!grobid || grobid === "ok") return "";
+    if (grobid === "unavailable") {
+      return html`<div class="warning-banner" role="status">
+        <strong>GROBID isn't responding.</strong> It is configured for
+        this server but didn't answer, so an uploaded PDF would be stored
+        without extracting its metadata, DOI or text. Check that the
+        Docker stack is running (<code>docker compose ps</code>).
+      </div>`;
+    }
+    return html`<div class="warning-banner" role="status">
+      <strong>PDF processing needs the Docker stack.</strong> This hive
+      server isn't connected to GROBID, so an uploaded PDF is stored
+      without extracting its metadata, DOI or text. To process PDFs, run
+      hive with the Docker stack (<code>just docker-up</code>); see the
+      README.
+    </div>`;
+  }
+
   // _renderTEIStatusHint explains what happened on the TEI /
   // GROBID pass in curator-facing language. Only shown after an
   // upload lands (res != null). The DOI-found case has already
@@ -12705,7 +12734,7 @@ class SfgaAddReferenceModal extends LitElement {
             GROBID extracted DOI <code>${this._rejectedDOI}</code>,
             but it resolved to a paper whose title doesn't match
             this PDF — likely a citation in the paper text (e.g. a
-            database credit) misclassified as this paper's own DOI.
+            database credit) rather than this paper's own DOI.
             ${res.metadata
               ? "Falling back to the Manual tab with GROBID's header metadata; searching OpenAlex for a matching DOI."
               : "Please continue via the Project / BibTeX / Manual tabs."}
@@ -12818,8 +12847,8 @@ class SfgaAddReferenceModal extends LitElement {
       //   1. DOI extracted → resolve via OpenAlex, cross-check
       //      against GROBID's extracted title. If titles agree,
       //      hop to the DOI tab with the preview + conflict picker.
-      //      If they disagree, GROBID likely grabbed a citation
-      //      DOI (not the paper's own) — discard the DOI and fall
+      //      If they disagree, the DOI likely came from a citation
+      //      (not the paper's own) — discard the DOI and fall
       //      through to case 2.
       //   2. No trusted DOI but GROBID pulled header metadata →
       //      Manual tab with fields pre-populated; fire the
@@ -12882,8 +12911,8 @@ class SfgaAddReferenceModal extends LitElement {
       const score = this._titleMatchScore(grobidTitle, ref.title || "");
       // 0.4 threshold: allows for ~40% token overlap. In practice
       // right-DOI matches score >0.7 (title differs only in casing
-      // / punctuation / markup); wrong-DOI matches — where GROBID
-      // grabbed a citation — score <0.1.
+      // / punctuation / markup); wrong-DOI matches — where the DOI
+      // came from a citation — score <0.1.
       if (grobidTitle && score < 0.4) {
         this._rejectedDOI = doi;
         this._doiInput = "";

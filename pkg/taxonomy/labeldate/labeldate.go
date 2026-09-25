@@ -48,11 +48,10 @@ var labelDateRE = regexp.MustCompile(
 	`(?i)^\s*(?:(\d{1,2})\s*[.\-\s]\s*)?(viii|vii|vi|iv|v|iii|ii|i|xii|xi|ix|x)\s*[.\-\s]\s*(\d{4})\s*$`,
 )
 
-// isoDateRE matches an already-ISO verbatim value. Publishers
-// occasionally ignore the taxonomic-community Roman-numeral
-// convention and print ISO dates directly (or curators paste ISO
-// into forms). Accept those verbatim rather than dropping the ISO
-// derivation on the floor.
+// isoDateRE matches an already-ISO verbatim value. Some papers
+// print ISO dates rather than the Roman-numeral month convention
+// (and curators may paste ISO into forms). Accept those verbatim
+// rather than dropping the ISO derivation.
 var isoDateRE = regexp.MustCompile(
 	`^\s*(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?\s*$`,
 )

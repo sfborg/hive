@@ -50,7 +50,7 @@ type Client struct {
 }
 
 // RateLimit is the most recent rate-limit snapshot the server sent
-// back. Zero-valued until a request completes. ORCID's public API
+// back. Zero-valued until a request completes. The ORCID public API
 // does not currently expose the granular X-RateLimit-* headers that
 // some other services do; when the server omits them, the fields
 // stay zero.

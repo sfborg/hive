@@ -1,7 +1,7 @@
 package refmanager
 
 import (
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 )
 
 // referenceMetadataValidator flags reference rows whose free-text

@@ -33,6 +33,11 @@ The hive server is expected to be up. Point --server at its base URL
 everything routes through the HTTP API so the running server's state
 machine stays authoritative.
 
+Before uploading, ingest checks that the server can process the files.
+PDFs need GROBID, which runs in the Docker stack (just docker-up). When
+the batch has PDFs and the server has no working GROBID, ingest warns and
+asks whether to continue; --yes continues without asking.
+
 The --license flag records a verified OA license on each reference the
 ingest touches. Skip it when you want to attach files first and set the
 license through the WUI later.`,
@@ -47,6 +52,7 @@ license through the WUI later.`,
 		recurse, _ := cmd.Flags().GetBool("recurse")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		timeout, _ := cmd.Flags().GetDuration("timeout")
+		yes, _ := cmd.Flags().GetBool("yes")
 
 		server = strings.TrimRight(server, "/")
 		files, err := expandIngestArgs(args, recurse)
@@ -75,6 +81,9 @@ license through the WUI later.`,
 		}
 
 		client := &http.Client{Timeout: timeout}
+		if err := checkIngestServices(client, server, files, yes); err != nil {
+			return err
+		}
 		summary := &ingestSummary{}
 
 		for _, g := range groups {
@@ -603,6 +612,7 @@ func init() {
 	ingestCmd.Flags().Bool("quiet", false, "suppress per-file progress output")
 	ingestCmd.Flags().Bool("recurse", false, "when a directory is passed, walk its subdirectories too (default: top-level entries only)")
 	ingestCmd.Flags().Bool("dry-run", false, "preview groups without uploading — useful for verifying grouping before spending time on a large batch")
+	ingestCmd.Flags().Bool("yes", false, "continue without asking when the server cannot process some of the files (for scripting)")
 	ingestCmd.Flags().Duration("timeout", 30*time.Minute, "per-file HTTP timeout; raise for large review papers where GROBID takes longer (e.g. --timeout 60m)")
 	rootCmd.AddCommand(ingestCmd)
 }

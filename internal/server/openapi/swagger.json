@@ -428,6 +428,61 @@
                 }
             }
         },
+        "/archive/assembler-nodes": {
+            "get": {
+                "description": "Returns every Layer 2 taxon projected to\n{taxon_id, canonical, authorship, rank,\nparent_taxon_id, color, has_overlay, flags[]}.\nColor derivation: blue \u003e red \u003e amber \u003e green.\nConsumed by the assimilate view for the four-color\ntree.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "archive"
+                ],
+                "summary": "List Layer 2 taxa with per-node color state",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/server.apiAssemblerNode"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/archive/reassemble": {
+            "post": {
+                "description": "Runs the deterministic assembler across every\ncompose run in the archive. Materializes matched /\ncreated taxa, synonyms, [bracket]ed species, and\nsensu-derived concept relations. Returns per-paper\nand per-action counters plus any curator-actionable\nflags.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "archive"
+                ],
+                "summary": "Reassemble literature view from Layer 1 assertions",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiReassembleReport"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/assertion/{id}/correction": {
             "post": {
                 "description": "Record a curator's fix to one NER-extracted field. The correction is additive; the original NER value stays on the assertion for training pipelines. Flips the assertion status to 'edited'.",
@@ -879,6 +934,12 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Provider refused on account grounds (spend limit, credits, API key); type urn:hive:error:provider-account-limit",
                         "schema": {
                             "$ref": "#/definitions/server.problem"
                         }
@@ -1912,6 +1973,109 @@
                 }
             }
         },
+        "/overlay/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overlays"
+                ],
+                "summary": "Get a Layer 3 overlay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Overlay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiLayer3Overlay"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "overlays"
+                ],
+                "summary": "Retire a Layer 3 overlay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Overlay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/overlay/{id}/citation": {
+            "patch": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overlays"
+                ],
+                "summary": "Set the citation reference on an overlay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Overlay ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Citation reference",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSetOverlayCitationReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiLayer3Overlay"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/prompt": {
             "get": {
                 "description": "Merged list of shipped built-in prompts and curator forks. Filter by purpose; include_content=1 inlines the prompt body.",
@@ -2446,6 +2610,46 @@
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/reference/library/{sha}/reannotate": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Re-run TEI → JATS annotation for a sidecar sha",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "sha512 of the sidecar attachment",
+                        "name": "sha",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiReannotateResult"
                         }
                     },
                     "404": {
@@ -3295,6 +3499,46 @@
                 }
             }
         },
+        "/reference/{id}/compose-tree": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Export a reference's compose tree as JSON",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Reference ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Specific run to export (defaults to most recent compose run)",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.composeTreeExportEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/reference/{id}/corrections": {
             "get": {
                 "description": "Every correction attached to the given reference, both active and reverted.",
@@ -3329,6 +3573,78 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/reference/{id}/license": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Get the verified license of a reference",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Reference ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiReferenceLicense"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Record the verified license of a reference",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Reference ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "License payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiSetLicenseReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiReferenceLicense"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/server.problem"
                         }
@@ -3597,6 +3913,26 @@
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/services": {
+            "get": {
+                "description": "Status of the optional services used to process uploaded papers:\n\"ok\", \"not_configured\" (not set up) or \"unavailable\" (set up\nbut not responding). PDF conversion needs GROBID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Document-processing services",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiServices"
                         }
                     }
                 }
@@ -4864,6 +5200,81 @@
                 }
             }
         },
+        "/taxon/{id}/overlays": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overlays"
+                ],
+                "summary": "List Layer 3 overlays for a taxon",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/server.apiLayer3Overlay"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "overlays"
+                ],
+                "summary": "Create a Layer 3 overlay for a taxon",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Taxon ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Overlay request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.apiCreateOverlayReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiLayer3Overlay"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/taxon/{id}/row-sources": {
             "get": {
                 "description": "Every hive__row_source row attached to the taxon's type_material, distribution, and vernacular children, plus a short citation for each unique reference.",
@@ -6038,6 +6449,61 @@
                 }
             }
         },
+        "server.apiAssemblerFlag": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiAssemblerNode": {
+            "type": "object",
+            "properties": {
+                "authorship": {
+                    "type": "string"
+                },
+                "canonical": {
+                    "type": "string"
+                },
+                "color": {
+                    "type": "string"
+                },
+                "flags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiAssemblerFlag"
+                    }
+                },
+                "has_overlay": {
+                    "type": "boolean"
+                },
+                "name_id": {
+                    "type": "string"
+                },
+                "parent_taxon_id": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                }
+            }
+        },
         "server.apiAssertion": {
             "type": "object",
             "properties": {
@@ -6151,6 +6617,17 @@
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiAttachedFile": {
+            "type": "object",
+            "properties": {
+                "ext": {
+                    "type": "string"
+                },
+                "sha512": {
                     "type": "string"
                 }
             }
@@ -6325,6 +6802,18 @@
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "server.apiCreateOverlayReq": {
+            "type": "object",
+            "properties": {
+                "claim": {},
+                "notes": {
+                    "type": "string"
+                },
+                "overlay_type": {
+                    "type": "string"
                 }
             }
         },
@@ -6854,6 +7343,39 @@
                     "type": "string"
                 },
                 "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiLayer3Overlay": {
+            "type": "object",
+            "properties": {
+                "citation_reference_id": {
+                    "type": "string"
+                },
+                "claim": {},
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "overlay_type": {
+                    "type": "string"
+                },
+                "retired_at": {
+                    "type": "string"
+                },
+                "taxon_id": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -7798,6 +8320,76 @@
                 }
             }
         },
+        "server.apiReannotateResult": {
+            "type": "object",
+            "properties": {
+                "annotation_name_count": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "sha512": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiReassembleReport": {
+            "type": "object",
+            "properties": {
+                "bracketed_created": {
+                    "type": "integer"
+                },
+                "concept_fields_set": {
+                    "type": "integer"
+                },
+                "concept_relations_added": {
+                    "type": "integer"
+                },
+                "distribution_inserted": {
+                    "type": "integer"
+                },
+                "extension_rows_replaced": {
+                    "type": "integer"
+                },
+                "flags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiAssemblerFlag"
+                    }
+                },
+                "matched": {
+                    "type": "integer"
+                },
+                "papers_loaded": {
+                    "type": "integer"
+                },
+                "papers_skipped": {
+                    "type": "integer"
+                },
+                "synonyms_created": {
+                    "type": "integer"
+                },
+                "taxa_created": {
+                    "type": "integer"
+                },
+                "type_material_inserted": {
+                    "type": "integer"
+                },
+                "vernacular_inserted": {
+                    "type": "integer"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "server.apiRef": {
             "type": "object",
             "properties": {
@@ -7820,6 +8412,12 @@
                 },
                 "alternative_id": {
                     "type": "string"
+                },
+                "attached_files": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiAttachedFile"
+                    }
                 },
                 "attached_pdf_shas": {
                     "description": "AttachedPDFShas lists the sidecar-library sha512s associated\nwith this reference via hive__reference_pdf. Typically one\nentry (one PDF per reference); the references-screen reader\npane loads the first sha. Empty when no source document has\nbeen attached.",
@@ -7993,6 +8591,29 @@
                 }
             }
         },
+        "server.apiReferenceLicense": {
+            "type": "object",
+            "properties": {
+                "license": {
+                    "type": "string"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "source_url": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                },
+                "verified_by": {
+                    "type": "string"
+                }
+            }
+        },
         "server.apiReferencePatch": {
             "type": "object",
             "properties": {
@@ -8111,6 +8732,13 @@
                 "ext": {
                     "type": "string"
                 },
+                "matched_by_doi": {
+                    "description": "MatchedByDOI lists reference rows whose col__doi matches\nthe DOI extracted from this upload. Same-DOI-different-sha\nis the multi-format case: dropping the JATS for a paper\nwhose PDF is already ingested. Clients (WUI upload dialog,\nhive ingest CLI) should offer to attach this sha to one of\nthe matched references rather than mint a duplicate.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiAttachedReference"
+                    }
+                },
                 "metadata": {
                     "$ref": "#/definitions/server.apiUploadBibHeader"
                 },
@@ -8213,11 +8841,44 @@
                 }
             }
         },
+        "server.apiServices": {
+            "type": "object",
+            "properties": {
+                "grobid": {
+                    "type": "string"
+                },
+                "ocr": {
+                    "type": "string"
+                },
+                "pandoc": {
+                    "type": "string"
+                }
+            }
+        },
         "server.apiSetGoldStandardRequest": {
             "type": "object",
             "properties": {
                 "gold": {
                     "type": "boolean"
+                }
+            }
+        },
+        "server.apiSetLicenseReq": {
+            "type": "object",
+            "properties": {
+                "license": {
+                    "type": "string"
+                },
+                "source_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiSetOverlayCitationReq": {
+            "type": "object",
+            "properties": {
+                "citation_reference_id": {
+                    "type": "string"
                 }
             }
         },
@@ -8844,6 +9505,38 @@
                 },
                 "symmetrical": {
                     "type": "boolean"
+                }
+            }
+        },
+        "server.composeTreeExportEnvelope": {
+            "type": "object",
+            "properties": {
+                "cost_usd": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "purpose": {
+                    "type": "string"
+                },
+                "raw_output": {
+                    "type": "object"
+                },
+                "reference_id": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "source_kind": {
+                    "type": "string"
                 }
             }
         },

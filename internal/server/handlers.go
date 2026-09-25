@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
@@ -122,6 +123,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /docs", s.handleDocs)
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/services", s.handleServices)
 	mux.HandleFunc("GET /api/archive", s.handleArchive)
 	mux.HandleFunc("POST /api/archive/reassemble", s.handleReassembleArchive)
 	mux.HandleFunc("GET /api/archive/assembler-nodes", s.handleAssemblerNodes)
@@ -311,6 +313,70 @@ func (s *server) routes() *http.ServeMux {
 // @Router       /health [get]
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// Service statuses reported by GET /api/services. They use the same
+// words as the upload response's tei_status.
+const (
+	serviceOK            = "ok"
+	serviceNotConfigured = "not_configured"
+	serviceUnavailable   = "unavailable"
+)
+
+// servicePingTimeout bounds each GROBID / OCR reachability check, so
+// a service that is down cannot stall the request.
+const servicePingTimeout = 3 * time.Second
+
+// handleServices reports whether the optional document-processing
+// services are available. PDF conversion needs GROBID, which runs in
+// the Docker stack; without it, uploads are stored unconverted. The
+// WUI and `hive ingest` use this to warn before an upload.
+//
+// @Summary      Document-processing services
+// @Description  Status of the optional services used to process uploaded papers:
+// @Description  "ok", "not_configured" (not set up) or "unavailable" (set up
+// @Description  but not responding). PDF conversion needs GROBID.
+// @Tags         system
+// @Produce      json
+// @Success      200 {object} apiServices
+// @Router       /services [get]
+func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
+	out := apiServices{
+		GROBID: serviceNotConfigured,
+		OCR:    serviceNotConfigured,
+		Pandoc: serviceUnavailable,
+	}
+	var wg sync.WaitGroup
+	if s.grobid != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(r.Context(), servicePingTimeout)
+			defer cancel()
+			out.GROBID = pingStatus(s.grobid.Ping(ctx))
+		}()
+	}
+	if s.ocr != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(r.Context(), servicePingTimeout)
+			defer cancel()
+			out.OCR = pingStatus(s.ocr.Ping(ctx))
+		}()
+	}
+	if s.pandoc != nil {
+		out.Pandoc = serviceOK
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, out)
+}
+
+func pingStatus(err error) string {
+	if err != nil {
+		return serviceUnavailable
+	}
+	return serviceOK
 }
 
 // handleVocab returns the controlled-vocabulary bundle. Callers cache this
@@ -782,7 +848,7 @@ type composeTreeExportEnvelope struct {
 	Notes       string          `json:"notes,omitempty"`
 	CostUSD     float64         `json:"cost_usd,omitempty"`
 	CreatedAt   string          `json:"created_at,omitempty"`
-	RawOutput   json.RawMessage `json:"raw_output"`
+	RawOutput   json.RawMessage `json:"raw_output" swaggertype:"object"`
 }
 
 // handleExportComposeTree returns the envelope-wrapped compose

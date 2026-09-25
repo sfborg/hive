@@ -108,6 +108,9 @@ const nomenCodePrefix = {
 
 export const api = {
   health: () => j("GET", "/api/health"),
+  // services reports whether GROBID, OCR and pandoc are available:
+  // {grobid, ocr, pandoc}, each "ok" / "not_configured" / "unavailable".
+  services: () => j("GET", "/api/services"),
   archive: () => j("GET", "/api/archive"),
 
   metadata: {

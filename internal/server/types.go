@@ -1027,6 +1027,15 @@ type apiPage[T any] struct {
 	Total      *int   `json:"total,omitempty"`
 }
 
+// apiServices is the response for GET /api/services. Each field is
+// "ok", "not_configured" or "unavailable". Pandoc is never
+// "not_configured": hive uses it when the binary is on PATH.
+type apiServices struct {
+	GROBID string `json:"grobid"`
+	OCR    string `json:"ocr"`
+	Pandoc string `json:"pandoc"`
+}
+
 // apiReferenceUpload is the response for POST /api/reference/upload.
 // Reports where the uploaded file landed in the sidecar so the WUI
 // can associate it with a reference row and trigger downstream

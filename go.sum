@@ -159,6 +159,8 @@ github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUc
 github.com/rogpeppe/go-internal v1.9.0 h1:73kH8U+JUqXU8lRuOHeVHaa/SZPifC7BkcraZVejAe8=
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/sfborg/gsvalidator v0.0.1 h1:ukeEthgeLOMP/OrQ975icoiKUjijWh5hxxyw501p1tM=
+github.com/sfborg/gsvalidator v0.0.1/go.mod h1:QDhdlgzmqH/hfp3vSFEdqEaZpP6M13tPIaOBcW8EbbA=
 github.com/sfborg/sflib v0.6.2 h1:HlVCIXZktAfbgxdizpzk5pxetA/kwfNUNx5+W/5PgbA=
 github.com/sfborg/sflib v0.6.2/go.mod h1:HiEtoRBPtJCvfQJ9yF2jX2yFHtFkUiPZbc4ACptDUjQ=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=

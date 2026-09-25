@@ -229,10 +229,9 @@ func ApplyBBoxRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 }
 
 // ApplyRefMergeToJATS merges the <ref> named by c.TargetElementID
-// into the preceding <ref> in the same <ref-list>. Used to repair
-// GROBID's ref-tokenizer glitches — a messy inline URL or an
-// address tail that gets parsed as a new author list, splitting a
-// single citation into two rows.
+// into the preceding <ref> in the same <ref-list>. Used when GROBID
+// splits a single citation into two rows, for example when an inline
+// URL or an address tail is parsed as a new author list.
 //
 // Merge strategy: take the target ref's element-citation textContent
 // (everything after the leading author/year fields that GROBID gave

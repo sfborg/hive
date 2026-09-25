@@ -1,7 +1,33 @@
-# Vendored PWA dependencies
+# Vendored web assets
 
-Hive's PWA runs with **no npm at runtime and no CDN**. Every JS asset is
-either hand-written under `web/dist/` or pinned in this directory.
+The web interface loads no packages at run time and uses no CDN. Its
+JavaScript is either written for hive under `internal/wui/dist/` or
+pinned in this directory, and the `hive` binary embeds all of it.
+
+## Lit
+
+- **File:** `lit-3.x.x.min.js`
+- **Version:** Lit 3.x (bundled `lit-all` build from https://github.com/lit/dist@3)
+- **Source URL:** `https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js`
+- **SHA-256:** `e14e8c5cece98af1f21c737187763f51fa4efba87be1641916d9bf475472bcb9`
+- **Size:** 29,370 bytes
+- **License:** BSD-3-Clause, Copyright (c) The Lit Project Contributors
+  and Copyright (c) 2017 Google LLC (see `lit-3.x.x.min.js.LICENSE.txt`)
+
+### Vendored files
+
+- **`lit-3.x.x.min.js`**: bundled runtime, imported by `app.js`. Retains
+  the upstream `@license` header (`SPDX-License-Identifier: BSD-3-Clause`).
+- **`lit-3.x.x.min.js.LICENSE.txt`**: full BSD-3-Clause text from
+  https://github.com/lit/lit/blob/main/LICENSE, 1,561 bytes
+  - **SHA-256:** `c94b94b40b85a5083dea825ae844b1cedb40dd425685362c135e143265dd6cd4`
+
+### Upgrading
+
+`just vendor-lit` downloads the current bundle from the source URL,
+replaces `lit-3.x.x.min.js`, and prints its SHA-256 and size. Update
+this entry, then check the web interface in a browser, including the
+offline app shell, before committing.
 
 ## ORCID iD icons
 
@@ -20,14 +46,18 @@ again by hand.
   with ORCID.
   - **SHA-256:** `24e2805bb9409fb1a2c2ce9a4bf8c1406606e03a0f5014394b99a09824b099c0`
 
-The ORCID iD icon is a trademark of ORCID, Inc., used unmodified per
-ORCID's iD display guidelines
+ORCID™, the ORCID logo, and the iD logo are trademarks of ORCID, Inc.
+and are used in accordance with the ORCID Brand Guidelines
+(https://info.orcid.org/brand-guidelines/). The icons are used as
+provided and unmodified, and iDs are displayed in accordance with the
+ORCID iD Display Guidelines
 (https://info.orcid.org/documentation/integration-guide/orcid-id-display-guidelines/).
-The guidelines distinguish iDs collected through ORCID's authenticated
-workflow from iDs entered manually or obtained from another system where
-authentication status is unknown. hive's iDs are currently all the
-latter — ingested papers, curator entry, imports — so they are shown
-with the unauthenticated icon and followed by "(unauthenticated)".
+The display guidelines distinguish iDs collected through the ORCID
+authenticated workflow from iDs entered manually or obtained from another
+system where authentication status is unknown. hive's iDs are currently
+all the latter (ingested papers, curator entry and imports), so they
+are shown with the unauthenticated icon and followed by
+"(unauthenticated)".
 
 The authenticated archive also carries mono (black/white) and reversed
 (white) colourways, and both archives carry 16/24/32 px PNGs; only the
@@ -35,25 +65,6 @@ default-colourway SVGs are vendored.
 
 To refresh: download the archives, `sha256sum` each SVG, update this
 entry. Never resize or re-encode the files; size them with CSS.
-
-## Lit
-
-- **File:** `lit-3.x.x.min.js`
-- **Version:** Lit 3.x (bundled `lit-all` build from https://github.com/lit/dist@3)
-- **Source URL:** `https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js`
-- **SHA-256:** `e14e8c5cece98af1f21c737187763f51fa4efba87be1641916d9bf475472bcb9`
-- **Size:** 29,370 bytes
-- **License:** BSD-3-Clause, Copyright (c) The Lit Project Contributors
-  and Copyright (c) 2017 Google LLC (see
-  `lit-3.x.x.min.js.LICENSE.txt`)
-
-### Vendored files
-
-- **`lit-3.x.x.min.js`** — bundled runtime, 29,370 bytes. Retains the
-  upstream `@license` header (`SPDX-License-Identifier: BSD-3-Clause`).
-- **`lit-3.x.x.min.js.LICENSE.txt`** — full BSD-3-Clause text from
-  https://github.com/lit/lit/blob/main/LICENSE, 1,561 bytes
-  - **SHA-256:** `c94b94b40b85a5083dea825ae844b1cedb40dd425685362c135e143265dd6cd4`
 
 ## RapiDoc
 
@@ -128,14 +139,3 @@ most likely first ask.
 6. Test bbox drawing and page navigation in a browser before
    committing, then delete the old `pdfjs-<old-version>/`
    directory in the same commit.
-
-## Upgrade procedure
-
-1. Fetch the newer bundle from the same source URL (or the successor build path).
-2. Compute `sha256sum` on the downloaded file and record it in this README.
-3. Rename the file to include the new pinned version (`lit-3.y.z.min.js`)
-   and update the `<script>` tag in `web/dist/index.html`.
-4. Test in a browser tab and via the offline app-shell before committing.
-
-Bundles served with a hash mismatch (upgrade skipped step 2) leave a paper
-trail we can catch in review.

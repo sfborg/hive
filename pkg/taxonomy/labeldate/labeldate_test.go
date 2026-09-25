@@ -37,7 +37,7 @@ func TestParseHappyPath(t *testing.T) {
 		// Month + year only (day omitted).
 		{"viii-2017", "2017-08"},
 		{"iii-1999", "1999-03"},
-		// Verbatim already in ISO — publishers who ignore the
+		// Verbatim already in ISO — dates printed without the
 		// Roman-numeral convention still get an ISO derivation.
 		{"2017-08-14", "2017-08-14"},
 		{"2017-08", "2017-08"},

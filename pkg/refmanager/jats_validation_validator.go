@@ -3,7 +3,7 @@ package refmanager
 import (
 	"strings"
 
-	"github.com/gdower/gsvalidator/domain"
+	"github.com/sfborg/gsvalidator/domain"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 )

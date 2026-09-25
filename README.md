@@ -1,15 +1,40 @@
 # Hive
 
-**hive assembles taxonomic databases from taxonomic literature.**
+Hive is a viewer and editor for [SFGA](https://github.com/sfborg/sfga)
+taxonomic archives (SQLite). It opens an archive in a terminal interface
+or in the browser, checks it against validation rules, and stamps edits
+with the editor's [ORCID iD](https://orcid.org).
 
-Drop a pile of taxonomy PDFs (or JATS XML, or EPUB) into hive
-and, through a mostly-automated pipeline, get out a curated
+Hive can also **assemble taxonomic databases from taxonomic
+literature.** Drop a pile of taxonomy PDFs (or JATS XML, or EPUB)
+into hive and, through a mostly-automated pipeline, get out a curated
 SFGA / CoLDP-shaped SQLite archive: a browseable taxonomic tree,
 synonymy chains, type material, distributions, concept relations,
-and a durable record of which sentence within a paper asserted each fact. 
+and a durable record of which sentence within a paper asserted each fact.
 Hive also separates **what has been published in the literature**
 from **taxonomic revisions not yet published**, making it easy to discover
 where revision work is needed.
+
+> **Status:** hive is an early prototype. Expect rough edges and
+> changes between releases, and keep backups of archives you edit.
+
+## Features
+
+### Viewing and editing archives
+
+- **Terminal interface.** `hive view` browses an archive read-only;
+  `hive edit` opens it for editing.
+- **Web interface.** `hive serve` runs a local web app for browsing and
+  editing at http://127.0.0.1:2365.
+- **Validation.** `hive validate` checks an archive with
+  [gsvalidator](https://github.com/sfborg/gsvalidator) against three
+  built-in rulesets (`hive`, `clb`, `tw`). Each can be switched off per
+  archive with `hive ruleset`.
+- **Attribution.** Edits are stamped with the configured ORCID iD.
+
+These need only the `hive` binary.
+
+### Building archives from the literature
 
 The workflow: ingest → digitize → tag → assemble → revise →
 publish. Ingest is bulk; digitize and light tag run
@@ -18,7 +43,11 @@ assembler is deterministic; revise is where curator judgment
 enters; publishing exports one or more layers of the finished
 tree.
 
-## What problem hive solves
+Digitizing PDFs uses [GROBID](https://github.com/grobidOrg/grobid)
+and an OCR service, which run alongside hive in Docker (see
+[Install](#install)).
+
+## What problem the literature pipeline solves
 
 By tracking published assertions separately from unpublished revisions,
 hive makes the curator's editorial work visible and actionable. **The
@@ -48,20 +77,116 @@ The workbench becomes a research tool rather than a data-entry tool.
   the taxonomy view unless they explicitly toggle to Layer 2
   alone.
 
-## Requirements
+## Install
 
-- **Docker + Docker Compose.** The hive stack ships as three
-  containers: hive itself (Go binary + WUI),
+### The hive binary
+
+Download a binary for Linux, macOS or Windows from the
+[releases page](https://github.com/sfborg/hive/releases), or install
+with [Go](https://go.dev/dl/) 1.26.5 or later:
+
+```
+go install github.com/sfborg/hive@latest
+```
+
+Release binaries are not signed. On macOS, the first launch may need to
+be approved in System Settings → Privacy & Security; on Windows,
+SmartScreen may ask for confirmation.
+
+The binary on its own is enough for viewing, editing and validating
+archives. It also accepts uploaded papers, but without GROBID it stores
+them unconverted; the web interface and `hive ingest` warn about this
+before a PDF is uploaded. Some pipeline steps use external tools when
+they are installed and are skipped otherwise: `pdftotext` and
+`pdftocairo` (Poppler), `xmllint` and pandoc. The Docker image includes
+all of them.
+
+### The full stack (literature pipeline)
+
+Requirements:
+
+- **Docker + Docker Compose.** The stack runs three containers:
+  hive itself (Go binary + WUI),
   [GROBID](https://github.com/grobidOrg/grobid) (PDF →
   structure conversion), and OCR (fallback for scan-quality
   PDFs).
-- **A shell.** The CLI is HTTP-based and talks to the running
-  server; most commands run against `http://127.0.0.1:2365`
-  by default.
-- **Optional:** the `just` command runner if you want the
-  recipe shortcuts. Everything can also be done by hand.
+- **[just](https://github.com/casey/just)** for the recipe shortcuts
+  below. Everything can also be done by hand.
 
-## Quickstart
+Copy the Compose file and environment templates into place, then fill
+in `.env` (LLM provider API keys, for extraction):
+
+```bash
+cp docker-compose.yml.template docker-compose.yml
+cp .env.template .env
+```
+
+The pipeline CLI commands (`hive ingest`, `hive ner`,
+`hive compose`) talk to the running server over HTTP, at
+`http://127.0.0.1:2365` by default.
+
+To run a local `hive serve` against GROBID alone, start it with
+`just docker-grobid` and set `HIVE_GROBID_URL=http://localhost:8070`.
+
+## Development quick start
+
+Development dependencies:
+
+- [Go](https://go.dev/dl/) 1.26.5 or later
+- [just](https://github.com/casey/just)
+
+Clone this repo, build Hive and generate a small demo archive:
+
+```
+just build    # bin/hive and bin/mkdemo
+just demo     # writes ./demo.db
+```
+
+Open it:
+
+```
+./bin/hive view demo.db     # read-only terminal interface
+./bin/hive edit demo.db     # editing terminal interface
+./bin/hive serve demo.db    # web interface at http://127.0.0.1:2365
+```
+
+Run the validation rules, and choose which rulesets apply:
+
+```
+./bin/hive validate demo.db
+./bin/hive ruleset list demo.db
+./bin/hive ruleset disable demo.db clb    # rulesets: hive, clb, tw
+```
+
+Run the tests with `just test`; `just --list` shows every recipe.
+
+## Configuration
+
+Settings live in `~/.config/sfborg/hive/config.yml`; `hive config path`
+prints the location.
+
+```
+hive config set orcid 0000-0002-1825-0097
+hive config set openalex-email you@example.org
+```
+
+- `orcid`: the iD stamped on edits (`col__modified_by`). Also set with
+  `--orcid` or `HIVE_ORCID`.
+- `openalex-email`: a contact address included with reference lookups
+  to OpenAlex, as its polite pool requests. Also set with
+  `--openalex-email` or `HIVE_OPENALEX_EMAIL`.
+
+The literature pipeline also reads these environment variables, which
+the Docker stack sets:
+
+- `HIVE_GROBID_URL`: the GROBID service. Unset means uploads are stored
+  without conversion.
+- `HIVE_OCR_URL`: the OCR service for image-only PDFs.
+
+`hive serve` listens on 127.0.0.1 by default. Binding to any other
+address requires authentication to be configured.
+
+## Literature pipeline quickstart
 
 ### Start a fresh project
 
@@ -267,3 +392,6 @@ binary: Lit (BSD-3-Clause), pdf.js (Apache-2.0) and RapiDoc (MIT) under
 `schema/vendor/`. Provenance, checksums and notices for each are in the
 README in those directories.
 
+ORCID™, the ORCID logo, and the iD logo are trademarks of ORCID, Inc.
+and are used in accordance with the
+[ORCID Brand Guidelines](https://info.orcid.org/brand-guidelines/).
