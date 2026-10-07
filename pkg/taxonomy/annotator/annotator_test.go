@@ -79,34 +79,142 @@ func TestFindNamesPublisherJATSPreservesTPBinding(t *testing.T) {
 // outside <body>, so a scientific-name-shaped string in the front-
 // matter (title, author, journal) stays plain. Only body content
 // is a valid target for the reader's chip UX.
-func TestFindNamesSkipsHeader(t *testing.T) {
+// TestFindNamesScope checks which parts of a document are scanned:
+// body prose and the title, abstract and keywords are; other front
+// metadata and reference lists are not.
+func TestFindNamesScope(t *testing.T) {
 	jats := []byte(`<?xml version="1.0"?>
 <article>
   <front>
+    <journal-meta><journal-title>Panthera onca Quarterly</journal-title></journal-meta>
     <article-meta>
       <title-group>
         <article-title>Notes on Panthera onca in Belize</article-title>
       </title-group>
+      <contrib-group><contrib><string-name>Homo sapiens</string-name></contrib></contrib-group>
+      <abstract><p>We studied Puma concolor.</p></abstract>
+      <kwd-group><kwd>Felidae</kwd></kwd-group>
     </article-meta>
   </front>
-  <body><p>Nothing to see here.</p></body>
+  <body><p>Lynx rufus occurs nearby.</p></body>
+  <back><ref-list><ref><mixed-citation><article-title>On Canis lupus</article-title></mixed-citation></ref></ref-list></back>
 </article>`)
-	a := New()
-	out, err := a.FindNames(jats)
+	out, err := New().FindNames(jats)
 	if err != nil {
 		t.Fatalf("FindNames: %v", err)
 	}
 	s := string(out)
-	// The header's "Panthera onca" should NOT be wrapped.
-	// The wrapped form we'd expect if it leaked: <tp:taxon-name ...>Panthera onca</tp:taxon-name>
-	// Search for the tp: element around that string specifically.
-	if idx := strings.Index(s, "Panthera onca"); idx >= 0 {
-		// Find the tag that opens just before "Panthera onca".
-		before := s[:idx]
-		lastOpen := strings.LastIndex(before, "<")
-		if lastOpen >= 0 && strings.HasPrefix(before[lastOpen:], "<tp:taxon-name") {
-			t.Errorf("header content was annotated; expected header names to pass through untouched:\n%s", s)
+	for _, want := range []string{
+		`<article-title>Notes on <tp:taxon-name full-name="Panthera onca">Panthera onca</tp:taxon-name> in Belize</article-title>`,
+		`>Puma concolor</tp:taxon-name>`,
+		`>Felidae</tp:taxon-name>`,
+		`>Lynx rufus</tp:taxon-name>`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
 		}
+	}
+	for _, unwanted := range []string{
+		`<journal-title><tp:taxon-name`,
+		`<string-name><tp:taxon-name`,
+		`full-name="Canis lupus"`,
+	} {
+		if strings.Contains(s, unwanted) {
+			t.Errorf("unexpected %q in:\n%s", unwanted, s)
+		}
+	}
+}
+
+// TestFindNamesInTextWithEntities checks that text containing XML
+// entities is scanned and that tags land on the right raw bytes.
+func TestFindNamesInTextWithEntities(t *testing.T) {
+	jats := []byte(`<article><body><p>After Smith &amp; Jones (2001) &#x2013; Panthera onca and Puma concolor.</p></body></article>`)
+	out, err := New().FindNames(jats)
+	if err != nil {
+		t.Fatalf("FindNames: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		`Smith &amp; Jones (2001) &#x2013; <tp:taxon-name full-name="Panthera onca">Panthera onca</tp:taxon-name>`,
+		`<tp:taxon-name full-name="Puma concolor">Puma concolor</tp:taxon-name>.`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+}
+
+// TestAddMissedNames checks the additive pass over an already
+// augmented document: it tags front prose and entity-bearing body
+// text, leaves other body text and existing tags alone, and does not
+// wrap a name twice.
+func TestAddMissedNames(t *testing.T) {
+	augmented := []byte(`<article xmlns:tp="` + TaxPubNamespace + `"><front><article-meta><title-group>` +
+		`<article-title>Panthera onca in Belize</article-title></title-group></article-meta></front>` +
+		`<body><p><tp:taxon-name full-name="Lynx rufus" gn:source="verified">Lynx rufus</tp:taxon-name> and Lynx lynx.</p>` +
+		`<p>Smith &amp; Jones: Puma concolor.</p></body></article>`)
+	out, err := New().AddMissedNames(augmented)
+	if err != nil {
+		t.Fatalf("AddMissedNames: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `<article-title><tp:taxon-name full-name="Panthera onca">Panthera onca</tp:taxon-name>`) {
+		t.Errorf("title name not added:\n%s", s)
+	}
+	if !strings.Contains(s, `<tp:taxon-name full-name="Puma concolor">Puma concolor</tp:taxon-name>`) {
+		t.Errorf("name in entity text not added:\n%s", s)
+	}
+	if strings.Contains(s, `full-name="Lynx lynx"`) {
+		t.Errorf("body text without entities was rescanned:\n%s", s)
+	}
+	if strings.Count(s, `full-name="Lynx rufus"`) != 1 {
+		t.Errorf("existing tag was wrapped again:\n%s", s)
+	}
+}
+
+func TestTrimNameSpan(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"(Bacillariophyceae)", "Bacillariophyceae"},
+		{"C. imitans.", "C. imitans"},
+		{"[Navicula],", "Navicula"},
+		{"Achnanthes (Achnanthidium)", "Achnanthes (Achnanthidium)"},
+		{"Achnanthes (Achnanthidium))", "Achnanthes (Achnanthidium)"},
+	} {
+		s, e := trimNameSpan(tc.in, 0, len(tc.in))
+		if got := tc.in[s:e]; got != tc.want {
+			t.Errorf("trimNameSpan(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestTrimTagBoundaries(t *testing.T) {
+	in := `<p><tp:taxon-name full-name="A b">A. b.</tp:taxon-name> and <tp:taxon-name full-name="C">(C),</tp:taxon-name> ` +
+		`<tp:taxon-name full-name="E">E &#x201D;</tp:taxon-name> <tp:taxon-name full-name="F">F &amp;;</tp:taxon-name> ` +
+		`<tp:taxon-name full-name="G (H)">G (H)</tp:taxon-name> <tp:taxon-name><tp:taxon-name-part>X</tp:taxon-name-part>.</tp:taxon-name></p>`
+	want := `<p><tp:taxon-name full-name="A b">A. b</tp:taxon-name>. and (<tp:taxon-name full-name="C">C</tp:taxon-name>), ` +
+		`<tp:taxon-name full-name="E">E &#x201D;</tp:taxon-name> <tp:taxon-name full-name="F">F &amp;</tp:taxon-name>; ` +
+		`<tp:taxon-name full-name="G (H)">G (H)</tp:taxon-name> <tp:taxon-name><tp:taxon-name-part>X</tp:taxon-name-part>.</tp:taxon-name></p>`
+	if got := string(TrimTagBoundaries([]byte(in))); got != want {
+		t.Errorf("TrimTagBoundaries =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestDecodeText(t *testing.T) {
+	raw := []byte("a &amp; b&#233;\r\nc")
+	got, pos, ok := decodeText(raw)
+	if !ok || got != "a & bé\nc" {
+		t.Fatalf("decodeText = %q, %v", got, ok)
+	}
+	if len(pos) != len(got)+1 || pos[len(got)] != len(raw) {
+		t.Fatalf("rawPos = %v", pos)
+	}
+	// "b" is decoded byte 4, raw byte 8; the two bytes of "é" both map
+	// to the start of its character reference.
+	if pos[4] != 8 || pos[5] != 9 || pos[6] != 9 {
+		t.Errorf("rawPos = %v", pos)
+	}
+	if _, _, ok := decodeText([]byte("x &nbsp; y")); ok {
+		t.Error("unknown entity decoded")
 	}
 }
 

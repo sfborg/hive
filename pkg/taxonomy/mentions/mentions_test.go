@@ -13,6 +13,8 @@ const sampleJATS = `<article xmlns:tp="http://www.plazi.org/taxpub" xmlns:gn="ht
 and <tp:taxon-name full-name="Fictogenus  alpha" gn:source="verified">F. alpha</tp:taxon-name>
 near <tp:taxon-name full-name="Fictogenus" gn:source="verified">Fictogenus</tp:taxon-name>;
 not resolved: <tp:taxon-name full-name="F. beta" gn:source="unresolved">F. beta</tp:taxon-name>
+publisher: <tp:taxon-name><tp:taxon-name-part taxon-name-part-type="genus">Fictogenus</tp:taxon-name-part> <tp:taxon-name-part taxon-name-part-type="species">alpha</tp:taxon-name-part></tp:taxon-name>
+publisher class: <tp:taxon-name><tp:taxon-name-part>Fictophyceae</tp:taxon-name-part></tp:taxon-name>
 &nbsp;and <tp:taxon-name full-name="Inventa nova" gn:source="unverified">Inventa nova</tp:taxon-name>
 </p></body></article>`
 
@@ -21,7 +23,7 @@ func TestCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count: %v", err)
 	}
-	want := map[string]int{"Fictogenus alpha": 2, "Fictogenus": 1, "Inventa nova": 1}
+	want := map[string]int{"Fictogenus alpha": 3, "Fictogenus": 1, "Inventa nova": 1, "Fictophyceae": 1}
 	if len(got) != len(want) {
 		t.Fatalf("Count = %v, want %v", got, want)
 	}

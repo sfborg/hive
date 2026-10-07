@@ -27,6 +27,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -112,14 +113,17 @@ func (a *Annotator) ensureReady() error {
 	return a.initErr
 }
 
-// FindNames walks a JATS document, runs GNfinder over the body
-// text (everything inside <body> — the paper's own prose), and
-// returns a new document with <tp:taxon-name> wrapped around every
-// detected scientific name. Content outside <body> (the <front>
-// article-meta and <back> ref-list) is copied through unchanged —
-// GNfinder isn't useful on structured metadata, and header content
-// already has its own domain-specific parsing (see pkg/grobid
-// ParseHeader / ExtractDOI).
+// FindNames walks a JATS document, runs GNfinder over the paper's
+// prose — everything inside <body>, plus the title, abstract and
+// keywords in <front> — and returns a new document with
+// <tp:taxon-name> wrapped around every detected scientific name.
+// Titles and abstracts are where papers most often name the higher
+// taxon they treat. Other <front> metadata (journal, contributors,
+// affiliations) and every reference list are copied through
+// unchanged: cited titles describe other works.
+//
+// Text containing XML entities (&amp;, &#x2013;, ...) is decoded with
+// a map back to raw byte positions, so names in it are found too.
 //
 // Deterministic: same JATS in → same augmented XML out. Runs
 // GNfinder per-text-node (not per-document) so cross-node names —
@@ -130,6 +134,138 @@ func (a *Annotator) ensureReady() error {
 // root element. Downstream readers that walk the augmented XML get
 // resolvable <tp:taxon-name> elements.
 func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
+	return a.findNames(jats, false)
+}
+
+// AddMissedNames tags names in an already-augmented document that an
+// earlier annotation pass could not see: the title, abstract and
+// keywords, and body text containing XML entities. Body text without
+// entities was scanned before and is left alone, and nothing inside
+// an existing <taxon-name> is touched, so existing tags and any
+// corrections keyed to them stay as they are. Run VerifyFullNames and
+// ExpandAbbreviations afterwards to verify the new tags.
+func (a *Annotator) AddMissedNames(augmented []byte) ([]byte, error) {
+	return a.findNames(augmented, true)
+}
+
+// trailingPunct is punctuation trimmed from the end of a tagged name.
+const trailingPunct = ".,;:"
+
+// trimNameSpan narrows the span [start, end) of a name in text so it
+// excludes leading opening brackets, trailing punctuation, and a
+// trailing ")" or "]" with no matching opening bracket in the span.
+// Brackets that belong to the name, as in a subgenus
+// ("Achnanthes (Achnanthidium)"), stay.
+func trimNameSpan(text string, start, end int) (int, int) {
+	for start < end && (text[start] == '(' || text[start] == '[') {
+		start++
+	}
+	for end > start {
+		c := text[end-1]
+		switch {
+		case strings.IndexByte(trailingPunct, c) >= 0:
+			end--
+		case c == ')' && strings.Count(text[start:end], "(") < strings.Count(text[start:end], ")"),
+			c == ']' && strings.Count(text[start:end], "[") < strings.Count(text[start:end], "]"):
+			end--
+		default:
+			return start, end
+		}
+	}
+	return start, end
+}
+
+// TrimTagBoundaries moves brackets and punctuation that an earlier
+// annotation pass put inside a name tag to just outside it, using the
+// same rule as [trimNameSpan]:
+// "<tp:taxon-name …>(Bacillariophyceae)</…>" →
+// "(<tp:taxon-name …>Bacillariophyceae</…>)". A semicolon that closes
+// an XML entity stays where it is. Tags containing other markup are
+// left alone.
+func TrimTagBoundaries(augmented []byte) []byte {
+	openTag := []byte("<" + TaxPubPrefix + ":taxon-name")
+	closeTag := []byte("</" + TaxPubPrefix + ":taxon-name>")
+	var out bytes.Buffer
+	out.Grow(len(augmented))
+	rest := augmented
+	for {
+		i := bytes.Index(rest, openTag)
+		if i < 0 {
+			out.Write(rest)
+			return out.Bytes()
+		}
+		after := rest[i+len(openTag):]
+		gt := bytes.IndexByte(after, '>')
+		if gt < 0 || (after[0] != ' ' && after[0] != '>') {
+			out.Write(rest[:i+len(openTag)])
+			rest = after
+			continue
+		}
+		openEnd := i + len(openTag) + gt + 1
+		c := bytes.Index(rest[openEnd:], closeTag)
+		if c < 0 {
+			out.Write(rest)
+			return out.Bytes()
+		}
+		content := rest[openEnd : openEnd+c]
+		if bytes.IndexByte(content, '<') >= 0 {
+			out.Write(rest[:openEnd+c+len(closeTag)])
+			rest = rest[openEnd+c+len(closeTag):]
+			continue
+		}
+		start, end := trimNameSpan(string(content), 0, len(content))
+		// Keep a semicolon that ends an entity, and anything before it.
+		for k := end; k < len(content); k++ {
+			if content[k] == ';' && endsEntity(content[:k+1]) {
+				end = k + 1
+			}
+		}
+		if start >= end {
+			out.Write(rest[:openEnd+c+len(closeTag)])
+			rest = rest[openEnd+c+len(closeTag):]
+			continue
+		}
+		out.Write(rest[:i])
+		out.Write(content[:start])
+		out.Write(rest[i:openEnd])
+		out.Write(content[start:end])
+		out.Write(closeTag)
+		out.Write(content[end:])
+		rest = rest[openEnd+c+len(closeTag):]
+	}
+}
+
+// endsEntity reports whether b ends with an XML entity or character
+// reference ("&amp;", "&#x201D;").
+func endsEntity(b []byte) bool {
+	amp := bytes.LastIndexByte(b, '&')
+	if amp < 0 || amp == len(b)-1 {
+		return false
+	}
+	ref := b[amp+1 : len(b)-1]
+	if len(ref) == 0 {
+		return false
+	}
+	for _, c := range ref {
+		if !(c == '#' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// frontProse are the <front> elements whose text is the paper's own
+// prose and is scanned for names.
+var frontProse = map[string]bool{
+	"article-title":  true,
+	"subtitle":       true,
+	"trans-title":    true,
+	"abstract":       true,
+	"trans-abstract": true,
+	"kwd-group":      true,
+}
+
+func (a *Annotator) findNames(jats []byte, additive bool) ([]byte, error) {
 	if err := a.ensureReady(); err != nil {
 		return nil, err
 	}
@@ -162,7 +298,7 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 	}
 
 	dec := xml.NewDecoder(bytes.NewReader(jats))
-	bodyDepth := 0
+	var bodyDepth, frontDepth, proseDepth, refListDepth, taxonNameDepth int
 	var beforeOffset int64
 	for {
 		beforeOffset = dec.InputOffset()
@@ -176,26 +312,51 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 		afterOffset := dec.InputOffset()
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "body" {
+			switch name := t.Name.Local; {
+			case name == "body":
 				bodyDepth++
+			case name == "front":
+				frontDepth++
+			case name == "ref-list":
+				refListDepth++
+			case name == "taxon-name":
+				taxonNameDepth++
+			case frontDepth > 0 && frontProse[name]:
+				proseDepth++
 			}
 		case xml.EndElement:
-			if t.Name.Local == "body" && bodyDepth > 0 {
+			switch name := t.Name.Local; {
+			case name == "body" && bodyDepth > 0:
 				bodyDepth--
+			case name == "front" && frontDepth > 0:
+				frontDepth--
+			case name == "ref-list" && refListDepth > 0:
+				refListDepth--
+			case name == "taxon-name" && taxonNameDepth > 0:
+				taxonNameDepth--
+			case frontDepth > 0 && frontProse[name] && proseDepth > 0:
+				proseDepth--
 			}
 		case xml.CharData:
-			if bodyDepth <= 0 || !hasWordContent(t) {
+			inBody := bodyDepth > 0
+			inProse := frontDepth > 0 && proseDepth > 0
+			if refListDepth > 0 || (!inBody && !inProse) || !hasWordContent(t) {
 				continue
 			}
 			raw := jats[beforeOffset:afterOffset]
-			decoded := string(t)
-			// Skip chunks where decoding differs from the raw
-			// bytes — entities (&amp; etc.) make GNfinder's
-			// plaintext offsets non-mappable to raw positions.
-			// Scientific names rarely contain XML-special chars,
-			// so the loss is negligible; safety wins.
-			if string(raw) != decoded {
+			decoded, rawPos, ok := decodeText(raw)
+			// A chunk the decoder cannot map back to raw bytes (a
+			// CDATA section, an unknown entity) is skipped.
+			if !ok || decoded != string(t) {
 				continue
+			}
+			if additive {
+				// Only text the full pass could not see: prose in
+				// <front>, and body text that contains entities.
+				hasEntity := len(decoded) != len(raw)
+				if taxonNameDepth > 0 || (inBody && !hasEntity) {
+					continue
+				}
 			}
 			res := a.gnf.Find("", decoded)
 			for _, n := range res.Names {
@@ -209,8 +370,15 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 					// isLabelWord for the rationale and list.
 					continue
 				}
-				startPos := beforeOffset + int64(n.OffsetStart)
-				endPos := beforeOffset + int64(n.OffsetEnd)
+				// GNfinder's offsets can include surrounding brackets
+				// and punctuation ("(Bacillariophyceae)",
+				// "C. imitans."); keep them outside the tag.
+				start, end := trimNameSpan(decoded, n.OffsetStart, n.OffsetEnd)
+				if start >= end {
+					continue
+				}
+				startPos := beforeOffset + int64(rawPos[start])
+				endPos := beforeOffset + int64(rawPos[end])
 				edits = append(edits, insertion{
 					pos: startPos,
 					text: `<` + TaxPubPrefix + `:taxon-name full-name="` +
@@ -224,6 +392,75 @@ func (a *Annotator) FindNames(jats []byte) ([]byte, error) {
 		}
 	}
 	return applyInsertions(jats, edits), nil
+}
+
+// decodeText decodes the predefined XML entities and character
+// references in raw text and normalizes line ends as an XML parser
+// does. rawPos[i] is the raw offset of decoded byte i, with a final
+// entry for the end, so a decoded span [s, e) maps to raw
+// [rawPos[s], rawPos[e]). It reports false for input it cannot map
+// (markup such as CDATA, or an unknown entity).
+func decodeText(raw []byte) (string, []int, bool) {
+	out := make([]byte, 0, len(raw))
+	rawPos := make([]int, 0, len(raw)+1)
+	for i := 0; i < len(raw); {
+		switch c := raw[i]; c {
+		case '<':
+			return "", nil, false
+		case '\r':
+			// "\r\n" and a lone "\r" both decode to "\n".
+			out = append(out, '\n')
+			rawPos = append(rawPos, i)
+			i++
+			if i < len(raw) && raw[i] == '\n' {
+				i++
+			}
+		case '&':
+			end := bytes.IndexByte(raw[i:], ';')
+			if end < 0 {
+				return "", nil, false
+			}
+			ref := string(raw[i+1 : i+end])
+			var val string
+			switch {
+			case ref == "amp":
+				val = "&"
+			case ref == "lt":
+				val = "<"
+			case ref == "gt":
+				val = ">"
+			case ref == "quot":
+				val = `"`
+			case ref == "apos":
+				val = "'"
+			case strings.HasPrefix(ref, "#x"), strings.HasPrefix(ref, "#X"):
+				n, err := strconv.ParseUint(ref[2:], 16, 32)
+				if err != nil {
+					return "", nil, false
+				}
+				val = string(rune(n))
+			case strings.HasPrefix(ref, "#"):
+				n, err := strconv.ParseUint(ref[1:], 10, 32)
+				if err != nil {
+					return "", nil, false
+				}
+				val = string(rune(n))
+			default:
+				return "", nil, false
+			}
+			for range len(val) {
+				rawPos = append(rawPos, i)
+			}
+			out = append(out, val...)
+			i += end + 1
+		default:
+			out = append(out, c)
+			rawPos = append(rawPos, i)
+			i++
+		}
+	}
+	rawPos = append(rawPos, len(raw))
+	return string(out), rawPos, true
 }
 
 // insertion is one atomic "insert this text at this byte position"

@@ -81,14 +81,26 @@ func TagPrefix(id int) string {
 // expansion could not resolve it.
 var abbreviated = regexp.MustCompile(`^[A-Z][a-z]?\.\s`)
 
-// Count returns how many times each name is tagged in augmented JATS,
-// keyed by the tag's full-name attribute. Tags whose full-name is
-// still an unresolved abbreviation are skipped.
+// Count returns how many times each name is tagged in augmented JATS.
+// A tag's name is its full-name attribute; publisher TaxPub tags,
+// which carry no full-name, use their text (the joined
+// taxon-name-part pieces). Names that are still unresolved
+// abbreviations are skipped.
 func Count(jats []byte) (map[string]int, error) {
 	counts := make(map[string]int)
+	add := func(name string) {
+		name = strings.Join(strings.Fields(name), " ")
+		if name != "" && !abbreviated.MatchString(name) {
+			counts[name]++
+		}
+	}
 	dec := xml.NewDecoder(bytes.NewReader(jats))
 	dec.Strict = false
 	dec.Entity = xml.HTMLEntity
+	// collecting > 0 while inside a tag without full-name; text goes
+	// to buf until that tag closes.
+	var collecting int
+	var buf strings.Builder
 	for {
 		tok, err := dec.Token()
 		if errors.Is(err, io.EOF) {
@@ -97,17 +109,37 @@ func Count(jats []byte) (map[string]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("mentions: parse JATS: %w", err)
 		}
-		se, ok := tok.(xml.StartElement)
-		if !ok || se.Name.Local != "taxon-name" {
-			continue
-		}
-		for _, attr := range se.Attr {
-			if attr.Name.Local != "full-name" {
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local != "taxon-name" {
 				continue
 			}
-			name := strings.Join(strings.Fields(attr.Value), " ")
-			if name != "" && !abbreviated.MatchString(name) {
-				counts[name]++
+			if collecting > 0 {
+				collecting++
+				continue
+			}
+			full := ""
+			for _, attr := range t.Attr {
+				if attr.Name.Local == "full-name" {
+					full = attr.Value
+				}
+			}
+			if full != "" {
+				add(full)
+				continue
+			}
+			collecting = 1
+			buf.Reset()
+		case xml.CharData:
+			if collecting > 0 {
+				buf.Write(t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "taxon-name" && collecting > 0 {
+				collecting--
+				if collecting == 0 {
+					add(buf.String())
+				}
 			}
 		}
 	}
