@@ -15764,6 +15764,11 @@ class SfgaReferences extends LitElement {
       flex-direction: column;
       overflow: hidden;
       min-width: 0;
+      min-height: 0;
+    }
+    .paper > .workspace {
+      flex: 1;
+      min-height: 0;
     }
     .paper-bar {
       display: flex;
