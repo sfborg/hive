@@ -19528,15 +19528,14 @@ class SfgaReferences extends LitElement {
   }
 
   // _composeRunLabel builds a compact dropdown label — model +
-  // cost + relative age so the curator can distinguish runs at a
-  // glance without decoding the run_id UUID.
+  // relative age so the curator can distinguish runs at a glance
+  // without decoding the run_id UUID.
   _composeRunLabel(r) {
     const env = this._safeParseAssertion(r.envelope);
     const model =
       env?.model_version_id || env?.model || r.source_id || "unknown";
-    const cost = r.cost_usd != null ? ` · ${this._formatUSD(r.cost_usd)}` : "";
     const when = r.created_at ? ` · ${this._relTime(r.created_at)}` : "";
-    return `${model}${cost}${when}`;
+    return `${model}${when}`;
   }
 
   // _relTime returns a short relative timestamp (5m, 2h, 3d) —
@@ -19694,7 +19693,6 @@ class SfgaReferences extends LitElement {
     const tree = run && run.raw_output;
     const env = run && this._safeParseAssertion(run.envelope);
     const model = env?.model_version_id || env?.model || run?.source_id || "—";
-    const cost = run ? run.cost_usd : null;
     return html`
       <div class="compare-column ${isActive ? "active" : ""}">
         <div
@@ -19735,7 +19733,10 @@ class SfgaReferences extends LitElement {
           </select>
           ${run
             ? html`<span class="compare-meta">
-                ${model} · ${cost != null ? this._formatUSD(cost) : "—"}
+                ${model} ·
+                ${env?.input_tokens ? env.input_tokens.toLocaleString() : "—"} in ·
+                ${env?.output_tokens ? env.output_tokens.toLocaleString() : "—"} out
+                tokens (provider-reported)
               </span>`
             : nothing}
         </div>
@@ -19754,12 +19755,6 @@ class SfgaReferences extends LitElement {
     } catch {
       return null;
     }
-  }
-
-  _formatUSD(n) {
-    if (n == null) return "";
-    if (n < 0.01) return `~$${n.toFixed(4)}`;
-    return `~$${n.toFixed(2)}`;
   }
 
   // _renderComposeTree walks compose_v1's name_usages by parentID

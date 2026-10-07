@@ -416,8 +416,10 @@ CREATE TABLE IF NOT EXISTS hive__reference_test_set (
 --                    whose assertions they consumed; the WUI walks
 --                    this pointer to render "the NER output this
 --                    compose was built from"
---   cost_usd         actual USD cost (from envelope for llm; zero
---                    for hive_ner and curator)
+--   cost_usd         unused; always 0 for new runs. hive reports
+--                    provider token counts only and never computes
+--                    dollar costs. Kept so existing archives need no
+--                    migration.
 --   is_gold_standard 0/1 — curator flags a run as ground truth for
 --                    scoring. When batch runs process a corpus,
 --                    LLM output on gold-flagged references is

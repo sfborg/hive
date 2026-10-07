@@ -537,11 +537,15 @@ export const api = {
       // browser). Cached per-server for one hour so repeated
       // invoke-modal opens don't hammer the upstream. Returns
       // {items: [{id, display_name?, context_window?,
-      // input_price_per_million?, output_price_per_million?}]}.
+      // max_output_tokens?, listed_price?: {input_per_token,
+      // output_per_token}}], pricing_source?}. listed_price is the
+      // provider's own published rate, passed through verbatim;
+      // pricing_source names the API host it came from. Pass
+      // {fresh: 1} to bypass the server cache.
       // 501 when the underlying adapter doesn't support models
       // listing — WUI should fall back to a free-text override.
-      models: (name) =>
-        j("GET", `/api/llm/providers/${encodeURIComponent(name)}/models`),
+      models: (name, opts) =>
+        j("GET", `/api/llm/providers/${encodeURIComponent(name)}/models${qs(opts)}`),
       // patch applies partial updates to a provider. Only
       // non-empty fields in the body take effect. Rules for
       // credential handling live in the server-side doc for
@@ -556,11 +560,10 @@ export const api = {
       // existed or not.
       delete: (name) => j("DELETE", `/api/llm/providers/${encodeURIComponent(name)}`),
     },
-    // estimate returns the token count + USD cost forecast + context-
-    // window check for a would-be invocation. The WUI uses this to
-    // show cost near the submit button, disable submit when the
-    // input would exceed the model's context window, and trigger a
-    // confirm() dialog above confirm_threshold_usd. See
+    // estimate returns the approximate token count + context-window
+    // check for a would-be invocation, so the WUI can disable submit
+    // when the input would exceed the model's context window. Token
+    // counts only; hive never computes dollar costs. See
     // apiLLMEstimateResponse on the server for the full field set.
     estimate: (body) => j("POST", "/api/llm/estimate", body),
     // invoke runs the prompt via the selected provider and persists

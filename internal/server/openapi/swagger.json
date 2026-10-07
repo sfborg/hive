@@ -857,7 +857,7 @@
         },
         "/llm/estimate": {
             "post": {
-                "description": "Compute approximate token count and USD cost for a would-be invocation without calling the provider.",
+                "description": "Compute approximate token count for a would-be invocation and check it against the model's context window, without calling the provider.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1160,6 +1160,12 @@
                         "name": "name",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Bypass the cache and fetch from the provider",
+                        "name": "fresh",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -7042,14 +7048,8 @@
         "server.apiLLMEstimateResponse": {
             "type": "object",
             "properties": {
-                "confirm_threshold_usd": {
-                    "type": "number"
-                },
                 "context_window": {
                     "type": "integer"
-                },
-                "estimated_cost_usd": {
-                    "type": "number"
                 },
                 "input_tokens": {
                     "type": "integer"
@@ -7063,9 +7063,6 @@
                 "model": {
                     "type": "string"
                 },
-                "pricing_known": {
-                    "type": "boolean"
-                },
                 "provider": {
                     "type": "string"
                 },
@@ -7077,6 +7074,10 @@
         "server.apiLLMInvokeRequest": {
             "type": "object",
             "properties": {
+                "effort": {
+                    "description": "Effort is the reasoning effort level (low | medium | high |\nxhigh | max). Empty uses the model default. Sent only to\nAnthropic providers.",
+                    "type": "string"
+                },
                 "input": {
                     "type": "string"
                 },
@@ -7112,6 +7113,10 @@
                 },
                 "temperature": {
                     "type": "number"
+                },
+                "thinking_summary": {
+                    "description": "ThinkingSummary requests a summary of the model's reasoning,\nstored on the run's envelope. Anthropic models that think by\ndefault only; others are rejected with 400.",
+                    "type": "boolean"
                 }
             }
         },
@@ -7143,6 +7148,10 @@
                     "items": {
                         "type": "object"
                     }
+                },
+                "pricing_source": {
+                    "description": "PricingSource names where any listed_price values came from\n(the provider's API host), so the WUI can attribute them.\nEmpty when no model in the list carries a listed price.",
+                    "type": "string"
                 }
             }
         },
@@ -7150,6 +7159,10 @@
             "type": "object",
             "properties": {
                 "compose_prompt_id": {
+                    "type": "string"
+                },
+                "ner_effort": {
+                    "description": "Per-step reasoning effort (low | medium | high | xhigh | max).\nEmpty uses the model default. Sent only to Anthropic\nproviders. Separate per step because NER typically needs less\nreasoning than tree composition.",
                     "type": "string"
                 },
                 "ner_max_tokens": {
@@ -7178,6 +7191,13 @@
                 "temperature": {
                     "description": "Temperature applied uniformly to both steps. Zero-value =\nprovider default (usually deterministic-ish).",
                     "type": "number"
+                },
+                "thinking_summary": {
+                    "description": "ThinkingSummary requests a summary of the model's reasoning,\nstored on each run's envelope. Applied per step only where it\nadds no cost: Anthropic providers with a model that thinks by\ndefault. Other steps run without it.",
+                    "type": "boolean"
+                },
+                "tree_effort": {
+                    "type": "string"
                 },
                 "tree_max_tokens": {
                     "type": "integer"
@@ -7296,9 +7316,6 @@
         "server.apiLLMRun": {
             "type": "object",
             "properties": {
-                "cost_usd": {
-                    "type": "number"
-                },
                 "created_at": {
                     "type": "string"
                 },
@@ -9523,9 +9540,6 @@
         "server.composeTreeExportEnvelope": {
             "type": "object",
             "properties": {
-                "cost_usd": {
-                    "type": "number"
-                },
                 "created_at": {
                     "type": "string"
                 },

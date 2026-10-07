@@ -278,8 +278,8 @@ type openaiModelsResponse struct {
 		Name          string `json:"name,omitempty"`
 		ContextLength int    `json:"context_length,omitempty"`
 		Pricing       struct {
-			// Per-token USD strings (OpenRouter). Empty
-			// on providers that don't expose pricing.
+			// USD per token as decimal strings (OpenRouter).
+			// Empty on providers that don't list prices.
 			Prompt     string `json:"prompt,omitempty"`
 			Completion string `json:"completion,omitempty"`
 		} `json:"pricing,omitempty"`
@@ -291,16 +291,10 @@ type openaiModelsResponse struct {
 
 // ListModels calls the provider's models-listing endpoint
 // (GET {baseURL}/models per the OpenAI convention) and returns
-// normalized [ModelInfo] entries. Prices are converted from
-// per-token (OpenRouter's format) to per-million (hive's
-// convention). Providers without pricing fields (plain OpenAI,
-// Ollama, most self-hosted) return entries with zero prices;
-// callers fall back to hive's static pricing table for those.
-//
-// Silent-fail semantics on individual field parses: a model
-// with a malformed pricing string still lands with the other
-// fields intact — an incomplete list is better than a broken
-// picker for the whole provider.
+// normalized [ModelInfo] entries. Context window and output cap are
+// filled when the provider reports them (OpenRouter does; plain
+// OpenAI and Ollama return IDs only). Listed per-token prices are
+// passed through as [ListedPrice] when present.
 func (o *OpenAICompat) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	apiKey, err := o.cred.Reveal(ctx)
 	if err != nil {
@@ -326,26 +320,28 @@ func (o *OpenAICompat) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 	models := make([]ModelInfo, 0, len(out.Data))
 	for _, m := range out.Data {
-		mi := ModelInfo{
+		models = append(models, ModelInfo{
 			ID:              m.ID,
 			DisplayName:     m.Name,
 			ContextWindow:   m.ContextLength,
 			MaxOutputTokens: m.TopProvider.MaxCompletionTokens,
-		}
-		// Per-token USD strings → per-million USD floats.
-		// Skip silently on parse failure so the model still
-		// lands, just without pricing info.
-		if m.Pricing.Prompt != "" {
-			if v, perr := strconv.ParseFloat(m.Pricing.Prompt, 64); perr == nil {
-				mi.InputPricePerMillion = v * 1_000_000
-			}
-		}
-		if m.Pricing.Completion != "" {
-			if v, perr := strconv.ParseFloat(m.Pricing.Completion, 64); perr == nil {
-				mi.OutputPricePerMillion = v * 1_000_000
-			}
-		}
-		models = append(models, mi)
+			ListedPrice:     listedPrice(m.Pricing.Prompt, m.Pricing.Completion),
+		})
 	}
 	return models, nil
+}
+
+// listedPrice returns the provider's listed rates when both are
+// non-negative decimal numbers. OpenRouter lists "-1" for routers
+// whose price depends on the model chosen at request time; those,
+// and empty or malformed values, yield nil so the UI falls back to
+// "see provider".
+func listedPrice(input, output string) *ListedPrice {
+	for _, v := range []string{input, output} {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0 {
+			return nil
+		}
+	}
+	return &ListedPrice{InputPerToken: input, OutputPerToken: output}
 }

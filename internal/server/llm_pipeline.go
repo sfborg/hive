@@ -65,6 +65,19 @@ type apiLLMPipelineRequest struct {
 	// Temperature applied uniformly to both steps. Zero-value =
 	// provider default (usually deterministic-ish).
 	Temperature float64 `json:"temperature,omitempty"`
+
+	// Per-step reasoning effort (low | medium | high | xhigh | max).
+	// Empty uses the model default. Sent only to Anthropic
+	// providers. Separate per step because NER typically needs less
+	// reasoning than tree composition.
+	NEREffort  string `json:"ner_effort,omitempty"`
+	TreeEffort string `json:"tree_effort,omitempty"`
+
+	// ThinkingSummary requests a summary of the model's reasoning,
+	// stored on each run's envelope. Applied per step only where it
+	// adds no cost: Anthropic providers with a model that thinks by
+	// default. Other steps run without it.
+	ThinkingSummary bool `json:"thinking_summary,omitempty"`
 }
 
 // apiLLMPipelineResponse returns both persisted-run summaries plus
@@ -155,6 +168,11 @@ func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 	nerModel := s.resolveModel(body.NERProvider, body.NERModel)
 	treeModel := s.resolveModel(body.TreeProvider, body.TreeModel)
 
+	if !llm.ValidEffort(body.NEREffort) || !llm.ValidEffort(body.TreeEffort) {
+		writeBadRequest(w, r, "invalid 'ner_effort' or 'tree_effort' value (low | medium | high | xhigh | max)")
+		return
+	}
+
 	// Default max_tokens to the model's per-call output cap so a
 	// full-paper NER pass doesn't truncate mid-JSON on 4096-token
 	// adapter defaults. Curators can still override per-step from
@@ -162,11 +180,11 @@ func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 	// contract keeps the override available.
 	nerMax := body.NERMaxTokens
 	if nerMax == 0 {
-		nerMax = defaultMaxForModel(nerModel)
+		nerMax = s.defaultMaxForModel(r.Context(), body.NERProvider, nerModel)
 	}
 	treeMax := body.TreeMaxTokens
 	if treeMax == 0 {
-		treeMax = defaultMaxForModel(treeModel)
+		treeMax = s.defaultMaxForModel(r.Context(), body.TreeProvider, treeModel)
 	}
 
 	// ---------- Step 1: NER ----------
@@ -197,6 +215,8 @@ func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 		llm.WithModel(nerModel),
 		llm.WithMaxTokens(nerMax),
 		llm.WithTemperature(body.Temperature),
+		llm.WithEffort(body.NEREffort),
+		llm.WithThinkingSummary(body.ThinkingSummary && s.thinkingSummaryFree(body.NERProvider, nerModel)),
 	)
 	if nerErr != nil {
 		writeJSON(w, http.StatusOK, apiLLMPipelineResponse{
@@ -256,6 +276,8 @@ func (s *server) handleRunLLMPipeline(w http.ResponseWriter, r *http.Request) {
 		llm.WithModel(treeModel),
 		llm.WithMaxTokens(treeMax),
 		llm.WithTemperature(body.Temperature),
+		llm.WithEffort(body.TreeEffort),
+		llm.WithThinkingSummary(body.ThinkingSummary && s.thinkingSummaryFree(body.TreeProvider, treeModel)),
 	)
 
 	// Prepare response, filling as much as we can even when
@@ -318,7 +340,6 @@ func (s *server) persistNERRun(
 	env llm.Envelope,
 ) (apiLLMRun, int, error, error) {
 	envJSON := mustJSON(env)
-	cost, _ := estimateCostForProvider(req.NERProvider, env.Model, env.InputTokens, env.OutputTokens)
 	run := hive.ExtractionRun{
 		ReferenceID:   req.ReferenceID,
 		Purpose:       "ner",
@@ -326,7 +347,6 @@ func (s *server) persistNERRun(
 		SourceID:      req.NERProvider,
 		EnvelopeJSON:  string(envJSON),
 		RawOutputJSON: env.Output,
-		CostUSD:       cost,
 		Notes:         req.Notes,
 	}
 	var (
@@ -372,7 +392,6 @@ func (s *server) persistComposeRun(
 	parentRunID string,
 ) (apiLLMRun, error) {
 	envJSON := mustJSON(env)
-	cost, _ := estimateCostForProvider(req.TreeProvider, env.Model, env.InputTokens, env.OutputTokens)
 	run := hive.ExtractionRun{
 		ReferenceID:   req.ReferenceID,
 		Purpose:       "compose",
@@ -381,7 +400,6 @@ func (s *server) persistComposeRun(
 		EnvelopeJSON:  string(envJSON),
 		RawOutputJSON: env.Output,
 		ParentRunID:   parentRunID,
-		CostUSD:       cost,
 		Notes:         req.Notes,
 	}
 	var runID string
@@ -508,25 +526,96 @@ func unwrapValueAndSources(field any) (string, []any) {
 }
 
 // defaultMaxForModel returns a per-call output-token cap tuned to
-// the model's own MaxOutputTokens limit. Prevents mid-JSON
-// truncation on a full-paper NER pass when the caller doesn't
-// specify max_tokens.
+// the model's own MaxOutputTokens limit (see [server.modelLimits]).
+// Prevents mid-JSON truncation on a full-paper NER pass when the
+// caller doesn't specify max_tokens.
 //
-// When the model isn't in the limits table, fall back to 32_768 —
-// high enough to cover most modern frontier models (Gemini 2.5
-// Flash/Pro, Sonnet 5, Opus 5, o3-mini, DeepSeek Reasoner) so an
+// When the model's limits are unknown, fall back to 32_768 —
+// high enough to cover most modern frontier models so an
 // unknown-to-hive model with a real 32K+ cap doesn't silently
-// truncate. Models with lower true caps (older Haiku at 8K, GPT-4o
-// at 16K, DeepSeek Chat at 8K) still work correctly because they
-// have explicit entries in the limits table; the fallback only
-// applies to model IDs hive has never seen. If such a model has
-// a lower cap than the fallback, the provider returns a 400 —
-// loud diagnostic, cheaper failure mode than silent truncation.
-func defaultMaxForModel(model string) int {
-	if lim, ok := llm.LookupLimits(model); ok && lim.MaxOutputTokens > 0 {
+// truncate. If such a model has a lower cap than the fallback, the
+// provider returns a 400 — loud diagnostic, cheaper failure mode
+// than silent truncation.
+func (s *server) defaultMaxForModel(ctx context.Context, provider, model string) int {
+	if lim, ok := s.modelLimits(ctx, provider, model); ok && lim.MaxOutputTokens > 0 {
 		return lim.MaxOutputTokens
 	}
 	return 32_768
+}
+
+// modelLimits returns the context window and output cap for model,
+// preferring the provider's own models listing (fetched and cached
+// on first use when the adapter supports listing) over hive's
+// static limits table. A failed listing falls back to the table.
+func (s *server) modelLimits(ctx context.Context, provider, model string) (llm.Limits, bool) {
+	if model != "" {
+		for _, m := range s.providerModels(ctx, provider) {
+			if m.ID == model && m.MaxOutputTokens > 0 {
+				return llm.Limits{ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens}, true
+			}
+		}
+	}
+	return llm.LookupLimits(model)
+}
+
+// providerModels returns the provider's models listing, from the
+// per-process cache or fetched on demand when the adapter supports
+// listing. Returns nil when the provider can't list models or the
+// fetch fails; callers treat that as "unknown".
+func (s *server) providerModels(ctx context.Context, provider string) []llm.ModelInfo {
+	if provider == "" || s.llmRunner == nil {
+		return nil
+	}
+	if models, ok := cachedModels(provider); ok {
+		return models
+	}
+	p, err := s.llmRunner.Providers.Get(provider)
+	if err != nil {
+		return nil
+	}
+	lister, ok := p.(llm.ModelLister)
+	if !ok {
+		return nil
+	}
+	models, err := lister.ListModels(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "models list failed", "provider", provider, "err", err)
+		return nil
+	}
+	storeModels(provider, models)
+	return models
+}
+
+// providerKind returns the configured adapter kind for a provider
+// name, or "" when the name is unknown.
+func (s *server) providerKind(name string) string {
+	for _, pc := range s.llmProviders {
+		if pc.Name == name {
+			return pc.Kind
+		}
+	}
+	return ""
+}
+
+// thinkingSummaryFree reports whether a thinking summary can be
+// requested for (provider, model) without adding cost.
+func (s *server) thinkingSummaryFree(provider, model string) bool {
+	return s.providerKind(provider) == llm.KindAnthropic && llm.ThinkingByDefault(model)
+}
+
+// thinkingSummaryProblem returns a client-facing reason why a
+// thinking summary can't be requested for (provider, model), or ""
+// when it can. Non-Anthropic providers ignore the request, so they
+// pass. Anthropic models that don't think by default are refused
+// because the request would turn thinking on and add cost.
+func (s *server) thinkingSummaryProblem(provider, model string) string {
+	if s.providerKind(provider) != llm.KindAnthropic {
+		return ""
+	}
+	if !llm.ThinkingByDefault(model) {
+		return fmt.Sprintf("thinking summary is not available for %s: the model does not think by default, so requesting it would increase cost", model)
+	}
+	return ""
 }
 
 // resolveModel returns the model name to use for a step —

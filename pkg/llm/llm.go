@@ -21,6 +21,7 @@ package llm
 
 import (
 	"context"
+	"slices"
 )
 
 // Request is the abstract shape of an LLM invocation. Adapters
@@ -56,6 +57,23 @@ type Request struct {
 	// layer — the caller decides.
 	Temperature float64
 
+	// Effort selects how much reasoning the model spends before
+	// answering ("low" | "medium" | "high" | "xhigh" | "max").
+	// Reasoning tokens are billed as output but not returned, so a
+	// lower level reduces cost on tasks that need little reasoning.
+	// Empty leaves the model default. Sent as output_config.effort
+	// by the Anthropic adapter; ignored by OpenAI-compat providers.
+	// Does not change MaxTokens.
+	Effort string
+
+	// ThinkingSummary asks the provider to return a readable summary
+	// of the model's reasoning in [Response.Thinking]. The raw
+	// reasoning is never returned. The Anthropic adapter accepts it
+	// only for models that think by default ([ThinkingByDefault]),
+	// where it does not change billing; OpenAI-compat providers
+	// ignore it.
+	ThinkingSummary bool
+
 	// ResponseFormat hints at expected output shape. "json" asks
 	// OpenAI-compat providers to constrain output via json_object
 	// mode; ignored by providers that don't support it. Empty leaves
@@ -85,6 +103,15 @@ type Response struct {
 	// report them. Cache hits count as input tokens on Anthropic.
 	InputTokens  int
 	OutputTokens int
+
+	// Effort is the effort level the adapter sent to the provider;
+	// empty when none was requested or the adapter does not support
+	// it.
+	Effort string
+
+	// Thinking is the provider's summary of the model's reasoning
+	// when [Request.ThinkingSummary] was set; empty otherwise.
+	Thinking string
 }
 
 // Provider is the invocation surface every adapter implements.
@@ -118,23 +145,35 @@ const (
 
 // ModelInfo describes one model as returned by a provider's
 // models-listing endpoint (OpenAI's /v1/models, OpenRouter's
-// /api/v1/models, etc.). Prices are per-million tokens in USD;
-// zero means "unknown / not returned by this provider" and
-// callers should fall back to hive's static [Pricing] table.
+// /api/v1/models, Anthropic's /v1/models, etc.). Zero limits mean
+// the provider did not report them.
 type ModelInfo struct {
-	ID                    string  `json:"id"`
-	DisplayName           string  `json:"display_name,omitempty"`
-	ContextWindow         int     `json:"context_window,omitempty"`
-	MaxOutputTokens       int     `json:"max_output_tokens,omitempty"`
-	InputPricePerMillion  float64 `json:"input_price_per_million,omitempty"`
-	OutputPricePerMillion float64 `json:"output_price_per_million,omitempty"`
+	ID              string `json:"id"`
+	DisplayName     string `json:"display_name,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
+	// ListedPrice carries the provider's own listed rates when its
+	// models endpoint includes them (OpenRouter does; Anthropic and
+	// OpenAI do not). Nil otherwise.
+	ListedPrice *ListedPrice `json:"listed_price,omitempty"`
+}
+
+// ListedPrice is a provider's published per-token rate, passed
+// through verbatim. hive never multiplies these by token counts or
+// derives totals from them; they are shown as the provider's
+// statement, attributed to the provider.
+type ListedPrice struct {
+	// InputPerToken and OutputPerToken are USD per token, exactly
+	// as the provider's API returned them (decimal strings).
+	InputPerToken  string `json:"input_per_token"`
+	OutputPerToken string `json:"output_per_token"`
 }
 
 // ModelLister is the optional interface a Provider implements
 // when its upstream API exposes a models-listing endpoint.
 // Callers type-assert to detect support; providers without
-// this interface fall back to the hive-static pricing table
-// and the curator-typed model-override text-box.
+// this interface fall back to hive's static limits table and the
+// curator-typed model-override text-box.
 //
 // Kept optional (rather than a Provider-interface method) so
 // adapters for providers that don't have a models endpoint —
@@ -142,4 +181,13 @@ type ModelInfo struct {
 // don't have to stub out a "not supported" method.
 type ModelLister interface {
 	ListModels(ctx context.Context) ([]ModelInfo, error)
+}
+
+// Efforts lists the accepted [Request.Effort] values, lowest first.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// ValidEffort reports whether e is empty (model default) or one of
+// [Efforts].
+func ValidEffort(e string) bool {
+	return e == "" || slices.Contains(Efforts, e)
 }

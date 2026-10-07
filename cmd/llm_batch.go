@@ -33,6 +33,8 @@ type llmBatchOpts struct {
 	Refs        []string
 	Provider    string
 	Model       string
+	Effort      string
+	Thinking    bool
 	Prompt      string
 	Purpose     string
 	Concurrency int
@@ -276,6 +278,12 @@ func invokeLLM(ctx context.Context, opts llmBatchOpts, refID, input, parentRunID
 	}
 	if opts.Model != "" {
 		body["model"] = opts.Model
+	}
+	if opts.Effort != "" {
+		body["effort"] = opts.Effort
+	}
+	if opts.Thinking {
+		body["thinking_summary"] = true
 	}
 	if parentRunID != "" {
 		body["parent_run_id"] = parentRunID
@@ -529,6 +537,15 @@ func orDash(s string) string {
 		return "(provider default)"
 	}
 	return s
+}
+
+// modelLabel renders a model name for run summaries, appending the
+// effort level when one was requested.
+func modelLabel(model, effort string) string {
+	if effort == "" {
+		return orDash(model)
+	}
+	return fmt.Sprintf("%s (effort: %s)", orDash(model), effort)
 }
 
 func mustMarshal(v any) []byte {

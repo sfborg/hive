@@ -32,6 +32,15 @@ type Envelope struct {
 	InputTokens    int       `json:"input_tokens,omitempty"`
 	OutputTokens   int       `json:"output_tokens,omitempty"`
 	Output         string    `json:"output"`
+
+	// Effort is the reasoning effort level sent to the provider;
+	// empty when the model default was used or the provider does
+	// not support effort.
+	Effort string `json:"effort,omitempty"`
+
+	// Thinking is the provider's summary of the model's reasoning,
+	// present only when one was requested.
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Invoke runs the provider with req and wraps the response in an
@@ -64,6 +73,8 @@ func Invoke(
 		ProviderKind:   p.Kind(),
 		Model:          model,
 		ModelVersionID: resp.ModelVersionID,
+		Effort:         resp.Effort,
+		Thinking:       resp.Thinking,
 		InvokedAt:      started,
 		InputTokens:    resp.InputTokens,
 		OutputTokens:   resp.OutputTokens,

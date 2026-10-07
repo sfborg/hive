@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sfborg/hive/pkg/llm"
 )
 
 var nerCmd = &cobra.Command{
@@ -48,6 +50,8 @@ func runNER(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
 	provider, _ := cmd.Flags().GetString("provider")
 	model, _ := cmd.Flags().GetString("model")
+	effort, _ := cmd.Flags().GetString("effort")
+	thinking, _ := cmd.Flags().GetBool("thinking-summary")
 	prompt, _ := cmd.Flags().GetString("prompt")
 	concurrency, _ := cmd.Flags().GetInt("concurrency")
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -59,6 +63,9 @@ func runNER(cmd *cobra.Command, args []string) error {
 	server = strings.TrimRight(server, "/")
 	if provider == "" {
 		return fmt.Errorf("--provider is required (see `hive ner --help`)")
+	}
+	if !llm.ValidEffort(effort) {
+		return fmt.Errorf("--effort must be one of %s", strings.Join(llm.Efforts, ", "))
 	}
 	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	if prompt == "" {
@@ -93,6 +100,8 @@ func runNER(cmd *cobra.Command, args []string) error {
 		Refs:        refs,
 		Provider:    provider,
 		Model:       model,
+		Effort:      effort,
+		Thinking:    thinking,
 		Prompt:      prompt,
 		Purpose:     "ner",
 		Concurrency: concurrency,
@@ -113,7 +122,7 @@ func runNER(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"Would run NER (prompt %q) against %d reference(s)\n"+
 				"  Provider: %s\n  Model:    %s\n",
-			prompt, len(refs), provider, orDash(model))
+			prompt, len(refs), provider, modelLabel(model, effort))
 		for _, id := range refs {
 			fmt.Fprintln(cmd.OutOrStdout(), "  "+id)
 		}
@@ -122,7 +131,7 @@ func runNER(cmd *cobra.Command, args []string) error {
 	if !yes {
 		headline := fmt.Sprintf("Ready to run NER (prompt %q) over %d reference(s)",
 			prompt, len(refs))
-		if err := confirmRun(headline, provider, model); err != nil {
+		if err := confirmRun(headline, provider, modelLabel(model, effort)); err != nil {
 			return err
 		}
 	}
@@ -133,6 +142,8 @@ func init() {
 	nerCmd.Flags().String("server", "http://127.0.0.1:2365", "base URL of the running hive server")
 	nerCmd.Flags().String("provider", "", "provider name (matches an entry in your llm_providers config)")
 	nerCmd.Flags().String("model", "", "model override; empty means the provider's configured default")
+	nerCmd.Flags().Bool("thinking-summary", false, "request a summary of the model's reasoning, stored on each run (Anthropic models that think by default only; no extra cost)")
+	nerCmd.Flags().String("effort", "", "reasoning effort: low | medium | high | xhigh | max (Anthropic providers only); empty means the model default")
 	nerCmd.Flags().String("prompt", "", "shipped prompt name (default: highest-versioned ner_v* prompt on the server)")
 	nerCmd.Flags().Int("concurrency", 1, "number of parallel invoke calls; default 1 avoids accidentally slamming the provider")
 	nerCmd.Flags().Bool("all", false, "run against every reference in the archive")

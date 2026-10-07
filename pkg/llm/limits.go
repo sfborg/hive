@@ -1,10 +1,9 @@
 package llm
 
 // Limits describes the per-model size envelope hive checks against
-// before invoking. Kept separate from [Pricing] because context
-// windows and prices change at different cadences and for
-// different reasons — separating them keeps each table small and
-// makes the intent of a per-model edit obvious.
+// before invoking. A provider's own models listing takes precedence
+// when available; this table is the fallback for providers without
+// one.
 type Limits struct {
 	// ContextWindow is the total token budget (input + output) the
 	// model accepts in a single call. Exceeding it returns HTTP 400
@@ -18,13 +17,18 @@ type Limits struct {
 	MaxOutputTokens int
 }
 
-// limitsTable is the authoritative per-model size envelope. Same
-// maintenance discipline as [pricingTable] — bump when a provider
-// announces changes. Models absent from the table return
+// limitsTable is the fallback per-model size envelope, used when the
+// provider's models listing is unavailable or omits the model. Bump
+// when a provider announces changes. Models absent from the table return
 // known=false from [LookupLimits]; callers should surface "size
 // limits unknown for this model" and (defensively) skip the size
 // check rather than assume infinite context.
 var limitsTable = map[string]Limits{
+	// Anthropic Claude Sonnet 5.5 — 1M context, 128K output per
+	// Anthropic's model documentation. Reasoning tokens count
+	// against max_tokens.
+	"claude-sonnet-5-5": {ContextWindow: 1_000_000, MaxOutputTokens: 128_000},
+
 	// Anthropic Claude 5 — 200K context standard tier. Output caps
 	// mirror the 4.x family (Sonnet 64K, Opus 32K) pending
 	// authoritative verification against Anthropic's per-model

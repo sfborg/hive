@@ -81,6 +81,8 @@ func runCompose(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
 	provider, _ := cmd.Flags().GetString("provider")
 	model, _ := cmd.Flags().GetString("model")
+	effort, _ := cmd.Flags().GetString("effort")
+	thinking, _ := cmd.Flags().GetBool("thinking-summary")
 	prompt, _ := cmd.Flags().GetString("prompt")
 	concurrency, _ := cmd.Flags().GetInt("concurrency")
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -92,10 +94,14 @@ func runCompose(cmd *cobra.Command, args []string) error {
 	nerPrompt, _ := cmd.Flags().GetString("ner-prompt")
 	nerProvider, _ := cmd.Flags().GetString("ner-provider")
 	nerModel, _ := cmd.Flags().GetString("ner-model")
+	nerEffort, _ := cmd.Flags().GetString("ner-effort")
 
 	server = strings.TrimRight(server, "/")
 	if provider == "" {
 		return fmt.Errorf("--provider is required (see `hive compose --help`)")
+	}
+	if !llm.ValidEffort(effort) || !llm.ValidEffort(nerEffort) {
+		return fmt.Errorf("--effort and --ner-effort must be one of %s", strings.Join(llm.Efforts, ", "))
 	}
 	httpClient := &http.Client{Timeout: 30 * time.Minute}
 	if prompt == "" {
@@ -117,6 +123,9 @@ func runCompose(cmd *cobra.Command, args []string) error {
 	}
 	if nerModel == "" {
 		nerModel = model
+	}
+	if nerEffort == "" {
+		nerEffort = effort
 	}
 	if concurrency < 1 {
 		concurrency = 1
@@ -188,7 +197,7 @@ func runCompose(cmd *cobra.Command, args []string) error {
 				"  NER-ready + fit for model: %d\n"+
 				"  NER-ready but too big for model: %d\n"+
 				"  Missing NER: %d%s\n",
-			prompt, len(refs), provider, orDash(model),
+			prompt, len(refs), provider, modelLabel(model, effort),
 			fitCount, len(tooBig), len(missing),
 			ifThen(runNerFirst, " (would run NER first via --ner)", " (would be skipped)"))
 		for _, id := range refs {
@@ -225,7 +234,7 @@ func runCompose(cmd *cobra.Command, args []string) error {
 			prompt, len(refs), fitCount, len(missing),
 			ifThen(runNerFirst, " (will run NER first — extra tokens)", " (will be loudly skipped)"),
 			tooBigNote)
-		if err := confirmRun(headline, provider, model); err != nil {
+		if err := confirmRun(headline, provider, modelLabel(model, effort)); err != nil {
 			return err
 		}
 	}
@@ -243,6 +252,8 @@ func runCompose(cmd *cobra.Command, args []string) error {
 			Refs:        missing,
 			Provider:    nerProvider,
 			Model:       nerModel,
+			Effort:      nerEffort,
+			Thinking:    thinking,
 			Prompt:      nerPrompt,
 			Purpose:     "ner",
 			Concurrency: concurrency,
@@ -285,6 +296,8 @@ func runCompose(cmd *cobra.Command, args []string) error {
 		Refs:        refs,
 		Provider:    provider,
 		Model:       model,
+		Effort:      effort,
+		Thinking:    thinking,
 		Prompt:      prompt,
 		Purpose:     "compose",
 		Concurrency: concurrency,
@@ -397,6 +410,8 @@ func init() {
 	composeCmd.Flags().String("server", "http://127.0.0.1:2365", "base URL of the running hive server")
 	composeCmd.Flags().String("provider", "", "provider name for the compose call")
 	composeCmd.Flags().String("model", "", "model override for compose; empty means the provider's configured default")
+	composeCmd.Flags().Bool("thinking-summary", false, "request a summary of the model's reasoning, stored on each run (Anthropic models that think by default only; no extra cost)")
+	composeCmd.Flags().String("effort", "", "reasoning effort: low | medium | high | xhigh | max (Anthropic providers only); empty means the model default")
 	composeCmd.Flags().String("prompt", "", "shipped compose prompt name (default: highest-versioned compose_v* prompt on the server)")
 	composeCmd.Flags().Int("concurrency", 1, "number of parallel invoke calls per phase")
 	composeCmd.Flags().Bool("all", false, "run against every reference in the archive")
@@ -408,5 +423,6 @@ func init() {
 	composeCmd.Flags().String("ner-prompt", "", "shipped NER prompt name when --ner is set (default: highest-versioned ner_v* prompt on the server)")
 	composeCmd.Flags().String("ner-provider", "", "provider for the NER phase when --ner is set (default: same as --provider)")
 	composeCmd.Flags().String("ner-model", "", "model for the NER phase when --ner is set (default: same as --model)")
+	composeCmd.Flags().String("ner-effort", "", "reasoning effort for the NER phase when --ner is set (default: same as --effort)")
 	rootCmd.AddCommand(composeCmd)
 }

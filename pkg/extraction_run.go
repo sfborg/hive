@@ -50,11 +50,6 @@ type ExtractionRun struct {
 	// assertions it consumed. Empty for runs without a parent
 	// (NER passes, curator entries, ad-hoc calls).
 	ParentRunID string
-	// CostUSD is the actual invocation cost in USD. Populated from
-	// llm.EstimateCost using the envelope's token counts (accurate
-	// because they're the provider-reported values, not estimates).
-	// Zero for source_kind = "hive_ner" or "curator".
-	CostUSD float64
 	// IsGoldStandard flags a run as ground-truth for scoring.
 	// Curator toggles this on runs they've annotated rigorously;
 	// downstream scoring compares LLM runs to gold runs on the
@@ -102,9 +97,9 @@ func (t *Tx) CreateExtractionRun(run ExtractionRun) (string, error) {
 	}
 	const q = `INSERT INTO hive__extraction_run
 		(run_id, reference_id, purpose, source_kind, source_id,
-		 envelope_json, raw_output_json, parent_run_id, cost_usd,
+		 envelope_json, raw_output_json, parent_run_id,
 		 is_gold_standard, notes, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := t.tx.ExecContext(t.ctx, q,
 		run.RunID,
 		nullableText(run.ReferenceID),
@@ -114,7 +109,6 @@ func (t *Tx) CreateExtractionRun(run ExtractionRun) (string, error) {
 		run.EnvelopeJSON,
 		run.RawOutputJSON,
 		nullableText(run.ParentRunID),
-		run.CostUSD,
 		gold,
 		run.Notes,
 		run.CreatedAt.Format(time.RFC3339Nano),
@@ -130,7 +124,7 @@ func (t *Tx) CreateExtractionRun(run ExtractionRun) (string, error) {
 func (a *Archive) GetExtractionRun(ctx context.Context, runID string) (*ExtractionRun, error) {
 	const q = `SELECT run_id, COALESCE(reference_id, ''), purpose,
 		source_kind, source_id, envelope_json, raw_output_json,
-		COALESCE(parent_run_id, ''), cost_usd, is_gold_standard,
+		COALESCE(parent_run_id, ''), is_gold_standard,
 		notes, created_at, COALESCE(deleted_at, '')
 		FROM hive__extraction_run
 		WHERE run_id = ?`
@@ -157,7 +151,7 @@ func (a *Archive) ListExtractionRunsByReference(
 ) ([]ExtractionRun, error) {
 	q := `SELECT run_id, COALESCE(reference_id, ''), purpose,
 		source_kind, source_id, envelope_json, raw_output_json,
-		COALESCE(parent_run_id, ''), cost_usd, is_gold_standard,
+		COALESCE(parent_run_id, ''), is_gold_standard,
 		notes, created_at, COALESCE(deleted_at, '')
 		FROM hive__extraction_run
 		WHERE reference_id = ?`
@@ -260,7 +254,6 @@ func scanExtractionRun(r rowScanner) (*ExtractionRun, error) {
 		&run.EnvelopeJSON,
 		&run.RawOutputJSON,
 		&run.ParentRunID,
-		&run.CostUSD,
 		&gold,
 		&run.Notes,
 		&createdAt,

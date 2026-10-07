@@ -476,12 +476,8 @@ definitions:
     type: object
   server.apiLLMEstimateResponse:
     properties:
-      confirm_threshold_usd:
-        type: number
       context_window:
         type: integer
-      estimated_cost_usd:
-        type: number
       input_tokens:
         type: integer
       limits_known:
@@ -490,8 +486,6 @@ definitions:
         type: integer
       model:
         type: string
-      pricing_known:
-        type: boolean
       provider:
         type: string
       would_exceed_context:
@@ -499,6 +493,12 @@ definitions:
     type: object
   server.apiLLMInvokeRequest:
     properties:
+      effort:
+        description: |-
+          Effort is the reasoning effort level (low | medium | high |
+          xhigh | max). Empty uses the model default. Sent only to
+          Anthropic providers.
+        type: string
       input:
         type: string
       max_tokens:
@@ -524,6 +524,12 @@ definitions:
         type: string
       temperature:
         type: number
+      thinking_summary:
+        description: |-
+          ThinkingSummary requests a summary of the model's reasoning,
+          stored on the run's envelope. Anthropic models that think by
+          default only; others are rejected with 400.
+        type: boolean
     type: object
   server.apiLLMInvokeResponse:
     properties:
@@ -544,10 +550,23 @@ definitions:
         items:
           type: object
         type: array
+      pricing_source:
+        description: |-
+          PricingSource names where any listed_price values came from
+          (the provider's API host), so the WUI can attribute them.
+          Empty when no model in the list carries a listed price.
+        type: string
     type: object
   server.apiLLMPipelineRequest:
     properties:
       compose_prompt_id:
+        type: string
+      ner_effort:
+        description: |-
+          Per-step reasoning effort (low | medium | high | xhigh | max).
+          Empty uses the model default. Sent only to Anthropic
+          providers. Separate per step because NER typically needs less
+          reasoning than tree composition.
         type: string
       ner_max_tokens:
         description: |-
@@ -586,6 +605,15 @@ definitions:
           Temperature applied uniformly to both steps. Zero-value =
           provider default (usually deterministic-ish).
         type: number
+      thinking_summary:
+        description: |-
+          ThinkingSummary requests a summary of the model's reasoning,
+          stored on each run's envelope. Applied per step only where it
+          adds no cost: Anthropic providers with a model that thinks by
+          default. Other steps run without it.
+        type: boolean
+      tree_effort:
+        type: string
       tree_max_tokens:
         type: integer
       tree_model:
@@ -673,8 +701,6 @@ definitions:
     type: object
   server.apiLLMRun:
     properties:
-      cost_usd:
-        type: number
       created_at:
         type: string
       deleted_at:
@@ -2319,8 +2345,6 @@ definitions:
     type: object
   server.composeTreeExportEnvelope:
     properties:
-      cost_usd:
-        type: number
       created_at:
         type: string
       notes:
@@ -3052,8 +3076,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Compute approximate token count and USD cost for a would-be invocation
-        without calling the provider.
+      description: Compute approximate token count for a would-be invocation and check
+        it against the model's context window, without calling the provider.
       parameters:
       - description: Estimate request
         in: body
@@ -3257,6 +3281,10 @@ paths:
         name: name
         required: true
         type: string
+      - description: Bypass the cache and fetch from the provider
+        in: query
+        name: fresh
+        type: boolean
       produces:
       - application/json
       responses:

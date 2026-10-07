@@ -39,6 +39,13 @@ class SfgaLlmInvokeModal extends LitElement {
     // own endpoint shape).
     _nerModel: { state: true },
     _treeModel: { state: true },
+    // Per-step reasoning effort ("" = model default). Only offered
+    // for Anthropic providers; other provider kinds ignore it.
+    _nerEffort: { state: true },
+    _treeEffort: { state: true },
+    // Request a summary of the model's reasoning. On by default;
+    // only offered when a step's model returns one at no extra cost.
+    _thinkingSummary: { state: true },
     // Per-provider model list cache. Populated on first pick of
     // a provider that supports models listing (OpenRouter,
     // OpenAI, Ollama, Gemini-compat, etc.); rendered as a
@@ -140,8 +147,16 @@ class SfgaLlmInvokeModal extends LitElement {
     }
     .form-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      /* minmax(0, 1fr) keeps a long provider or model label from
+         widening its column past the modal. */
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--sp-3);
+    }
+    .form-row select,
+    .form-row input {
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
     }
     .form-note {
       color: var(--dim);
@@ -390,8 +405,44 @@ class SfgaLlmInvokeModal extends LitElement {
       font-family: var(--font-mono);
       font-size: var(--fs-xs);
     }
-    .result .step .cost {
+    .spend-warning {
+      font-size: var(--fs-xs);
+      color: var(--sev-warn);
+      border: 1px solid var(--sev-warn);
+      background: var(--sev-warn-bg);
+      border-radius: var(--radius-md);
+      padding: var(--sp-2) var(--sp-3);
+    }
+    .spend-warning p {
+      margin: 0;
+    }
+    .spend-warning p + p {
+      margin-top: var(--sp-1);
+    }
+    .checkbox-row {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      align-items: start;
+      gap: var(--sp-2);
+    }
+    .checkbox-row .form-note {
+      display: block;
+    }
+    .result .thinking summary {
+      cursor: pointer;
+      font-size: var(--fs-xs);
+      color: var(--dim);
+    }
+    .result .thinking pre {
+      white-space: pre-wrap;
+      max-height: 16rem;
+      overflow: auto;
+      font-size: var(--fs-xs);
+      margin: var(--sp-1) 0 0;
+    }
+    .result .step .tokens {
       font-family: var(--font-mono);
+      font-size: var(--fs-xs);
     }
     .result .total {
       border-top: 1px solid color-mix(in oklab, var(--sev-info) 30%, transparent);
@@ -412,6 +463,9 @@ class SfgaLlmInvokeModal extends LitElement {
     this._treeProvider = "";
     this._nerModel = "";
     this._treeModel = "";
+    this._nerEffort = "";
+    this._treeEffort = "";
+    this._thinkingSummary = true;
     this._modelsCache = {};
     this._loadingProviders = false;
     this._running = false;
@@ -657,6 +711,15 @@ class SfgaLlmInvokeModal extends LitElement {
       };
       if (this._nerModel.trim()) body.ner_model = this._nerModel.trim();
       if (this._treeModel.trim()) body.tree_model = this._treeModel.trim();
+      if (this._nerEffort && this._supportsEffort(this._nerProvider)) {
+        body.ner_effort = this._nerEffort;
+      }
+      if (this._treeEffort && this._supportsEffort(this._treeProvider)) {
+        body.tree_effort = this._treeEffort;
+      }
+      if (this._thinkingSummary && this._anyStepThinksByDefault()) {
+        body.thinking_summary = true;
+      }
       if (this._nerPromptID) body.ner_prompt_id = this._nerPromptID;
       if (this._composePromptID) body.compose_prompt_id = this._composePromptID;
       this._result = await api.llm.pipeline(body);
@@ -703,10 +766,17 @@ class SfgaLlmInvokeModal extends LitElement {
     return `${mm}:${ss.toString().padStart(2, "0")}`;
   }
 
-  _formatUSD(n) {
-    if (n == null) return "—";
-    if (n < 0.01) return `~$${n.toFixed(4)}`;
-    return `~$${n.toFixed(2)}`;
+  // _formatTokens renders a provider-reported token count, or "—"
+  // when the provider didn't report one (zero would imply no work).
+  _formatTokens(n) {
+    return n ? n.toLocaleString() : "—";
+  }
+
+  // _sumTokens adds the counts that were reported; undefined when
+  // none were.
+  _sumTokens(...ns) {
+    const known = ns.filter((n) => n);
+    return known.length ? known.reduce((a, b) => a + b, 0) : undefined;
   }
 
   render() {
@@ -919,6 +989,12 @@ class SfgaLlmInvokeModal extends LitElement {
                   )}
                 </datalist>`
               : nothing}
+            ${this._renderEffortSelect(
+              this._nerProvider,
+              this._nerEffort,
+              (v) => (this._nerEffort = v),
+            )}
+            ${this._renderPriceNote(this._nerProvider, this._nerModel)}
             <span class="form-note">
               Extracts per-fact assertions. A cheap model usually
               suffices. ${nerModels.length > 0
@@ -965,6 +1041,12 @@ class SfgaLlmInvokeModal extends LitElement {
                   )}
                 </datalist>`
               : nothing}
+            ${this._renderEffortSelect(
+              this._treeProvider,
+              this._treeEffort,
+              (v) => (this._treeEffort = v),
+            )}
+            ${this._renderPriceNote(this._treeProvider, this._treeModel)}
             <span class="form-note">
               Composes the tree from assertions + paper context.
               Benefits from a stronger reasoning model (Sonnet /
@@ -973,11 +1055,35 @@ class SfgaLlmInvokeModal extends LitElement {
           </label>
         </div>
 
+        ${this._anyStepThinksByDefault()
+          ? html`<label class="checkbox-row">
+              <input
+                type="checkbox"
+                .checked=${this._thinkingSummary}
+                @change=${(e) => (this._thinkingSummary = e.target.checked)}
+              />
+              <span>
+                Save a summary of the model's reasoning
+                <span class="form-note">
+                  Applies to steps whose model reasons by default, where
+                  the summary adds no cost. Shown in the run result.
+                </span>
+              </span>
+            </label>`
+          : nothing}
+
         <div class="prompt-pickers">
           ${this._renderPromptPicker("ner", "NER prompt")}
           ${this._renderPromptPicker("compose", "Compose prompt")}
         </div>
         ${this._promptPreview ? this._renderPromptPreview() : nothing}
+
+        <div class="spend-warning" role="note">
+          <p>⚠ Warning: this will invoke LLM API calls and cost money.
+          You are responsible for all incurred costs.</p>
+          <p>It is strongly recommended that you set spending limits with
+          your LLM service provider and vigilantly monitor your spending.</p>
+        </div>
 
         <div class="actions">
           <button type="button" class="secondary" @click=${this._close}>
@@ -1010,13 +1116,21 @@ class SfgaLlmInvokeModal extends LitElement {
     `;
   }
 
+  // _renderThinking shows a step's saved reasoning summary, collapsed.
+  _renderThinking(env) {
+    if (!env.thinking) return nothing;
+    return html`<details class="thinking">
+      <summary>Reasoning summary</summary>
+      <pre>${env.thinking}</pre>
+    </details>`;
+  }
+
   _renderResult() {
     const r = this._result;
     const ner = r.ner_run || {};
     const tree = r.compose_run || {};
     const nerEnv = this._safeParse(ner.envelope) || {};
     const treeEnv = this._safeParse(tree.envelope) || {};
-    const totalCost = (ner.cost_usd || 0) + (tree.cost_usd || 0);
     const failed = r.failed_stage;
     const assertionsN = r.assertions_materialized || 0;
     const materializeErr = r.ner_materialize_error;
@@ -1045,29 +1159,35 @@ class SfgaLlmInvokeModal extends LitElement {
 
         <div class="step">
           <span class="name">NER</span>
-          <span class="meta">
-            ${nerEnv.model || ner.source_id || "—"}
-            ·
-            ${(nerEnv.input_tokens || 0).toLocaleString()}→${(nerEnv.output_tokens || 0).toLocaleString()} tok
+          <span class="meta">${nerEnv.model || ner.source_id || "—"}</span>
+          <span class="tokens">
+            ${this._formatTokens(nerEnv.input_tokens)} in ·
+            ${this._formatTokens(nerEnv.output_tokens)} out
           </span>
-          <span class="cost">${this._formatUSD(ner.cost_usd)}</span>
         </div>
+        ${this._renderThinking(nerEnv)}
 
         ${tree.run_id
           ? html`<div class="step">
               <span class="name">Tree</span>
-              <span class="meta">
-                ${treeEnv.model || tree.source_id || "—"}
-                ·
-                ${(treeEnv.input_tokens || 0).toLocaleString()}→${(treeEnv.output_tokens || 0).toLocaleString()} tok
+              <span class="meta">${treeEnv.model || tree.source_id || "—"}</span>
+              <span class="tokens">
+                ${this._formatTokens(treeEnv.input_tokens)} in ·
+                ${this._formatTokens(treeEnv.output_tokens)} out
               </span>
-              <span class="cost">${this._formatUSD(tree.cost_usd)}</span>
-            </div>`
+            </div>
+            ${this._renderThinking(treeEnv)}`
           : nothing}
 
         <div class="total">
-          <span>Total</span>
-          <span>${this._formatUSD(totalCost)}</span>
+          <span>Provider-reported tokens</span>
+          <span>
+            ${this._formatTokens(this._sumTokens(nerEnv.input_tokens, treeEnv.input_tokens))} in ·
+            ${this._formatTokens(this._sumTokens(nerEnv.output_tokens, treeEnv.output_tokens))} out
+          </span>
+        </div>
+        <div class="form-note">
+          Verify actual token usage on your provider's dashboard.
         </div>
 
         ${materializeErr
@@ -1102,15 +1222,60 @@ class SfgaLlmInvokeModal extends LitElement {
     `;
   }
 
+  // _supportsEffort reports whether the provider's adapter sends an
+  // effort level. Only the Anthropic adapter does.
+  _supportsEffort(providerName) {
+    const p = this._providers.find((p) => p.name === providerName);
+    return !!p && p.kind === "anthropic";
+  }
+
+  // _renderEffortSelect renders the reasoning-effort picker for one
+  // pipeline step, or nothing when the provider ignores effort.
+  _renderEffortSelect(providerName, value, onChange) {
+    if (!this._supportsEffort(providerName)) return nothing;
+    return html`
+      <select
+        aria-label="Reasoning effort"
+        title="Reasoning effort. Lower levels use fewer reasoning tokens; output length limits are unchanged."
+        @change=${(e) => onChange(e.target.value)}
+      >
+        ${["", "low", "medium", "high", "xhigh", "max"].map(
+          (lvl) => html`
+            <option value=${lvl} ?selected=${lvl === value}>
+              ${lvl ? `effort: ${lvl}` : "effort: model default"}
+            </option>
+          `,
+        )}
+      </select>
+    `;
+  }
+
+  // _thinksByDefault mirrors llm.ThinkingByDefault: models that
+  // reason without being asked, so a summary adds no cost.
+  _thinksByDefault(providerName, modelOverride) {
+    if (!this._supportsEffort(providerName)) return false;
+    const model = modelOverride.trim() || this._defaultModelFor(providerName);
+    return ["claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-mythos-5"].some(
+      (p) => model.startsWith(p),
+    );
+  }
+
+  _anyStepThinksByDefault() {
+    return (
+      this._thinksByDefault(this._nerProvider, this._nerModel) ||
+      this._thinksByDefault(this._treeProvider, this._treeModel)
+    );
+  }
+
   _defaultModelFor(providerName) {
     const p = this._providers.find((p) => p.name === providerName);
     return p ? p.default_model || "" : "";
   }
 
   // _fetchModelsFor calls the backend proxy for the provider's
-  // /models endpoint. Silent no-op when already cached (fetching
-  // costs nothing here but the upstream call goes through the
-  // per-server cache so a re-fetch would just hit that anyway).
+  // /models endpoint, bypassing the server cache so any listed
+  // prices are current when the modal opens. Silent no-op when
+  // this modal instance already fetched the provider.
   // Failure paths: log to console, leave cache empty for that
   // provider — the model-override input still works as a
   // free-text field.
@@ -1119,12 +1284,15 @@ class SfgaLlmInvokeModal extends LitElement {
     if (this._modelsCache[providerName]) return;
     // Mark as in-flight with an empty array so parallel calls
     // don't stack up.
-    this._modelsCache = { ...this._modelsCache, [providerName]: [] };
+    this._modelsCache = { ...this._modelsCache, [providerName]: { items: [] } };
     try {
-      const resp = await api.llm.providers.models(providerName);
+      const resp = await api.llm.providers.models(providerName, { fresh: 1 });
       this._modelsCache = {
         ...this._modelsCache,
-        [providerName]: resp.items || [],
+        [providerName]: {
+          items: resp.items || [],
+          pricingSource: resp.pricing_source || "",
+        },
       };
     } catch (err) {
       // Provider doesn't support models listing (501) or the
@@ -1134,7 +1302,34 @@ class SfgaLlmInvokeModal extends LitElement {
   }
 
   _modelListFor(providerName) {
-    return this._modelsCache[providerName] || [];
+    return this._modelsCache[providerName]?.items || [];
+  }
+
+  // _renderPriceNote shows the provider's listed per-token rate for
+  // the effective model, attributed to its source, or "see provider"
+  // when the provider's API doesn't list one. Rates are converted
+  // from per token to per million tokens for readability; hive never
+  // multiplies them by token counts.
+  _renderPriceNote(providerName, modelOverride) {
+    if (!providerName) return nothing;
+    const model = modelOverride.trim() || this._defaultModelFor(providerName);
+    const entry = this._modelsCache[providerName];
+    const m = (entry?.items || []).find((x) => x.id === model);
+    const lp = m?.listed_price;
+    if (!lp || !entry.pricingSource) {
+      return html`<span class="form-note">Pricing: see provider.</span>`;
+    }
+    const perMillion = (s) =>
+      new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      }).format(Number(s) * 1_000_000);
+    return html`<span class="form-note">
+      Listed by ${entry.pricingSource}: ${perMillion(lp.input_per_token)} / 1M
+      input tokens · ${perMillion(lp.output_per_token)} / 1M output tokens
+    </span>`;
   }
 
   _safeParse(v) {

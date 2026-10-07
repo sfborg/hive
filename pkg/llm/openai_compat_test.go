@@ -200,6 +200,33 @@ func TestOpenAICompatCacheControlDisabled(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatIgnoresEffort(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &raw)
+		_, _ = w.Write([]byte(`{
+			"model": "m",
+			"choices": [{"message": {"role": "assistant", "content": "ok"}}]
+		}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat("t", srv.URL, "m", PlainCredential{Secret: "k"})
+	env, err := Invoke(context.Background(), p, "ner_test", Request{User: "u", Effort: "low"})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	for _, k := range []string{"effort", "output_config", "reasoning_effort"} {
+		if _, present := raw[k]; present {
+			t.Errorf("request carried %q: %v", k, raw[k])
+		}
+	}
+	if env.Effort != "" {
+		t.Errorf("envelope effort = %q, want empty for unsupported provider", env.Effort)
+	}
+}
+
 func TestOpenAICompatSurfacesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -211,5 +238,40 @@ func TestOpenAICompatSurfacesHTTPError(t *testing.T) {
 	_, err := p.Complete(context.Background(), Request{User: "u"})
 	if err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "bad model") {
 		t.Fatalf("expected 400 + body in error, got %v", err)
+	}
+}
+
+func TestOpenAICompatListModelsPassesThroughListedPrices(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"anthropic/claude-sonnet-5-5","name":"Claude Sonnet 5.5","context_length":1000000,
+			 "pricing":{"prompt":"0.000002","completion":"0.00001"},
+			 "top_provider":{"max_completion_tokens":128000}},
+			{"id":"openrouter/auto","pricing":{"prompt":"-1","completion":"-1"}},
+			{"id":"plain-model"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat("t", srv.URL, "m", PlainCredential{Secret: "k"})
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 3 {
+		t.Fatalf("models = %+v", models)
+	}
+	lp := models[0].ListedPrice
+	if lp == nil || lp.InputPerToken != "0.000002" || lp.OutputPerToken != "0.00001" {
+		t.Errorf("listed price = %+v, want verbatim provider strings", lp)
+	}
+	if models[0].MaxOutputTokens != 128000 || models[0].ContextWindow != 1000000 {
+		t.Errorf("limits = %+v", models[0])
+	}
+	if models[1].ListedPrice != nil {
+		t.Errorf("variable-price router got a listed price: %+v", models[1].ListedPrice)
+	}
+	if models[2].ListedPrice != nil {
+		t.Errorf("model without pricing got a listed price: %+v", models[2].ListedPrice)
 	}
 }

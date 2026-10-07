@@ -47,6 +47,13 @@ func WithMaxTokens(n int) RunOption { return func(r *Request) { r.MaxTokens = n 
 // WithTemperature sets sampling temperature (0..1).
 func WithTemperature(t float64) RunOption { return func(r *Request) { r.Temperature = t } }
 
+// WithEffort sets the reasoning effort level (see [Request.Effort]).
+func WithEffort(e string) RunOption { return func(r *Request) { r.Effort = e } }
+
+// WithThinkingSummary requests a summary of the model's reasoning
+// (see [Request.ThinkingSummary]).
+func WithThinkingSummary(on bool) RunOption { return func(r *Request) { r.ThinkingSummary = on } }
+
 // WithResponseFormat sets the response-format hint. "json" turns
 // on OpenAI-compat json_object mode; ignored by adapters that
 // don't support it.

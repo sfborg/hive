@@ -50,6 +50,16 @@ type apiLLMInvokeRequest struct {
 	MaxTokens      int     `json:"max_tokens,omitempty"`
 	Temperature    float64 `json:"temperature,omitempty"`
 	ResponseFormat string  `json:"response_format,omitempty"`
+
+	// Effort is the reasoning effort level (low | medium | high |
+	// xhigh | max). Empty uses the model default. Sent only to
+	// Anthropic providers.
+	Effort string `json:"effort,omitempty"`
+
+	// ThinkingSummary requests a summary of the model's reasoning,
+	// stored on the run's envelope. Anthropic models that think by
+	// default only; others are rejected with 400.
+	ThinkingSummary bool `json:"thinking_summary,omitempty"`
 }
 
 // apiLLMInvokeResponse returns the persisted run's ID alongside
@@ -98,9 +108,8 @@ func (s *server) handleListLLMProviders(w http.ResponseWriter, r *http.Request) 
 
 // apiLLMEstimateRequest is POST /api/llm/estimate body. Provider,
 // Prompt, and Input mirror /api/llm/invoke — the estimate uses the
-// same inputs the invocation would so the WUI can compute "cost of
-// what I'm about to submit" without duplicating any call-shape
-// logic. Optional fields override provider defaults for the check.
+// same inputs the invocation would so the WUI can size-check what
+// it is about to submit without duplicating any call-shape logic. Optional fields override provider defaults for the check.
 type apiLLMEstimateRequest struct {
 	Provider  string `json:"provider"`
 	Prompt    string `json:"prompt"`
@@ -110,35 +119,29 @@ type apiLLMEstimateRequest struct {
 }
 
 // apiLLMEstimateResponse is what the WUI renders next to the
-// submit button. When PricingKnown is false, WUI should show
-// "cost unknown for this model" instead of "$0.00" and always
-// confirm on submit. When WouldExceedContext is true, WUI should
+// submit button. It carries token counts only; hive never computes
+// dollar costs. When WouldExceedContext is true, WUI should
 // disable submit with a "too long for this model" message — no
 // point spending a round-trip on a request the provider will 400.
 type apiLLMEstimateResponse struct {
-	Provider            string  `json:"provider"`
-	Model               string  `json:"model"`
-	InputTokens         int     `json:"input_tokens"`
-	MaxOutputTokens     int     `json:"max_output_tokens"`
-	EstimatedCostUSD    float64 `json:"estimated_cost_usd"`
-	PricingKnown        bool    `json:"pricing_known"`
-	ConfirmThresholdUSD float64 `json:"confirm_threshold_usd"`
-	ContextWindow       int     `json:"context_window,omitempty"`
-	LimitsKnown         bool    `json:"limits_known"`
-	WouldExceedContext  bool    `json:"would_exceed_context"`
+	Provider           string `json:"provider"`
+	Model              string `json:"model"`
+	InputTokens        int    `json:"input_tokens"`
+	MaxOutputTokens    int    `json:"max_output_tokens"`
+	ContextWindow      int    `json:"context_window,omitempty"`
+	LimitsKnown        bool   `json:"limits_known"`
+	WouldExceedContext bool   `json:"would_exceed_context"`
 }
 
-// handleEstimateLLM computes an approximate token count and USD
-// cost for a would-be invocation without actually calling the
-// provider. Used by the WUI to display cost next to the submit
-// button and to trigger a confirmation dialog above
-// [llm.ConfirmThresholdUSD]. Also reports whether the payload
-// would exceed the model's context window so the WUI can disable
+// handleEstimateLLM computes an approximate token count for a
+// would-be invocation without actually calling the provider, and
+// reports whether the payload would exceed the model's context
+// window so the WUI can disable
 // submit for hopeless cases (e.g. a 700-page paper on a 200K-token
 // Claude model — chunking support is deferred as its own concern).
 //
 // @Summary      Estimate an LLM invocation
-// @Description  Compute approximate token count and USD cost for a would-be invocation without calling the provider.
+// @Description  Compute approximate token count for a would-be invocation and check it against the model's context window, without calling the provider.
 // @Tags         llm
 // @Accept       json
 // @Produce      json
@@ -200,23 +203,19 @@ func (s *server) handleEstimateLLM(w http.ResponseWriter, r *http.Request) {
 		// (typically small), so the estimate is conservative there.
 		maxOut = 4096
 	}
-	cost, priceKnown := estimateCostForProvider(body.Provider, model, inputTokens, maxOut)
-	limits, limitsKnown := llm.LookupLimits(model)
+	limits, limitsKnown := s.modelLimits(r.Context(), body.Provider, model)
 	exceeds := false
 	if limitsKnown {
 		exceeds = inputTokens+maxOut > limits.ContextWindow
 	}
 	writeJSON(w, http.StatusOK, apiLLMEstimateResponse{
-		Provider:            body.Provider,
-		Model:               model,
-		InputTokens:         inputTokens,
-		MaxOutputTokens:     maxOut,
-		EstimatedCostUSD:    cost,
-		PricingKnown:        priceKnown,
-		ConfirmThresholdUSD: llm.ConfirmThresholdUSD,
-		ContextWindow:       limits.ContextWindow,
-		LimitsKnown:         limitsKnown,
-		WouldExceedContext:  exceeds,
+		Provider:           body.Provider,
+		Model:              model,
+		InputTokens:        inputTokens,
+		MaxOutputTokens:    maxOut,
+		ContextWindow:      limits.ContextWindow,
+		LimitsKnown:        limitsKnown,
+		WouldExceedContext: exceeds,
 	})
 }
 
@@ -267,6 +266,10 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "purpose is required (ner | compose | translate)")
 		return
 	}
+	if !llm.ValidEffort(body.Effort) {
+		writeBadRequest(w, r, "invalid 'effort' value (low | medium | high | xhigh | max)")
+		return
+	}
 
 	// Resolve the model up front so envelope.Model records the
 	// requested identifier (matches the pricing table key) rather
@@ -282,6 +285,12 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if body.ThinkingSummary {
+		if msg := s.thinkingSummaryProblem(body.Provider, model); msg != "" {
+			writeBadRequest(w, r, msg)
+			return
+		}
+	}
 
 	// Default max_tokens to the model's per-call output cap when
 	// caller doesn't specify — never truncate output arbitrarily
@@ -290,7 +299,7 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 	// policy as the pipeline handler.
 	maxTokens := body.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = defaultMaxForModel(model)
+		maxTokens = s.defaultMaxForModel(r.Context(), body.Provider, model)
 	}
 
 	env, err := s.llmRunner.Run(
@@ -301,6 +310,8 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 		llm.WithModel(model),
 		llm.WithMaxTokens(maxTokens),
 		llm.WithTemperature(body.Temperature),
+		llm.WithEffort(body.Effort),
+		llm.WithThinkingSummary(body.ThinkingSummary && s.thinkingSummaryFree(body.Provider, model)),
 		llm.WithResponseFormat(body.ResponseFormat),
 	)
 	if err != nil {
@@ -336,11 +347,6 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 		envJSON = []byte{}
 	}
 
-	// Actual cost from provider-reported token counts (accurate,
-	// not the estimate's char-based approximation). Zero when
-	// no source (dynamic cache or static table) knows the model.
-	cost, _ := estimateCostForProvider(body.Provider, env.Model, env.InputTokens, env.OutputTokens)
-
 	run := hive.ExtractionRun{
 		ReferenceID:   body.ReferenceID,
 		Purpose:       body.Purpose,
@@ -349,7 +355,6 @@ func (s *server) handleInvokeLLM(w http.ResponseWriter, r *http.Request) {
 		EnvelopeJSON:  string(envJSON),
 		RawOutputJSON: env.Output,
 		ParentRunID:   body.ParentRunID,
-		CostUSD:       cost,
 		Notes:         body.Notes,
 	}
 
@@ -416,7 +421,6 @@ type apiLLMRun struct {
 	Envelope       json.RawMessage `json:"envelope,omitempty" swaggertype:"object"`
 	RawOutput      json.RawMessage `json:"raw_output,omitempty" swaggertype:"object"`
 	ParentRunID    string          `json:"parent_run_id,omitempty"`
-	CostUSD        float64         `json:"cost_usd"`
 	IsGoldStandard bool            `json:"is_gold_standard"`
 	Notes          string          `json:"notes,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
@@ -427,39 +431,6 @@ type apiLLMRunList struct {
 	Items []apiLLMRun `json:"items"`
 }
 
-// estimateCostForProvider computes the USD cost of an invocation
-// using the best pricing source available:
-//
-//  1. Provider's own cached models list (populated by
-//     /api/llm/providers/{name}/models). Works for aggregators
-//     like OpenRouter that return per-token pricing per model,
-//     without needing hive to hand-maintain a table for every
-//     OR-mediated model ID.
-//  2. hive's static pricing table (pkg/llm/pricing.go). Covers
-//     the well-known native provider models.
-//
-// Returns known=false when neither source has pricing for this
-// (provider, model). Callers surface "cost unknown" so the WUI
-// always confirms before submit rather than silently showing
-// $0.00.
-func estimateCostForProvider(providerName, model string, inputTokens, outputTokens int) (float64, bool) {
-	if providerName != "" && model != "" {
-		if cached, ok := cachedModels(providerName); ok {
-			for _, m := range cached {
-				if m.ID != model {
-					continue
-				}
-				if m.InputPricePerMillion == 0 && m.OutputPricePerMillion == 0 {
-					break
-				}
-				in := float64(inputTokens) / 1_000_000 * m.InputPricePerMillion
-				out := float64(outputTokens) / 1_000_000 * m.OutputPricePerMillion
-				return in + out, true
-			}
-		}
-	}
-	return llm.EstimateCost(model, inputTokens, outputTokens)
-}
 
 func runToAPI(r hive.ExtractionRun) apiLLMRun {
 	api := apiLLMRun{
@@ -469,7 +440,6 @@ func runToAPI(r hive.ExtractionRun) apiLLMRun {
 		SourceKind:     r.SourceKind,
 		SourceID:       r.SourceID,
 		ParentRunID:    r.ParentRunID,
-		CostUSD:        r.CostUSD,
 		IsGoldStandard: r.IsGoldStandard,
 		Notes:          r.Notes,
 		CreatedAt:      r.CreatedAt,

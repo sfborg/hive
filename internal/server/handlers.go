@@ -846,7 +846,6 @@ type composeTreeExportEnvelope struct {
 	SourceKind  string          `json:"source_kind"`
 	SourceID    string          `json:"source_id"`
 	Notes       string          `json:"notes,omitempty"`
-	CostUSD     float64         `json:"cost_usd,omitempty"`
 	CreatedAt   string          `json:"created_at,omitempty"`
 	RawOutput   json.RawMessage `json:"raw_output" swaggertype:"object"`
 }
@@ -920,7 +919,6 @@ func (s *server) handleExportComposeTree(w http.ResponseWriter, r *http.Request)
 		SourceKind:  picked.SourceKind,
 		SourceID:    picked.SourceID,
 		Notes:       picked.Notes,
-		CostUSD:     picked.CostUSD,
 		CreatedAt:   picked.CreatedAt.Format(time.RFC3339Nano),
 		RawOutput:   raw,
 	}

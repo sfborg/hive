@@ -21,7 +21,6 @@ func TestCreateAndGetExtractionRun(t *testing.T) {
 			SourceID:      "anthropic-main",
 			EnvelopeJSON:  `{"prompt_name":"ner_v5"}`,
 			RawOutputJSON: `{"assertions":[]}`,
-			CostUSD:       0.032,
 			Notes:         "first run against dascilloidea-3",
 		})
 		if err != nil {
@@ -46,9 +45,6 @@ func TestCreateAndGetExtractionRun(t *testing.T) {
 	}
 	if got.Purpose != "ner" || got.SourceKind != "llm" || got.SourceID != "anthropic-main" {
 		t.Errorf("purpose/kind/source_id: %+v", got)
-	}
-	if got.CostUSD != 0.032 {
-		t.Errorf("CostUSD = %v", got.CostUSD)
 	}
 	if got.IsGoldStandard {
 		t.Errorf("expected is_gold_standard=false by default")
@@ -166,7 +162,6 @@ func TestSoftDeleteAndRestoreExtractionRun(t *testing.T) {
 			Purpose:     "ner",
 			SourceKind:  "llm",
 			SourceID:    "anthropic-main",
-			CostUSD:     0.10,
 		})
 		runID = id
 		return err

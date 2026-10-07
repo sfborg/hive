@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -61,13 +62,18 @@ func storeModels(name string, models []llm.ModelInfo) {
 // GET /api/llm/providers/{name}/models.
 type apiLLMModelList struct {
 	Items []llm.ModelInfo `json:"items" swaggertype:"array,object"`
+	// PricingSource names where any listed_price values came from
+	// (the provider's API host), so the WUI can attribute them.
+	// Empty when no model in the list carries a listed price.
+	PricingSource string `json:"pricing_source,omitempty"`
 }
 
 // handleListLLMProviderModels calls the provider's models-listing
 // endpoint (via its optional ModelLister interface) and returns
 // the normalized model list. Cached per-process for
 // [modelsCacheTTL] so repeated invoke-modal opens don't hammer
-// the upstream. 501 when the underlying adapter doesn't support
+// the upstream; ?fresh=1 bypasses the cache (and refreshes it) so
+// listed prices shown to the curator are current. 501 when the underlying adapter doesn't support
 // models listing — the WUI falls back to a free-text override
 // input in that case.
 //
@@ -76,6 +82,7 @@ type apiLLMModelList struct {
 // @Tags         llm
 // @Produce      json
 // @Param        name path string true "Provider name"
+// @Param        fresh query bool false "Bypass the cache and fetch from the provider"
 // @Success      200 {object} apiLLMModelList
 // @Failure      400 {object} problem
 // @Failure      501 {object} map[string]string
@@ -91,8 +98,9 @@ func (s *server) handleListLLMProviderModels(w http.ResponseWriter, r *http.Requ
 		writeBadRequest(w, r, "no llm providers configured")
 		return
 	}
-	if cached, ok := cachedModels(name); ok {
-		writeJSON(w, http.StatusOK, apiLLMModelList{Items: cached})
+	fresh := r.URL.Query().Get("fresh") == "1" || r.URL.Query().Get("fresh") == "true"
+	if cached, ok := cachedModels(name); ok && !fresh {
+		writeJSON(w, http.StatusOK, s.modelListResponse(name, cached))
 		return
 	}
 	provider, err := s.llmRunner.Providers.Get(name)
@@ -112,7 +120,29 @@ func (s *server) handleListLLMProviderModels(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	storeModels(name, models)
-	writeJSON(w, http.StatusOK, apiLLMModelList{Items: models})
+	writeJSON(w, http.StatusOK, s.modelListResponse(name, models))
+}
+
+// modelListResponse wraps models for the wire, attributing listed
+// prices to the provider's API host (falling back to the provider
+// name when no base URL is configured).
+func (s *server) modelListResponse(provider string, models []llm.ModelInfo) apiLLMModelList {
+	out := apiLLMModelList{Items: models}
+	for _, m := range models {
+		if m.ListedPrice == nil {
+			continue
+		}
+		out.PricingSource = provider
+		for _, pc := range s.llmProviders {
+			if pc.Name == provider && pc.BaseURL != "" {
+				if u, err := url.Parse(pc.BaseURL); err == nil && u.Host != "" {
+					out.PricingSource = u.Host
+				}
+			}
+		}
+		break
+	}
+	return out
 }
 
 // apiLLMProviderCreateRequest is the WUI-paste-flow body for POST
