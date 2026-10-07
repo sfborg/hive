@@ -3605,6 +3605,41 @@
                 }
             }
         },
+        "/reference/{id}/casing": {
+            "get": {
+                "description": "Words the reference's attached documents write with capitals mid-sentence (proper nouns, genus and higher names, gene names, acronyms), keyed by lower case.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Casing vocabulary of a reference's documents",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Reference ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiCasingVocabulary"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/reference/{id}/compose-tree": {
             "get": {
                 "produces": [
@@ -6803,6 +6838,17 @@
                 },
                 "score": {
                     "type": "integer"
+                }
+            }
+        },
+        "server.apiCasingVocabulary": {
+            "type": "object",
+            "properties": {
+                "words": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },

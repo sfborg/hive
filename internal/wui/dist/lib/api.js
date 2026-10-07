@@ -606,6 +606,10 @@ export const api = {
   reference: {
     list: (opts) => j("GET", `/api/reference${qs(opts)}`),
     get: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}`),
+    // casing returns {words: {lower: form}}: how the reference's own
+    // documents write capitalized words, for restoring fields supplied
+    // in all capitals.
+    casing: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}/casing`),
     search: (opts) => j("GET", `/api/reference/search${qs(opts)}`),
     // colTaxa looks up higher taxa in the name-mention index for the
     // ncbi_parent / col_parent filters; opts.source is "ncbi" or

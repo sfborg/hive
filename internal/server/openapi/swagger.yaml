@@ -248,6 +248,13 @@ definitions:
       score:
         type: integer
     type: object
+  server.apiCasingVocabulary:
+    properties:
+      words:
+        additionalProperties:
+          type: string
+        type: object
+    type: object
   server.apiColTaxon:
     properties:
       name:
@@ -4493,6 +4500,31 @@ paths:
           schema:
             $ref: '#/definitions/server.problem'
       summary: Detach PDF from reference
+      tags:
+      - references
+  /reference/{id}/casing:
+    get:
+      description: Words the reference's attached documents write with capitals mid-sentence
+        (proper nouns, genus and higher names, gene names, acronyms), keyed by lower
+        case.
+      parameters:
+      - description: Reference ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiCasingVocabulary'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Casing vocabulary of a reference's documents
       tags:
       - references
   /reference/{id}/compose-tree:

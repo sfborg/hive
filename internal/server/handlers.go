@@ -22,6 +22,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/refmanager/casing"
 	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/hive/pkg/assembler"
 	"github.com/sfborg/hive/pkg/correction"
@@ -230,6 +231,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference/lookup-bhlnames", s.handleLookupBHLnames)
 	mux.HandleFunc("POST /api/reference/parse-bibtex", s.handleParseBibTeX)
 	mux.HandleFunc("GET /api/reference/{id}", s.handleGetReference)
+	mux.HandleFunc("GET /api/reference/{id}/casing", s.handleReferenceCasing)
 	mux.HandleFunc("PATCH /api/reference/{id}", s.handlePatchReference)
 	mux.HandleFunc("DELETE /api/reference/{id}", s.handleDeleteReference)
 	// POST /api/reference/upload accepts a multipart file
@@ -5189,6 +5191,45 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 		out.Workflow = referenceWorkflowToAPI(wf)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// apiCasingVocabulary maps a lower-case word to the form the
+// reference's own text writes it in (see package casing).
+type apiCasingVocabulary struct {
+	Words map[string]string `json:"words"`
+}
+
+// handleReferenceCasing returns the casing vocabulary learned from the
+// text of the reference's attached documents. The WUI uses it to
+// restore titles and other fields supplied in all capitals. Empty when
+// no document is attached.
+//
+// @Summary      Casing vocabulary of a reference's documents
+// @Description  Words the reference's attached documents write with capitals mid-sentence (proper nouns, genus and higher names, gene names, acronyms), keyed by lower case.
+// @Tags         references
+// @Produce      json
+// @Param        id path string true "Reference ID"
+// @Success      200 {object} apiCasingVocabulary
+// @Failure      500 {object} problem
+// @Router       /reference/{id}/casing [get]
+func (s *server) handleReferenceCasing(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	shas, err := s.a.ReferencePDFs(r.Context(), id)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	var segs []string
+	for _, sha := range shas {
+		jats, err := sidecar.Read(s.archivePath, sha, "jats.xml")
+		if err != nil || jats == nil {
+			continue
+		}
+		if ss, err := casing.JATSSegments(jats); err == nil {
+			segs = append(segs, ss...)
+		}
+	}
+	writeJSON(w, http.StatusOK, apiCasingVocabulary{Words: casing.Vocabulary(segs)})
 }
 
 // buildAttachedFiles enriches a bare sha slice with the primary

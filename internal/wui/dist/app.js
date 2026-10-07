@@ -12,6 +12,7 @@
 
 import { LitElement, html, css, svg, unsafeHTML, nothing } from "/vendor/lit-3.x.x.min.js";
 import { api, Problem } from "/lib/api.js";
+import { sentenceCase, titleCase, nameCase } from "/lib/casing.js";
 
 // ---------- icons ----------
 // Inline SVG shapes hand-picked from Lucide (MIT license, lucide.dev).
@@ -11127,6 +11128,18 @@ function extractDOI(input) {
 // Events:
 //   reference-picked  { id, label }  — modal closes; caller updates form.
 //   close                             — modal closes; no change.
+// CASE_FIXERS maps reference fields to the case restoration their
+// fix button applies (see lib/casing.js).
+const CASE_FIXERS = {
+  title: { label: "Fix capitalization (sentence case)", fix: sentenceCase },
+  author: { label: "Fix capitalization of names", fix: (v) => nameCase(v) },
+  editor: { label: "Fix capitalization of names", fix: (v) => nameCase(v) },
+  container_author: { label: "Fix capitalization of names", fix: (v) => nameCase(v) },
+  container_title: { label: "Fix capitalization (title case)", fix: titleCase },
+  publisher: { label: "Fix capitalization (title case)", fix: titleCase },
+  publisher_place: { label: "Fix capitalization (title case)", fix: titleCase },
+};
+
 class SfgaAddReferenceModal extends LitElement {
   static properties = {
     contextCanonical: { attribute: false },
@@ -11232,6 +11245,10 @@ class SfgaAddReferenceModal extends LitElement {
     // track the save round-trip.
     _manual: { state: true },
     _manualOriginal: { state: true },
+    // How the reference's own documents write capitalized words
+    // ({lower: form}); used by the case-fix buttons. Empty when the
+    // reference has no attached document or is being added.
+    _casingVocab: { state: true },
     // Progressive disclosure for the Manual form. Add-mode with an
     // auto-fetched pre-fill (DOI resolve, BibTeX parse, upload) only
     // shows the essential fields + fields that have values; the
@@ -11365,6 +11382,29 @@ class SfgaAddReferenceModal extends LitElement {
       /* Column-2 cell that wraps input + inline conflict chips.
          Keeps the input at column width while allowing the chip
          to sit on its own line below without breaking the grid. */
+      .manual-ref-form .input-with-fix {
+        display: flex;
+        gap: var(--sp-1);
+        align-items: stretch;
+      }
+      .manual-ref-form .input-with-fix input {
+        flex: 1;
+        min-width: 0;
+      }
+      .manual-ref-form .case-fix {
+        font: inherit;
+        font-size: var(--fs-xs);
+        padding: 0 var(--sp-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        color: var(--accent);
+        cursor: pointer;
+      }
+      .manual-ref-form .case-fix:hover,
+      .manual-ref-form .case-fix:focus-visible {
+        border-color: var(--accent);
+      }
       .manual-ref-form .input-cell {
         display: grid;
         gap: var(--sp-1);
@@ -11746,6 +11786,12 @@ class SfgaAddReferenceModal extends LitElement {
       if (this.editID !== id) return;
       this._manualOriginal = ref;
       this._manual = manualFromReference(ref);
+      api.reference
+        .casing(id)
+        .then((c) => {
+          if (this.editID === id) this._casingVocab = c.words || {};
+        })
+        .catch(() => {});
       const persisted = issueResp.items || [];
       // Mirror the picker's inline missing-structured-metadata check
       // so the banner agrees with the badge. The picker's
@@ -13305,15 +13351,38 @@ class SfgaAddReferenceModal extends LitElement {
     return html`
       <label>${label}</label>
       <div class="input-cell">
-        <input
-          type="text"
-          placeholder=${opts.placeholder || ""}
-          .value=${d[key] || ""}
-          @input=${(e) => this._manualFieldChange(key, e.target.value)}
-        />
+        <div class="input-with-fix">
+          <input
+            type="text"
+            placeholder=${opts.placeholder || ""}
+            .value=${d[key] || ""}
+            @input=${(e) => this._manualFieldChange(key, e.target.value)}
+          />
+          ${this._renderCaseFix(key, d[key] || "")}
+        </div>
         ${this._renderManualConflictChip(key)}
       </div>
     `;
+  }
+
+  // _renderCaseFix shows a button that restores the case of a field
+  // supplied in all capitals (or, for names, with a "Mc" prefix in the
+  // wrong case), when the fix would change the value. The tooltip
+  // previews the result; the curator can still edit before saving.
+  _renderCaseFix(key, value) {
+    const fixer = CASE_FIXERS[key];
+    if (!fixer || !value) return nothing;
+    const fixed = fixer.fix(value, this._casingVocab || {});
+    if (fixed === value) return nothing;
+    return html`<button
+      type="button"
+      class="case-fix"
+      title=${`${fixer.label}: ${fixed}`}
+      aria-label=${`${fixer.label}. Result: ${fixed}`}
+      @click=${() => this._manualFieldChange(key, fixed)}
+    >
+      Aa
+    </button>`;
   }
 
   _manualFieldChange(field, value) {
