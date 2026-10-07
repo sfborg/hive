@@ -15390,7 +15390,6 @@ class SfgaReferences extends LitElement {
     _indexParent: { state: true },
     _indexSource: { state: true },
     _minMentions: { state: true },
-    _indexTaxa: { state: true },
     // Infinite-scroll state: true when there are more references
     // to fetch past the currently-loaded window. False once we've
     // paginated to the end (or a search returns everything at once).
@@ -15636,9 +15635,6 @@ class SfgaReferences extends LitElement {
       display: flex;
       align-items: center;
       gap: var(--sp-1);
-    }
-    .col-filter .col-input {
-      width: 16rem;
     }
     .col-filter .min-mentions {
       font: inherit;
@@ -17504,7 +17500,6 @@ class SfgaReferences extends LitElement {
     this._indexParent = "";
     this._indexSource = "ncbi";
     this._minMentions = 1;
-    this._indexTaxa = [];
     this._stepFilters = {};
     this._stepHelpOpen = false;
     try {
@@ -17805,24 +17800,6 @@ class SfgaReferences extends LitElement {
     return opts;
   }
 
-  // _onIndexInput refreshes the higher-taxon suggestions as the
-  // curator types.
-  _onIndexInput(value) {
-    clearTimeout(this._indexSuggestTimer);
-    this._indexSuggestTimer = setTimeout(async () => {
-      try {
-        const page = await api.reference.colTaxa({
-          source: this._indexSource,
-          q: value.trim(),
-          limit: 25,
-        });
-        this._indexTaxa = page.items || [];
-      } catch {
-        this._indexTaxa = [];
-      }
-    }, 200);
-  }
-
   _setIndexParent(value) {
     const v = value.trim();
     if (v === this._indexParent) return;
@@ -17833,7 +17810,6 @@ class SfgaReferences extends LitElement {
   _setIndexSource(src) {
     if (src === this._indexSource) return;
     this._indexSource = src;
-    this._indexTaxa = [];
     if (this._indexParent) this._fetchPage(true);
   }
 
@@ -19814,25 +19790,14 @@ class SfgaReferences extends LitElement {
           )}
         </div>
         <div class="col-filter" role="group" aria-label="Higher-taxon filter">
-          <label class="chip-group-label" for="index-parent">In</label>
-          <input
+          <span class="chip-group-label">In</span>
+          <sfga-taxon-picker
             id="index-parent"
-            class="search col-input"
-            type="search"
-            list="index-taxa"
-            placeholder="higher taxon, e.g. Bacillariophyceae"
             .value=${this._indexParent}
-            @input=${(e) => this._onIndexInput(e.target.value)}
-            @focus=${(e) => this._onIndexInput(e.target.value)}
-            @change=${(e) => this._setIndexParent(e.target.value)}
-          />
-          <datalist id="index-taxa">
-            ${this._indexTaxa.map(
-              (t) => html`<option value=${t.name}>
-                ${t.rank} · ${t.papers} ${t.papers === 1 ? "paper" : "papers"}
-              </option>`,
-            )}
-          </datalist>
+            .source=${this._indexSource}
+            .minMentions=${this._minMentions}
+            @pick=${(e) => this._setIndexParent(e.detail.name)}
+          ></sfga-taxon-picker>
           <label class="chip-group-label" for="index-source">per</label>
           <select
             id="index-source"
@@ -19861,9 +19826,10 @@ class SfgaReferences extends LitElement {
               Finds papers that mention names the chosen source places in
               this taxon. The classification comes from NCBI Taxonomy or the
               Catalogue of Life, not from the papers, and is never added to
-              your project. Use the source's names; the suggestions show what
-              it has. NCBI Taxonomy covers more algae; groups a source does
-              not cover cannot be found through it.
+              your project. Use the source's names; the field browses its
+              classification, with the number of papers in each taxon. NCBI
+              Taxonomy covers more algae; groups a source does not cover
+              cannot be found through it.
             </p>
           </details>
         </div>
@@ -19876,7 +19842,7 @@ class SfgaReferences extends LitElement {
                 ? html`No indexed papers mention names
                     ${indexSourceLabel(this._indexSource)} places in
                     “${this._indexParent}”. The source may use a different name
-                    for this group; pick one from the suggestions.`
+                    for this group; browse its classification from the field.`
                 : this._query || this._stepFilterParam()
                   ? "(No references match the search or filter)"
                   : "(No references)"}

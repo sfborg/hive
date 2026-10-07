@@ -1342,6 +1342,17 @@ definitions:
       total:
         type: integer
     type: object
+  server.apiPage-server_apiTaxonTreeNode:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/server.apiTaxonTreeNode'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
   server.apiPage-server_apiTypeMaterial:
     properties:
       items:
@@ -2166,6 +2177,21 @@ definitions:
       scrutinizer_date:
         type: string
       scrutinizer_id:
+        type: string
+    type: object
+  server.apiTaxonTreeNode:
+    properties:
+      children:
+        type: integer
+      match:
+        type: boolean
+      name:
+        type: string
+      papers:
+        type: integer
+      path:
+        type: string
+      rank:
         type: string
     type: object
   server.apiTestSetAddRequest:
@@ -3598,6 +3624,57 @@ paths:
           schema:
             $ref: '#/definitions/server.problem'
       summary: Look up higher taxa in the name-mention index
+      tags:
+      - references
+  /name-mentions/tree:
+    get:
+      description: Nodes of one verifier source's classification of names mentioned
+        in indexed papers, in depth-first order, each with the number of papers mentioning
+        names in it. Without q, returns the descendants of path down to depth branching
+        levels (a node with a single child does not count as a level). With q, returns
+        the taxa whose names start with q and their ancestors. Discovery data only.
+      parameters:
+      - description: 'Source: ncbi (default) or col'
+        in: query
+        name: source
+        type: string
+      - description: Classification path such as |Eukaryota|Sar|; default the top
+        in: query
+        name: path
+        type: string
+      - description: Branching levels below path (default 1, at most 5)
+        in: query
+        name: depth
+        type: integer
+      - description: Name prefix to search for
+        in: query
+        name: q
+        type: string
+      - description: Count a paper only when it mentions a name in the taxon at least
+          this often
+        in: query
+        name: min_mentions
+        type: integer
+      - description: Maximum q matches (default 30)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.apiPage-server_apiTaxonTreeNode'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.problem'
+      summary: Browse the classification of mentioned names
       tags:
       - references
   /name-relation/{id}:

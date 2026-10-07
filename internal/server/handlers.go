@@ -210,6 +210,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/reference/dashboard", s.handleReferenceDashboard)
 	mux.HandleFunc("GET /api/reference/search", s.handleReferenceSearch)
 	mux.HandleFunc("GET /api/name-mentions/taxa", s.handleColTaxa)
+	mux.HandleFunc("GET /api/name-mentions/tree", s.handleTaxonTree)
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
 	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
 	mux.HandleFunc("POST /api/reference/{id}/attach-pdf", s.handleAttachReferencePDF)
@@ -3790,6 +3791,75 @@ func (s *server) handleColTaxa(w http.ResponseWriter, r *http.Request) {
 		items = append(items, apiColTaxon{Name: t.Name, Rank: t.Rank, Papers: t.Papers})
 	}
 	writeJSON(w, http.StatusOK, apiPage[apiColTaxon]{Items: items})
+}
+
+// apiTaxonTreeNode is one taxon in a classification-tree response.
+type apiTaxonTreeNode struct {
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Rank     string `json:"rank,omitempty"`
+	Papers   int    `json:"papers"`
+	Children int    `json:"children"`
+	Match    bool   `json:"match,omitempty"`
+}
+
+// handleTaxonTree returns part of one source's classification of the
+// names mentioned in indexed papers, for browsing the higher-taxon
+// reference filter.
+//
+// @Summary      Browse the classification of mentioned names
+// @Description  Nodes of one verifier source's classification of names mentioned in indexed papers, in depth-first order, each with the number of papers mentioning names in it. Without q, returns the descendants of path down to depth branching levels (a node with a single child does not count as a level). With q, returns the taxa whose names start with q and their ancestors. Discovery data only.
+// @Tags         references
+// @Produce      json
+// @Param        source query string false "Source: ncbi (default) or col"
+// @Param        path query string false "Classification path such as |Eukaryota|Sar|; default the top"
+// @Param        depth query int false "Branching levels below path (default 1, at most 5)"
+// @Param        q query string false "Name prefix to search for"
+// @Param        min_mentions query int false "Count a paper only when it mentions a name in the taxon at least this often"
+// @Param        limit query int false "Maximum q matches (default 30)"
+// @Success      200 {object} apiPage[apiTaxonTreeNode]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name-mentions/tree [get]
+func (s *server) handleTaxonTree(w http.ResponseWriter, r *http.Request) {
+	qv := r.URL.Query()
+	key := qv.Get("source")
+	if key == "" {
+		key = mentions.Sources[0].Key
+	}
+	src, ok := mentions.SourceByKey(key)
+	if !ok {
+		writeBadRequest(w, r, "invalid 'source' value (ncbi | col)")
+		return
+	}
+	tq := hive.TaxonTreeQuery{SourceID: src.ID, Path: qv.Get("path"), Q: qv.Get("q")}
+	for _, p := range []struct {
+		name string
+		dst  *int
+		max  int
+	}{{"depth", &tq.Depth, 5}, {"min_mentions", &tq.MinMentions, 1000}, {"limit", &tq.Limit, 100}} {
+		raw := qv.Get(p.name)
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeBadRequest(w, r, "invalid '"+p.name+"' value")
+			return
+		}
+		*p.dst = min(n, p.max)
+	}
+	nodes, err := s.a.TaxonTree(r.Context(), tq)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiTaxonTreeNode, 0, len(nodes))
+	for _, n := range nodes {
+		items = append(items, apiTaxonTreeNode{Path: n.Path, Name: n.Name, Rank: n.Rank,
+			Papers: n.Papers, Children: n.Children, Match: n.Match})
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiTaxonTreeNode]{Items: items})
 }
 
 // parseReferenceQuery reads the reference-list narrowing parameters

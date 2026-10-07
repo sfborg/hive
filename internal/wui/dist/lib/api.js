@@ -615,6 +615,10 @@ export const api = {
     // ncbi_parent / col_parent filters; opts.source is "ncbi" or
     // "col". Discovery data only. Returns {items: [{name, rank, papers}]}.
     colTaxa: (opts) => j("GET", `/api/name-mentions/taxa${qs(opts)}`),
+    // taxonTree browses the same classification: opts {source, path,
+    // depth, q, min_mentions}. Returns {items: [{path, name, rank,
+    // papers, children, match}]} in depth-first order.
+    taxonTree: (opts) => j("GET", `/api/name-mentions/tree${qs(opts)}`),
     // create optionally accepts an attach_pdf_sha which links the
     // newly-created reference to a sidecar-library sha in the same
     // transaction. Used by the reference-add modal when the curator

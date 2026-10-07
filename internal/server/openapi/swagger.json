@@ -1501,6 +1501,76 @@
                 }
             }
         },
+        "/name-mentions/tree": {
+            "get": {
+                "description": "Nodes of one verifier source's classification of names mentioned in indexed papers, in depth-first order, each with the number of papers mentioning names in it. Without q, returns the descendants of path down to depth branching levels (a node with a single child does not count as a level). With q, returns the taxa whose names start with q and their ancestors. Discovery data only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Browse the classification of mentioned names",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Source: ncbi (default) or col",
+                        "name": "source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Classification path such as |Eukaryota|Sar|; default the top",
+                        "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Branching levels below path (default 1, at most 5)",
+                        "name": "depth",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name prefix to search for",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Count a paper only when it mentions a name in the taxon at least this often",
+                        "name": "min_mentions",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum q matches (default 30)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiTaxonTreeNode"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/name-relation/{id}": {
             "delete": {
                 "description": "Delete a name-relation row by rowid.",
@@ -8287,6 +8357,23 @@
                 }
             }
         },
+        "server.apiPage-server_apiTaxonTreeNode": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiTaxonTreeNode"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.apiPage-server_apiTypeMaterial": {
             "type": "object",
             "properties": {
@@ -9410,6 +9497,29 @@
                     "type": "string"
                 },
                 "scrutinizer_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiTaxonTreeNode": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "integer"
+                },
+                "match": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "papers": {
+                    "type": "integer"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "rank": {
                     "type": "string"
                 }
             }
