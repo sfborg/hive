@@ -170,6 +170,136 @@ type ReferenceHit struct {
 	// validationSeverityBadge helper — same signal appears on every
 	// picker/list rendering this record.
 	MaxSeverity string
+	// Workflow is the per-step progress of the reference through the
+	// four-step reference workflow.
+	Workflow ReferenceWorkflow
+	// License is the verified license from hive__reference_license,
+	// or "" when none has been recorded.
+	License string
+}
+
+// WorkflowState is how far a reference has got through one workflow
+// step.
+type WorkflowState string
+
+const (
+	WorkflowNone    WorkflowState = "none"    // not started
+	WorkflowPartial WorkflowState = "partial" // started, needs work or review
+	WorkflowDone    WorkflowState = "done"    // complete
+)
+
+// ReferenceWorkflow is a reference's state for each of the four
+// workflow steps, using the same step definitions as
+// [Archive.ReferenceDashboard]:
+//
+//   - Bibliographic: done when author, issued date and title are all
+//     present; partial when some are.
+//   - Digitized: done when a source document is attached.
+//   - Assertions: done when assertions exist and none are pending
+//     review; partial while any are pending. Assertions from
+//     soft-deleted extraction runs are not counted.
+//   - Imported: done when any assertion has been imported.
+type ReferenceWorkflow struct {
+	Bibliographic WorkflowState
+	Digitized     WorkflowState
+	Assertions    WorkflowState
+	Imported      WorkflowState
+}
+
+// referenceStatus is the per-reference data the reference list
+// derives from tables beyond the reference row.
+type referenceStatus struct {
+	Workflow ReferenceWorkflow
+	License  string
+}
+
+// ReferenceWorkflowFor returns the workflow state of one reference.
+// A reference that does not exist yields the all-"none" state.
+func (a *Archive) ReferenceWorkflowFor(ctx context.Context, id string) (ReferenceWorkflow, error) {
+	st, err := a.batchReferenceStatus(ctx, []string{id})
+	if err != nil {
+		return ReferenceWorkflow{}, err
+	}
+	if s, ok := st[id]; ok {
+		return s.Workflow, nil
+	}
+	none := ReferenceWorkflow{WorkflowNone, WorkflowNone, WorkflowNone, WorkflowNone}
+	return none, nil
+}
+
+// batchReferenceStatus computes workflow state and license for the
+// given reference IDs in one query.
+func (a *Archive) batchReferenceStatus(ctx context.Context, ids []string) (map[string]referenceStatus, error) {
+	out := make(map[string]referenceStatus, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	q := `SELECT r.col__id,
+		(COALESCE(r.col__author, '') != '')
+		  + (COALESCE(r.col__issued, '') != '')
+		  + (COALESCE(r.col__title, '') != ''),
+		EXISTS (SELECT 1 FROM hive__reference_pdf p
+		        WHERE p.reference_id = r.col__id),
+		(SELECT COUNT(*) FROM hive__reference_assertion ra
+		   LEFT JOIN hive__extraction_run er ON er.run_id = ra.source_run_id
+		  WHERE ra.reference_id = r.col__id AND er.deleted_at IS NULL),
+		(SELECT COUNT(*) FROM hive__reference_assertion ra
+		   LEFT JOIN hive__extraction_run er ON er.run_id = ra.source_run_id
+		  WHERE ra.reference_id = r.col__id AND er.deleted_at IS NULL
+		    AND ra.status = 'pending'),
+		EXISTS (SELECT 1 FROM hive__reference_assertion ra
+		        WHERE ra.reference_id = r.col__id
+		          AND ra.imported_at IS NOT NULL),
+		COALESCE((SELECT l.license FROM hive__reference_license l
+		          WHERE l.reference_id = r.col__id), '')
+	FROM reference r
+	WHERE r.col__id IN (` + strings.Repeat("?,", len(ids)-1) + `?)`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := a.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("core: reference status: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id                          string
+			bibFields, assertions, pend int
+			digitized, imported         bool
+			license                     string
+		)
+		if err := rows.Scan(&id, &bibFields, &digitized, &assertions, &pend, &imported, &license); err != nil {
+			return nil, fmt.Errorf("core: scan reference status: %w", err)
+		}
+		w := ReferenceWorkflow{
+			Bibliographic: WorkflowNone,
+			Digitized:     WorkflowNone,
+			Assertions:    WorkflowNone,
+			Imported:      WorkflowNone,
+		}
+		switch {
+		case bibFields == 3:
+			w.Bibliographic = WorkflowDone
+		case bibFields > 0:
+			w.Bibliographic = WorkflowPartial
+		}
+		if digitized {
+			w.Digitized = WorkflowDone
+		}
+		switch {
+		case pend > 0:
+			w.Assertions = WorkflowPartial
+		case assertions > 0:
+			w.Assertions = WorkflowDone
+		}
+		if imported {
+			w.Imported = WorkflowDone
+		}
+		out[id] = referenceStatus{Workflow: w, License: license}
+	}
+	return out, rows.Err()
 }
 
 // ReferenceSort selects the ordering ListReferencesPage uses.
@@ -185,6 +315,9 @@ const (
 	// top. Preferred landing view for large archives where
 	// alphabetical scan is impractical.
 	ReferenceSortRecent
+	// ReferenceSortYear orders by publication date, newest first,
+	// then author and title.
+	ReferenceSortYear
 )
 
 // ReferenceFilter narrows ListReferencesPage and SearchReferences to
@@ -259,12 +392,16 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sor
 	}
 
 	orderBy := "col__author, col__issued, col__title"
-	if sort == ReferenceSortRecent {
+	switch sort {
+	case ReferenceSortRecent:
 		// col__modified is set on every write; DESC puts newest
 		// first. Tie-break by id for a deterministic sort so
 		// paginated infinite-scroll doesn't re-shuffle rows across
 		// LIMIT/OFFSET windows.
 		orderBy = "col__modified DESC, col__id"
+	case ReferenceSortYear:
+		// Undated references sort last.
+		orderBy = "COALESCE(col__issued, '') = '', col__issued DESC, col__author, col__title, col__id"
 	}
 
 	q := `SELECT
@@ -367,6 +504,16 @@ func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []an
 			if s, ok := summaries[hits[i].ID]; ok {
 				hits[i].IssueCount = s.Count
 				hits[i].MaxSeverity = s.MaxSeverity
+			}
+		}
+		status, err := a.batchReferenceStatus(ctx, ids)
+		if err != nil {
+			return nil, 0, err
+		}
+		for i := range hits {
+			if st, ok := status[hits[i].ID]; ok {
+				hits[i].Workflow = st.Workflow
+				hits[i].License = st.License
 			}
 		}
 	}

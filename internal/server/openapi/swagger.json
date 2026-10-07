@@ -2328,7 +2328,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Sort: author|recent",
+                        "description": "Sort: author|recent|year",
                         "name": "sort",
                         "in": "query"
                     },
@@ -8548,6 +8548,14 @@
                 },
                 "volume": {
                     "type": "string"
+                },
+                "workflow": {
+                    "description": "Workflow mirrors the field on apiReferenceHit so the open\npaper's tab status stays current after a run or import.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiReferenceWorkflow"
+                        }
+                    ]
                 }
             }
         },
@@ -8605,6 +8613,10 @@
                     "description": "IssueCount is the number of open validation issues currently\nfiled against this reference row. Zero → elided from JSON so\nthe wire shape stays flat; front-ends render a warn badge on\npicker results when \u003e 0 and route a click to the reference-\nquick-fix modal (feedback_no_side_quests).",
                     "type": "integer"
                 },
+                "license": {
+                    "description": "License is the verified license, empty when none is recorded.",
+                    "type": "string"
+                },
                 "max_severity": {
                     "description": "MaxSeverity is the highest severity among the record's open\nissues (\"error\" / \"warn\" / \"info\" / \"debug\"). Empty when\nIssueCount is 0. Drives the WUI badge color via the shared\nvalidationSeverityBadge helper so every picker/list surface\nrenders the same signal.",
                     "type": "string"
@@ -8614,6 +8626,14 @@
                 },
                 "type": {
                     "type": "string"
+                },
+                "workflow": {
+                    "description": "Workflow is the reference's state for each workflow step\n(\"none\" | \"partial\" | \"done\"). Drives the library's status dots.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiReferenceWorkflow"
+                        }
+                    ]
                 },
                 "year": {
                     "type": "string"
@@ -8778,6 +8798,23 @@
                     "type": "integer"
                 },
                 "tei_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiReferenceWorkflow": {
+            "type": "object",
+            "properties": {
+                "assertions": {
+                    "type": "string"
+                },
+                "bibliographic": {
+                    "type": "string"
+                },
+                "digitized": {
+                    "type": "string"
+                },
+                "imported": {
                     "type": "string"
                 }
             }

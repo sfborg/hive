@@ -2468,7 +2468,15 @@ class SfgaApp extends LitElement {
   // and the alt+letter global shortcut so no navigation path can
   // bypass the confirm. Returns true iff the switch proceeded.
   async _requestScreenChange(target) {
-    if (target === this.screen) return true;
+    if (target === this.screen) {
+      // Re-selecting References while a paper is open returns to the
+      // library.
+      if (target === "references" && this._pendingReferenceId) {
+        this._pendingReferenceId = "";
+        this._pendingWorkspaceTab = "";
+      }
+      return true;
+    }
     if (this.screen === "metadata" && this._hasUnsavedMetadata()) {
       const md = this.renderRoot?.querySelector("sfga-metadata");
       const choice = await confirmDirty({
@@ -2576,6 +2584,11 @@ class SfgaApp extends LitElement {
         tab === "assembly"
           ? tab
           : "";
+    } else if (parts[0] === "references") {
+      // The library: no paper open.
+      this.screen = "references";
+      this._pendingReferenceId = "";
+      this._pendingWorkspaceTab = "";
     } else if (SfgaApp.views.some((v) => v.id === parts[0])) {
       this.screen = parts[0];
     } else {
@@ -15091,6 +15104,30 @@ class SfgaMetadata extends LitElement {
 // detail on the right. Read-only in this slice; add-by-DOI / add-by-
 // BibTeX and edit come later. Fetches its own data on connect.
 
+// REFERENCE_SORTS are the library's sort options. Values match the
+// `sort` query parameter of GET /api/reference ("author" is the
+// server default).
+const REFERENCE_SORTS = [
+  { value: "recent", label: "Recent", title: "Most recently added or edited first" },
+  { value: "author", label: "A–Z", title: "Alphabetical by author" },
+  { value: "year", label: "Year", title: "Newest publication year first" },
+];
+
+// WORKFLOW_STEPS maps each reference workflow step to the workspace
+// tab where it is done. Keys match the `workflow` object on
+// reference API responses.
+const WORKFLOW_STEPS = [
+  { key: "bibliographic", label: "Bibliographic", tab: "bibliography", tabLabel: "Bibliography" },
+  { key: "digitized", label: "Digitized", tab: "digitize", tabLabel: "Digitize" },
+  { key: "assertions", label: "Assertions", tab: "assertions", tabLabel: "Assertions" },
+  { key: "imported", label: "Imported", tab: "assembly", tabLabel: "Assimilate" },
+];
+const WORKFLOW_STATE_LABELS = {
+  done: "complete",
+  partial: "started, needs review",
+  none: "not started",
+};
+
 // REFERENCE_FILTERS are the workflow-stage filter chips in the
 // reference list sidebar. Values match the `filter` query parameter
 // of GET /api/reference and /api/reference/search.
@@ -15292,13 +15329,195 @@ class SfgaReferences extends LitElement {
   static styles = css`
     :host {
       display: grid;
-      /* 2-column layout: list on the left, workspace on the right.
-         Workspace has its own tabs + two-pane layout inside so
-         the outer host grid stays simple. */
-      grid-template-columns: minmax(18rem, 22rem) 1fr;
+      /* One full-width area: either the library (reference list)
+         or an open paper's workspace. The library stays mounted
+         while a paper is open so its scroll position, query and
+         loaded rows survive the round trip. */
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
       height: 100%;
       position: relative;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    .library {
+      overflow: auto;
+      padding: var(--sp-3) var(--sp-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+      min-width: 0;
+    }
+    .library-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-2);
+      align-items: center;
+      font-size: var(--fs-sm);
+    }
+    .library-toolbar .search-row {
+      flex: 1 1 22rem;
+      max-width: 40rem;
+    }
+    .library-toolbar .chip-group {
+      display: flex;
+      gap: var(--sp-1);
+      align-items: center;
+    }
+    .library-toolbar .chip-group-label {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-right: var(--sp-1);
+    }
+    table.ref-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--fs-sm);
+    }
+    .ref-table th {
+      text-align: left;
+      font-weight: 600;
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+    }
+    .ref-table td {
+      padding: var(--sp-1) var(--sp-2);
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+      vertical-align: top;
+    }
+    .ref-table tbody tr:hover {
+      background: color-mix(in oklab, var(--fg) 6%, transparent);
+    }
+    .ref-table .col-year,
+    .ref-table .col-license {
+      white-space: nowrap;
+      color: var(--dim);
+    }
+    .ref-table .col-authors {
+      max-width: 18rem;
+    }
+    .ref-table .col-authors span {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .ref-table .col-title a {
+      color: var(--fg);
+      text-decoration: none;
+    }
+    .ref-table .col-title a:hover,
+    .ref-table .col-title a:focus-visible {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    .status-dots {
+      display: inline-flex;
+      gap: 0.15rem;
+      white-space: nowrap;
+    }
+    /* Dots are CSS shapes rather than font glyphs so they render
+       the same in every font: filled (done), half-filled (needs
+       review), ring (not started). Meaning is carried by the shape
+       and by aria-label, not by colour alone. */
+    .status-dot {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.2rem;
+      height: 1.2rem;
+      border-radius: 50%;
+      color: var(--dim);
+      text-decoration: none;
+    }
+    .status-dot::before {
+      content: "";
+      width: 0.65rem;
+      height: 0.65rem;
+      border-radius: 50%;
+      border: 1.5px solid currentColor;
+      box-sizing: border-box;
+    }
+    .status-dot.done::before {
+      background: currentColor;
+    }
+    .status-dot.partial::before {
+      background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+    }
+    a.status-dot:hover,
+    a.status-dot:focus-visible {
+      background: color-mix(in oklab, var(--accent) 15%, transparent);
+      color: var(--accent);
+    }
+    .status-dot.done {
+      color: var(--sev-info);
+    }
+    .status-dot.partial {
+      color: var(--sev-warn);
+    }
+    .workspace-tabs .status-dot {
+      width: 1rem;
+      height: 1rem;
+      margin-left: var(--sp-1);
+      vertical-align: -0.15rem;
+    }
+    .paper {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .paper-bar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      padding: var(--sp-2) var(--sp-3);
+      border-bottom: 1px solid var(--border);
+      font-size: var(--fs-sm);
+    }
+    .paper-bar a,
+    .paper-bar button.link {
+      color: var(--accent);
+      text-decoration: none;
+      white-space: nowrap;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      cursor: pointer;
+    }
+    .paper-bar a:hover,
+    .paper-bar button.link:hover {
+      text-decoration: underline;
+    }
+    .paper-bar .paper-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--dim);
+    }
+    .paper-bar .paper-nav {
+      display: flex;
+      gap: var(--sp-2);
+      align-items: center;
+      white-space: nowrap;
+    }
+    .paper-bar .paper-nav .pos {
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .paper-bar .disabled {
+      color: var(--dim);
+      opacity: 0.5;
     }
     /* Drop-zone highlight lives at document level (see styles.css
        body[data-drop-active]) so it can extend across iframes and
@@ -16529,14 +16748,6 @@ class SfgaReferences extends LitElement {
     .tax-line .tax-verify {
       margin-right: var(--sp-1);
     }
-    aside {
-      overflow: auto;
-      padding: var(--sp-2);
-      display: grid;
-      grid-template-rows: auto auto auto 1fr;
-      gap: var(--sp-1);
-      align-content: start;
-    }
     /* Right pane stacks structured detail and (when present) the
        augmented reader in one scrolling column. Detail scrolls
        away as curator scrolls down, so the reader takes the full
@@ -16641,18 +16852,12 @@ class SfgaReferences extends LitElement {
       border-color: var(--accent);
       color: var(--accent);
     }
-    aside {
-      border-right: 1px solid var(--border);
-      font-family: var(--font-mono);
-      font-size: var(--fs-sm);
-      grid-template-rows: auto auto auto 1fr;
-    }
-    aside .search-row {
+    .library .search-row {
       display: flex;
       gap: var(--sp-1);
       align-items: stretch;
     }
-    aside .search {
+    .library .search {
       flex: 1;
       padding: var(--sp-1) var(--sp-2);
       background: var(--bg);
@@ -16663,11 +16868,11 @@ class SfgaReferences extends LitElement {
       box-sizing: border-box;
       min-width: 0;
     }
-    aside .search:focus {
+    .library .search:focus {
       outline: none;
       border-color: var(--accent);
     }
-    aside .add-btn {
+    .library .add-btn {
       padding: 0 var(--sp-2);
       background: var(--bg);
       color: var(--fg);
@@ -16678,24 +16883,11 @@ class SfgaReferences extends LitElement {
       font-size: var(--fs-lg);
       line-height: 1;
     }
-    aside .add-btn:hover {
+    .library .add-btn:hover {
       border-color: var(--accent);
       color: var(--accent);
     }
-    aside .sort-row {
-      /* Grid over flex — deterministic 50/50 columns that don't
-         re-flow when the button's border-color changes on active.
-         The earlier flex attempt widened visibly on click because
-         browsers' default button min-width and the flex-basis
-         interpretation combined unexpectedly. */
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: var(--sp-1);
-    }
-    aside .filter-row {
-      grid-template-columns: repeat(4, 1fr);
-    }
-    aside .sort-chip {
+    .library .sort-chip {
       min-width: 0;
       box-sizing: border-box;
       background: var(--bg);
@@ -16708,21 +16900,21 @@ class SfgaReferences extends LitElement {
       font-size: var(--fs-xs);
       color: var(--dim);
     }
-    aside .sort-chip:focus {
+    .library .sort-chip:focus {
       outline: none;
     }
-    aside .sort-chip:hover:not([disabled]) {
+    .library .sort-chip:hover:not([disabled]) {
       border-color: var(--accent);
     }
-    aside .sort-chip.active {
+    .library .sort-chip.active {
       border-color: var(--accent);
       color: var(--accent);
     }
-    aside .sort-chip[disabled] {
+    .library .sort-chip[disabled] {
       opacity: 0.5;
       cursor: not-allowed;
     }
-    aside .scroll-sentinel {
+    .library .scroll-sentinel {
       height: 1px;
     }
     ul.list {
@@ -16851,31 +17043,53 @@ class SfgaReferences extends LitElement {
        is selected. Fills the workspace column so the 4 step bars +
        hot list read as a full page, not a floating widget. */
     .dashboard {
-      padding: var(--sp-5) var(--sp-6);
-      overflow: auto;
       color: var(--fg);
     }
     .dashboard h2 {
       margin: 0 0 var(--sp-2);
       font-size: var(--fs-lg);
     }
+    .dashboard-head {
+      display: flex;
+      align-items: baseline;
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-2);
+    }
+    .dashboard-head h2 {
+      margin: 0;
+    }
     .dashboard-total {
       color: var(--dim);
       font-size: var(--fs-sm);
-      margin-bottom: var(--sp-5);
     }
     .dashboard-steps {
-      display: flex;
-      flex-direction: column;
-      gap: var(--sp-3);
-      margin-bottom: var(--sp-6);
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+      gap: var(--sp-2) var(--sp-4);
+      margin-bottom: var(--sp-2);
     }
     .dashboard-step {
       display: grid;
-      grid-template-columns: minmax(10rem, 14rem) 1fr auto;
+      grid-template-columns: 1fr auto;
+      grid-template-areas: "label count" "bar bar";
       align-items: center;
-      gap: var(--sp-3);
-      font-size: var(--fs-sm);
+      gap: var(--sp-1) var(--sp-2);
+      font-size: var(--fs-xs);
+    }
+    .dashboard-step-label {
+      grid-area: label;
+    }
+    .dashboard-step-bar {
+      grid-area: bar;
+    }
+    .dashboard-step-count {
+      grid-area: count;
+    }
+    .dashboard-extra {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-2) var(--sp-6);
+      align-items: flex-start;
     }
     .dashboard-step-label {
       color: var(--fg);
@@ -16896,11 +17110,9 @@ class SfgaReferences extends LitElement {
       color: var(--dim);
       font-variant-numeric: tabular-nums;
       font-size: var(--fs-xs);
-      min-width: 4.5rem;
       text-align: right;
     }
     .dashboard details {
-      margin-bottom: var(--sp-6);
       color: var(--dim);
       font-size: var(--fs-sm);
     }
@@ -16918,8 +17130,8 @@ class SfgaReferences extends LitElement {
     .dashboard details dt { color: var(--fg); }
     .dashboard details dd { margin: 0; }
     .dashboard-attention h3 {
-      font-size: var(--fs-md);
-      margin: 0 0 var(--sp-2);
+      font-size: var(--fs-sm);
+      margin: 0 0 var(--sp-1);
     }
     .dashboard-attention ul {
       list-style: none;
@@ -16986,10 +17198,13 @@ class SfgaReferences extends LitElement {
     // reference switch so navigating to a new reference doesn't
     // leave a stale page number.
     this._pdfPage = 1;
-    this._sort =
-      localStorage.getItem("hive.references.sort") === "author"
-        ? "author"
-        : "recent";
+    {
+      let saved = "";
+      try {
+        saved = localStorage.getItem("hive.references.sort") || "";
+      } catch {}
+      this._sort = REFERENCE_SORTS.some((o) => o.value === saved) ? saved : "recent";
+    }
     this._filter = "";
     try {
       const f = localStorage.getItem("hive.references.filter");
@@ -17201,13 +17416,11 @@ class SfgaReferences extends LitElement {
   }
 
   firstUpdated() {
-    // Attach infinite-scroll observer whose root is the scrolling
-    // aside pane. IntersectionObserver fires when the sentinel
-    // scrolls into the viewport, triggering the next page fetch.
-    // Sentinel re-observation happens in updated() below because
-    // the sentinel doesn't exist until _hits has content (lit
-    // template branch); observing here alone would be a no-op on
-    // first mount with an empty list.
+    // Attach the infinite-scroll observer whose root is the scrolling
+    // library pane. IntersectionObserver fires when the sentinel
+    // scrolls into view, triggering the next page fetch. Sentinel
+    // re-observation happens in updated() because the sentinel
+    // doesn't exist until _hits has content.
     this._scrollObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -17216,7 +17429,7 @@ class SfgaReferences extends LitElement {
           }
         }
       },
-      { root: this.renderRoot.querySelector("aside"), rootMargin: "200px" },
+      { root: this.renderRoot.querySelector(".library"), rootMargin: "200px" },
     );
     this._observeSentinel();
   }
@@ -17253,7 +17466,7 @@ class SfgaReferences extends LitElement {
         this._hasMore = false;
       } else {
         const opts = { limit, offset };
-        if (this._sort === "recent") opts.sort = "recent";
+        if (this._sort !== "author") opts.sort = this._sort;
         if (this._filter) opts.filter = this._filter;
         const page = await api.reference.list(opts);
         items = page.items || [];
@@ -17290,8 +17503,13 @@ class SfgaReferences extends LitElement {
   // screen), honor it. Ignored during initial load — that path runs
   // through connectedCallback.
   updated(changed) {
-    if (changed.has("selectId") && this.selectId && this.selectId !== this._selectedId) {
-      this._select(this.selectId);
+    if (changed.has("selectId") && this.selectId !== this._selectedId) {
+      if (this.selectId) {
+        this._select(this.selectId);
+      } else if (changed.get("selectId")) {
+        // The shell routed back to the library (#/references).
+        this._closePaper();
+      }
     }
     // _dropActive state → document.body[data-drop-active] is
     // synced imperatively in the window listeners (connectedCallback)
@@ -17335,6 +17553,15 @@ class SfgaReferences extends LitElement {
         this._current.attached_pdf_shas &&
         this._current.attached_pdf_shas.length > 0;
       if (!hasPDF && !legacyHasReader) this._workspaceTab = "bibliography";
+    }
+    // Tab side effects run once per (reference, tab) pair, however
+    // the tab was reached: a tab click, a status dot, or the URL.
+    if ((changed.has("_workspaceTab") || changed.has("_current")) && this._current) {
+      const key = this._current.id + "/" + this._workspaceTab;
+      if (key !== this._shownTabKey) {
+        this._shownTabKey = key;
+        this._onTabShown(this._workspaceTab);
+      }
     }
     // The infinite-scroll sentinel lives inside a lit template
     // branch that only renders when _hits is non-empty. Re-observe
@@ -17388,22 +17615,69 @@ class SfgaReferences extends LitElement {
     requestAnimationFrame(tryScroll);
   }
 
-  async _select(id) {
+  // _closePaper returns to the library: clears the open paper and
+  // refreshes the dashboard plus the closed paper's row, whose
+  // workflow status may have changed while it was open.
+  _closePaper() {
+    const id = this._selectedId;
     if (!id) return;
-    // Clicking the already-selected reference deselects it, which
-    // returns the right pane to the dashboard landing view. Matches
-    // the sidebar-Refs re-click return path documented in
-    // REFERENCES_DASHBOARD_PLAN.
-    if (id === this._selectedId) {
-      this._selectedId = "";
-      this._current = null;
-      this._corrections = [];
-      this._grobidRegions = [];
-      this._activeTool = "read";
-      this._fetchDashboard();
-      return;
+    this._selectedId = "";
+    this._current = null;
+    this._shownTabKey = "";
+    this._llmInvokeOpen = false;
+    this._corrections = [];
+    this._grobidRegions = [];
+    this._activeTool = "read";
+    this._fetchDashboard();
+    this._refreshHit(id);
+  }
+
+  // _refreshHit re-reads one reference and patches its workflow
+  // status into the loaded library rows.
+  async _refreshHit(id) {
+    try {
+      const ref = await api.reference.get(id);
+      this._hits = this._hits.map((h) =>
+        h.id === id ? { ...h, workflow: ref.workflow || h.workflow } : h,
+      );
+    } catch {}
+  }
+
+  // _refreshCurrentWorkflow re-reads the open paper's workflow
+  // status after an action that can change it (a run, an import).
+  async _refreshCurrentWorkflow() {
+    const id = this._selectedId;
+    if (!id) return;
+    try {
+      const ref = await api.reference.get(id);
+      if (this._selectedId === id && this._current) {
+        this._current = { ...this._current, workflow: ref.workflow };
+      }
+    } catch {}
+  }
+
+  // _onTabShown performs what a workspace tab needs when it becomes
+  // visible for the open paper: data fetches and telling the reader
+  // iframe which workflow it hosts (per-workflow CSS such as GN dim
+  // and NER emphasis).
+  _onTabShown(tab) {
+    if (tab === "assertions" || tab === "assembly") {
+      this._fetchAssertions(this._selectedId);
     }
+    if (tab === "assembly") {
+      this._fetchPaperImportMappings(this._selectedId);
+    }
+    if (tab !== "assembly") {
+      requestAnimationFrame(() =>
+        this._postToReader({ type: "hive:set-workflow", workflow: tab }),
+      );
+    }
+  }
+
+  async _select(id) {
+    if (!id || id === this._selectedId) return;
     this._selectedId = id;
+    this._shownTabKey = "";
     this._current = null;
     this._inTestSet = null;
     this._llmInvokeOpen = false;
@@ -17457,14 +17731,6 @@ class SfgaReferences extends LitElement {
       // _inTestSet and shows a subtle intermediate state (null)
       // while the fetch is in flight.
       this._fetchTestSetStatus(id);
-      // If the Assertions tab is active (curator reloaded the
-      // browser with that tab selected, or navigated back to a
-      // ref they'd previously reviewed), fetch assertions +
-      // compose runs. Otherwise skip — the tab-click handler
-      // triggers the fetch on-demand.
-      if (this._workspaceTab === "assertions") {
-        this._fetchAssertions(id);
-      }
     } catch (err) {
       this._error = err instanceof Problem ? err.detail || err.title : String(err);
     }
@@ -18927,8 +19193,10 @@ class SfgaReferences extends LitElement {
     };
     return html`
       <div class="dashboard">
-        <h2>References</h2>
-        <div class="dashboard-total">${d.total} total</div>
+        <div class="dashboard-head">
+          <h2>References</h2>
+          <span class="dashboard-total">${d.total} total</span>
+        </div>
         <div class="dashboard-steps">
           ${bar("Step 1 — Bibliographic", d.steps.bibliographic,
             "Author, publication date, and title all populated")}
@@ -18939,6 +19207,7 @@ class SfgaReferences extends LitElement {
           ${bar("Step 4 — Imported", d.steps.imported,
             "Reviewed assertions written into the archive")}
         </div>
+        <div class="dashboard-extra">
         <details>
           <summary>What does each step mean?</summary>
           <dl>
@@ -18967,6 +19236,7 @@ class SfgaReferences extends LitElement {
               </div>
             `
           : html`<div class="dashboard-attention"><h3>Needs attention</h3><p class="empty">All caught up.</p></div>`}
+        </div>
       </div>
     `;
   }
@@ -18975,93 +19245,10 @@ class SfgaReferences extends LitElement {
     if (this._error) {
       return html`<div class="error" role="alert">${this._error}</div>`;
     }
+    const paperOpen = !!this._selectedId;
     return html`
-      <aside>
-        <div class="search-row">
-          <input
-            class="search"
-            type="text"
-            placeholder="Search author / title / citation / DOI / ID…"
-            .value=${this._query}
-            @input=${(e) => this._onQueryChange(e.target.value)}
-          />
-          <button
-            class="add-btn"
-            type="button"
-            title="Add reference"
-            aria-label="Add reference"
-            @click=${() => (this._addingNew = true)}
-          >
-            +
-          </button>
-        </div>
-        <div class="sort-row" role="group" aria-label="Sort references">
-          <button
-            class=${"sort-chip" + (this._sort === "recent" ? " active" : "")}
-            type="button"
-            title="Sort by most recently added or edited"
-            ?disabled=${!!this._query.trim()}
-            @click=${() => this._setSort("recent")}
-          >
-            Recent
-          </button>
-          <button
-            class=${"sort-chip" + (this._sort === "author" ? " active" : "")}
-            type="button"
-            title="Sort alphabetically by author"
-            ?disabled=${!!this._query.trim()}
-            @click=${() => this._setSort("author")}
-          >
-            A–Z
-          </button>
-        </div>
-        <div class="sort-row filter-row" role="group" aria-label="Filter references">
-          ${REFERENCE_FILTERS.map(
-            (o) => html`
-              <button
-                class=${"sort-chip" + (this._filter === o.value ? " active" : "")}
-                type="button"
-                title=${o.title}
-                aria-pressed=${this._filter === o.value ? "true" : "false"}
-                @click=${() => this._setFilter(o.value)}
-              >
-                ${o.label}
-              </button>
-            `,
-          )}
-        </div>
-        ${this._loading && this._hits.length === 0
-          ? html`<div class="empty" role="status">Loading…</div>`
-          : this._hits.length === 0
-            ? html`<div class="empty">
-                ${this._query || this._filter
-                  ? "(No references match the search or filter)"
-                  : "(No references)"}
-              </div>`
-            : html`
-                <ul class="list" role="listbox" aria-label="References">
-                  ${this._hits.map(
-                    (h) => html`
-                      <li
-                        role="option"
-                        aria-selected=${h.id === this._selectedId ? "true" : "false"}
-                        class=${h.id === this._selectedId ? "selected" : ""}
-                        @click=${() => this._select(h.id)}
-                      >
-                        <span class="author">${h.author || "(no author)"}</span
-                        ><span class="year">${h.year || ""}</span>
-                        <span class="title">${h.title || h.citation || ""}</span>
-                      </li>
-                    `,
-                  )}
-                </ul>
-                <div class="scroll-sentinel" aria-hidden="true"></div>
-                ${this._loading && this._hits.length > 0
-                  ? html`<div class="empty" role="status">Loading more…</div>`
-                  : nothing}
-              `}
-      </aside>
-      ${this._renderRightPanes()}
+      <div class="library" ?hidden=${paperOpen}>${this._renderLibrary()}</div>
+      ${paperOpen ? this._renderPaper() : nothing}
       ${this._editRefID || this._addingNew || this._jatsRefEdit
         ? html`<sfga-add-reference-modal
             .editID=${this._editRefID}
@@ -19097,10 +19284,206 @@ class SfgaReferences extends LitElement {
               // triggered the run from a different tab.
               this._workspaceTab = "assertions";
               this._fetchAssertions(this._selectedId);
+              this._refreshCurrentWorkflow();
             }}
           ></sfga-llm-invoke-modal>`
         : nothing}
     `;
+  }
+
+
+  // _renderLibrary is the full-width reference manager: progress
+  // summary, search and filters, and the reference table. Opening a
+  // paper navigates to #/reference/<id>, which the shell routes back
+  // here as selectId.
+  _renderLibrary() {
+    return html`
+      ${this._renderDashboard()}
+      <div class="library-toolbar">
+        <div class="search-row">
+          <input
+            class="search"
+            type="search"
+            aria-label="Search references"
+            placeholder="Search author / title / citation / DOI / ID…"
+            .value=${this._query}
+            @input=${(e) => this._onQueryChange(e.target.value)}
+          />
+          <button
+            class="add-btn"
+            type="button"
+            title="Add reference"
+            aria-label="Add reference"
+            @click=${() => (this._addingNew = true)}
+          >
+            +
+          </button>
+        </div>
+        <div class="chip-group" role="group" aria-label="Sort references">
+          <span class="chip-group-label">Sort</span>
+          ${REFERENCE_SORTS.map(
+            (o) => html`
+              <button
+                class=${"sort-chip" + (this._sort === o.value ? " active" : "")}
+                type="button"
+                title=${o.title}
+                aria-pressed=${this._sort === o.value ? "true" : "false"}
+                ?disabled=${!!this._query.trim()}
+                @click=${() => this._setSort(o.value)}
+              >
+                ${o.label}
+              </button>
+            `,
+          )}
+        </div>
+        <div class="chip-group" role="group" aria-label="Filter references">
+          <span class="chip-group-label">Show</span>
+          ${REFERENCE_FILTERS.map(
+            (o) => html`
+              <button
+                class=${"sort-chip" + (this._filter === o.value ? " active" : "")}
+                type="button"
+                title=${o.title}
+                aria-pressed=${this._filter === o.value ? "true" : "false"}
+                @click=${() => this._setFilter(o.value)}
+              >
+                ${o.label}
+              </button>
+            `,
+          )}
+        </div>
+      </div>
+      ${this._loading && this._hits.length === 0
+        ? html`<div class="empty" role="status">Loading…</div>`
+        : this._hits.length === 0
+          ? html`<div class="empty">
+              ${this._query || this._filter
+                ? "(No references match the search or filter)"
+                : "(No references)"}
+            </div>`
+          : html`
+              <table class="ref-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Status</th>
+                    <th scope="col">Authors</th>
+                    <th scope="col">Year</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">License</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this._hits.map(
+                    (h) => html`
+                      <tr @dblclick=${(e) => this._onRowDblClick(e, h.id)}>
+                        <td>${this._renderStatusDots(h.workflow, h.id)}</td>
+                        <td class="col-authors"><span>${h.author || "(no author)"}</span></td>
+                        <td class="col-year">${h.year || ""}</td>
+                        <td class="col-title">
+                          <a
+                            href=${"#/reference/" + encodeURIComponent(h.id)}
+                            title="Open this paper (or double-click the row)"
+                            >${h.title || h.citation || "(untitled)"}</a
+                          >
+                        </td>
+                        <td class="col-license">${h.license || "—"}</td>
+                      </tr>
+                    `,
+                  )}
+                </tbody>
+              </table>
+              <div class="scroll-sentinel" aria-hidden="true"></div>
+              ${this._loading && this._hits.length > 0
+                ? html`<div class="empty" role="status">Loading more…</div>`
+                : nothing}
+            `}
+    `;
+  }
+
+  // _onRowDblClick opens a paper from anywhere on its row. Clicks on
+  // links inside the row keep their own behavior.
+  _onRowDblClick(e, id) {
+    if (e.target.closest("a, button, input")) return;
+    location.hash = "#/reference/" + encodeURIComponent(id);
+  }
+
+  // _renderStatusDots renders the four workflow-step dots for a
+  // reference. Each dot links to the paper on that step's tab.
+  _renderStatusDots(wf, id) {
+    return html`<span class="status-dots">
+      ${WORKFLOW_STEPS.map((step) => {
+        const state = (wf && wf[step.key]) || "none";
+        const label = `${step.label}: ${WORKFLOW_STATE_LABELS[state]}`;
+        return html`<a
+          class=${"status-dot " + state}
+          href=${"#/reference/" + encodeURIComponent(id) + "/" + step.tab}
+          title=${label + " — open " + step.tabLabel}
+          aria-label=${label + ", open " + step.tabLabel}
+        ></a>`;
+      })}
+    </span>`;
+  }
+
+  // _renderTabDot renders the open paper's status for one tab.
+  _renderTabDot(tab) {
+    const step = WORKFLOW_STEPS.find((s) => s.tab === tab);
+    const wf = this._current && this._current.workflow;
+    if (!step || !wf) return nothing;
+    const state = wf[step.key] || "none";
+    return html`<span
+      class=${"status-dot " + state}
+      role="img"
+      aria-label=${WORKFLOW_STATE_LABELS[state]}
+      title=${step.label + ": " + WORKFLOW_STATE_LABELS[state]}
+    ></span>`;
+  }
+
+  // _renderPaper is the open paper: a bar with the way back to the
+  // library and previous/next through the library's current rows,
+  // above the workspace tabs.
+  _renderPaper() {
+    const idx = this._hits.findIndex((h) => h.id === this._selectedId);
+    const prev = idx > 0 ? this._hits[idx - 1] : null;
+    const next = idx >= 0 && idx < this._hits.length - 1 ? this._hits[idx + 1] : null;
+    const title = this._current
+      ? this._current.title || this._current.citation || this._current.id
+      : "";
+    const tab = this._workspaceTab;
+    const href = (h) => "#/reference/" + encodeURIComponent(h.id) + "/" + tab;
+    return html`
+      <div class="paper">
+        <nav class="paper-bar" aria-label="Paper navigation">
+          <a href="#/references">← Library</a>
+          <span class="paper-title" title=${title}>${title}</span>
+          ${idx >= 0
+            ? html`<span class="paper-nav">
+                ${prev
+                  ? html`<a href=${href(prev)} title=${prev.title || ""}>‹ Previous</a>`
+                  : html`<span class="disabled">‹ Previous</span>`}
+                <span class="pos">${idx + 1} of ${this._hasMore ? `${this._hits.length}+` : this._hits.length}</span>
+                ${next
+                  ? html`<a href=${href(next)} title=${next.title || ""}>Next ›</a>`
+                  : this._hasMore
+                    ? html`<button class="link" type="button" @click=${() => this._nextAfterLoad(idx)}>
+                        Next ›
+                      </button>`
+                    : html`<span class="disabled">Next ›</span>`}
+              </span>`
+            : nothing}
+        </nav>
+        ${this._renderRightPanes()}
+      </div>
+    `;
+  }
+
+  // _nextAfterLoad loads the next page of library rows, then opens
+  // the row after idx.
+  async _nextAfterLoad(idx) {
+    await this._fetchPage(false);
+    const next = this._hits[idx + 1];
+    if (next) {
+      location.hash = "#/reference/" + encodeURIComponent(next.id) + "/" + this._workspaceTab;
+    }
   }
 
   _closeModal() {
@@ -19164,7 +19547,7 @@ class SfgaReferences extends LitElement {
     // the same reference again (or Refs in the sidebar) returns
     // here.
     if (!this._current) {
-      return this._renderDashboard();
+      return html`<div class="dashboard-loading" role="status">Loading…</div>`;
     }
     const hasReader =
       this._current &&
@@ -19216,14 +19599,9 @@ class SfgaReferences extends LitElement {
             role="tab"
             aria-selected=${this._workspaceTab === "bibliography"}
             class=${this._workspaceTab === "bibliography" ? "active" : ""}
-            @click=${() => {
-              this._workspaceTab = "bibliography";
-              requestAnimationFrame(() =>
-                this._postToReader({ type: "hive:set-workflow", workflow: "bibliography" }),
-              );
-            }}
+            @click=${() => (this._workspaceTab = "bibliography")}
           >
-            Bibliography
+            Bibliography${this._renderTabDot("bibliography")}
           </button>
           <button
             role="tab"
@@ -19233,47 +19611,27 @@ class SfgaReferences extends LitElement {
             title=${hasPDF
               ? "Compare the augmented JATS reader with the source PDF"
               : "No PDF attached to this reference"}
-            @click=${() => {
-              this._workspaceTab = "digitize";
-              requestAnimationFrame(() =>
-                this._postToReader({ type: "hive:set-workflow", workflow: "digitize" }),
-              );
-            }}
+            @click=${() => (this._workspaceTab = "digitize")}
           >
-            Digitize
+            Digitize${this._renderTabDot("digitize")}
           </button>
           <button
             role="tab"
             aria-selected=${this._workspaceTab === "assertions"}
             class=${this._workspaceTab === "assertions" ? "active" : ""}
             title="Review structured assertions extracted from the paper"
-            @click=${() => {
-              this._workspaceTab = "assertions";
-              this._fetchAssertions(this._selectedId);
-              // Tell the visible reader iframe which workflow
-              // it's now hosting so per-workflow CSS overrides
-              // (GN dim, NER emphasis) apply.
-              requestAnimationFrame(() =>
-                this._postToReader({ type: "hive:set-workflow", workflow: "assertions" }),
-              );
-            }}
+            @click=${() => (this._workspaceTab = "assertions")}
           >
-            Assertions
+            Assertions${this._renderTabDot("assertions")}
           </button>
           <button
             role="tab"
             aria-selected=${this._workspaceTab === "assembly"}
             class=${this._workspaceTab === "assembly" ? "active" : ""}
             title="Assimilate paper mentions into the taxonomy tree and import"
-            @click=${() => {
-              this._workspaceTab = "assembly";
-              // Assembly needs the same data as Assertions (compose
-              // runs, per-mention keys) plus paper_import mappings.
-              this._fetchAssertions(this._selectedId);
-              this._fetchPaperImportMappings(this._selectedId);
-            }}
+            @click=${() => (this._workspaceTab = "assembly")}
           >
-            Assimilate
+            Assimilate${this._renderTabDot("assembly")}
           </button>
         </div>
         <div class="workspace-panes">

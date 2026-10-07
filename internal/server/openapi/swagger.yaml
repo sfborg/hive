@@ -1607,6 +1607,12 @@ definitions:
         type: string
       volume:
         type: string
+      workflow:
+        allOf:
+        - $ref: '#/definitions/server.apiReferenceWorkflow'
+        description: |-
+          Workflow mirrors the field on apiReferenceHit so the open
+          paper's tab status stays current after a run or import.
     type: object
   server.apiReferenceDashboard:
     properties:
@@ -1658,6 +1664,9 @@ definitions:
           picker results when > 0 and route a click to the reference-
           quick-fix modal (feedback_no_side_quests).
         type: integer
+      license:
+        description: License is the verified license, empty when none is recorded.
+        type: string
       max_severity:
         description: |-
           MaxSeverity is the highest severity among the record's open
@@ -1670,6 +1679,12 @@ definitions:
         type: string
       type:
         type: string
+      workflow:
+        allOf:
+        - $ref: '#/definitions/server.apiReferenceWorkflow'
+        description: |-
+          Workflow is the reference's state for each workflow step
+          ("none" | "partial" | "done"). Drives the library's status dots.
       year:
         type: string
     type: object
@@ -1799,6 +1814,17 @@ definitions:
       size:
         type: integer
       tei_status:
+        type: string
+    type: object
+  server.apiReferenceWorkflow:
+    properties:
+      assertions:
+        type: string
+      bibliographic:
+        type: string
+      digitized:
+        type: string
+      imported:
         type: string
     type: object
   server.apiRegion:
@@ -4063,7 +4089,7 @@ paths:
         in: query
         name: offset
         type: integer
-      - description: 'Sort: author|recent'
+      - description: 'Sort: author|recent|year'
         in: query
         name: sort
         type: string

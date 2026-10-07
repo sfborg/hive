@@ -3691,7 +3691,7 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Param        limit query int false "Page size"
 // @Param        offset query int false "Row offset"
-// @Param        sort query string false "Sort: author|recent"
+// @Param        sort query string false "Sort: author|recent|year"
 // @Param        filter query string false "Workflow filter: runs|assertions|pending"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
@@ -3704,8 +3704,11 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort := hive.ReferenceSortAuthor
-	if r.URL.Query().Get("sort") == "recent" {
+	switch r.URL.Query().Get("sort") {
+	case "recent":
 		sort = hive.ReferenceSortRecent
+	case "year":
+		sort = hive.ReferenceSortYear
 	}
 	filter, ok := hive.ParseReferenceFilter(r.URL.Query().Get("filter"))
 	if !ok {
@@ -5089,6 +5092,9 @@ func (s *server) handleGetReference(w http.ResponseWriter, r *http.Request) {
 			out.AttachedPDFShas = append(out.AttachedPDFShas, af.SHA512)
 		}
 		out.HasSourceDoc = true
+	}
+	if wf, err := s.a.ReferenceWorkflowFor(r.Context(), id); err == nil {
+		out.Workflow = referenceWorkflowToAPI(wf)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

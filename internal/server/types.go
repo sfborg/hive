@@ -728,6 +728,31 @@ type apiReferenceHit struct {
 	// legacy row with no source document doesn't clutter the wire
 	// shape. Falsy today until PDF ingest slice lands.
 	HasSourceDoc bool `json:"has_source_doc,omitempty"`
+	// Workflow is the reference's state for each workflow step
+	// ("none" | "partial" | "done"). Drives the library's status dots.
+	Workflow *apiReferenceWorkflow `json:"workflow,omitempty"`
+	// License is the verified license, empty when none is recorded.
+	License string `json:"license,omitempty"`
+}
+
+// apiReferenceWorkflow is the wire form of [hive.ReferenceWorkflow].
+type apiReferenceWorkflow struct {
+	Bibliographic string `json:"bibliographic"`
+	Digitized     string `json:"digitized"`
+	Assertions    string `json:"assertions"`
+	Imported      string `json:"imported"`
+}
+
+func referenceWorkflowToAPI(w hive.ReferenceWorkflow) *apiReferenceWorkflow {
+	if w.Bibliographic == "" {
+		return nil
+	}
+	return &apiReferenceWorkflow{
+		Bibliographic: string(w.Bibliographic),
+		Digitized:     string(w.Digitized),
+		Assertions:    string(w.Assertions),
+		Imported:      string(w.Imported),
+	}
 }
 
 // apiReference is the detail projection for a single reference.
@@ -775,6 +800,9 @@ type apiReference struct {
 	// resolver on the WUI side fetches /api/issue directly and
 	// computes both locally to keep this endpoint fast.)
 	HasSourceDoc bool `json:"has_source_doc,omitempty"`
+	// Workflow mirrors the field on apiReferenceHit so the open
+	// paper's tab status stays current after a run or import.
+	Workflow *apiReferenceWorkflow `json:"workflow,omitempty"`
 	// AttachedPDFShas lists the sidecar-library sha512s associated
 	// with this reference via hive__reference_pdf. Typically one
 	// entry (one PDF per reference); the references-screen reader
@@ -806,6 +834,8 @@ func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 		Type:        h.Type,
 		IssueCount:  h.IssueCount,
 		MaxSeverity: h.MaxSeverity,
+		Workflow:    referenceWorkflowToAPI(h.Workflow),
+		License:     h.License,
 	}
 }
 

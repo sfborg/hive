@@ -148,3 +148,72 @@ func TestSearchReferencesFilterAndIDPrefix(t *testing.T) {
 		t.Errorf("short query matched ids %v, want none", hitIDs(hits))
 	}
 }
+
+func TestReferenceWorkflowStates(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedReferenceFilterFixtures(t, a, ctx)
+
+	tests := []struct {
+		id   string
+		want ReferenceWorkflow
+	}{
+		{"ref-none", ReferenceWorkflow{WorkflowDone, WorkflowNone, WorkflowNone, WorkflowNone}},
+		{"ref-accepted", ReferenceWorkflow{WorkflowDone, WorkflowNone, WorkflowDone, WorkflowNone}},
+		{"abcdef01-0000-4000-8000-000000000001", ReferenceWorkflow{WorkflowDone, WorkflowNone, WorkflowPartial, WorkflowNone}},
+		// Assertions from a soft-deleted run do not count.
+		{"ref-deleted", ReferenceWorkflow{WorkflowDone, WorkflowNone, WorkflowNone, WorkflowNone}},
+		{"ref-missing", ReferenceWorkflow{WorkflowNone, WorkflowNone, WorkflowNone, WorkflowNone}},
+	}
+	for _, tc := range tests {
+		got, err := a.ReferenceWorkflowFor(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("ReferenceWorkflowFor(%s): %v", tc.id, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: workflow = %+v, want %+v", tc.id, got, tc.want)
+		}
+	}
+
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceFilterNone)
+	if err != nil {
+		t.Fatalf("ListReferencesPage: %v", err)
+	}
+	for _, h := range hits {
+		if h.Workflow.Bibliographic == "" {
+			t.Errorf("hit %s has no workflow state", h.ID)
+		}
+	}
+}
+
+func TestListReferencesPageSortYear(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		for _, r := range []struct{ id, issued string }{
+			{"r-2019", "2019"}, {"r-undated", ""}, {"r-2024", "2024-05"},
+		} {
+			if _, err := tx.CreateReference(coldp.Reference{
+				ID: r.id, Author: "Doe, J.", Title: r.id, Issued: r.issued,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortYear, ReferenceFilterNone)
+	if err != nil {
+		t.Fatalf("ListReferencesPage: %v", err)
+	}
+	var got []string
+	for _, h := range hits {
+		got = append(got, h.ID)
+	}
+	want := []string{"r-2024", "r-2019", "r-undated"}
+	if !slices.Equal(got, want) {
+		t.Errorf("year order = %v, want %v", got, want)
+	}
+}
