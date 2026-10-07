@@ -4182,7 +4182,9 @@ paths:
         in: query
         name: sort
         type: string
-      - description: 'Workflow filter: runs|assertions|pending'
+      - description: 'Comma-separated workflow filters, all of which must hold: runs,
+          assertions, pending, bibliographic, digitized, imported, and no-bibliographic,
+          no-digitized, no-assertions, no-imported'
         in: query
         name: filter
         type: string
@@ -5205,7 +5207,9 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: 'Workflow filter: runs|assertions|pending'
+      - description: 'Comma-separated workflow filters, all of which must hold: runs,
+          assertions, pending, bibliographic, digitized, imported, and no-bibliographic,
+          no-digitized, no-assertions, no-imported'
         in: query
         name: filter
         type: string

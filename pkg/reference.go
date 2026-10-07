@@ -350,6 +350,17 @@ const (
 	// ReferenceFilterPending keeps references with at least one
 	// visible assertion still in 'pending' status.
 	ReferenceFilterPending ReferenceFilter = "pending"
+
+	// Workflow-step filters, with the step definitions of
+	// [ReferenceWorkflow]. Each "no-" form keeps the references that
+	// still need the step.
+	ReferenceFilterBibliographic   ReferenceFilter = "bibliographic"
+	ReferenceFilterNoBibliographic ReferenceFilter = "no-bibliographic"
+	ReferenceFilterDigitized       ReferenceFilter = "digitized"
+	ReferenceFilterNoDigitized     ReferenceFilter = "no-digitized"
+	ReferenceFilterNoAssertions    ReferenceFilter = "no-assertions"
+	ReferenceFilterImported        ReferenceFilter = "imported"
+	ReferenceFilterNoImported      ReferenceFilter = "no-imported"
 )
 
 // ParseReferenceFilter maps a wire value to a ReferenceFilter. The
@@ -357,11 +368,26 @@ const (
 func ParseReferenceFilter(s string) (ReferenceFilter, bool) {
 	switch f := ReferenceFilter(s); f {
 	case ReferenceFilterNone, ReferenceFilterRuns,
-		ReferenceFilterAssertions, ReferenceFilterPending:
+		ReferenceFilterAssertions, ReferenceFilterPending,
+		ReferenceFilterBibliographic, ReferenceFilterNoBibliographic,
+		ReferenceFilterDigitized, ReferenceFilterNoDigitized,
+		ReferenceFilterNoAssertions,
+		ReferenceFilterImported, ReferenceFilterNoImported:
 		return f, true
 	}
 	return ReferenceFilterNone, false
 }
+
+// Workflow-step predicates over the reference table.
+const (
+	bibliographicComplete = `COALESCE(reference.col__author, '') != ''
+		AND COALESCE(reference.col__issued, '') != ''
+		AND COALESCE(reference.col__title, '') != ''`
+	referenceDigitized = `EXISTS (SELECT 1 FROM hive__reference_pdf p
+		WHERE p.reference_id = reference.col__id)`
+	referenceImported = `EXISTS (SELECT 1 FROM hive__reference_assertion ra
+		WHERE ra.reference_id = reference.col__id AND ra.imported_at IS NOT NULL)`
+)
 
 // referenceFilterSQL returns a WHERE predicate over the reference
 // table for f, or "" when f applies no filter. Assertions whose
@@ -383,14 +409,28 @@ func referenceFilterSQL(f ReferenceFilter) string {
 		return visibleAssertion + `)`
 	case ReferenceFilterPending:
 		return visibleAssertion + ` AND ra.status = 'pending')`
+	case ReferenceFilterNoAssertions:
+		return "NOT " + visibleAssertion + `)`
+	case ReferenceFilterBibliographic:
+		return bibliographicComplete
+	case ReferenceFilterNoBibliographic:
+		return "NOT (" + bibliographicComplete + ")"
+	case ReferenceFilterDigitized:
+		return referenceDigitized
+	case ReferenceFilterNoDigitized:
+		return "NOT " + referenceDigitized
+	case ReferenceFilterImported:
+		return referenceImported
+	case ReferenceFilterNoImported:
+		return "NOT " + referenceImported
 	}
 	return ""
 }
 
 // ReferenceQuery narrows a reference listing or search.
 type ReferenceQuery struct {
-	// Filter restricts results to a workflow stage.
-	Filter ReferenceFilter
+	// Filters restrict results to workflow stages; all must hold.
+	Filters []ReferenceFilter
 	// Parents keeps references that mention a name a verifier source
 	// places in the given higher taxon; every entry must match.
 	Parents []IndexParent
@@ -424,8 +464,10 @@ func (rq ReferenceQuery) parentCond(p IndexParent) (string, []any) {
 func (rq ReferenceQuery) predicate() (string, []any) {
 	var conds []string
 	var args []any
-	if p := referenceFilterSQL(rq.Filter); p != "" {
-		conds = append(conds, p)
+	for _, f := range rq.Filters {
+		if p := referenceFilterSQL(f); p != "" {
+			conds = append(conds, "("+p+")")
+		}
 	}
 	for _, p := range rq.Parents {
 		cond, a := rq.parentCond(p)

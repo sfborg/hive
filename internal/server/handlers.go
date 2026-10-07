@@ -3694,7 +3694,7 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Param        limit query int false "Page size"
 // @Param        offset query int false "Row offset"
 // @Param        sort query string false "Sort: author|recent|year"
-// @Param        filter query string false "Workflow filter: runs|assertions|pending"
+// @Param        filter query string false "Comma-separated workflow filters, all of which must hold: runs, assertions, pending, bibliographic, digitized, imported, and no-bibliographic, no-digitized, no-assertions, no-imported"
 // @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
 // @Param        ncbi_parent query string false "Papers mentioning names NCBI Taxonomy places in this higher taxon"
 // @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent / ncbi_parent"
@@ -3795,11 +3795,16 @@ func (s *server) handleColTaxa(w http.ResponseWriter, r *http.Request) {
 // a client-facing message for invalid values.
 func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 	qv := r.URL.Query()
-	filter, ok := hive.ParseReferenceFilter(qv.Get("filter"))
-	if !ok {
-		return hive.ReferenceQuery{}, "invalid 'filter' value"
+	var rq hive.ReferenceQuery
+	if raw := qv.Get("filter"); raw != "" {
+		for _, v := range strings.Split(raw, ",") {
+			f, ok := hive.ParseReferenceFilter(strings.TrimSpace(v))
+			if !ok {
+				return hive.ReferenceQuery{}, fmt.Sprintf("invalid 'filter' value %q", v)
+			}
+			rq.Filters = append(rq.Filters, f)
+		}
 	}
-	rq := hive.ReferenceQuery{Filter: filter}
 	for _, src := range mentions.Sources {
 		if v := strings.TrimSpace(qv.Get(src.Key + "_parent")); v != "" {
 			rq.Parents = append(rq.Parents, hive.IndexParent{SourceID: src.ID, Name: v})
@@ -3825,7 +3830,7 @@ func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 // @Produce      json
 // @Param        q query string true "Query string"
 // @Param        limit query int false "Page size"
-// @Param        filter query string false "Workflow filter: runs|assertions|pending"
+// @Param        filter query string false "Comma-separated workflow filters, all of which must hold: runs, assertions, pending, bibliographic, digitized, imported, and no-bibliographic, no-digitized, no-assertions, no-imported"
 // @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
 // @Param        ncbi_parent query string false "Papers mentioning names NCBI Taxonomy places in this higher taxon"
 // @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent / ncbi_parent"

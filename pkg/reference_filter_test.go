@@ -103,7 +103,7 @@ func TestListReferencesPageFilter(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.filter), func(t *testing.T) {
-			hits, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Filter: tc.filter})
+			hits, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Filters: []ReferenceFilter{tc.filter}})
 			if err != nil {
 				t.Fatalf("ListReferencesPage: %v", err)
 			}
@@ -122,7 +122,7 @@ func TestSearchReferencesFilterAndIDPrefix(t *testing.T) {
 	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
 	seedReferenceFilterFixtures(t, a, ctx)
 
-	hits, err := a.SearchReferences(ctx, "assertion", 50, ReferenceQuery{Filter: ReferenceFilterPending})
+	hits, err := a.SearchReferences(ctx, "assertion", 50, ReferenceQuery{Filters: []ReferenceFilter{ReferenceFilterPending}})
 	if err != nil {
 		t.Fatalf("SearchReferences: %v", err)
 	}
@@ -215,5 +215,44 @@ func TestListReferencesPageSortYear(t *testing.T) {
 	want := []string{"r-2024", "r-2019", "r-undated"}
 	if !slices.Equal(got, want) {
 		t.Errorf("year order = %v, want %v", got, want)
+	}
+}
+
+func TestWorkflowStepFilters(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedReferenceFilterFixtures(t, a, ctx)
+	err := a.WithTx(ctx, func(tx *Tx) error {
+		_, err := tx.CreateReference(coldp.Reference{ID: "ref-nobib", Title: "No author or date"})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	count := func(fs ...ReferenceFilter) int {
+		t.Helper()
+		_, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Filters: fs})
+		if err != nil {
+			t.Fatalf("%v: %v", fs, err)
+		}
+		return total
+	}
+	all := count()
+	for _, pair := range [][2]ReferenceFilter{
+		{ReferenceFilterBibliographic, ReferenceFilterNoBibliographic},
+		{ReferenceFilterDigitized, ReferenceFilterNoDigitized},
+		{ReferenceFilterAssertions, ReferenceFilterNoAssertions},
+		{ReferenceFilterImported, ReferenceFilterNoImported},
+	} {
+		if has, needs := count(pair[0]), count(pair[1]); has+needs != all {
+			t.Errorf("%s (%d) + %s (%d) != all (%d)", pair[0], has, pair[1], needs, all)
+		}
+	}
+	if got := count(ReferenceFilterNoBibliographic); got != 1 {
+		t.Errorf("no-bibliographic = %d, want 1", got)
+	}
+	// Filters combine with AND: assertions and pending review.
+	if got := count(ReferenceFilterAssertions, ReferenceFilterPending); got != 2 {
+		t.Errorf("assertions AND pending = %d, want 2", got)
 	}
 }

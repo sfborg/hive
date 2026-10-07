@@ -2386,7 +2386,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Workflow filter: runs|assertions|pending",
+                        "description": "Comma-separated workflow filters, all of which must hold: runs, assertions, pending, bibliographic, digitized, imported, and no-bibliographic, no-digitized, no-assertions, no-imported",
                         "name": "filter",
                         "in": "query"
                     },
@@ -3158,7 +3158,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Workflow filter: runs|assertions|pending",
+                        "description": "Comma-separated workflow filters, all of which must hold: runs, assertions, pending, bibliographic, digitized, imported, and no-bibliographic, no-digitized, no-assertions, no-imported",
                         "name": "filter",
                         "in": "query"
                     },

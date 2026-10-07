@@ -15140,15 +15140,25 @@ const WORKFLOW_STATE_LABELS = {
   none: "not started",
 };
 
-// REFERENCE_FILTERS are the workflow-stage filter chips in the
-// reference list sidebar. Values match the `filter` query parameter
-// of GET /api/reference and /api/reference/search.
-const REFERENCE_FILTERS = [
-  { value: "", label: "All", title: "Show all references" },
-  { value: "runs", label: "Runs", title: "References with at least one extraction run" },
-  { value: "assertions", label: "Assertions", title: "References with extracted assertions" },
-  { value: "pending", label: "Pending", title: "References with assertions awaiting review" },
+// STEP_FILTERS are the library's workflow-step buttons. Each cycles
+// needs → has → off; `needs` and `has` are the `filter` values of
+// GET /api/reference for that state, and `dash` is the step's key in
+// the dashboard counts that fill the button.
+const STEP_FILTERS = [
+  { key: "bibliographic", label: "Bibliographic", dash: "bibliographic",
+    needs: "no-bibliographic", has: "bibliographic",
+    needsText: "missing author, date or title", hasText: "with author, date and title" },
+  { key: "digitized", label: "Digitized", dash: "digitized",
+    needs: "no-digitized", has: "digitized",
+    needsText: "without an attached document", hasText: "with an attached document" },
+  { key: "assertions", label: "Assertions", dash: "assertions_extracted",
+    needs: "no-assertions", has: "assertions",
+    needsText: "without extracted assertions", hasText: "with extracted assertions" },
+  { key: "imported", label: "Imported", dash: "imported",
+    needs: "no-imported", has: "imported",
+    needsText: "with nothing imported yet", hasText: "with imported assertions" },
 ];
+const STEP_CYCLE = { "": "needs", needs: "has", has: "" };
 
 class SfgaReferences extends LitElement {
   static properties = {
@@ -15299,10 +15309,11 @@ class SfgaReferences extends LitElement {
     // "author" is the alphabetical fallback for curators who
     // specifically want to scan by name. Persisted in localStorage.
     _sort: { state: true },
-    // Workflow-stage filter for the reference list (one of the
-    // REFERENCE_FILTERS values; "" = all). Applies to both the
+    // Workflow-step filters: STEP_FILTERS key → "needs" | "has" | ""
+    // (off). Active steps combine with AND. Applies to both the
     // paginated list and search. Persisted in localStorage.
-    _filter: { state: true },
+    _stepFilters: { state: true },
+    _stepHelpOpen: { state: true },
     // Higher-taxon filter over the name-mention index: the taxon, the
     // source whose classification it uses ("ncbi" | "col"), and the
     // minimum mention count for a name to count toward it. Discovery
@@ -15428,6 +15439,129 @@ class SfgaReferences extends LitElement {
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
+    }
+    .library-head {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      flex-wrap: wrap;
+    }
+    .library-head h2 {
+      margin: 0;
+      font-size: var(--fs-lg);
+    }
+    .library-total {
+      color: var(--dim);
+      font-size: var(--fs-sm);
+    }
+    .step-buttons {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 11rem)) auto;
+      gap: var(--sp-1);
+      align-items: stretch;
+      margin-left: auto;
+    }
+    /* The fill is the button's own background: the archive's progress
+       on the step, with the label drawn over it. */
+    .step-button {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+      min-width: 0;
+      padding: var(--sp-1) var(--sp-2);
+      font: inherit;
+      font-size: var(--fs-xs);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      background: linear-gradient(
+        to right,
+        color-mix(in oklab, var(--sev-info) 30%, transparent) var(--fill),
+        var(--bg) var(--fill)
+      );
+    }
+    .step-button:hover,
+    .step-button:focus-visible {
+      border-color: var(--accent);
+    }
+    .step-button.needs,
+    .step-button.has {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .step-button .step-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+    .step-button .step-count {
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .step-button .status-dot {
+      width: 0.8rem;
+      height: 0.8rem;
+      color: var(--accent);
+    }
+    .step-help {
+      font: inherit;
+      font-size: var(--fs-xs);
+      width: 1.8rem;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      background: var(--bg);
+      color: var(--dim);
+      cursor: pointer;
+    }
+    .step-help-backdrop {
+      position: fixed;
+      inset: 0;
+      background: color-mix(in oklab, var(--fg) 25%, transparent);
+      z-index: 20;
+    }
+    .step-help-dialog {
+      position: fixed;
+      top: 15vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(34rem, calc(100vw - 2rem));
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-4);
+      z-index: 21;
+      font-size: var(--fs-sm);
+    }
+    .step-help-dialog h3 {
+      margin: 0 0 var(--sp-2);
+    }
+    .step-help-dialog dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: var(--sp-1) var(--sp-3);
+    }
+    .step-help-dialog dt {
+      font-weight: 600;
+    }
+    .step-help-dialog dd {
+      margin: 0;
+    }
+    .step-help-dialog .status-dot {
+      vertical-align: -0.2rem;
+      color: var(--accent);
+    }
+    .step-help-close {
+      font: inherit;
+      padding: var(--sp-1) var(--sp-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--fg);
+      cursor: pointer;
     }
     .col-filter {
       display: flex;
@@ -17297,10 +17431,15 @@ class SfgaReferences extends LitElement {
     this._indexSource = "ncbi";
     this._minMentions = 1;
     this._indexTaxa = [];
-    this._filter = "";
+    this._stepFilters = {};
+    this._stepHelpOpen = false;
     try {
-      const f = localStorage.getItem("hive.references.filter");
-      if (REFERENCE_FILTERS.some((o) => o.value === f)) this._filter = f;
+      const saved = JSON.parse(localStorage.getItem("hive.references.steps") || "{}");
+      for (const st of STEP_FILTERS) {
+        if (saved[st.key] === "needs" || saved[st.key] === "has") {
+          this._stepFilters[st.key] = saved[st.key];
+        }
+      }
     } catch {}
     this._hasMore = true;
     this._dashboard = null;
@@ -17552,14 +17691,14 @@ class SfgaReferences extends LitElement {
         // Search returns relevance-ranked results in one shot; no
         // pagination. Sort toggle doesn't apply during search.
         const opts = { q, limit, ...this._indexOpts() };
-        if (this._filter) opts.filter = this._filter;
+        if (this._stepFilterParam()) opts.filter = this._stepFilterParam();
         const page = await api.reference.search(opts);
         items = page.items || [];
         this._hasMore = false;
       } else {
         const opts = { limit, offset, ...this._indexOpts() };
         if (this._sort !== "author") opts.sort = this._sort;
-        if (this._filter) opts.filter = this._filter;
+        if (this._stepFilterParam()) opts.filter = this._stepFilterParam();
         const page = await api.reference.list(opts);
         items = page.items || [];
         this._hasMore = items.length === limit;
@@ -17630,13 +17769,129 @@ class SfgaReferences extends LitElement {
     if (this._indexParent) this._fetchPage(true);
   }
 
-  _setFilter(filter) {
-    if (this._filter === filter) return;
-    this._filter = filter;
+  // _stepFilterParam returns the `filter` query value for the active
+  // step buttons, or "" when none is active.
+  _stepFilterParam() {
+    return STEP_FILTERS.filter((st) => this._stepFilters[st.key])
+      .map((st) => st[this._stepFilters[st.key]])
+      .join(",");
+  }
+
+  // _cycleStep advances a step button: needs → has → off.
+  _cycleStep(key) {
+    const next = STEP_CYCLE[this._stepFilters[key] || ""];
+    const filters = { ...this._stepFilters };
+    if (next) filters[key] = next;
+    else delete filters[key];
+    this._stepFilters = filters;
     try {
-      localStorage.setItem("hive.references.filter", filter);
+      localStorage.setItem("hive.references.steps", JSON.stringify(filters));
     } catch {}
     this._fetchPage(true);
+  }
+
+  // _renderStepButtons shows one equal-width button per workflow
+  // step. The button's background fill is the archive's progress on
+  // that step, with the label drawn over it; clicking cycles the list
+  // filter needs → has → off.
+  _renderStepButtons() {
+    const d = this._dashboard;
+    return html`
+      <div class="step-buttons" role="group" aria-label="Filter by workflow step">
+        ${STEP_FILTERS.map((st) => {
+          const step = d && d.steps ? d.steps[st.dash] : null;
+          const done = step ? step.done : 0;
+          const total = step ? step.total : 0;
+          const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+          const state = this._stepFilters[st.key] || "";
+          const showing =
+            state === "needs"
+              ? `showing references ${st.needsText}`
+              : state === "has"
+                ? `showing references ${st.hasText}`
+                : "not filtering";
+          const next = STEP_CYCLE[state];
+          const nextText =
+            next === "needs"
+              ? `show references ${st.needsText}`
+              : next === "has"
+                ? `show references ${st.hasText}`
+                : "stop filtering";
+          return html`<button
+            type="button"
+            class=${"step-button" + (state ? " " + state : "")}
+            style=${`--fill: ${pct}%`}
+            aria-label=${`${st.label}: ${done} of ${total} done; ${showing}. Click to ${nextText}.`}
+            title=${`${st.label}: ${done} of ${total} (${pct}%). Click to ${nextText}.`}
+            @click=${() => this._cycleStep(st.key)}
+          >
+            ${state
+              ? html`<span
+                  class=${"status-dot " + (state === "has" ? "done" : "none")}
+                  aria-hidden="true"
+                ></span>`
+              : nothing}
+            <span class="step-label"
+              >${state === "needs" ? "Needs " + st.label.toLowerCase() : st.label}</span
+            >
+            <span class="step-count">${done}/${total}</span>
+          </button>`;
+        })}
+        <button
+          type="button"
+          class="step-help"
+          aria-label="About the workflow steps"
+          title="About the workflow steps"
+          @click=${() => (this._stepHelpOpen = true)}
+        >
+          ?
+        </button>
+      </div>
+    `;
+  }
+
+  // _renderStepHelp explains the workflow steps and their buttons.
+  _renderStepHelp() {
+    if (!this._stepHelpOpen) return nothing;
+    const close = () => (this._stepHelpOpen = false);
+    return html`
+      <div class="step-help-backdrop" @click=${close}></div>
+      <div
+        class="step-help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="step-help-title"
+        @keydown=${(e) => e.key === "Escape" && close()}
+      >
+        <h3 id="step-help-title">Workflow steps</h3>
+        <p>
+          Each reference moves through four steps. A button's fill shows how
+          many references in the archive have completed that step.
+        </p>
+        <dl>
+          <dt>Bibliographic</dt>
+          <dd>Author, publication date and title are recorded.</dd>
+          <dt>Digitized</dt>
+          <dd>A source document is attached and converted to structured text.</dd>
+          <dt>Assertions</dt>
+          <dd>
+            Extraction has produced structured claims from the paper. Claims
+            awaiting review show as a half-filled status dot.
+          </dd>
+          <dt>Imported</dt>
+          <dd>Reviewed claims have been written into the archive's taxonomy.</dd>
+        </dl>
+        <p>
+          Clicking a button cycles what the list shows: references that still
+          need the step
+          (<span class="status-dot none" aria-hidden="true"></span>), then
+          references that have completed it
+          (<span class="status-dot done" aria-hidden="true"></span>), then all
+          references. Active buttons combine.
+        </p>
+        <button type="button" class="step-help-close" @click=${close}>Close</button>
+      </div>
+    `;
   }
 
   // Post-mount: if the shell hands us a new `selectId` (e.g. curator
@@ -19439,7 +19694,14 @@ class SfgaReferences extends LitElement {
   // here as selectId.
   _renderLibrary() {
     return html`
-      ${this._renderDashboard()}
+      <div class="library-head">
+        <h2>References</h2>
+        <span class="library-total"
+          >${this._dashboard ? `${this._dashboard.total} total` : ""}</span
+        >
+        ${this._renderStepButtons()}
+      </div>
+      ${this._renderStepHelp()}
       <div class="library-toolbar">
         <div class="search-row">
           <input
@@ -19531,22 +19793,6 @@ class SfgaReferences extends LitElement {
             </p>
           </details>
         </div>
-        <div class="chip-group" role="group" aria-label="Filter references">
-          <span class="chip-group-label">Show</span>
-          ${REFERENCE_FILTERS.map(
-            (o) => html`
-              <button
-                class=${"sort-chip" + (this._filter === o.value ? " active" : "")}
-                type="button"
-                title=${o.title}
-                aria-pressed=${this._filter === o.value ? "true" : "false"}
-                @click=${() => this._setFilter(o.value)}
-              >
-                ${o.label}
-              </button>
-            `,
-          )}
-        </div>
       </div>
       ${this._loading && this._hits.length === 0
         ? html`<div class="empty" role="status">Loading…</div>`
@@ -19557,7 +19803,7 @@ class SfgaReferences extends LitElement {
                     ${indexSourceLabel(this._indexSource)} places in
                     “${this._indexParent}”. The source may use a different name
                     for this group; pick one from the suggestions.`
-                : this._query || this._filter
+                : this._query || this._stepFilterParam()
                   ? "(No references match the search or filter)"
                   : "(No references)"}
             </div>`
