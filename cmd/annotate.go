@@ -26,9 +26,10 @@ var annotateRetagCmd = &cobra.Command{
 	Long: `Updates the augmented JATS of the given references' attached documents
 in place. It tags names in the title, abstract and keywords and in body
 text containing XML entities, which earlier annotation passes did not
-scan, and moves brackets and punctuation that ended up inside a name
-tag to just outside it. Existing tags are otherwise left as they are. New tags are
-verified and abbreviations expanded through GNverifier.
+scan, moves brackets and punctuation that ended up inside a name tag
+to just outside it, and declares the TaxPub namespace with Plazi's URI.
+Existing tags are otherwise left as they are. New tags are verified and
+abbreviations expanded through GNverifier.
 
 Re-run "hive mentions index" afterwards to update the name-mention
 index.`,
@@ -133,6 +134,7 @@ func retag(ctx context.Context, ann *annotator.Annotator, orig []byte) ([]byte, 
 		return nil, err
 	}
 	doc = annotator.TrimTagBoundaries(doc)
+	doc = annotator.AlignTaxPubNamespace(doc)
 	if doc, err = ann.VerifyFullNames(ctx, doc); err != nil {
 		return nil, fmt.Errorf("verify: %w", err)
 	}

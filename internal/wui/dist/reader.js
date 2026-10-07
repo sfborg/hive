@@ -79,6 +79,9 @@ class SfgaReader extends LitElement {
     // reference has no PDF.
     _pdfSha: { state: true },
     _showExpanded: { state: true },
+    // Mark which names hive tagged (GN) and which the publisher tagged
+    // (TaxPub). Remembered per browser.
+    _showTagSources: { state: true },
     // Side-by-side PDF pane: when enabled, the PDF loads on the
     // left half of the viewport and the reader text on the right,
     // so a curator can eyeball the source next to the augmented
@@ -768,11 +771,12 @@ class SfgaReader extends LitElement {
     }
     /* Chip styling per gn:source. Verified is the confident state
        (accent-tinted); ambiguous / unverified sit in the middle
-       (amber / orange); unresolved is red. Every full-form chip
-       carries a gn:source — VerifyFullNames stamps verified and
-       unwraps unverified — so there is no "no source" case to
-       style. Abbreviations that don't resolve stay wrapped with
-       gn:source="unresolved" (red). */
+       (amber / orange); unresolved is red. Every chip hive's
+       annotator writes carries a gn:source — VerifyFullNames stamps
+       verified and unwraps unverified. Abbreviations that don't
+       resolve stay wrapped with gn:source="unresolved" (red). Tags
+       from publisher TaxPub XML carry no gn:source and render as
+       plain italics (class "plain publisher"). */
     .taxon-name {
       display: inline;
       padding: 0.05rem 0.3rem;
@@ -796,6 +800,29 @@ class SfgaReader extends LitElement {
     .taxon-name.unresolved {
       background: color-mix(in oklab, var(--sev-error) 15%, transparent);
       border-color: color-mix(in oklab, var(--sev-error) 40%, transparent);
+    }
+    /* Tag sources, shown when the "Tag sources" toggle is on: a small
+       "GN" mark before names tagged by hive's GNfinder pass, and a
+       dotted underline on names tagged by the publisher's TaxPub
+       markup. The mark is text, so it scales with the font. */
+    :host([data-tag-sources]) .taxon-name.gn::before {
+      content: "GN";
+      font-style: normal;
+      font-size: 0.6em;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      vertical-align: 0.35em;
+      margin-right: 0.2em;
+      color: var(--dim);
+    }
+    :host([data-tag-sources]) .taxon-name.publisher {
+      text-decoration: underline dotted;
+      text-underline-offset: 0.2em;
+    }
+    /* Publisher tags have no chip background, so chip padding would
+       only open gaps around adjacent punctuation. */
+    .taxon-name.publisher {
+      padding: 0;
     }
     .empty,
     .error {
@@ -957,6 +984,10 @@ class SfgaReader extends LitElement {
     this._reannotating = false;
     this._doc = null;
     this._showExpanded = false;
+    this._showTagSources = true;
+    try {
+      this._showTagSources = localStorage.getItem("hive.reader.tagSources") !== "off";
+    } catch {}
     this._showPDF = false;
     // Columned view is on by default — journal-style multi-column
     // layout with paginated navigation. column-width naturally
@@ -1368,10 +1399,14 @@ class SfgaReader extends LitElement {
     // Recompute pages whenever the doc, paginated mode, expand-
     // abbreviations toggle, or PDF-toggle changes — any of these
     // can affect layout dimensions.
+    if (changed.has("_showTagSources")) {
+      this.toggleAttribute("data-tag-sources", this._showTagSources);
+    }
     if (
       changed.has("_doc") ||
       changed.has("_paginated") ||
       changed.has("_showExpanded") ||
+      changed.has("_showTagSources") ||
       changed.has("_showPDF")
     ) {
       // Wait a frame so Lit finishes committing DOM changes
@@ -1807,6 +1842,19 @@ class SfgaReader extends LitElement {
             />
             Expand abbreviations
           </label>
+          <label title="Mark names tagged by GNfinder (GN) and by the publisher (dotted underline)">
+            <input
+              type="checkbox"
+              .checked=${this._showTagSources}
+              @change=${(e) => {
+                this._showTagSources = e.target.checked;
+                try {
+                  localStorage.setItem("hive.reader.tagSources", e.target.checked ? "on" : "off");
+                } catch {}
+              }}
+            />
+            Tag sources
+          </label>
           <label title=${this._pdfSha ? "Show the source PDF instead of the augmented text" : "No PDF attached to this reference"}>
             <input
               type="checkbox"
@@ -1907,15 +1955,19 @@ class SfgaReader extends LitElement {
     if (!meta) return nothing;
     return html`
       <header class="paper-header">
-        ${meta.title ? html`<h1 class="paper-title">${meta.title}</h1>` : nothing}
+        ${meta.titleEl
+          ? html`<h1 class="paper-title">${this._renderNodes(meta.titleEl.childNodes)}</h1>`
+          : meta.title
+            ? html`<h1 class="paper-title">${meta.title}</h1>`
+            : nothing}
         ${meta.authors.length
           ? html`<p class="paper-authors">${meta.authors.join(", ")}</p>`
           : nothing}
-        ${meta.abstractParas.length
+        ${meta.abstractEls.length
           ? html`
               <details class="paper-abstract" open>
                 <summary>Abstract</summary>
-                ${meta.abstractParas.map((p) => html`<p>${p}</p>`)}
+                ${meta.abstractEls.map((p) => html`<p>${this._renderNodes(p.childNodes)}</p>`)}
               </details>
             `
           : nothing}
@@ -1937,15 +1989,37 @@ class SfgaReader extends LitElement {
     const bibtex = this._formatBibTeX(data);
     const cslJSON = this._formatCSLJSON(data);
     const doiURL = data.doi ? `https://doi.org/${data.doi}` : "";
+    // The header renders the title and abstract from their elements so
+    // name tags in them show as chips; the text forms feed the copy
+    // buffers.
+    const articleMeta = this._directChild(front, "article-meta");
+    const titleGroup = articleMeta && this._directChild(articleMeta, "title-group");
+    const titleEl = titleGroup && this._directChild(titleGroup, "article-title");
     return {
       title: data.title,
+      titleEl: titleEl || null,
       authors: data.authors,
       abstractParas,
+      abstractEls: this._abstractElements(front),
       plain,
       bibtex,
       cslJSON,
       doiURL,
     };
+  }
+
+  // _abstractElements returns the abstract's <p> elements, or the
+  // <abstract> element itself when it has no <p> children.
+  _abstractElements(front) {
+    const articleMeta = this._directChild(front, "article-meta");
+    if (!articleMeta) return [];
+    const abs = this._directChild(articleMeta, "abstract");
+    if (!abs) return [];
+    const paras = [...abs.children].filter(
+      (c) => c.localName === "p" && (c.textContent || "").trim(),
+    );
+    if (paras.length) return paras;
+    return (abs.textContent || "").trim() ? [abs] : [];
   }
 
   // _extractAbstract pulls each <abstract><p> under <article-meta>
@@ -3623,7 +3697,10 @@ class SfgaReader extends LitElement {
       el.getAttribute("gn:candidates") ||
       el.getAttribute("candidates") ||
       "";
-    const cls = source || "plain";
+    // Tags written by hive's annotator carry full-name / gn:source;
+    // tags that came with publisher TaxPub XML carry neither.
+    const origin = fullName || source ? "gn" : "publisher";
+    const cls = `${source || "plain"} ${origin}`;
     const isAbbrev = /^[A-Za-z]{1,3}\.\s/.test(original);
     const expanded = this._showExpanded && isAbbrev && fullName;
     let title = fullName || original;
@@ -3631,6 +3708,7 @@ class SfgaReader extends LitElement {
     else if (source === "ambiguous") title += ` (ambiguous · candidates: ${candidates})`;
     else if (source === "unverified") title += ` (unverified)`;
     else if (source === "unresolved") title += ` (unresolved abbreviation)`;
+    title += origin === "gn" ? " · tagged by GNfinder" : " · tagged by the publisher (TaxPub)";
     const body = expanded ? fullName : this._renderNodes(el.childNodes);
     return html`<span
       class="taxon-name ${cls}"

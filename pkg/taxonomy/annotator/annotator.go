@@ -41,11 +41,28 @@ import (
 	"github.com/gnames/gnverifier/pkg/io/verifrest"
 )
 
-// TaxPubNamespace is the JATS-TaxPub namespace URI. Consumers that
-// prefer a different prefix can rewrite it — but the namespace URI
-// must stay stable so downstream tools (Plazi, Pensoft) recognize
-// the markup as TaxPub.
-const TaxPubNamespace = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
+// TaxPubNamespace is the TaxPub namespace URI, as published by Plazi
+// and declared by publisher TaxPub XML. Consumers that prefer a
+// different prefix can rewrite it — but the namespace URI must stay
+// stable so downstream tools recognize the markup as TaxPub.
+//
+// Tags written by the annotator carry a full-name attribute (and
+// gn:source once verified); publisher tags do not. That, not the
+// namespace, tells the two apart.
+const TaxPubNamespace = "http://www.plazi.org/taxpub"
+
+// legacyTaxPubNamespace is the TaxPub URI earlier annotation passes
+// declared. [AlignTaxPubNamespace] replaces it.
+const legacyTaxPubNamespace = "http://exsansi.pensoft.net/pub-med/pub-med-tp/1.0"
+
+// AlignTaxPubNamespace rewrites xmlns:tp declarations of the legacy
+// TaxPub URI to [TaxPubNamespace]. Both URIs name the TaxPub
+// vocabulary, so element meaning is unchanged.
+func AlignTaxPubNamespace(doc []byte) []byte {
+	return bytes.ReplaceAll(doc,
+		[]byte(`xmlns:`+TaxPubPrefix+`="`+legacyTaxPubNamespace+`"`),
+		[]byte(`xmlns:`+TaxPubPrefix+`="`+TaxPubNamespace+`"`))
+}
 
 // TaxPubPrefix is the conventional short prefix for the TaxPub
 // namespace. Rendered as `xmlns:tp="…"` on the root element so
