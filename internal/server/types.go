@@ -733,6 +733,23 @@ type apiReferenceHit struct {
 	Workflow *apiReferenceWorkflow `json:"workflow,omitempty"`
 	// License is the verified license, empty when none is recorded.
 	License string `json:"license,omitempty"`
+	// MentionsIndexed is true when the reference's name mentions have
+	// been indexed.
+	MentionsIndexed bool `json:"mentions_indexed,omitempty"`
+	// ColFamily is the family with the most name mentions according to
+	// the Catalogue of Life, with that mention total. Discovery data
+	// only; never project data.
+	ColFamily         string `json:"col_family,omitempty"`
+	ColFamilyMentions int    `json:"col_family_mentions,omitempty"`
+	// ColMatch explains a col_parent match: the most-mentioned name the
+	// Catalogue of Life places in the requested taxon.
+	ColMatch *apiColMatch `json:"col_match,omitempty"`
+}
+
+// apiColMatch is the wire form of [hive.ColMatch].
+type apiColMatch struct {
+	Mention string `json:"mention"`
+	Count   int    `json:"count"`
 }
 
 // apiReferenceWorkflow is the wire form of [hive.ReferenceWorkflow].
@@ -836,7 +853,19 @@ func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 		MaxSeverity: h.MaxSeverity,
 		Workflow:    referenceWorkflowToAPI(h.Workflow),
 		License:     h.License,
+
+		MentionsIndexed:   h.MentionsIndexed,
+		ColFamily:         h.ColFamily,
+		ColFamilyMentions: h.ColFamilyMentions,
+		ColMatch:          colMatchToAPI(h.ColMatch),
 	}
+}
+
+func colMatchToAPI(m *hive.ColMatch) *apiColMatch {
+	if m == nil {
+		return nil
+	}
+	return &apiColMatch{Mention: m.Mention, Count: m.Count}
 }
 
 func referenceToAPI(r *coldp.Reference) apiReference {

@@ -207,6 +207,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/reference", s.handleReferences)
 	mux.HandleFunc("GET /api/reference/dashboard", s.handleReferenceDashboard)
 	mux.HandleFunc("GET /api/reference/search", s.handleReferenceSearch)
+	mux.HandleFunc("GET /api/name-mentions/taxa", s.handleColTaxa)
 	mux.HandleFunc("POST /api/reference", s.handleCreateReference)
 	mux.HandleFunc("POST /api/reference/regenerate-citations", s.handleRegenerateCitations)
 	mux.HandleFunc("POST /api/reference/{id}/attach-pdf", s.handleAttachReferencePDF)
@@ -3693,6 +3694,8 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Param        offset query int false "Row offset"
 // @Param        sort query string false "Sort: author|recent|year"
 // @Param        filter query string false "Workflow filter: runs|assertions|pending"
+// @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
+// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
@@ -3710,12 +3713,12 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	case "year":
 		sort = hive.ReferenceSortYear
 	}
-	filter, ok := hive.ParseReferenceFilter(r.URL.Query().Get("filter"))
-	if !ok {
-		writeBadRequest(w, r, "invalid 'filter' value")
+	rq, msg := parseReferenceQuery(r)
+	if msg != "" {
+		writeBadRequest(w, r, msg)
 		return
 	}
-	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset, sort, filter)
+	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset, sort, rq)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
@@ -3731,6 +3734,70 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+// apiColTaxon is one higher taxon from the name-mention index.
+type apiColTaxon struct {
+	Name   string `json:"name"`
+	Rank   string `json:"rank"`
+	Papers int    `json:"papers"`
+}
+
+// handleColTaxa returns higher taxa from the name-mention index whose
+// names start with q, most-mentioned first. Backs autocomplete for the
+// col_parent reference filter, whose values must use the Catalogue of
+// Life's names.
+//
+// @Summary      Look up Catalogue of Life higher taxa in the name-mention index
+// @Description  Higher taxa (kingdom to genus) from the Catalogue of Life classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.
+// @Tags         references
+// @Produce      json
+// @Param        q query string false "Name prefix"
+// @Param        limit query int false "Maximum results (default 20)"
+// @Success      200 {object} apiPage[apiColTaxon]
+// @Failure      400 {object} problem
+// @Failure      500 {object} problem
+// @Router       /name-mentions/taxa [get]
+func (s *server) handleColTaxa(w http.ResponseWriter, r *http.Request) {
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			writeBadRequest(w, r, "invalid 'limit' value")
+			return
+		}
+		limit = clampPageSize(n)
+	}
+	taxa, err := s.a.ColTaxa(r.Context(), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]apiColTaxon, 0, len(taxa))
+	for _, t := range taxa {
+		items = append(items, apiColTaxon{Name: t.Name, Rank: t.Rank, Papers: t.Papers})
+	}
+	writeJSON(w, http.StatusOK, apiPage[apiColTaxon]{Items: items})
+}
+
+// parseReferenceQuery reads the reference-list narrowing parameters
+// shared by GET /api/reference and /api/reference/search. It returns
+// a client-facing message for invalid values.
+func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
+	qv := r.URL.Query()
+	filter, ok := hive.ParseReferenceFilter(qv.Get("filter"))
+	if !ok {
+		return hive.ReferenceQuery{}, "invalid 'filter' value"
+	}
+	rq := hive.ReferenceQuery{Filter: filter, ColParent: strings.TrimSpace(qv.Get("col_parent"))}
+	if raw := qv.Get("min_mentions"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return hive.ReferenceQuery{}, "invalid 'min_mentions' value (a positive integer)"
+		}
+		rq.MinMentions = n
+	}
+	return rq, ""
+}
+
 // handleReferenceSearch returns references whose author, title,
 // citation, or DOI matches q as a case-insensitive substring, or
 // whose ID starts with q.
@@ -3742,6 +3809,8 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 // @Param        q query string true "Query string"
 // @Param        limit query int false "Page size"
 // @Param        filter query string false "Workflow filter: runs|assertions|pending"
+// @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
+// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
@@ -3761,12 +3830,12 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	filter, ok := hive.ParseReferenceFilter(r.URL.Query().Get("filter"))
-	if !ok {
-		writeBadRequest(w, r, "invalid 'filter' value")
+	rq, msg := parseReferenceQuery(r)
+	if msg != "" {
+		writeBadRequest(w, r, msg)
 		return
 	}
-	hits, err := s.a.SearchReferences(r.Context(), q, limit, filter)
+	hits, err := s.a.SearchReferences(r.Context(), q, limit, rq)
 	if err != nil {
 		writeProblem(w, r, err)
 		return

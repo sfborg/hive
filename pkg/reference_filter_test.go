@@ -103,7 +103,7 @@ func TestListReferencesPageFilter(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.filter), func(t *testing.T) {
-			hits, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, tc.filter)
+			hits, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Filter: tc.filter})
 			if err != nil {
 				t.Fatalf("ListReferencesPage: %v", err)
 			}
@@ -122,7 +122,7 @@ func TestSearchReferencesFilterAndIDPrefix(t *testing.T) {
 	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
 	seedReferenceFilterFixtures(t, a, ctx)
 
-	hits, err := a.SearchReferences(ctx, "assertion", 50, ReferenceFilterPending)
+	hits, err := a.SearchReferences(ctx, "assertion", 50, ReferenceQuery{Filter: ReferenceFilterPending})
 	if err != nil {
 		t.Fatalf("SearchReferences: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestSearchReferencesFilterAndIDPrefix(t *testing.T) {
 		t.Errorf("filtered search ids = %v, want %v", got, want)
 	}
 
-	hits, err = a.SearchReferences(ctx, "ABCDEF01", 50, ReferenceFilterNone)
+	hits, err = a.SearchReferences(ctx, "ABCDEF01", 50, ReferenceQuery{})
 	if err != nil {
 		t.Fatalf("SearchReferences: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSearchReferencesFilterAndIDPrefix(t *testing.T) {
 	}
 
 	// Queries shorter than minIDPrefixLen do not match on ID.
-	hits, err = a.SearchReferences(ctx, "abcdef", 50, ReferenceFilterNone)
+	hits, err = a.SearchReferences(ctx, "abcdef", 50, ReferenceQuery{})
 	if err != nil {
 		t.Fatalf("SearchReferences: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestReferenceWorkflowStates(t *testing.T) {
 		}
 	}
 
-	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceFilterNone)
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{})
 	if err != nil {
 		t.Fatalf("ListReferencesPage: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestListReferencesPageSortYear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortYear, ReferenceFilterNone)
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortYear, ReferenceQuery{})
 	if err != nil {
 		t.Fatalf("ListReferencesPage: %v", err)
 	}

@@ -15291,6 +15291,12 @@ class SfgaReferences extends LitElement {
     // REFERENCE_FILTERS values; "" = all). Applies to both the
     // paginated list and search. Persisted in localStorage.
     _filter: { state: true },
+    // Catalogue of Life higher-taxon filter (col_parent) and the
+    // minimum mention count for a name to count toward it. Backed by
+    // the name-mention index; discovery data, never project data.
+    _colParent: { state: true },
+    _minMentions: { state: true },
+    _colTaxa: { state: true },
     // Infinite-scroll state: true when there are more references
     // to fetch past the currently-loaded window. False once we've
     // paginated to the end (or a search returns everything at once).
@@ -15408,6 +15414,74 @@ class SfgaReferences extends LitElement {
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
+    }
+    .col-filter {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    .col-filter .col-input {
+      width: 16rem;
+    }
+    .col-filter .min-mentions {
+      font: inherit;
+      font-size: var(--fs-xs);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1);
+    }
+    .col-help {
+      position: relative;
+    }
+    .col-help summary {
+      list-style: none;
+      cursor: pointer;
+      color: var(--dim);
+      padding: 0 var(--sp-1);
+    }
+    .col-help summary::-webkit-details-marker {
+      display: none;
+    }
+    .col-help p {
+      position: absolute;
+      right: 0;
+      top: 1.5rem;
+      z-index: 5;
+      width: 22rem;
+      margin: 0;
+      padding: var(--sp-2) var(--sp-3);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 2px 8px color-mix(in oklab, var(--fg) 15%, transparent);
+      font-size: var(--fs-xs);
+      color: var(--fg);
+    }
+    /* Catalogue of Life data is marked with a dashed outline and a
+       "CoL" label so it reads as external classification, not as
+       something the paper states. */
+    .col-badge {
+      display: inline-block;
+      border: 1px dashed var(--dim);
+      border-radius: var(--radius-sm);
+      padding: 0 0.3em;
+      font-size: var(--fs-xs);
+      font-weight: normal;
+      color: var(--dim);
+      line-height: 1.3;
+    }
+    .col-match {
+      margin-top: var(--sp-1);
+      font-size: var(--fs-xs);
+      color: var(--dim);
+    }
+    .ref-table .col-family {
+      white-space: nowrap;
+    }
+    .ref-table .dim {
+      color: var(--dim);
     }
     .ref-table .col-title a {
       color: var(--fg);
@@ -17205,6 +17279,9 @@ class SfgaReferences extends LitElement {
       } catch {}
       this._sort = REFERENCE_SORTS.some((o) => o.value === saved) ? saved : "recent";
     }
+    this._colParent = "";
+    this._minMentions = 1;
+    this._colTaxa = [];
     this._filter = "";
     try {
       const f = localStorage.getItem("hive.references.filter");
@@ -17459,13 +17536,13 @@ class SfgaReferences extends LitElement {
       if (q) {
         // Search returns relevance-ranked results in one shot; no
         // pagination. Sort toggle doesn't apply during search.
-        const opts = { q, limit };
+        const opts = { q, limit, ...this._colOpts() };
         if (this._filter) opts.filter = this._filter;
         const page = await api.reference.search(opts);
         items = page.items || [];
         this._hasMore = false;
       } else {
-        const opts = { limit, offset };
+        const opts = { limit, offset, ...this._colOpts() };
         if (this._sort !== "author") opts.sort = this._sort;
         if (this._filter) opts.filter = this._filter;
         const page = await api.reference.list(opts);
@@ -17487,6 +17564,43 @@ class SfgaReferences extends LitElement {
       localStorage.setItem("hive.references.sort", sort);
     } catch {}
     this._fetchPage(true);
+  }
+
+  // _colOpts returns the Catalogue of Life filter parameters for the
+  // reference list and search endpoints.
+  _colOpts() {
+    const parent = this._colParent.trim();
+    if (!parent) return {};
+    return this._minMentions > 1
+      ? { col_parent: parent, min_mentions: this._minMentions }
+      : { col_parent: parent };
+  }
+
+  // _onColInput refreshes the higher-taxon suggestions as the curator
+  // types.
+  _onColInput(value) {
+    clearTimeout(this._colSuggestTimer);
+    this._colSuggestTimer = setTimeout(async () => {
+      try {
+        const page = await api.reference.colTaxa({ q: value.trim(), limit: 25 });
+        this._colTaxa = page.items || [];
+      } catch {
+        this._colTaxa = [];
+      }
+    }, 200);
+  }
+
+  _setColParent(value) {
+    const v = value.trim();
+    if (v === this._colParent) return;
+    this._colParent = v;
+    this._fetchPage(true);
+  }
+
+  _setMinMentions(n) {
+    if (n === this._minMentions) return;
+    this._minMentions = n;
+    if (this._colParent) this._fetchPage(true);
   }
 
   _setFilter(filter) {
@@ -19336,6 +19450,49 @@ class SfgaReferences extends LitElement {
             `,
           )}
         </div>
+        <div class="col-filter" role="group" aria-label="Catalogue of Life group filter">
+          <label class="chip-group-label" for="col-parent">In (CoL)</label>
+          <input
+            id="col-parent"
+            class="search col-input"
+            type="search"
+            list="col-taxa"
+            placeholder="higher taxon, e.g. Bacillariophyceae"
+            .value=${this._colParent}
+            @input=${(e) => this._onColInput(e.target.value)}
+            @focus=${(e) => this._onColInput(e.target.value)}
+            @change=${(e) => this._setColParent(e.target.value)}
+          />
+          <datalist id="col-taxa">
+            ${this._colTaxa.map(
+              (t) => html`<option value=${t.name}>
+                ${t.rank} · ${t.papers} ${t.papers === 1 ? "paper" : "papers"}
+              </option>`,
+            )}
+          </datalist>
+          <label class="chip-group-label" for="min-mentions">mentioned ≥</label>
+          <select
+            id="min-mentions"
+            class="min-mentions"
+            .value=${String(this._minMentions)}
+            @change=${(e) => this._setMinMentions(Number(e.target.value))}
+          >
+            ${[1, 2, 3, 5, 10].map(
+              (n) => html`<option value=${n} ?selected=${n === this._minMentions}>${n}×</option>`,
+            )}
+          </select>
+          <details class="col-help">
+            <summary aria-label="About the Catalogue of Life filter">ⓘ</summary>
+            <p>
+              Finds papers that mention names the Catalogue of Life places
+              in this taxon. The classification comes from the Catalogue
+              of Life, not from the papers, and is never added to your
+              project. Use the Catalogue of Life's names (suggestions show
+              what is available); groups it does not cover cannot be found
+              this way.
+            </p>
+          </details>
+        </div>
         <div class="chip-group" role="group" aria-label="Filter references">
           <span class="chip-group-label">Show</span>
           ${REFERENCE_FILTERS.map(
@@ -19357,9 +19514,14 @@ class SfgaReferences extends LitElement {
         ? html`<div class="empty" role="status">Loading…</div>`
         : this._hits.length === 0
           ? html`<div class="empty">
-              ${this._query || this._filter
-                ? "(No references match the search or filter)"
-                : "(No references)"}
+              ${this._colParent
+                ? html`No indexed papers mention names the Catalogue of Life
+                    places in “${this._colParent}”. The Catalogue of Life may
+                    use a different name for this group; pick one from the
+                    suggestions.`
+                : this._query || this._filter
+                  ? "(No references match the search or filter)"
+                  : "(No references)"}
             </div>`
           : html`
               <table class="ref-table">
@@ -19369,6 +19531,9 @@ class SfgaReferences extends LitElement {
                     <th scope="col">Authors</th>
                     <th scope="col">Year</th>
                     <th scope="col">Title</th>
+                    <th scope="col" title="Most-mentioned family according to the Catalogue of Life">
+                      Family <span class="col-badge">CoL</span>
+                    </th>
                     <th scope="col">License</th>
                   </tr>
                 </thead>
@@ -19385,7 +19550,16 @@ class SfgaReferences extends LitElement {
                             title="Open this paper (or double-click the row)"
                             >${h.title || h.citation || "(untitled)"}</a
                           >
+                          ${h.col_match
+                            ? html`<div class="col-match">
+                                <span class="col-badge">CoL</span>
+                                Mentions <i>${h.col_match.mention}</i>
+                                (${h.col_match.count}×), which the Catalogue of
+                                Life places in ${this._colParent}.
+                              </div>`
+                            : nothing}
                         </td>
+                        <td class="col-family">${this._renderColFamily(h)}</td>
                         <td class="col-license">${h.license || "—"}</td>
                       </tr>
                     `,
@@ -19398,6 +19572,20 @@ class SfgaReferences extends LitElement {
                 : nothing}
             `}
     `;
+  }
+
+  // _renderColFamily shows a reference's most-mentioned family
+  // according to the Catalogue of Life.
+  _renderColFamily(h) {
+    if (!h.mentions_indexed) {
+      return html`<span class="dim" title="Name mentions not indexed yet">—</span>`;
+    }
+    if (!h.col_family) {
+      return html`<span class="dim" title="No mentioned name is placed in a family by the Catalogue of Life">not in CoL</span>`;
+    }
+    return html`<span title=${`${h.col_family_mentions} mentions of names in this family (Catalogue of Life)`}
+      >${h.col_family}</span
+    >`;
   }
 
   // _onRowDblClick opens a paper from anywhere on its row. Clicks on

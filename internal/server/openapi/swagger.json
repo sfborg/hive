@@ -1449,6 +1449,52 @@
                 }
             }
         },
+        "/name-mentions/taxa": {
+            "get": {
+                "description": "Higher taxa (kingdom to genus) from the Catalogue of Life classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "references"
+                ],
+                "summary": "Look up Catalogue of Life higher taxa in the name-mention index",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name prefix",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum results (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.apiPage-server_apiColTaxon"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.problem"
+                        }
+                    }
+                }
+            }
+        },
         "/name-relation/{id}": {
             "delete": {
                 "description": "Delete a name-relation row by rowid.",
@@ -2337,6 +2383,18 @@
                         "description": "Workflow filter: runs|assertions|pending",
                         "name": "filter",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Papers mentioning names the Catalogue of Life places in this higher taxon",
+                        "name": "col_parent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Count only names mentioned at least this many times toward col_parent",
+                        "name": "min_mentions",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3090,6 +3148,18 @@
                         "type": "string",
                         "description": "Workflow filter: runs|assertions|pending",
                         "name": "filter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Papers mentioning names the Catalogue of Life places in this higher taxon",
+                        "name": "col_parent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Count only names mentioned at least this many times toward col_parent",
+                        "name": "min_mentions",
                         "in": "query"
                     }
                 ],
@@ -6718,6 +6788,31 @@
                 }
             }
         },
+        "server.apiColMatch": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "mention": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.apiColTaxon": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "papers": {
+                    "type": "integer"
+                },
+                "rank": {
+                    "type": "string"
+                }
+            }
+        },
         "server.apiCopyAgentRequest": {
             "type": "object",
             "properties": {
@@ -7951,6 +8046,23 @@
                 }
             }
         },
+        "server.apiPage-server_apiColTaxon": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.apiColTaxon"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.apiPage-server_apiDistribution": {
             "type": "object",
             "properties": {
@@ -8602,6 +8714,21 @@
                 "citation": {
                     "type": "string"
                 },
+                "col_family": {
+                    "description": "ColFamily is the family with the most name mentions according to\nthe Catalogue of Life, with that mention total. Discovery data\nonly; never project data.",
+                    "type": "string"
+                },
+                "col_family_mentions": {
+                    "type": "integer"
+                },
+                "col_match": {
+                    "description": "ColMatch explains a col_parent match: the most-mentioned name the\nCatalogue of Life places in the requested taxon.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiColMatch"
+                        }
+                    ]
+                },
                 "has_source_doc": {
                     "description": "HasSourceDoc is true when the reference has an ingested source\ndocument available in the archive's sidecar directory (PDF\n→ JATS conversion complete, ready for annotation and\nAI-assisted extraction — see REFERENCE_PDF_PLAN.md).\nDrives the gold-star tier of the reference-picker badge:\nstructured-metadata + source-attached → curator has fully\nupgraded this reference. Elided from JSON (omitempty) so a\nlegacy row with no source document doesn't clutter the wire\nshape. Falsy today until PDF ingest slice lands.",
                     "type": "boolean"
@@ -8620,6 +8747,10 @@
                 "max_severity": {
                     "description": "MaxSeverity is the highest severity among the record's open\nissues (\"error\" / \"warn\" / \"info\" / \"debug\"). Empty when\nIssueCount is 0. Drives the WUI badge color via the shared\nvalidationSeverityBadge helper so every picker/list surface\nrenders the same signal.",
                     "type": "string"
+                },
+                "mentions_indexed": {
+                    "description": "MentionsIndexed is true when the reference's name mentions have\nbeen indexed.",
+                    "type": "boolean"
                 },
                 "title": {
                     "type": "string"

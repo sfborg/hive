@@ -927,6 +927,9 @@ func ensureHiveTables(ctx context.Context, db *sql.DB) error {
 	if err := ensureFTSPopulated(ctx, db, "hive__name_fts_tri"); err != nil {
 		return err
 	}
+	if err := ensureRawNameTables(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 

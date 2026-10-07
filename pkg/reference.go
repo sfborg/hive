@@ -176,6 +176,17 @@ type ReferenceHit struct {
 	// License is the verified license from hive__reference_license,
 	// or "" when none has been recorded.
 	License string
+	// MentionsIndexed is true when the name-mention index has rows for
+	// the reference.
+	MentionsIndexed bool
+	// ColFamily is the family with the most name mentions according
+	// to the index's verifier source, with that mention total. Empty
+	// when no mentioned name verified to a family.
+	ColFamily         string
+	ColFamilyMentions int
+	// ColMatch is set for queries with a ColParent: the reference's
+	// strongest matching mention.
+	ColMatch *ColMatch
 }
 
 // WorkflowState is how far a reference has got through one workflow
@@ -374,19 +385,148 @@ func referenceFilterSQL(f ReferenceFilter) string {
 	return ""
 }
 
+// ReferenceQuery narrows a reference listing or search.
+type ReferenceQuery struct {
+	// Filter restricts results to a workflow stage.
+	Filter ReferenceFilter
+	// ColParent keeps references that mention a name the
+	// name-mention index's verifier source (the Catalogue of Life)
+	// places in this higher taxon, matched case-insensitively against
+	// the record's own name and every rank of its classification.
+	ColParent string
+	// MinMentions counts only names mentioned at least this many times
+	// toward ColParent. Values below 1 mean 1.
+	MinMentions int
+}
+
+func (rq ReferenceQuery) minMentions() int {
+	return max(rq.MinMentions, 1)
+}
+
+// colParentCond is the condition, over hive__name_mention m joined to
+// raw__taxon t, that the mention's record lies in rq.ColParent.
+func (rq ReferenceQuery) colParentCond() (string, []any) {
+	cols := make([]string, len(classificationColumns))
+	for i, c := range classificationColumns {
+		cols[i] = "LOWER(t." + c + ")"
+	}
+	return `m.mention_count >= ? AND LOWER(?) IN (` + strings.Join(cols, ", ") + `)`,
+		[]any{rq.minMentions(), strings.TrimSpace(rq.ColParent)}
+}
+
+// predicate returns the WHERE condition over the reference table, or
+// "" when rq applies no restriction.
+func (rq ReferenceQuery) predicate() (string, []any) {
+	var conds []string
+	var args []any
+	if p := referenceFilterSQL(rq.Filter); p != "" {
+		conds = append(conds, p)
+	}
+	if strings.TrimSpace(rq.ColParent) != "" {
+		cond, a := rq.colParentCond()
+		conds = append(conds, `EXISTS (
+		SELECT 1 FROM hive__name_mention m
+		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
+		WHERE m.reference_id = reference.col__id AND `+cond+`)`)
+		args = append(args, a...)
+	}
+	return strings.Join(conds, " AND "), args
+}
+
+// ColMatch explains why a reference matched a ColParent query: its
+// most-mentioned name that the verifier places in the taxon.
+type ColMatch struct {
+	Mention string
+	Count   int
+}
+
+// addMentionSummaries fills each hit's name-mention summary: whether
+// the reference has been indexed, its most-mentioned family according
+// to the verifier source, and, when rq has a ColParent, the strongest
+// matching mention.
+func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, ids []string, rq ReferenceQuery) error {
+	in := strings.Repeat("?,", len(ids)-1) + "?"
+	idArgs := make([]any, len(ids))
+	for i, id := range ids {
+		idArgs[i] = id
+	}
+	byID := make(map[string]*ReferenceHit, len(hits))
+	for i := range hits {
+		byID[hits[i].ID] = &hits[i]
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT m.reference_id, COALESCE(t.col__family, ''), SUM(m.mention_count)
+		FROM hive__name_mention m
+		LEFT JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
+		WHERE m.reference_id IN (`+in+`)
+		GROUP BY m.reference_id, COALESCE(t.col__family, '')`, idArgs...)
+	if err != nil {
+		return fmt.Errorf("core: mention families: %w", err)
+	}
+	for rows.Next() {
+		var id, family string
+		var n int
+		if err := rows.Scan(&id, &family, &n); err != nil {
+			rows.Close()
+			return err
+		}
+		h := byID[id]
+		if h == nil {
+			continue
+		}
+		h.MentionsIndexed = true
+		if family != "" && (n > h.ColFamilyMentions ||
+			(n == h.ColFamilyMentions && family < h.ColFamily)) {
+			h.ColFamily, h.ColFamilyMentions = family, n
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(rq.ColParent) == "" {
+		return nil
+	}
+	cond, condArgs := rq.colParentCond()
+	rows, err = a.db.QueryContext(ctx, `
+		SELECT m.reference_id, m.mention, m.mention_count
+		FROM hive__name_mention m
+		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
+		WHERE m.reference_id IN (`+in+`) AND `+cond+`
+		ORDER BY m.mention_count DESC, m.mention`, append(idArgs, condArgs...)...)
+	if err != nil {
+		return fmt.Errorf("core: mention matches: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, mention string
+		var n int
+		if err := rows.Scan(&id, &mention, &n); err != nil {
+			return err
+		}
+		if h := byID[id]; h != nil && h.ColMatch == nil {
+			h.ColMatch = &ColMatch{Mention: mention, Count: n}
+		}
+	}
+	return rows.Err()
+}
+
 // ListReferencesPage returns references with SQL-level LIMIT/OFFSET
 // pagination. limit == 0 disables the LIMIT clause. Sort order
 // selected by the sort parameter; filter restricts the rows (and the
 // returned total) to a workflow stage.
-func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sort ReferenceSort, filter ReferenceFilter) ([]ReferenceHit, int, error) {
+func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sort ReferenceSort, rq ReferenceQuery) ([]ReferenceHit, int, error) {
 	where := ""
-	if pred := referenceFilterSQL(filter); pred != "" {
+	pred, predArgs := rq.predicate()
+	if pred != "" {
 		where = " WHERE " + pred
 	}
 
 	var total int
 	if err := a.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reference`+where,
+		`SELECT COUNT(*) FROM reference`+where, predArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("core: count references: %w", err)
 	}
@@ -414,12 +554,12 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sor
 	FROM reference` + where + `
 	ORDER BY ` + orderBy
 
-	args := []any{}
+	args := append([]any{}, predArgs...)
 	if limit > 0 {
 		q += " LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
 	}
-	return a.scanReferenceHits(ctx, q, args, total)
+	return a.scanReferenceHits(ctx, q, args, total, rq)
 }
 
 // minIDPrefixLen is the shortest query SearchReferences treats as a
@@ -430,9 +570,9 @@ const minIDPrefixLen = 8
 // SearchReferences returns references whose author, title, citation,
 // or DOI matches q as a case-insensitive substring, or whose col__id
 // starts with q (when q is at least minIDPrefixLen characters).
-// filter restricts results to a workflow stage. Ordered by author +
-// year for stable browsing.
-func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, filter ReferenceFilter) ([]ReferenceHit, error) {
+// rq restricts results further. Ordered by author + year for stable
+// browsing.
+func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, rq ReferenceQuery) ([]ReferenceHit, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -448,8 +588,9 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, fil
 		args = append(args, q+"%")
 	}
 	match += `)`
-	if pred := referenceFilterSQL(filter); pred != "" {
+	if pred, predArgs := rq.predicate(); pred != "" {
 		match += " AND " + pred
+		args = append(args, predArgs...)
 	}
 	query := `SELECT
 		col__id,
@@ -463,7 +604,7 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, fil
 	ORDER BY col__author, col__issued, col__title
 	LIMIT ?`
 	args = append(args, limit)
-	hits, _, err := a.scanReferenceHits(ctx, query, args, 0)
+	hits, _, err := a.scanReferenceHits(ctx, query, args, 0, rq)
 	return hits, err
 }
 
@@ -472,7 +613,7 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, fil
 // paginated list path fetches it separately; search returns 0).
 // Folds in open-issue counts per hit in a single batched pass —
 // mirrors the vernacular / distribution / nomen-history patterns.
-func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []any, total int) ([]ReferenceHit, int, error) {
+func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []any, total int, rq ReferenceQuery) ([]ReferenceHit, int, error) {
 	rows, err := a.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("core: query references: %w", err)
@@ -515,6 +656,9 @@ func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []an
 				hits[i].Workflow = st.Workflow
 				hits[i].License = st.License
 			}
+		}
+		if err := a.addMentionSummaries(ctx, hits, ids, rq); err != nil {
+			return nil, 0, err
 		}
 	}
 
