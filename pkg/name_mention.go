@@ -19,10 +19,13 @@ import (
 // Verified records are stored in raw__name and raw__taxon, tables with
 // the columns of the SFGA name and taxon tables plus provenance
 // columns. A record's position in the source's classification is
-// stored in the taxon row's rank columns (col__family, col__order, …).
+// stored in the taxon row's rank columns (col__family, col__order, …)
+// and, including unranked levels, in raw__path.
 
-// rawProvenanceColumns are added to every raw__ table.
-var rawProvenanceColumns = []string{"raw__source", "raw__reference_id", "raw__source_row"}
+// rawProvenanceColumns are added to every raw__ table. raw__path holds
+// a verifier record's full classification as "|top|…|record|", so
+// unranked levels can be matched too.
+var rawProvenanceColumns = []string{"raw__source", "raw__reference_id", "raw__source_row", "raw__path"}
 
 // rawTables are the SFGA tables mirrored as raw__ tables.
 var rawTables = []string{"name", "taxon"}
@@ -131,17 +134,6 @@ var rankColumns = map[string]string{
 	"species":     "col__species",
 }
 
-// classificationColumns are the raw__taxon rank columns searched by a
-// higher-taxon filter.
-var classificationColumns = func() []string {
-	cols := make([]string, 0, len(rankColumns))
-	for _, c := range []string{"realm", "kingdom", "phylum", "subphylum", "class",
-		"subclass", "order", "suborder", "superfamily", "family", "subfamily",
-		"tribe", "subtribe", "genus", "subgenus", "section", "species"} {
-		cols = append(cols, rankColumns[c])
-	}
-	return cols
-}()
 
 // ReplaceNameMentions replaces a reference's mention rows for one
 // verifier source. counts holds the mention count per name; matches
@@ -195,12 +187,16 @@ func upsertRawRecord(tx *Tx, source string, m mentions.Match) error {
 	); err != nil {
 		return fmt.Errorf("core: upsert raw__name %s: %w", leaf.ID, err)
 	}
-	cols := []string{"col__id", "col__name_id", "col__parent_id", "raw__source"}
+	cols := []string{"col__id", "col__name_id", "col__parent_id", "raw__source", "raw__path"}
 	parent := ""
 	if len(m.Path) > 1 {
 		parent = m.Path[len(m.Path)-2].ID
 	}
-	args := []any{leaf.ID, leaf.ID, parent, source}
+	names := make([]string, len(m.Path))
+	for i, r := range m.Path {
+		names[i] = r.Name
+	}
+	args := []any{leaf.ID, leaf.ID, parent, source, "|" + strings.Join(names, "|") + "|"}
 	for _, r := range m.Path {
 		if col, ok := rankColumns[r.Rank]; ok {
 			cols = append(cols, col)
@@ -263,10 +259,11 @@ type ColTaxon struct {
 var colTaxonRanks = []string{"kingdom", "phylum", "subphylum", "class",
 	"subclass", "order", "suborder", "family", "subfamily", "genus"}
 
-// ColTaxa returns higher taxa in the name-mention index whose names
-// start with prefix (case-insensitive), most-mentioned first. They are
-// the values a ColParent query can match.
-func (a *Archive) ColTaxa(ctx context.Context, prefix string, limit int) ([]ColTaxon, error) {
+// ColTaxa returns ranked higher taxa from one verifier source in the
+// name-mention index whose names start with prefix (case-insensitive),
+// most-mentioned first. They are values an [IndexParent] query for
+// that source can match.
+func (a *Archive) ColTaxa(ctx context.Context, sourceID int, prefix string, limit int) ([]ColTaxon, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -277,8 +274,9 @@ func (a *Archive) ColTaxa(ctx context.Context, prefix string, limit int) ([]ColT
 		parts = append(parts, `SELECT t.`+col+` AS name, '`+r+`' AS rank, m.reference_id
 			FROM hive__name_mention m
 			JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
-			WHERE t.`+col+` != '' AND LOWER(t.`+col+`) LIKE LOWER(?) ESCAPE '\'`)
-		args = append(args, likePrefix(prefix))
+			WHERE m.raw__source LIKE ? AND t.`+col+` != ''
+			  AND LOWER(t.`+col+`) LIKE LOWER(?) ESCAPE '\'`)
+		args = append(args, mentions.TagPrefix(sourceID)+"%", likePrefix(prefix))
 	}
 	q := `SELECT name, rank, COUNT(DISTINCT reference_id) AS papers FROM (` +
 		strings.Join(parts, " UNION ALL ") + `)

@@ -60,10 +60,10 @@ func TestColParentFilter(t *testing.T) {
 		rq   ReferenceQuery
 		want []string
 	}{
-		{ReferenceQuery{ColParent: "fictaceae"}, []string{"ref-a", "ref-b"}},
-		{ReferenceQuery{ColParent: "Fictogenus"}, []string{"ref-a"}},
-		{ReferenceQuery{ColParent: "Plantae", MinMentions: 2}, []string{"ref-a"}},
-		{ReferenceQuery{ColParent: "Animalia"}, nil},
+		{ReferenceQuery{Parents: []IndexParent{{1, "fictaceae"}}}, []string{"ref-a", "ref-b"}},
+		{ReferenceQuery{Parents: []IndexParent{{1, "Fictogenus"}}}, []string{"ref-a"}},
+		{ReferenceQuery{Parents: []IndexParent{{1, "Plantae"}}, MinMentions: 2}, []string{"ref-a"}},
+		{ReferenceQuery{Parents: []IndexParent{{1, "Animalia"}}}, nil},
 	}
 	for _, tc := range tests {
 		hits, total, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, tc.rq)
@@ -82,7 +82,7 @@ func TestColParentFilter(t *testing.T) {
 		}
 	}
 
-	hits, err := a.SearchReferences(ctx, "ref", 50, ReferenceQuery{ColParent: "Fictaceae"})
+	hits, err := a.SearchReferences(ctx, "ref", 50, ReferenceQuery{Parents: []IndexParent{{1, "Fictaceae"}}})
 	if err != nil {
 		t.Fatalf("SearchReferences: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestMentionSummaries(t *testing.T) {
 	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
 	seedMentions(t, a, ctx)
 
-	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{ColParent: "Fictaceae"})
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Parents: []IndexParent{{1, "Fictaceae"}}})
 	if err != nil {
 		t.Fatalf("ListReferencesPage: %v", err)
 	}
@@ -105,11 +105,12 @@ func TestMentionSummaries(t *testing.T) {
 		byID[h.ID] = h
 	}
 	ra := byID["ref-a"]
-	if !ra.MentionsIndexed || ra.ColFamily != "Fictaceae" || ra.ColFamilyMentions != 6 {
+	if !ra.MentionsIndexed || ra.IndexFamily != "Fictaceae" || ra.IndexFamilyMentions != 6 || ra.IndexFamilySourceID != 1 {
 		t.Errorf("ref-a summary = %+v", ra)
 	}
-	if ra.ColMatch == nil || ra.ColMatch.Mention != "Fictogenus alpha" || ra.ColMatch.Count != 5 {
-		t.Errorf("ref-a match = %+v", ra.ColMatch)
+	if ra.IndexMatch == nil || ra.IndexMatch.Mention != "Fictogenus alpha" || ra.IndexMatch.Count != 5 ||
+		ra.IndexMatch.SourceID != 1 || ra.IndexMatch.Parent != "Fictaceae" {
+		t.Errorf("ref-a match = %+v", ra.IndexMatch)
 	}
 
 	all, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{})
@@ -117,11 +118,11 @@ func TestMentionSummaries(t *testing.T) {
 		t.Fatalf("ListReferencesPage: %v", err)
 	}
 	for _, h := range all {
-		if h.ID == "ref-c" && (h.MentionsIndexed || h.ColFamily != "") {
+		if h.ID == "ref-c" && (h.MentionsIndexed || h.IndexFamily != "") {
 			t.Errorf("unindexed ref-c summary = %+v", h)
 		}
-		if h.ColMatch != nil {
-			t.Errorf("%s: ColMatch set without a ColParent query", h.ID)
+		if h.IndexMatch != nil {
+			t.Errorf("%s: IndexMatch set without a Parents query", h.ID)
 		}
 	}
 }
@@ -133,7 +134,7 @@ func TestReplaceNameMentionsReplaces(t *testing.T) {
 	if err := a.ReplaceNameMentions(ctx, "ref-a", testSource, map[string]int{"Nonesuch": 1}, nil); err != nil {
 		t.Fatalf("ReplaceNameMentions: %v", err)
 	}
-	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{ColParent: "Fictogenus"})
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{Parents: []IndexParent{{1, "Fictogenus"}}})
 	if err != nil {
 		t.Fatalf("ListReferencesPage: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestColTaxa(t *testing.T) {
 	a := newTestArchive(t)
 	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
 	seedMentions(t, a, ctx)
-	got, err := a.ColTaxa(ctx, "fict", 10)
+	got, err := a.ColTaxa(ctx, 1, "fict", 10)
 	if err != nil {
 		t.Fatalf("ColTaxa: %v", err)
 	}
@@ -161,6 +162,55 @@ func TestColTaxa(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("ColTaxa[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIndexSourcesAreSeparate(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedMentions(t, a, ctx)
+	// The same name in a second source, placed in a different family
+	// and under an unranked clade.
+	ncbi := mentions.Match{MatchType: "Exact", RecordID: "n9", Path: []mentions.Rank{
+		{Name: "Eukaryota", Rank: "domain", ID: "n1"},
+		{Name: "Fictoclada", Rank: "unranked", ID: "n2"},
+		{Name: "Inventaceae", Rank: "family", ID: "n3"},
+		{Name: "Fictogenus", Rank: "genus", ID: "n9"},
+	}}
+	if err := a.ReplaceNameMentions(ctx, "ref-a", "gnverifier:4@2026-09-28",
+		map[string]int{"Fictogenus alpha": 5},
+		map[string]mentions.Match{"Fictogenus alpha": ncbi},
+	); err != nil {
+		t.Fatalf("ReplaceNameMentions ncbi: %v", err)
+	}
+
+	// An unranked level matches through the classification path.
+	hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor,
+		ReferenceQuery{Parents: []IndexParent{{mentions.NCBI, "fictoclada"}}})
+	if err != nil {
+		t.Fatalf("ncbi query: %v", err)
+	}
+	if got := hitIDs(hits); len(got) != 1 || got[0] != "ref-a" {
+		t.Errorf("ncbi_parent Fictoclada = %v, want [ref-a]", got)
+	}
+	// A taxon from one source is not found through the other.
+	hits, _, err = a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor,
+		ReferenceQuery{Parents: []IndexParent{{mentions.CatalogueOfLife, "Inventaceae"}}})
+	if err != nil {
+		t.Fatalf("col query: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("col_parent Inventaceae matched NCBI rows: %v", hitIDs(hits))
+	}
+	// The family summary prefers NCBI.
+	all, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, h := range all {
+		if h.ID == "ref-a" && (h.IndexFamily != "Inventaceae" || h.IndexFamilySourceID != mentions.NCBI) {
+			t.Errorf("ref-a family = %q from %d, want Inventaceae from NCBI", h.IndexFamily, h.IndexFamilySourceID)
 		}
 	}
 }

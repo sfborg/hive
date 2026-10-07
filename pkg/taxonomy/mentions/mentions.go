@@ -16,6 +16,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	vlib "github.com/gnames/gnlib/ent/verifier"
 	gnverifier "github.com/gnames/gnverifier/pkg"
@@ -23,9 +24,57 @@ import (
 	"github.com/gnames/gnverifier/pkg/io/verifrest"
 )
 
-// CatalogueOfLife is the GNverifier data source ID of the Catalogue of
-// Life, the only discovery source the index uses.
-const CatalogueOfLife = 1
+// GNverifier data source IDs of the discovery sources.
+const (
+	CatalogueOfLife = 1
+	NCBI            = 4
+)
+
+// Source is a name source the index verifies against.
+type Source struct {
+	// ID is the GNverifier data source ID.
+	ID int
+	// Key names the source in query parameters and facets
+	// ("col" → col_parent, "ncbi" → ncbi_parent).
+	Key string
+	// Label is the source's display name.
+	Label string
+}
+
+// Sources are the discovery sources, in display-preference order: a
+// summary that can come from either source uses the first that has
+// it. NCBI Taxonomy comes first because it covers algae the Catalogue
+// of Life base release lacks.
+var Sources = []Source{
+	{ID: NCBI, Key: "ncbi", Label: "NCBI Taxonomy"},
+	{ID: CatalogueOfLife, Key: "col", Label: "Catalogue of Life"},
+}
+
+// SourceByKey returns the source with the given key.
+func SourceByKey(key string) (Source, bool) {
+	for _, s := range Sources {
+		if s.Key == key {
+			return s, true
+		}
+	}
+	return Source{}, false
+}
+
+// SourceByID returns the source with the given GNverifier ID.
+func SourceByID(id int) (Source, bool) {
+	for _, s := range Sources {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Source{}, false
+}
+
+// TagPrefix is the raw__source prefix shared by every release of a
+// source.
+func TagPrefix(id int) string {
+	return fmt.Sprintf("gnverifier:%d@", id)
+}
 
 // abbreviated matches a full-name attribute that still holds an
 // abbreviated binomial ("C. strepitans") because abbreviation
@@ -110,23 +159,25 @@ type Verifier interface {
 	DataSource(id int) (vlib.DataSource, error)
 }
 
-// NewVerifier returns a GNverifier client restricted to the Catalogue
-// of Life.
-func NewVerifier() Verifier {
-	cfg := gnverifierconfig.New(gnverifierconfig.OptDataSources([]int{CatalogueOfLife}))
+// NewVerifier returns a GNverifier client restricted to one data
+// source.
+func NewVerifier(sourceID int) Verifier {
+	cfg := gnverifierconfig.New(gnverifierconfig.OptDataSources([]int{sourceID}))
 	return gnverifier.New(cfg, verifrest.New(cfg.VerifierURL))
 }
 
 // SourceTag identifies the data source and its release for provenance,
 // as "gnverifier:<id>@<release>". The release is the source's version
 // string, else its release date, else the date GNverifier harvested it.
+// A release date in the future is treated as a metadata error and
+// skipped.
 func SourceTag(v Verifier, id int) (string, error) {
 	ds, err := v.DataSource(id)
 	if err != nil {
 		return "", fmt.Errorf("mentions: data source %d: %w", id, err)
 	}
 	version := ds.Version
-	if version == "" {
+	if version == "" && !inFuture(ds.RevisionDate) {
 		version = ds.RevisionDate
 	}
 	if version == "" {
@@ -135,7 +186,18 @@ func SourceTag(v Verifier, id int) (string, error) {
 	if version == "" {
 		version = "unknown"
 	}
-	return fmt.Sprintf("gnverifier:%d@%s", id, version), nil
+	return TagPrefix(id) + version, nil
+}
+
+// inFuture reports whether a YYYY-MM-DD, YYYY-MM or YYYY date lies
+// after today.
+func inFuture(date string) bool {
+	for _, layout := range []string{"2006-01-02", "2006-01", "2006"} {
+		if t, err := time.Parse(layout, date); err == nil {
+			return t.After(time.Now())
+		}
+	}
+	return false
 }
 
 // batchSize bounds each VerifyBatch call.

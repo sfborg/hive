@@ -248,13 +248,6 @@ definitions:
       score:
         type: integer
     type: object
-  server.apiColMatch:
-    properties:
-      count:
-        type: integer
-      mention:
-        type: string
-    type: object
   server.apiColTaxon:
     properties:
       name:
@@ -421,6 +414,18 @@ definitions:
         type: string
       page:
         type: integer
+    type: object
+  server.apiIndexMatch:
+    properties:
+      count:
+        type: integer
+      mention:
+        type: string
+      parent:
+        type: string
+      source:
+        description: Source is "ncbi" or "col".
+        type: string
     type: object
   server.apiIssue:
     properties:
@@ -1669,20 +1674,6 @@ definitions:
         type: string
       citation:
         type: string
-      col_family:
-        description: |-
-          ColFamily is the family with the most name mentions according to
-          the Catalogue of Life, with that mention total. Discovery data
-          only; never project data.
-        type: string
-      col_family_mentions:
-        type: integer
-      col_match:
-        allOf:
-        - $ref: '#/definitions/server.apiColMatch'
-        description: |-
-          ColMatch explains a col_parent match: the most-mentioned name the
-          Catalogue of Life places in the requested taxon.
       has_source_doc:
         description: |-
           HasSourceDoc is true when the reference has an ingested source
@@ -1697,6 +1688,22 @@ definitions:
         type: boolean
       id:
         type: string
+      index_family:
+        description: |-
+          IndexFamily is the family with the most name mentions according
+          to a verifier source ("ncbi" or "col" in IndexFamilySource), with
+          that mention total. Discovery data only; never project data.
+        type: string
+      index_family_mentions:
+        type: integer
+      index_family_source:
+        type: string
+      index_match:
+        allOf:
+        - $ref: '#/definitions/server.apiIndexMatch'
+        description: |-
+          IndexMatch explains a col_parent / ncbi_parent match: the
+          most-mentioned name the source places in the requested taxon.
       issue_count:
         description: |-
           IssueCount is the number of open validation issues currently
@@ -3552,10 +3559,14 @@ paths:
       - metadata
   /name-mentions/taxa:
     get:
-      description: Higher taxa (kingdom to genus) from the Catalogue of Life classification
-        of names mentioned in indexed papers, with the number of papers mentioning
-        names in each. Discovery data only.
+      description: Ranked higher taxa (kingdom to genus) from one verifier source's
+        classification of names mentioned in indexed papers, with the number of papers
+        mentioning names in each. Discovery data only.
       parameters:
+      - description: 'Source: ncbi (default) or col'
+        in: query
+        name: source
+        type: string
       - description: Name prefix
         in: query
         name: q
@@ -3579,7 +3590,7 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/server.problem'
-      summary: Look up Catalogue of Life higher taxa in the name-mention index
+      summary: Look up higher taxa in the name-mention index
       tags:
       - references
   /name-relation/{id}:
@@ -4180,7 +4191,12 @@ paths:
         in: query
         name: col_parent
         type: string
+      - description: Papers mentioning names NCBI Taxonomy places in this higher taxon
+        in: query
+        name: ncbi_parent
+        type: string
       - description: Count only names mentioned at least this many times toward col_parent
+          / ncbi_parent
         in: query
         name: min_mentions
         type: integer
@@ -5198,7 +5214,12 @@ paths:
         in: query
         name: col_parent
         type: string
+      - description: Papers mentioning names NCBI Taxonomy places in this higher taxon
+        in: query
+        name: ncbi_parent
+        type: string
       - description: Count only names mentioned at least this many times toward col_parent
+          / ncbi_parent
         in: query
         name: min_mentions
         type: integer

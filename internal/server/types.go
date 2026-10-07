@@ -6,6 +6,7 @@ import (
 
 	"github.com/gnames/gnlib/ent/nomcode"
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -736,20 +737,24 @@ type apiReferenceHit struct {
 	// MentionsIndexed is true when the reference's name mentions have
 	// been indexed.
 	MentionsIndexed bool `json:"mentions_indexed,omitempty"`
-	// ColFamily is the family with the most name mentions according to
-	// the Catalogue of Life, with that mention total. Discovery data
-	// only; never project data.
-	ColFamily         string `json:"col_family,omitempty"`
-	ColFamilyMentions int    `json:"col_family_mentions,omitempty"`
-	// ColMatch explains a col_parent match: the most-mentioned name the
-	// Catalogue of Life places in the requested taxon.
-	ColMatch *apiColMatch `json:"col_match,omitempty"`
+	// IndexFamily is the family with the most name mentions according
+	// to a verifier source ("ncbi" or "col" in IndexFamilySource), with
+	// that mention total. Discovery data only; never project data.
+	IndexFamily         string `json:"index_family,omitempty"`
+	IndexFamilySource   string `json:"index_family_source,omitempty"`
+	IndexFamilyMentions int    `json:"index_family_mentions,omitempty"`
+	// IndexMatch explains a col_parent / ncbi_parent match: the
+	// most-mentioned name the source places in the requested taxon.
+	IndexMatch *apiIndexMatch `json:"index_match,omitempty"`
 }
 
-// apiColMatch is the wire form of [hive.ColMatch].
-type apiColMatch struct {
+// apiIndexMatch is the wire form of [hive.IndexMatch].
+type apiIndexMatch struct {
 	Mention string `json:"mention"`
 	Count   int    `json:"count"`
+	// Source is "ncbi" or "col".
+	Source string `json:"source"`
+	Parent string `json:"parent"`
 }
 
 // apiReferenceWorkflow is the wire form of [hive.ReferenceWorkflow].
@@ -854,18 +859,28 @@ func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 		Workflow:    referenceWorkflowToAPI(h.Workflow),
 		License:     h.License,
 
-		MentionsIndexed:   h.MentionsIndexed,
-		ColFamily:         h.ColFamily,
-		ColFamilyMentions: h.ColFamilyMentions,
-		ColMatch:          colMatchToAPI(h.ColMatch),
+		MentionsIndexed:     h.MentionsIndexed,
+		IndexFamily:         h.IndexFamily,
+		IndexFamilySource:   sourceKey(h.IndexFamilySourceID),
+		IndexFamilyMentions: h.IndexFamilyMentions,
+		IndexMatch:          indexMatchToAPI(h.IndexMatch),
 	}
 }
 
-func colMatchToAPI(m *hive.ColMatch) *apiColMatch {
+// sourceKey returns a verifier source's key ("ncbi", "col"), or "" for
+// an unknown or zero ID.
+func sourceKey(id int) string {
+	if src, ok := mentions.SourceByID(id); ok {
+		return src.Key
+	}
+	return ""
+}
+
+func indexMatchToAPI(m *hive.IndexMatch) *apiIndexMatch {
 	if m == nil {
 		return nil
 	}
-	return &apiColMatch{Mention: m.Mention, Count: m.Count}
+	return &apiIndexMatch{Mention: m.Mention, Count: m.Count, Source: sourceKey(m.SourceID), Parent: m.Parent}
 }
 
 func referenceToAPI(r *coldp.Reference) apiReference {

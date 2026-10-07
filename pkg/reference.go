@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sfborg/hive/pkg/taxonomy"
+	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -179,14 +180,15 @@ type ReferenceHit struct {
 	// MentionsIndexed is true when the name-mention index has rows for
 	// the reference.
 	MentionsIndexed bool
-	// ColFamily is the family with the most name mentions according
-	// to the index's verifier source, with that mention total. Empty
-	// when no mentioned name verified to a family.
-	ColFamily         string
-	ColFamilyMentions int
-	// ColMatch is set for queries with a ColParent: the reference's
+	// IndexFamily is the family with the most name mentions according
+	// to a verifier source, with that mention total and the source's
+	// GNverifier ID. Empty when no mentioned name verified to a family.
+	IndexFamily         string
+	IndexFamilyMentions int
+	IndexFamilySourceID int
+	// IndexMatch is set for queries with Parents: the reference's
 	// strongest matching mention.
-	ColMatch *ColMatch
+	IndexMatch *IndexMatch
 }
 
 // WorkflowState is how far a reference has got through one workflow
@@ -389,29 +391,32 @@ func referenceFilterSQL(f ReferenceFilter) string {
 type ReferenceQuery struct {
 	// Filter restricts results to a workflow stage.
 	Filter ReferenceFilter
-	// ColParent keeps references that mention a name the
-	// name-mention index's verifier source (the Catalogue of Life)
-	// places in this higher taxon, matched case-insensitively against
-	// the record's own name and every rank of its classification.
-	ColParent string
+	// Parents keeps references that mention a name a verifier source
+	// places in the given higher taxon; every entry must match.
+	Parents []IndexParent
 	// MinMentions counts only names mentioned at least this many times
-	// toward ColParent. Values below 1 mean 1.
+	// toward Parents. Values below 1 mean 1.
 	MinMentions int
+}
+
+// IndexParent is a higher taxon in one verifier source's
+// classification, matched case-insensitively against every level of
+// the classification path, ranked or not.
+type IndexParent struct {
+	SourceID int
+	Name     string
 }
 
 func (rq ReferenceQuery) minMentions() int {
 	return max(rq.MinMentions, 1)
 }
 
-// colParentCond is the condition, over hive__name_mention m joined to
-// raw__taxon t, that the mention's record lies in rq.ColParent.
-func (rq ReferenceQuery) colParentCond() (string, []any) {
-	cols := make([]string, len(classificationColumns))
-	for i, c := range classificationColumns {
-		cols[i] = "LOWER(t." + c + ")"
-	}
-	return `m.mention_count >= ? AND LOWER(?) IN (` + strings.Join(cols, ", ") + `)`,
-		[]any{rq.minMentions(), strings.TrimSpace(rq.ColParent)}
+// parentCond is the condition, over hive__name_mention m joined to
+// raw__taxon t, that the mention's record lies in p.
+func (rq ReferenceQuery) parentCond(p IndexParent) (string, []any) {
+	return `m.raw__source LIKE ? AND m.mention_count >= ?
+		AND INSTR(LOWER(t.raw__path), '|' || LOWER(?) || '|') > 0`,
+		[]any{mentions.TagPrefix(p.SourceID) + "%", rq.minMentions(), strings.TrimSpace(p.Name)}
 }
 
 // predicate returns the WHERE condition over the reference table, or
@@ -422,8 +427,8 @@ func (rq ReferenceQuery) predicate() (string, []any) {
 	if p := referenceFilterSQL(rq.Filter); p != "" {
 		conds = append(conds, p)
 	}
-	if strings.TrimSpace(rq.ColParent) != "" {
-		cond, a := rq.colParentCond()
+	for _, p := range rq.Parents {
+		cond, a := rq.parentCond(p)
 		conds = append(conds, `EXISTS (
 		SELECT 1 FROM hive__name_mention m
 		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
@@ -433,17 +438,19 @@ func (rq ReferenceQuery) predicate() (string, []any) {
 	return strings.Join(conds, " AND "), args
 }
 
-// ColMatch explains why a reference matched a ColParent query: its
-// most-mentioned name that the verifier places in the taxon.
-type ColMatch struct {
-	Mention string
-	Count   int
+// IndexMatch explains why a reference matched a Parents query: its
+// most-mentioned name that the source places in the first parent.
+type IndexMatch struct {
+	Mention  string
+	Count    int
+	SourceID int
+	Parent   string
 }
 
 // addMentionSummaries fills each hit's name-mention summary: whether
-// the reference has been indexed, its most-mentioned family according
-// to the verifier source, and, when rq has a ColParent, the strongest
-// matching mention.
+// the reference has been indexed, its most-mentioned family (from the
+// first source in [mentions.Sources] that places a mentioned name in a
+// family), and, when rq has Parents, the strongest matching mention.
 func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, ids []string, rq ReferenceQuery) error {
 	in := strings.Repeat("?,", len(ids)-1) + "?"
 	idArgs := make([]any, len(ids))
@@ -456,18 +463,24 @@ func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, 
 	}
 
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT m.reference_id, COALESCE(t.col__family, ''), SUM(m.mention_count)
+		SELECT m.reference_id, m.raw__source, COALESCE(t.col__family, ''), SUM(m.mention_count)
 		FROM hive__name_mention m
 		LEFT JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
 		WHERE m.reference_id IN (`+in+`)
-		GROUP BY m.reference_id, COALESCE(t.col__family, '')`, idArgs...)
+		GROUP BY m.reference_id, m.raw__source, COALESCE(t.col__family, '')`, idArgs...)
 	if err != nil {
 		return fmt.Errorf("core: mention families: %w", err)
 	}
+	type famBest struct {
+		family string
+		n      int
+	}
+	// best[referenceID][sourceID]
+	best := map[string]map[int]famBest{}
 	for rows.Next() {
-		var id, family string
+		var id, source, family string
 		var n int
-		if err := rows.Scan(&id, &family, &n); err != nil {
+		if err := rows.Scan(&id, &source, &family, &n); err != nil {
 			rows.Close()
 			return err
 		}
@@ -476,20 +489,40 @@ func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, 
 			continue
 		}
 		h.MentionsIndexed = true
-		if family != "" && (n > h.ColFamilyMentions ||
-			(n == h.ColFamilyMentions && family < h.ColFamily)) {
-			h.ColFamily, h.ColFamilyMentions = family, n
+		if family == "" {
+			continue
+		}
+		var sid int
+		if _, err := fmt.Sscanf(source, "gnverifier:%d@", &sid); err != nil {
+			continue
+		}
+		if best[id] == nil {
+			best[id] = map[int]famBest{}
+		}
+		cur := best[id][sid]
+		if n > cur.n || (n == cur.n && family < cur.family) {
+			best[id][sid] = famBest{family, n}
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	for id, bySource := range best {
+		for _, src := range mentions.Sources {
+			if fb, ok := bySource[src.ID]; ok {
+				h := byID[id]
+				h.IndexFamily, h.IndexFamilyMentions, h.IndexFamilySourceID = fb.family, fb.n, src.ID
+				break
+			}
+		}
+	}
 
-	if strings.TrimSpace(rq.ColParent) == "" {
+	if len(rq.Parents) == 0 {
 		return nil
 	}
-	cond, condArgs := rq.colParentCond()
+	first := rq.Parents[0]
+	cond, condArgs := rq.parentCond(first)
 	rows, err = a.db.QueryContext(ctx, `
 		SELECT m.reference_id, m.mention, m.mention_count
 		FROM hive__name_mention m
@@ -506,8 +539,9 @@ func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, 
 		if err := rows.Scan(&id, &mention, &n); err != nil {
 			return err
 		}
-		if h := byID[id]; h != nil && h.ColMatch == nil {
-			h.ColMatch = &ColMatch{Mention: mention, Count: n}
+		if h := byID[id]; h != nil && h.IndexMatch == nil {
+			h.IndexMatch = &IndexMatch{Mention: mention, Count: n,
+				SourceID: first.SourceID, Parent: strings.TrimSpace(first.Name)}
 		}
 	}
 	return rows.Err()

@@ -15,19 +15,20 @@ var mentionsCmd = &cobra.Command{
 	Use:   "mentions",
 	Short: "Name-mention index for finding papers by higher taxon",
 	Long: `The name-mention index records how often each scientific name is
-tagged in a paper and where the Catalogue of Life places it, so papers
-can be found by higher taxon before they are assimilated. It is a
-discovery aid: its classification is never imported into the archive's
-taxonomy.`,
+tagged in a paper and where NCBI Taxonomy and the Catalogue of Life
+place it, so papers can be found by higher taxon before they are
+assimilated. It is a discovery aid: its classification is never
+imported into the archive's taxonomy.`,
 }
 
 var mentionsIndexCmd = &cobra.Command{
 	Use:   "index <archive.db> [ref-id...]",
-	Short: "Count tagged names per paper and verify them against the Catalogue of Life",
+	Short: "Count tagged names per paper and verify them against NCBI Taxonomy and the Catalogue of Life",
 	Long: `Reads the augmented JATS of each paper's attached documents, counts
-the tagged scientific names, verifies the unique names against the
-Catalogue of Life through GNverifier, and replaces the papers' rows in
-the name-mention index. Use --all to index every reference.`,
+the tagged scientific names, verifies the unique names against NCBI
+Taxonomy and the Catalogue of Life through GNverifier, and replaces the
+papers' rows in the name-mention index. Use --all to index every
+reference.`,
 	Args:          cobra.MinimumNArgs(1),
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -84,41 +85,40 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(names)
 
-	v := mentions.NewVerifier()
-	source, err := mentions.SourceTag(v, mentions.CatalogueOfLife)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "Verifying %d unique names from %d papers against %s…\n", len(names), len(counts), source)
-	matches := mentions.Verify(ctx, v, names)
-
-	byType := map[string]int{}
-	for _, n := range names {
-		if m, ok := matches[n]; ok {
-			byType[m.MatchType]++
-		} else {
-			byType["NoMatch"]++
-		}
-	}
-	for id, c := range counts {
-		if err := a.ReplaceNameMentions(ctx, id, source, c, matches); err != nil {
-			return fmt.Errorf("%s: %w", id, err)
-		}
-	}
-
-	fmt.Fprintf(out, "Indexed %d papers", len(counts))
+	fmt.Fprintf(out, "Indexing %d unique names from %d papers", len(names), len(counts))
 	if skipped > 0 {
-		fmt.Fprintf(out, " (%d skipped: no augmented JATS)", skipped)
+		fmt.Fprintf(out, " (%d papers skipped: no augmented JATS)", skipped)
 	}
 	fmt.Fprintln(out, ".")
-	types := make([]string, 0, len(byType))
-	for t := range byType {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-	fmt.Fprintln(out, "Unique names by match type:")
-	for _, t := range types {
-		fmt.Fprintf(out, "  %-14s %d\n", t, byType[t])
+	for _, src := range mentions.Sources {
+		v := mentions.NewVerifier(src.ID)
+		tag, err := mentions.SourceTag(v, src.ID)
+		if err != nil {
+			return err
+		}
+		matches := mentions.Verify(ctx, v, names)
+		for id, c := range counts {
+			if err := a.ReplaceNameMentions(ctx, id, tag, c, matches); err != nil {
+				return fmt.Errorf("%s: %w", id, err)
+			}
+		}
+		byType := map[string]int{}
+		for _, n := range names {
+			if m, ok := matches[n]; ok {
+				byType[m.MatchType]++
+			} else {
+				byType["NoMatch"]++
+			}
+		}
+		types := make([]string, 0, len(byType))
+		for t := range byType {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		fmt.Fprintf(out, "%s (%s), unique names by match type:\n", src.Label, tag)
+		for _, t := range types {
+			fmt.Fprintf(out, "  %-14s %d\n", t, byType[t])
+		}
 	}
 	return nil
 }

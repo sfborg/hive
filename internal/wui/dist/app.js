@@ -15104,6 +15104,18 @@ class SfgaMetadata extends LitElement {
 // detail on the right. Read-only in this slice; add-by-DOI / add-by-
 // BibTeX and edit come later. Fetches its own data on connect.
 
+// INDEX_SOURCES are the name-mention index's verifier sources. Keys
+// match the `<key>_parent` query parameters and `source` values of the
+// reference API.
+const INDEX_SOURCES = [
+  { key: "ncbi", label: "NCBI Taxonomy", short: "NCBI" },
+  { key: "col", label: "Catalogue of Life", short: "CoL" },
+];
+const indexSourceLabel = (key) =>
+  (INDEX_SOURCES.find((s) => s.key === key) || {}).label || key;
+const indexSourceShort = (key) =>
+  (INDEX_SOURCES.find((s) => s.key === key) || {}).short || key;
+
 // REFERENCE_SORTS are the library's sort options. Values match the
 // `sort` query parameter of GET /api/reference ("author" is the
 // server default).
@@ -15291,12 +15303,14 @@ class SfgaReferences extends LitElement {
     // REFERENCE_FILTERS values; "" = all). Applies to both the
     // paginated list and search. Persisted in localStorage.
     _filter: { state: true },
-    // Catalogue of Life higher-taxon filter (col_parent) and the
-    // minimum mention count for a name to count toward it. Backed by
-    // the name-mention index; discovery data, never project data.
-    _colParent: { state: true },
+    // Higher-taxon filter over the name-mention index: the taxon, the
+    // source whose classification it uses ("ncbi" | "col"), and the
+    // minimum mention count for a name to count toward it. Discovery
+    // data, never project data.
+    _indexParent: { state: true },
+    _indexSource: { state: true },
     _minMentions: { state: true },
-    _colTaxa: { state: true },
+    _indexTaxa: { state: true },
     // Infinite-scroll state: true when there are more references
     // to fetch past the currently-loaded window. False once we've
     // paginated to the end (or a search returns everything at once).
@@ -17279,9 +17293,10 @@ class SfgaReferences extends LitElement {
       } catch {}
       this._sort = REFERENCE_SORTS.some((o) => o.value === saved) ? saved : "recent";
     }
-    this._colParent = "";
+    this._indexParent = "";
+    this._indexSource = "ncbi";
     this._minMentions = 1;
-    this._colTaxa = [];
+    this._indexTaxa = [];
     this._filter = "";
     try {
       const f = localStorage.getItem("hive.references.filter");
@@ -17536,13 +17551,13 @@ class SfgaReferences extends LitElement {
       if (q) {
         // Search returns relevance-ranked results in one shot; no
         // pagination. Sort toggle doesn't apply during search.
-        const opts = { q, limit, ...this._colOpts() };
+        const opts = { q, limit, ...this._indexOpts() };
         if (this._filter) opts.filter = this._filter;
         const page = await api.reference.search(opts);
         items = page.items || [];
         this._hasMore = false;
       } else {
-        const opts = { limit, offset, ...this._colOpts() };
+        const opts = { limit, offset, ...this._indexOpts() };
         if (this._sort !== "author") opts.sort = this._sort;
         if (this._filter) opts.filter = this._filter;
         const page = await api.reference.list(opts);
@@ -17566,41 +17581,53 @@ class SfgaReferences extends LitElement {
     this._fetchPage(true);
   }
 
-  // _colOpts returns the Catalogue of Life filter parameters for the
-  // reference list and search endpoints.
-  _colOpts() {
-    const parent = this._colParent.trim();
+  // _indexOpts returns the higher-taxon filter parameters
+  // (ncbi_parent or col_parent) for the reference list and search
+  // endpoints.
+  _indexOpts() {
+    const parent = this._indexParent.trim();
     if (!parent) return {};
-    return this._minMentions > 1
-      ? { col_parent: parent, min_mentions: this._minMentions }
-      : { col_parent: parent };
+    const opts = { [this._indexSource + "_parent"]: parent };
+    if (this._minMentions > 1) opts.min_mentions = this._minMentions;
+    return opts;
   }
 
-  // _onColInput refreshes the higher-taxon suggestions as the curator
-  // types.
-  _onColInput(value) {
-    clearTimeout(this._colSuggestTimer);
-    this._colSuggestTimer = setTimeout(async () => {
+  // _onIndexInput refreshes the higher-taxon suggestions as the
+  // curator types.
+  _onIndexInput(value) {
+    clearTimeout(this._indexSuggestTimer);
+    this._indexSuggestTimer = setTimeout(async () => {
       try {
-        const page = await api.reference.colTaxa({ q: value.trim(), limit: 25 });
-        this._colTaxa = page.items || [];
+        const page = await api.reference.colTaxa({
+          source: this._indexSource,
+          q: value.trim(),
+          limit: 25,
+        });
+        this._indexTaxa = page.items || [];
       } catch {
-        this._colTaxa = [];
+        this._indexTaxa = [];
       }
     }, 200);
   }
 
-  _setColParent(value) {
+  _setIndexParent(value) {
     const v = value.trim();
-    if (v === this._colParent) return;
-    this._colParent = v;
+    if (v === this._indexParent) return;
+    this._indexParent = v;
     this._fetchPage(true);
+  }
+
+  _setIndexSource(src) {
+    if (src === this._indexSource) return;
+    this._indexSource = src;
+    this._indexTaxa = [];
+    if (this._indexParent) this._fetchPage(true);
   }
 
   _setMinMentions(n) {
     if (n === this._minMentions) return;
     this._minMentions = n;
-    if (this._colParent) this._fetchPage(true);
+    if (this._indexParent) this._fetchPage(true);
   }
 
   _setFilter(filter) {
@@ -19450,31 +19477,42 @@ class SfgaReferences extends LitElement {
             `,
           )}
         </div>
-        <div class="col-filter" role="group" aria-label="Catalogue of Life group filter">
-          <label class="chip-group-label" for="col-parent">In (CoL)</label>
+        <div class="col-filter" role="group" aria-label="Higher-taxon filter">
+          <label class="chip-group-label" for="index-parent">In</label>
           <input
-            id="col-parent"
+            id="index-parent"
             class="search col-input"
             type="search"
-            list="col-taxa"
+            list="index-taxa"
             placeholder="higher taxon, e.g. Bacillariophyceae"
-            .value=${this._colParent}
-            @input=${(e) => this._onColInput(e.target.value)}
-            @focus=${(e) => this._onColInput(e.target.value)}
-            @change=${(e) => this._setColParent(e.target.value)}
+            .value=${this._indexParent}
+            @input=${(e) => this._onIndexInput(e.target.value)}
+            @focus=${(e) => this._onIndexInput(e.target.value)}
+            @change=${(e) => this._setIndexParent(e.target.value)}
           />
-          <datalist id="col-taxa">
-            ${this._colTaxa.map(
+          <datalist id="index-taxa">
+            ${this._indexTaxa.map(
               (t) => html`<option value=${t.name}>
                 ${t.rank} · ${t.papers} ${t.papers === 1 ? "paper" : "papers"}
               </option>`,
             )}
           </datalist>
+          <label class="chip-group-label" for="index-source">per</label>
+          <select
+            id="index-source"
+            class="min-mentions"
+            @change=${(e) => this._setIndexSource(e.target.value)}
+          >
+            ${INDEX_SOURCES.map(
+              (src) => html`<option value=${src.key} ?selected=${src.key === this._indexSource}>
+                ${src.label}
+              </option>`,
+            )}
+          </select>
           <label class="chip-group-label" for="min-mentions">mentioned ≥</label>
           <select
             id="min-mentions"
             class="min-mentions"
-            .value=${String(this._minMentions)}
             @change=${(e) => this._setMinMentions(Number(e.target.value))}
           >
             ${[1, 2, 3, 5, 10].map(
@@ -19482,14 +19520,14 @@ class SfgaReferences extends LitElement {
             )}
           </select>
           <details class="col-help">
-            <summary aria-label="About the Catalogue of Life filter">ⓘ</summary>
+            <summary aria-label="About the higher-taxon filter">ⓘ</summary>
             <p>
-              Finds papers that mention names the Catalogue of Life places
-              in this taxon. The classification comes from the Catalogue
-              of Life, not from the papers, and is never added to your
-              project. Use the Catalogue of Life's names (suggestions show
-              what is available); groups it does not cover cannot be found
-              this way.
+              Finds papers that mention names the chosen source places in
+              this taxon. The classification comes from NCBI Taxonomy or the
+              Catalogue of Life, not from the papers, and is never added to
+              your project. Use the source's names; the suggestions show what
+              it has. NCBI Taxonomy covers more algae; groups a source does
+              not cover cannot be found through it.
             </p>
           </details>
         </div>
@@ -19514,11 +19552,11 @@ class SfgaReferences extends LitElement {
         ? html`<div class="empty" role="status">Loading…</div>`
         : this._hits.length === 0
           ? html`<div class="empty">
-              ${this._colParent
-                ? html`No indexed papers mention names the Catalogue of Life
-                    places in “${this._colParent}”. The Catalogue of Life may
-                    use a different name for this group; pick one from the
-                    suggestions.`
+              ${this._indexParent
+                ? html`No indexed papers mention names
+                    ${indexSourceLabel(this._indexSource)} places in
+                    “${this._indexParent}”. The source may use a different name
+                    for this group; pick one from the suggestions.`
                 : this._query || this._filter
                   ? "(No references match the search or filter)"
                   : "(No references)"}
@@ -19531,8 +19569,8 @@ class SfgaReferences extends LitElement {
                     <th scope="col">Authors</th>
                     <th scope="col">Year</th>
                     <th scope="col">Title</th>
-                    <th scope="col" title="Most-mentioned family according to the Catalogue of Life">
-                      Family <span class="col-badge">CoL</span>
+                    <th scope="col" title="Most-mentioned family according to NCBI Taxonomy, or the Catalogue of Life where NCBI has none">
+                      Family
                     </th>
                     <th scope="col">License</th>
                   </tr>
@@ -19550,12 +19588,13 @@ class SfgaReferences extends LitElement {
                             title="Open this paper (or double-click the row)"
                             >${h.title || h.citation || "(untitled)"}</a
                           >
-                          ${h.col_match
+                          ${h.index_match
                             ? html`<div class="col-match">
-                                <span class="col-badge">CoL</span>
-                                Mentions <i>${h.col_match.mention}</i>
-                                (${h.col_match.count}×), which the Catalogue of
-                                Life places in ${this._colParent}.
+                                <span class="col-badge">${indexSourceShort(h.index_match.source)}</span>
+                                Mentions <i>${h.index_match.mention}</i>
+                                (${h.index_match.count}×), which
+                                ${indexSourceLabel(h.index_match.source)} places in
+                                ${h.index_match.parent}.
                               </div>`
                             : nothing}
                         </td>
@@ -19575,16 +19614,18 @@ class SfgaReferences extends LitElement {
   }
 
   // _renderColFamily shows a reference's most-mentioned family
-  // according to the Catalogue of Life.
+  // according to an index source, labelled with that source.
   _renderColFamily(h) {
     if (!h.mentions_indexed) {
       return html`<span class="dim" title="Name mentions not indexed yet">—</span>`;
     }
-    if (!h.col_family) {
-      return html`<span class="dim" title="No mentioned name is placed in a family by the Catalogue of Life">not in CoL</span>`;
+    if (!h.index_family) {
+      return html`<span class="dim" title="No mentioned name is placed in a family by an index source">—</span>`;
     }
-    return html`<span title=${`${h.col_family_mentions} mentions of names in this family (Catalogue of Life)`}
-      >${h.col_family}</span
+    const label = indexSourceLabel(h.index_family_source);
+    return html`<span title=${`${h.index_family_mentions} mentions of names in this family (${label})`}
+      >${h.index_family}
+      <span class="col-badge">${indexSourceShort(h.index_family_source)}</span></span
     >`;
   }
 

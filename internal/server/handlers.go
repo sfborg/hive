@@ -22,6 +22,7 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
+	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/hive/pkg/assembler"
 	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/llm"
@@ -3695,7 +3696,8 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Param        sort query string false "Sort: author|recent|year"
 // @Param        filter query string false "Workflow filter: runs|assertions|pending"
 // @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
-// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent"
+// @Param        ncbi_parent query string false "Papers mentioning names NCBI Taxonomy places in this higher taxon"
+// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent / ncbi_parent"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
@@ -3741,15 +3743,16 @@ type apiColTaxon struct {
 	Papers int    `json:"papers"`
 }
 
-// handleColTaxa returns higher taxa from the name-mention index whose
-// names start with q, most-mentioned first. Backs autocomplete for the
-// col_parent reference filter, whose values must use the Catalogue of
-// Life's names.
+// handleColTaxa returns higher taxa from one source of the
+// name-mention index whose names start with q, most-mentioned first.
+// Backs autocomplete for the col_parent / ncbi_parent reference
+// filters, whose values must use that source's names.
 //
-// @Summary      Look up Catalogue of Life higher taxa in the name-mention index
-// @Description  Higher taxa (kingdom to genus) from the Catalogue of Life classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.
+// @Summary      Look up higher taxa in the name-mention index
+// @Description  Ranked higher taxa (kingdom to genus) from one verifier source's classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.
 // @Tags         references
 // @Produce      json
+// @Param        source query string false "Source: ncbi (default) or col"
 // @Param        q query string false "Name prefix"
 // @Param        limit query int false "Maximum results (default 20)"
 // @Success      200 {object} apiPage[apiColTaxon]
@@ -3766,7 +3769,16 @@ func (s *server) handleColTaxa(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	taxa, err := s.a.ColTaxa(r.Context(), r.URL.Query().Get("q"), limit)
+	key := r.URL.Query().Get("source")
+	if key == "" {
+		key = mentions.Sources[0].Key
+	}
+	src, ok := mentions.SourceByKey(key)
+	if !ok {
+		writeBadRequest(w, r, "invalid 'source' value (ncbi | col)")
+		return
+	}
+	taxa, err := s.a.ColTaxa(r.Context(), src.ID, r.URL.Query().Get("q"), limit)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
@@ -3787,7 +3799,12 @@ func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 	if !ok {
 		return hive.ReferenceQuery{}, "invalid 'filter' value"
 	}
-	rq := hive.ReferenceQuery{Filter: filter, ColParent: strings.TrimSpace(qv.Get("col_parent"))}
+	rq := hive.ReferenceQuery{Filter: filter}
+	for _, src := range mentions.Sources {
+		if v := strings.TrimSpace(qv.Get(src.Key + "_parent")); v != "" {
+			rq.Parents = append(rq.Parents, hive.IndexParent{SourceID: src.ID, Name: v})
+		}
+	}
 	if raw := qv.Get("min_mentions"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
@@ -3810,7 +3827,8 @@ func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 // @Param        limit query int false "Page size"
 // @Param        filter query string false "Workflow filter: runs|assertions|pending"
 // @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
-// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent"
+// @Param        ncbi_parent query string false "Papers mentioning names NCBI Taxonomy places in this higher taxon"
+// @Param        min_mentions query int false "Count only names mentioned at least this many times toward col_parent / ncbi_parent"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem

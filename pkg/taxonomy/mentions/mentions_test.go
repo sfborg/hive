@@ -81,6 +81,19 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+type futureDateVerifier struct{ stubVerifier }
+
+func (*futureDateVerifier) DataSource(id int) (vlib.DataSource, error) {
+	return vlib.DataSource{ID: id, RevisionDate: "2999-01-01", UpdatedAt: "2026-09-28"}, nil
+}
+
+func TestSourceTagSkipsFutureReleaseDate(t *testing.T) {
+	tag, err := SourceTag(&futureDateVerifier{}, NCBI)
+	if err != nil || tag != "gnverifier:4@2026-09-28" {
+		t.Errorf("SourceTag = %q, %v", tag, err)
+	}
+}
+
 func TestSourceTagPrefersReleaseDate(t *testing.T) {
 	tag, err := SourceTag(&stubVerifier{}, CatalogueOfLife)
 	if err != nil || tag != "gnverifier:1@2026-08-20" {

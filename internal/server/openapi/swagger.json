@@ -1451,15 +1451,21 @@
         },
         "/name-mentions/taxa": {
             "get": {
-                "description": "Higher taxa (kingdom to genus) from the Catalogue of Life classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.",
+                "description": "Ranked higher taxa (kingdom to genus) from one verifier source's classification of names mentioned in indexed papers, with the number of papers mentioning names in each. Discovery data only.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "references"
                 ],
-                "summary": "Look up Catalogue of Life higher taxa in the name-mention index",
+                "summary": "Look up higher taxa in the name-mention index",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Source: ncbi (default) or col",
+                        "name": "source",
+                        "in": "query"
+                    },
                     {
                         "type": "string",
                         "description": "Name prefix",
@@ -2391,8 +2397,14 @@
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Papers mentioning names NCBI Taxonomy places in this higher taxon",
+                        "name": "ncbi_parent",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Count only names mentioned at least this many times toward col_parent",
+                        "description": "Count only names mentioned at least this many times toward col_parent / ncbi_parent",
                         "name": "min_mentions",
                         "in": "query"
                     }
@@ -3157,8 +3169,14 @@
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Papers mentioning names NCBI Taxonomy places in this higher taxon",
+                        "name": "ncbi_parent",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "Count only names mentioned at least this many times toward col_parent",
+                        "description": "Count only names mentioned at least this many times toward col_parent / ncbi_parent",
                         "name": "min_mentions",
                         "in": "query"
                     }
@@ -6788,17 +6806,6 @@
                 }
             }
         },
-        "server.apiColMatch": {
-            "type": "object",
-            "properties": {
-                "count": {
-                    "type": "integer"
-                },
-                "mention": {
-                    "type": "string"
-                }
-            }
-        },
         "server.apiColTaxon": {
             "type": "object",
             "properties": {
@@ -7033,6 +7040,24 @@
                 },
                 "page": {
                     "type": "integer"
+                }
+            }
+        },
+        "server.apiIndexMatch": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "mention": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is \"ncbi\" or \"col\".",
+                    "type": "string"
                 }
             }
         },
@@ -8714,27 +8739,30 @@
                 "citation": {
                     "type": "string"
                 },
-                "col_family": {
-                    "description": "ColFamily is the family with the most name mentions according to\nthe Catalogue of Life, with that mention total. Discovery data\nonly; never project data.",
-                    "type": "string"
-                },
-                "col_family_mentions": {
-                    "type": "integer"
-                },
-                "col_match": {
-                    "description": "ColMatch explains a col_parent match: the most-mentioned name the\nCatalogue of Life places in the requested taxon.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/server.apiColMatch"
-                        }
-                    ]
-                },
                 "has_source_doc": {
                     "description": "HasSourceDoc is true when the reference has an ingested source\ndocument available in the archive's sidecar directory (PDF\n→ JATS conversion complete, ready for annotation and\nAI-assisted extraction — see REFERENCE_PDF_PLAN.md).\nDrives the gold-star tier of the reference-picker badge:\nstructured-metadata + source-attached → curator has fully\nupgraded this reference. Elided from JSON (omitempty) so a\nlegacy row with no source document doesn't clutter the wire\nshape. Falsy today until PDF ingest slice lands.",
                     "type": "boolean"
                 },
                 "id": {
                     "type": "string"
+                },
+                "index_family": {
+                    "description": "IndexFamily is the family with the most name mentions according\nto a verifier source (\"ncbi\" or \"col\" in IndexFamilySource), with\nthat mention total. Discovery data only; never project data.",
+                    "type": "string"
+                },
+                "index_family_mentions": {
+                    "type": "integer"
+                },
+                "index_family_source": {
+                    "type": "string"
+                },
+                "index_match": {
+                    "description": "IndexMatch explains a col_parent / ncbi_parent match: the\nmost-mentioned name the source places in the requested taxon.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.apiIndexMatch"
+                        }
+                    ]
                 },
                 "issue_count": {
                     "description": "IssueCount is the number of open validation issues currently\nfiled against this reference row. Zero → elided from JSON so\nthe wire shape stays flat; front-ends render a warn badge on\npicker results when \u003e 0 and route a click to the reference-\nquick-fix modal (feedback_no_side_quests).",

@@ -607,9 +607,9 @@ export const api = {
     list: (opts) => j("GET", `/api/reference${qs(opts)}`),
     get: (id) => j("GET", `/api/reference/${encodeURIComponent(id)}`),
     search: (opts) => j("GET", `/api/reference/search${qs(opts)}`),
-    // colTaxa looks up Catalogue of Life higher taxa in the
-    // name-mention index for the col_parent filter. Discovery data
-    // only. Returns {items: [{name, rank, papers}]}.
+    // colTaxa looks up higher taxa in the name-mention index for the
+    // ncbi_parent / col_parent filters; opts.source is "ncbi" or
+    // "col". Discovery data only. Returns {items: [{name, rank, papers}]}.
     colTaxa: (opts) => j("GET", `/api/name-mentions/taxa${qs(opts)}`),
     // create optionally accepts an attach_pdf_sha which links the
     // newly-created reference to a sidecar-library sha in the same
