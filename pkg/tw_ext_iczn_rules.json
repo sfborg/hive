@@ -1,0 +1,869 @@
+{
+  "name": "tw_ext_iczn_sfga",
+  "version": "0.2.0",
+  "domain": "biodiversity",
+  "author": "sfborg/hive",
+  "description": "TaxonWorks-derived validation rules for names governed by the ICZN (col__code_id ZOOLOGICAL). These rules need the TaxonWorks round-trip columns, which are a proposal against the sfga schema and not yet adopted: the bundle's requires block names them, and hive skips the bundle and reports the missing columns when an archive does not have them. Each rule's description names the TaxonWorks class and method it is ported from. Statuses are matched as NOMEN ontology URIs in name.col__status_id. Relations are declared in hive_rules.json. Schema compatibility: SFGA v0.3.x.",
+  "created_at": "2026-09-22T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": [],
+    "columns": {
+      "name.tw__author_ids": "text",
+      "name.tw__nomenclatural_classification": "text",
+      "name.tw__reference_original": "text",
+      "name.tw__verbatim_author": "text",
+      "name_relation.tw__name_relationship_type": "text",
+      "type_material.tw__type_type": "text"
+    },
+    "relations": ["name:element-originalgenus", "name:family-before-1961-relation", "name:forgotten-relation", "name:homonym-of-suppressed", "name:replaced-homonym-incoming", "name:replacement-for", "name:secondary1961-relation", "name:subsequent-designation-of", "name:subsequent-monotypy-of", "name:unnecessary-replacement", "type_material:name"]
+  },
+  "relations": {},
+  "supersedes": ["tw_iczn_authorship_parentheses", "tw_iczn_missing_author_links", "tw_iczn_missing_original_author_links", "tw_iczn_missing_original_publication", "tw_iczn_status_code_mismatch", "tw_iczn_status_not_specific", "tw_iczn_status_prefer_relationship", "tw_iczn_status_rank_above_species", "tw_iczn_status_rank_family", "tw_iczn_status_rank_genus", "tw_iczn_status_rank_species", "tw_iczn_status_year_1758_1899", "tw_iczn_status_year_1758_1960", "tw_iczn_status_year_1758_2011", "tw_iczn_status_year_1900_on", "tw_iczn_status_year_1931_1960", "tw_iczn_status_year_1931_on", "tw_iczn_status_year_1951_on", "tw_iczn_status_year_1961_on", "tw_iczn_status_year_2000_on", "tw_iczn_status_year_2012_on", "tw_iczn_status_year_after_1757", "tw_iczn_status_year_pre_linnean", "tw_iczn_type_material_status"],
+  "rules": [
+    {
+      "rule_id": "tw_ext_iczn_status_code_mismatch",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Statuses belong to the name's code",
+      "description": "Ported from TaxonWorks TaxonNameClassification#nomenclature_code_matches (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000013|http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000019|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000056|http://purl\\.obolibrary\\.org/obo/NOMEN_0000057|http://purl\\.obolibrary\\.org/obo/NOMEN_0000081|http://purl\\.obolibrary\\.org/obo/NOMEN_0000082|http://purl\\.obolibrary\\.org/obo/NOMEN_0000083|http://purl\\.obolibrary\\.org/obo/NOMEN_0000084|http://purl\\.obolibrary\\.org/obo/NOMEN_0000085|http://purl\\.obolibrary\\.org/obo/NOMEN_0000086|http://purl\\.obolibrary\\.org/obo/NOMEN_0000087|http://purl\\.obolibrary\\.org/obo/NOMEN_0000088|http://purl\\.obolibrary\\.org/obo/NOMEN_0000089|http://purl\\.obolibrary\\.org/obo/NOMEN_0000090|http://purl\\.obolibrary\\.org/obo/NOMEN_0000091|http://purl\\.obolibrary\\.org/obo/NOMEN_0000092|http://purl\\.obolibrary\\.org/obo/NOMEN_0000103|http://purl\\.obolibrary\\.org/obo/NOMEN_0000104|http://purl\\.obolibrary\\.org/obo/NOMEN_0000105|http://purl\\.obolibrary\\.org/obo/NOMEN_0000125|http://purl\\.obolibrary\\.org/obo/NOMEN_0000126|http://purl\\.obolibrary\\.org/obo/NOMEN_0000127|http://purl\\.obolibrary\\.org/obo/NOMEN_0000128|http://purl\\.obolibrary\\.org/obo/NOMEN_0000377|http://purl\\.obolibrary\\.org/obo/NOMEN_0000378|http://purl\\.obolibrary\\.org/obo/NOMEN_0000379|http://purl\\.obolibrary\\.org/obo/NOMEN_0000380|http://purl\\.obolibrary\\.org/obo/NOMEN_0000381|http://purl\\.obolibrary\\.org/obo/NOMEN_0000382|http://purl\\.obolibrary\\.org/obo/NOMEN_0000383|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "A status on this name belongs to another nomenclatural code; ICZN names need ICZN statuses.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_ext_iczn_type_material_status",
+      "table_name": "type_material",
+      "field_name": "tw__type_type",
+      "rule_name": "Type status is used by the ICZN",
+      "description": "Ported from TaxonWorks TypeMaterial#check_type_type (app/models/type_material.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "tw__type_type", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "ZOOLOGICAL",
+          "relation": "type_material:name"
+        }
+      ],
+      "parameters": {
+        "pattern": "^(?:holotype|paratype|paralectotype|neotype|lectotype|syntype|paratypes|syntypes|paralectotypes)$"
+      },
+      "error_message": "This type status is not one the ICZN uses.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_ext_iczn_authorship_parentheses",
+      "table_name": "name",
+      "field_name": "tw__verbatim_author",
+      "rule_name": "Author parentheses are closed",
+      "description": "Ported from TaxonWorks Protonym#verbatim_author_with_closed_parens_when_present (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "tw__verbatim_author", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^(?:\\([^()]+\\)|[^()]+)$"},
+      "error_message": "The author must either be wholly enclosed in one pair of parentheses or contain none.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_ext_iczn_conflicting_status_available_unavailable",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Conflicting statuses: available and unavailable",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_validate_disjoint_classes (app/models/taxon_name_classification.rb) with disjoint_taxon_name_classes.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000025|http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000060|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000223|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0000228|http://purl\\.obolibrary\\.org/obo/NOMEN_0000229|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000024|http://purl\\.obolibrary\\.org/obo/NOMEN_0000026|http://purl\\.obolibrary\\.org/obo/NOMEN_0000038|http://purl\\.obolibrary\\.org/obo/NOMEN_0000039|http://purl\\.obolibrary\\.org/obo/NOMEN_0000040|http://purl\\.obolibrary\\.org/obo/NOMEN_0000041|http://purl\\.obolibrary\\.org/obo/NOMEN_0000058|http://purl\\.obolibrary\\.org/obo/NOMEN_0000059|http://purl\\.obolibrary\\.org/obo/NOMEN_0000168|http://purl\\.obolibrary\\.org/obo/NOMEN_0000169|http://purl\\.obolibrary\\.org/obo/NOMEN_0000170|http://purl\\.obolibrary\\.org/obo/NOMEN_0000171|http://purl\\.obolibrary\\.org/obo/NOMEN_0000172|http://purl\\.obolibrary\\.org/obo/NOMEN_0000173|http://purl\\.obolibrary\\.org/obo/NOMEN_0000174|http://purl\\.obolibrary\\.org/obo/NOMEN_0000175|http://purl\\.obolibrary\\.org/obo/NOMEN_0000176|http://purl\\.obolibrary\\.org/obo/NOMEN_0000177|http://purl\\.obolibrary\\.org/obo/NOMEN_0000178|http://purl\\.obolibrary\\.org/obo/NOMEN_0000179|http://purl\\.obolibrary\\.org/obo/NOMEN_0000180|http://purl\\.obolibrary\\.org/obo/NOMEN_0000181|http://purl\\.obolibrary\\.org/obo/NOMEN_0000182|http://purl\\.obolibrary\\.org/obo/NOMEN_0000183|http://purl\\.obolibrary\\.org/obo/NOMEN_0000184|http://purl\\.obolibrary\\.org/obo/NOMEN_0000185|http://purl\\.obolibrary\\.org/obo/NOMEN_0000186|http://purl\\.obolibrary\\.org/obo/NOMEN_0000187|http://purl\\.obolibrary\\.org/obo/NOMEN_0000188|http://purl\\.obolibrary\\.org/obo/NOMEN_0000189|http://purl\\.obolibrary\\.org/obo/NOMEN_0000190|http://purl\\.obolibrary\\.org/obo/NOMEN_0000191|http://purl\\.obolibrary\\.org/obo/NOMEN_0000192|http://purl\\.obolibrary\\.org/obo/NOMEN_0000193|http://purl\\.obolibrary\\.org/obo/NOMEN_0000194|http://purl\\.obolibrary\\.org/obo/NOMEN_0000195|http://purl\\.obolibrary\\.org/obo/NOMEN_0000196|http://purl\\.obolibrary\\.org/obo/NOMEN_0000197|http://purl\\.obolibrary\\.org/obo/NOMEN_0000198|http://purl\\.obolibrary\\.org/obo/NOMEN_0000199|http://purl\\.obolibrary\\.org/obo/NOMEN_0000200|http://purl\\.obolibrary\\.org/obo/NOMEN_0000201|http://purl\\.obolibrary\\.org/obo/NOMEN_0000202|http://purl\\.obolibrary\\.org/obo/NOMEN_0000203|http://purl\\.obolibrary\\.org/obo/NOMEN_0000204|http://purl\\.obolibrary\\.org/obo/NOMEN_0000205|http://purl\\.obolibrary\\.org/obo/NOMEN_0000206|http://purl\\.obolibrary\\.org/obo/NOMEN_0000207|http://purl\\.obolibrary\\.org/obo/NOMEN_0000208|http://purl\\.obolibrary\\.org/obo/NOMEN_0000209|http://purl\\.obolibrary\\.org/obo/NOMEN_0000210|http://purl\\.obolibrary\\.org/obo/NOMEN_0000211|http://purl\\.obolibrary\\.org/obo/NOMEN_0000212|http://purl\\.obolibrary\\.org/obo/NOMEN_0000213|http://purl\\.obolibrary\\.org/obo/NOMEN_0000214|http://purl\\.obolibrary\\.org/obo/NOMEN_0000218|http://purl\\.obolibrary\\.org/obo/NOMEN_0000219|http://purl\\.obolibrary\\.org/obo/NOMEN_0000221|http://purl\\.obolibrary\\.org/obo/NOMEN_0000222|http://purl\\.obolibrary\\.org/obo/NOMEN_0001060)|(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000024|http://purl\\.obolibrary\\.org/obo/NOMEN_0000026|http://purl\\.obolibrary\\.org/obo/NOMEN_0000038|http://purl\\.obolibrary\\.org/obo/NOMEN_0000039|http://purl\\.obolibrary\\.org/obo/NOMEN_0000040|http://purl\\.obolibrary\\.org/obo/NOMEN_0000041|http://purl\\.obolibrary\\.org/obo/NOMEN_0000058|http://purl\\.obolibrary\\.org/obo/NOMEN_0000059|http://purl\\.obolibrary\\.org/obo/NOMEN_0000168|http://purl\\.obolibrary\\.org/obo/NOMEN_0000169|http://purl\\.obolibrary\\.org/obo/NOMEN_0000170|http://purl\\.obolibrary\\.org/obo/NOMEN_0000171|http://purl\\.obolibrary\\.org/obo/NOMEN_0000172|http://purl\\.obolibrary\\.org/obo/NOMEN_0000173|http://purl\\.obolibrary\\.org/obo/NOMEN_0000174|http://purl\\.obolibrary\\.org/obo/NOMEN_0000175|http://purl\\.obolibrary\\.org/obo/NOMEN_0000176|http://purl\\.obolibrary\\.org/obo/NOMEN_0000177|http://purl\\.obolibrary\\.org/obo/NOMEN_0000178|http://purl\\.obolibrary\\.org/obo/NOMEN_0000179|http://purl\\.obolibrary\\.org/obo/NOMEN_0000180|http://purl\\.obolibrary\\.org/obo/NOMEN_0000181|http://purl\\.obolibrary\\.org/obo/NOMEN_0000182|http://purl\\.obolibrary\\.org/obo/NOMEN_0000183|http://purl\\.obolibrary\\.org/obo/NOMEN_0000184|http://purl\\.obolibrary\\.org/obo/NOMEN_0000185|http://purl\\.obolibrary\\.org/obo/NOMEN_0000186|http://purl\\.obolibrary\\.org/obo/NOMEN_0000187|http://purl\\.obolibrary\\.org/obo/NOMEN_0000188|http://purl\\.obolibrary\\.org/obo/NOMEN_0000189|http://purl\\.obolibrary\\.org/obo/NOMEN_0000190|http://purl\\.obolibrary\\.org/obo/NOMEN_0000191|http://purl\\.obolibrary\\.org/obo/NOMEN_0000192|http://purl\\.obolibrary\\.org/obo/NOMEN_0000193|http://purl\\.obolibrary\\.org/obo/NOMEN_0000194|http://purl\\.obolibrary\\.org/obo/NOMEN_0000195|http://purl\\.obolibrary\\.org/obo/NOMEN_0000196|http://purl\\.obolibrary\\.org/obo/NOMEN_0000197|http://purl\\.obolibrary\\.org/obo/NOMEN_0000198|http://purl\\.obolibrary\\.org/obo/NOMEN_0000199|http://purl\\.obolibrary\\.org/obo/NOMEN_0000200|http://purl\\.obolibrary\\.org/obo/NOMEN_0000201|http://purl\\.obolibrary\\.org/obo/NOMEN_0000202|http://purl\\.obolibrary\\.org/obo/NOMEN_0000203|http://purl\\.obolibrary\\.org/obo/NOMEN_0000204|http://purl\\.obolibrary\\.org/obo/NOMEN_0000205|http://purl\\.obolibrary\\.org/obo/NOMEN_0000206|http://purl\\.obolibrary\\.org/obo/NOMEN_0000207|http://purl\\.obolibrary\\.org/obo/NOMEN_0000208|http://purl\\.obolibrary\\.org/obo/NOMEN_0000209|http://purl\\.obolibrary\\.org/obo/NOMEN_0000210|http://purl\\.obolibrary\\.org/obo/NOMEN_0000211|http://purl\\.obolibrary\\.org/obo/NOMEN_0000212|http://purl\\.obolibrary\\.org/obo/NOMEN_0000213|http://purl\\.obolibrary\\.org/obo/NOMEN_0000214|http://purl\\.obolibrary\\.org/obo/NOMEN_0000218|http://purl\\.obolibrary\\.org/obo/NOMEN_0000219|http://purl\\.obolibrary\\.org/obo/NOMEN_0000221|http://purl\\.obolibrary\\.org/obo/NOMEN_0000222|http://purl\\.obolibrary\\.org/obo/NOMEN_0001060).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000025|http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000060|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000223|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0000228|http://purl\\.obolibrary\\.org/obo/NOMEN_0000229|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name carries statuses that exclude each other (available and unavailable). Keep the one that applies.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_conflicting_status_valid_invalid",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Conflicting statuses: valid and invalid",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_validate_disjoint_classes (app/models/taxon_name_classification.rb) with disjoint_taxon_name_classes.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061)|(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name carries statuses that exclude each other (valid and invalid). Keep the one that applies.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_family_before_1961_year",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Family-group name replaced before 1961 was described before 1961",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::PotentiallyValidating::FamilyBefore1961#sv_year_of_description (app/models/taxon_name_relationship/iczn/potentially_validating/family_before1961.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:family-before-1961-relation"}
+      ],
+      "parameters": {"max": 1960},
+      "error_message": "",
+      "warning_message": "A family-group name based on a genus synonym replaced before 1961 must have been described before 1961. Check the year or the relationship.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_forgotten_homonym_year",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Forgotten homonym was described before 1900",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Homonym::Primary::Forgotten#sv_forgotten_homonym (app/models/taxon_name_relationship/iczn/invalidating/homonym/primary/forgotten.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:forgotten-relation"}
+      ],
+      "parameters": {"max": 1899},
+      "error_message": "",
+      "warning_message": "A forgotten name (nomen oblitum) must have been described before 1900. Check the year or the relationship.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_homonym_of_suppressed_name",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Homonym of a totally suppressed name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Homonym#sv_validate_total_suppression (app/models/taxon_name_relationship/iczn/invalidating/homonym.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:homonym-of-suppressed"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The name this one is a homonym of is totally suppressed, so this name should not be treated as a homonym.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_replacement_needs_objective_synonym",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Replacement name has an objective synonym relationship",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::PotentiallyValidating::ReplacementName#sv_specific_relationship (app/models/taxon_name_relationship/iczn/potentially_validating/replacement_name.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:replacement-for"},
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:unnecessary-replacement"}
+      ],
+      "parameters": {"field": "col__id", "relation": "name:replaced-homonym-incoming"},
+      "error_message": "",
+      "warning_message": "This name replaces another, but neither a replaced-homonym nor an unnecessary-replacement relationship records why. Add one.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_replacement_of_replacement",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Replacement name of a replacement name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Synonym::Objective::ReplacedHomonym#sv_specific_relationship (app/models/taxon_name_relationship/iczn/invalidating/synonym/objective/replaced_homonym.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:replacement-for"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:replaced-homonym-incoming"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A replacement name cannot be proposed for another replacement name. Move the relationship to the older objective synonym.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_secondary_homonym_1961_year",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Secondary homonym replaced before 1961 was described before 1961",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Homonym::Secondary::Secondary1961#sv_year_of_description (app/models/taxon_name_relationship/iczn/invalidating/homonym/secondary/secondary1961.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:secondary1961-relation"}
+      ],
+      "parameters": {"max": 1960},
+      "error_message": "",
+      "warning_message": "A secondary homonym replaced before 1961 must have been described before 1961. Check the year or the relationship.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_rank_above_species",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Status applies to genus-group or higher names only",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_classification (app/models/taxon_name_classification.rb) with applicable_ranks.",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000170)"
+        },
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^(?:SUPERKINGDOM|KINGDOM|SUBKINGDOM|INFRAKINGDOM|SUPERPHYLUM|PHYLUM|SUBPHYLUM|INFRAPHYLUM|SUPERCLASS|CLASS|SUBCLASS|INFRACLASS|SUPERCOHORT|COHORT|MAGNORDER|SUPERORDER|MIRORDER|ORDER|SUBORDER|INFRAORDER|PARVORDER|NANORDER|SUPERFAMILY|EPIFAMILY|FAMILY|SUPERSUBFAMILY|SUBFAMILY|INFRAFAMILY|SUPERTRIBE|TRIBE|SUBTRIBE|INFRATRIBE|SUPERGENUS|GENUS|SUPERSUPERSUBGENUS|SUPERSUBGENUS|SUBGENUS|INFRAGENUS)$"
+      },
+      "error_message": "",
+      "warning_message": "A nomenclatural status on this name applies only to genus-group or higher names.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_rank_family",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Status applies to family-group names only",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_classification (app/models/taxon_name_classification.rb) with applicable_ranks.",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000188|http://purl\\.obolibrary\\.org/obo/NOMEN_0000202|http://purl\\.obolibrary\\.org/obo/NOMEN_0000203|http://purl\\.obolibrary\\.org/obo/NOMEN_0000204|http://purl\\.obolibrary\\.org/obo/NOMEN_0000205|http://purl\\.obolibrary\\.org/obo/NOMEN_0000206|http://purl\\.obolibrary\\.org/obo/NOMEN_0000207|http://purl\\.obolibrary\\.org/obo/NOMEN_0000208|http://purl\\.obolibrary\\.org/obo/NOMEN_0000209|http://purl\\.obolibrary\\.org/obo/NOMEN_0000213|http://purl\\.obolibrary\\.org/obo/NOMEN_0000214|http://purl\\.obolibrary\\.org/obo/NOMEN_0000222|http://purl\\.obolibrary\\.org/obo/NOMEN_0000229|http://purl\\.obolibrary\\.org/obo/NOMEN_0001060|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061)"
+        },
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^(?:SUPERFAMILY|EPIFAMILY|FAMILY|SUPERSUBFAMILY|SUBFAMILY|INFRAFAMILY|SUPERTRIBE|TRIBE|SUBTRIBE|INFRATRIBE)$"
+      },
+      "error_message": "",
+      "warning_message": "A nomenclatural status on this name applies only to family-group names.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_rank_genus",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Status applies to genus-group names only",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_classification (app/models/taxon_name_classification.rb) with applicable_ranks.",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000058|http://purl\\.obolibrary\\.org/obo/NOMEN_0000171|http://purl\\.obolibrary\\.org/obo/NOMEN_0000183|http://purl\\.obolibrary\\.org/obo/NOMEN_0000184|http://purl\\.obolibrary\\.org/obo/NOMEN_0000185|http://purl\\.obolibrary\\.org/obo/NOMEN_0000196|http://purl\\.obolibrary\\.org/obo/NOMEN_0000211|http://purl\\.obolibrary\\.org/obo/NOMEN_0000228|http://purl\\.obolibrary\\.org/obo/NOMEN_0001059)"
+        },
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {"pattern": "^(?:SUPERGENUS|GENUS|SUPERSUPERSUBGENUS|SUPERSUBGENUS|SUBGENUS|INFRAGENUS)$"},
+      "error_message": "",
+      "warning_message": "A nomenclatural status on this name applies only to genus-group names.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_rank_species",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Status applies to species-group names only",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_classification (app/models/taxon_name_classification.rb) with applicable_ranks.",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000059|http://purl\\.obolibrary\\.org/obo/NOMEN_0000060|http://purl\\.obolibrary\\.org/obo/NOMEN_0000172|http://purl\\.obolibrary\\.org/obo/NOMEN_0000173|http://purl\\.obolibrary\\.org/obo/NOMEN_0000179|http://purl\\.obolibrary\\.org/obo/NOMEN_0000180|http://purl\\.obolibrary\\.org/obo/NOMEN_0000189|http://purl\\.obolibrary\\.org/obo/NOMEN_0000190|http://purl\\.obolibrary\\.org/obo/NOMEN_0000193|http://purl\\.obolibrary\\.org/obo/NOMEN_0000198|http://purl\\.obolibrary\\.org/obo/NOMEN_0000199|http://purl\\.obolibrary\\.org/obo/NOMEN_0000212)"
+        },
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {
+        "pattern": "^(?:SUPERSUPERSPECIES|SUPERSPECIES|SPECIES_AGGREGATE|SUBSUPERSPECIES|SPECIES|SUBSPECIES)$"
+      },
+      "error_message": "",
+      "warning_message": "A nomenclatural status on this name applies only to species-group names.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1758_1899",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1758–1899",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000209)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1758, "max": 1899},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published in 1758–1899. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1758_1960",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1758–1960",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000178)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1758, "max": 1960},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published in 1758–1960. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1758_2011",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1758–2011",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000038)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1758, "max": 2011},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published in 1758–2011. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1900_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1900 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000208)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1900},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 1900 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1931_1960",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1931–1960",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000213|http://purl\\.obolibrary\\.org/obo/NOMEN_0000214|http://purl\\.obolibrary\\.org/obo/NOMEN_0001060)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1931, "max": 1960},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published in 1931–1960. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1931_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1931 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000182|http://purl\\.obolibrary\\.org/obo/NOMEN_0000183|http://purl\\.obolibrary\\.org/obo/NOMEN_0000184|http://purl\\.obolibrary\\.org/obo/NOMEN_0000195)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1931},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 1931 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1951_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1951 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000186)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1951},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 1951 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_1961_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 1961 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000176|http://purl\\.obolibrary\\.org/obo/NOMEN_0000177|http://purl\\.obolibrary\\.org/obo/NOMEN_0000198)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1961},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 1961 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_2000_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 2000 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000185|http://purl\\.obolibrary\\.org/obo/NOMEN_0000187|http://purl\\.obolibrary\\.org/obo/NOMEN_0000188|http://purl\\.obolibrary\\.org/obo/NOMEN_0000189|http://purl\\.obolibrary\\.org/obo/NOMEN_0000190)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 2000},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 2000 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_2012_on",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status limited to names published 2012 or later",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000039|http://purl\\.obolibrary\\.org/obo/NOMEN_0000040|http://purl\\.obolibrary\\.org/obo/NOMEN_0000041)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 2012},
+      "error_message": "",
+      "warning_message": "A status on this name applies only to names published 2012 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_after_1757",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Status used on a name published after 1757",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000024|http://purl\\.obolibrary\\.org/obo/NOMEN_0000025|http://purl\\.obolibrary\\.org/obo/NOMEN_0000026|http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000055|http://purl\\.obolibrary\\.org/obo/NOMEN_0000058|http://purl\\.obolibrary\\.org/obo/NOMEN_0000059|http://purl\\.obolibrary\\.org/obo/NOMEN_0000060|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000168|http://purl\\.obolibrary\\.org/obo/NOMEN_0000169|http://purl\\.obolibrary\\.org/obo/NOMEN_0000170|http://purl\\.obolibrary\\.org/obo/NOMEN_0000171|http://purl\\.obolibrary\\.org/obo/NOMEN_0000172|http://purl\\.obolibrary\\.org/obo/NOMEN_0000173|http://purl\\.obolibrary\\.org/obo/NOMEN_0000174|http://purl\\.obolibrary\\.org/obo/NOMEN_0000175|http://purl\\.obolibrary\\.org/obo/NOMEN_0000179|http://purl\\.obolibrary\\.org/obo/NOMEN_0000180|http://purl\\.obolibrary\\.org/obo/NOMEN_0000181|http://purl\\.obolibrary\\.org/obo/NOMEN_0000191|http://purl\\.obolibrary\\.org/obo/NOMEN_0000192|http://purl\\.obolibrary\\.org/obo/NOMEN_0000193|http://purl\\.obolibrary\\.org/obo/NOMEN_0000194|http://purl\\.obolibrary\\.org/obo/NOMEN_0000196|http://purl\\.obolibrary\\.org/obo/NOMEN_0000197|http://purl\\.obolibrary\\.org/obo/NOMEN_0000199|http://purl\\.obolibrary\\.org/obo/NOMEN_0000200|http://purl\\.obolibrary\\.org/obo/NOMEN_0000201|http://purl\\.obolibrary\\.org/obo/NOMEN_0000202|http://purl\\.obolibrary\\.org/obo/NOMEN_0000203|http://purl\\.obolibrary\\.org/obo/NOMEN_0000204|http://purl\\.obolibrary\\.org/obo/NOMEN_0000205|http://purl\\.obolibrary\\.org/obo/NOMEN_0000206|http://purl\\.obolibrary\\.org/obo/NOMEN_0000207|http://purl\\.obolibrary\\.org/obo/NOMEN_0000210|http://purl\\.obolibrary\\.org/obo/NOMEN_0000211|http://purl\\.obolibrary\\.org/obo/NOMEN_0000212|http://purl\\.obolibrary\\.org/obo/NOMEN_0000219|http://purl\\.obolibrary\\.org/obo/NOMEN_0000221|http://purl\\.obolibrary\\.org/obo/NOMEN_0000222|http://purl\\.obolibrary\\.org/obo/NOMEN_0000223|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0000228|http://purl\\.obolibrary\\.org/obo/NOMEN_0000229|http://purl\\.obolibrary\\.org/obo/NOMEN_0001058|http://purl\\.obolibrary\\.org/obo/NOMEN_0001059|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"min": 1758},
+      "error_message": "",
+      "warning_message": "ICZN statuses apply to names published in 1758 or later. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_year_pre_linnean",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Pre-Linnean status on a name published before 1758",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_year (app/models/taxon_name_classification.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000218)"
+        },
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"}
+      ],
+      "parameters": {"max": 1757},
+      "error_message": "",
+      "warning_message": "The pre-Linnean status applies only to names published before 1758. Check the year and the statuses.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_subsequent_designation_after_1930",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Genus with a subsequent designation was described before 1931",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentDesignation#sv_described_after_1930 (app/models/taxon_name_relationship/typification/genus/subsequent/subsequent_designation.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:subsequent-designation-of"}
+      ],
+      "parameters": {"max": 1930},
+      "error_message": "",
+      "warning_message": "This genus was described after 1930, so it is a nomen nudum unless its type was designated in the original publication.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_subsequent_monotypy_after_1930",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Genus with a subsequent monotypy was described before 1931",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentMonotypy#sv_described_after_1930 (app/models/taxon_name_relationship/typification/genus/subsequent/subsequent_monotypy.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]{4}$"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:subsequent-monotypy-of"}
+      ],
+      "parameters": {"max": 1930},
+      "error_message": "",
+      "warning_message": "This genus was described after 1930, so it is a nomen nudum unless its type was designated in the original publication.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_iczn_invalidating_not_specific",
+      "table_name": "name_relation",
+      "field_name": "tw__name_relationship_type",
+      "rule_name": "Invalidating relationship is not specific",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating#sv_not_specific_relationship (app/models/taxon_name_relationship/iczn/invalidating.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {
+          "field": "tw__name_relationship_type",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000272"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Record why the name is unavailable or invalid, rather than the general relationship.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_not_specific",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "More specific status preferred",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_not_specific_classes (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000026|http://purl\\.obolibrary\\.org/obo/NOMEN_0000168|http://purl\\.obolibrary\\.org/obo/NOMEN_0000169|http://purl\\.obolibrary\\.org/obo/NOMEN_0000174|http://purl\\.obolibrary\\.org/obo/NOMEN_0000219|http://purl\\.obolibrary\\.org/obo/NOMEN_0000223)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A status on this name has more specific sub-statuses. Choose the one that states the reason.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_iczn_status_prefer_relationship",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Relationship preferred over status",
+      "description": "Ported from TaxonWorks TaxonNameClassification::Iczn::Available::Invalid#sv_not_specific_classes (app/models/taxon_name_classification/iczn/available/invalid.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A status on this name can be used, but a name relationship records the reason more precisely.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_iczn_suppression_not_specific",
+      "table_name": "name_relation",
+      "field_name": "tw__name_relationship_type",
+      "rule_name": "Suppression is not specific",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Synonym::Suppression#sv_not_specific_relationship (app/models/taxon_name_relationship/iczn/invalidating/synonym/suppression.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {
+          "field": "tw__name_relationship_type",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000280"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Record whether the suppression is total, partial or conditional.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_iczn_synonym_not_specific",
+      "table_name": "name_relation",
+      "field_name": "tw__name_relationship_type",
+      "rule_name": "Synonym relationship is not specific",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Iczn::Invalidating::Synonym#sv_not_specific_relationship (app/models/taxon_name_relationship/iczn/invalidating/synonym.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {
+          "field": "tw__name_relationship_type",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000276"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Record whether this is an objective or a subjective synonym.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_iczn_missing_author_links",
+      "table_name": "name",
+      "field_name": "tw__author_ids",
+      "rule_name": "Name authors are linked",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_roles (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SUPERFAMILY", "EPIFAMILY", "FAMILY", "SUPERSUBFAMILY", "SUBFAMILY", "INFRAFAMILY", "SUPERTRIBE", "TRIBE", "SUBTRIBE", "INFRATRIBE", "SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SPECIES_AGGREGATE", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The authors of this name are not linked to author records.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_ext_iczn_missing_original_genus",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Missing original genus",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_original_genus (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SPECIES_AGGREGATE", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
+        }
+      ],
+      "parameters": {"field": "col__id", "relation": "name:element-originalgenus"},
+      "error_message": "",
+      "warning_message": "No original genus is recorded for this name.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_ext_iczn_missing_original_publication",
+      "table_name": "name",
+      "field_name": "tw__reference_original",
+      "rule_name": "Missing original publication",
+      "description": "Ported from TaxonWorks TaxonName#sv_missing_original_publication (app/models/taxon_name.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "ZOOLOGICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SUPERFAMILY", "EPIFAMILY", "FAMILY", "SUPERSUBFAMILY", "SUBFAMILY", "INFRAFAMILY", "SUPERTRIBE", "TRIBE", "SUBTRIBE", "INFRATRIBE", "SUPERGENUS", "GENUS", "SUPERSUPERSUBGENUS", "SUPERSUBGENUS", "SUBGENUS", "INFRAGENUS", "SUPERSUPERSPECIES", "SUPERSPECIES", "SPECIES_AGGREGATE", "SUBSUPERSPECIES", "SPECIES", "SUBSPECIES"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "No citation of this name is recorded as the original publication.",
+      "is_active": true,
+      "priority": 50
+    }
+  ]
+}

@@ -38,6 +38,18 @@ func main() {
 
 	ctx := hive.WithActor(context.Background(), "0000-0002-1825-0097")
 
+	// Add the TaxonWorks round-trip columns and reopen, so the demo
+	// archive also exercises the tw_ext rules. Bundles load at Open.
+	if err := hive.ApplyTaxonWorksExtension(ctx, a); err != nil {
+		die("taxonworks extension: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		die("close: %v", err)
+	}
+	if a, err = hive.Open(path); err != nil {
+		die("reopen: %v", err)
+	}
+
 	err = a.WithTx(ctx, func(tx *hive.Tx) error {
 		if err := tx.UpdateMetadata(hive.Metadata{
 			Title:       "Hive demo — Felidae",
@@ -61,8 +73,18 @@ func main() {
 	// is logged but doesn't abort the whole seed (some fixtures
 	// depend on empty state that a prior fixture may have taken —
 	// this is best-effort inspection data, not a test).
+	fixtures := hive.RuleFixtures
+	// The TaxonWorks-derived bundles keep their fixtures as data next
+	// to the package tests; include them when run from the repo root.
+	if data, err := os.ReadFile("pkg/testdata/tw_rulefixtures.json"); err == nil {
+		tw, err := hive.RuleFixturesFromJSON(data)
+		if err != nil {
+			die("tw fixtures: %v", err)
+		}
+		fixtures = append(append([]hive.RuleFixture{}, fixtures...), tw...)
+	}
 	appliedBad, appliedGood, skipped := 0, 0, 0
-	for _, f := range hive.RuleFixtures {
+	for _, f := range fixtures {
 		for _, c := range f.Bad {
 			if err := c.Setup(ctx, a); err != nil {
 				fmt.Fprintf(os.Stderr, "  skip %s bad %q: %v\n", f.RuleID, c.Note, err)

@@ -530,8 +530,42 @@ func (a *Archive) ReindexValidation(ctx context.Context, progress func(ReindexPr
 				return a.syncIssuesLocal(ctx, "species_interaction", id)
 			},
 		},
+		{
+			// name_relation and type_material rows are also addressed
+			// by rowid: name_relation has no col__id, and
+			// type_material.col__id is optional and often empty.
+			// Per-mutation sync for these tables is a follow-up; the
+			// full reindex keeps their issues current.
+			name:  "name_relation",
+			listQ: `SELECT rowid FROM name_relation ORDER BY rowid`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "name_relation", id)
+			},
+		},
+		{
+			name:  "type_material",
+			listQ: `SELECT rowid FROM type_material ORDER BY rowid`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "type_material", id)
+			},
+		},
+		{
+			// tw__otu exists only on an archive written with the
+			// TaxonWorks round-trip columns; skipped otherwise, like
+			// the tw_ext rules that read it.
+			name:  "tw__otu",
+			listQ: `SELECT id FROM tw__otu ORDER BY id`,
+			syncFn: func(ctx context.Context, id string) error {
+				return a.syncIssuesLocal(ctx, "tw__otu", id)
+			},
+		},
 	}
 	for _, t := range tables {
+		if ok, err := a.tableExists(ctx, t.name); err != nil {
+			return err
+		} else if !ok {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -697,4 +731,16 @@ func nullableString(v interface{}) interface{} {
 		return nil
 	}
 	return s
+}
+
+// tableExists reports whether the archive has a table. The TaxonWorks
+// round-trip tables are optional (see ApplyTaxonWorksExtension).
+func (a *Archive) tableExists(ctx context.Context, table string) (bool, error) {
+	var n int
+	err := a.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("core: table exists %s: %w", table, err)
+	}
+	return n > 0, nil
 }

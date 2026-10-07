@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/sfborg/gsvalidator/adapter/repository"
 	"github.com/sfborg/gsvalidator/domain"
@@ -26,15 +30,97 @@ var clbRulesJSON []byte
 //go:embed tw_rules.json
 var twRulesJSON []byte
 
+//go:embed tw_iczn_rules.json
+var twICZNRulesJSON []byte
+
+//go:embed tw_icn_rules.json
+var twICNRulesJSON []byte
+
+//go:embed tw_icnp_rules.json
+var twICNPRulesJSON []byte
+
+//go:embed tw_icvcn_rules.json
+var twICVCNRulesJSON []byte
+
+//go:embed tw_ext_rules.json
+var twExtRulesJSON []byte
+
+//go:embed tw_ext_iczn_rules.json
+var twExtICZNRulesJSON []byte
+
+//go:embed tw_ext_icn_rules.json
+var twExtICNRulesJSON []byte
+
+//go:embed tw_ext_icnp_rules.json
+var twExtICNPRulesJSON []byte
+
+//go:embed tw_ext_icvcn_rules.json
+var twExtICVCNRulesJSON []byte
+
 // rulesetSource identifies where a bundle of rules came from —
 // visible in rule_id prefixes (hive_ / clb_ / tw_) and used by
-// per-ruleset enable/disable when that surface lands. Currently
-// all three sources load unconditionally; a curator-facing toggle
-// is a follow-up.
+// per-ruleset enable/disable via hive__config_rulesets.
 type rulesetSource struct {
 	name    string
 	bundle  []byte
 	enabled bool
+}
+
+// rulesetSources lists every embedded bundle in load order. The
+// TaxonWorks-derived rules are split by nomenclatural code so a
+// curator can disable the rules for a code the archive does not
+// curate; "tw" holds the TaxonWorks rules that apply to every code.
+var rulesetSources = []rulesetSource{
+	{name: "hive", bundle: hiveRulesJSON},
+	{name: "clb", bundle: clbRulesJSON},
+	{name: "tw", bundle: twRulesJSON},
+	{name: "tw_iczn", bundle: twICZNRulesJSON},
+	{name: "tw_icn", bundle: twICNRulesJSON},
+	{name: "tw_icnp", bundle: twICNPRulesJSON},
+	{name: "tw_icvcn", bundle: twICVCNRulesJSON},
+	// The tw_ext bundles need the TaxonWorks round-trip columns; they
+	// load only on an archive that has them (see RulesetSkip).
+	{name: "tw_ext", bundle: twExtRulesJSON},
+	{name: "tw_ext_iczn", bundle: twExtICZNRulesJSON},
+	{name: "tw_ext_icn", bundle: twExtICNRulesJSON},
+	{name: "tw_ext_icnp", bundle: twExtICNPRulesJSON},
+	{name: "tw_ext_icvcn", bundle: twExtICVCNRulesJSON},
+}
+
+// RulesetSkip records a bundle that did not load because the archive
+// lacks a table, column or relation the bundle's Requires block names.
+// Its rules did not run.
+type RulesetSkip struct {
+	Ruleset          string
+	Rules            int
+	MissingTables    []string
+	MissingColumns   []string
+	MissingRelations []string
+	TypeMismatches   []string
+}
+
+// Summary renders a skip as one line for a CLI or a log.
+func (s RulesetSkip) Summary() string {
+	var missing []string
+	missing = append(missing, s.MissingTables...)
+	missing = append(missing, s.MissingColumns...)
+	missing = append(missing, s.MissingRelations...)
+	missing = append(missing, s.TypeMismatches...)
+	return fmt.Sprintf("ruleset %s: %d rules did not run; archive lacks %s",
+		s.Ruleset, s.Rules, strings.Join(missing, ", "))
+}
+
+// bundleSupersedes reads a bundle's optional "supersedes" list: rule
+// ids from other bundles that this bundle replaces. gsvalidator's
+// loader ignores the field, so it is read from the raw JSON.
+func bundleSupersedes(bundle []byte) ([]string, error) {
+	var b struct {
+		Supersedes []string `json:"supersedes"`
+	}
+	if err := json.Unmarshal(bundle, &b); err != nil {
+		return nil, fmt.Errorf("read supersedes: %w", err)
+	}
+	return b.Supersedes, nil
 }
 
 // newHiveValidator builds a gsvalidator use case pre-wired with
@@ -50,12 +136,16 @@ type rulesetSource struct {
 // Returns the primary (hive) bundle loader so callers can inspect
 // rule metadata (Trigger, RecheckDays) for time-based scheduling.
 // Rules from all enabled bundles are merged into a single
-// mergedRuleLoader wired into the use case.
-func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUseCase, *repository.BundleLoader, error) {
-	sources := []rulesetSource{
-		{name: "hive", bundle: hiveRulesJSON, enabled: true},
-		{name: "clb", bundle: clbRulesJSON, enabled: true},
-		{name: "tw", bundle: twRulesJSON, enabled: true},
+// mergedRuleLoader wired into the use case. Bundles the archive
+// cannot satisfy are reported as RulesetSkips rather than dropped
+// silently.
+func newHiveValidator(db *sql.DB, archivePath string) (
+	*usecase.ValidateRecordUseCase, *repository.BundleLoader, []RulesetSkip, error,
+) {
+	sources := make([]rulesetSource, len(rulesetSources))
+	for i, src := range rulesetSources {
+		sources[i] = src
+		sources[i].enabled = true
 	}
 	// Apply per-ruleset toggles from hive__config_rulesets — a
 	// curator's explicit disable turns off a whole bundle before
@@ -63,7 +153,7 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	ctx := context.Background()
 	rulesetOverrides, err := readRulesetOverrides(ctx, db)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read ruleset overrides: %w", err)
+		return nil, nil, nil, fmt.Errorf("read ruleset overrides: %w", err)
 	}
 	for i, src := range sources {
 		if v, ok := rulesetOverrides[src.name]; ok {
@@ -74,11 +164,24 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 	primaryLoader := repository.NewBytesBundleLoader(hiveRulesJSON)
 	pkg, err := primaryLoader.LoadPackage(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
+		return nil, nil, nil, fmt.Errorf("hive_sfga bundle: %w", err)
+	}
+	available := make(map[string]bool, len(pkg.Relations))
+	for name := range pkg.Relations {
+		available[name] = true
 	}
 	// Merge rules across enabled bundles. Relations come from the
 	// primary (hive) bundle only.
+	//
+	// A bundle whose Requires block names tables or columns the
+	// archive does not have is skipped, and the skip is recorded so
+	// callers can say so out loud: the TaxonWorks round-trip bundles
+	// need tw__ columns that are still a proposal against the sfga
+	// schema, and a rename upstream has to surface as "these rules
+	// did not run", not as silence.
 	var mergedRules []*domain.Rule
+	var skipped []RulesetSkip
+	var superseded []string
 	for _, src := range sources {
 		if !src.enabled {
 			continue
@@ -86,16 +189,56 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 		bl := repository.NewBytesBundleLoader(src.bundle)
 		bundle, err := bl.LoadPackage(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
+			return nil, nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
 		}
+		if err := usecase.CheckRequires(ctx, db, bundle.Requires, available); err != nil {
+			var re *usecase.RequiresError
+			if !errors.As(err, &re) {
+				return nil, nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
+			}
+			skipped = append(skipped, RulesetSkip{
+				Ruleset:          src.name,
+				Rules:            len(bundle.Rules),
+				MissingTables:    re.MissingTables,
+				MissingColumns:   re.MissingColumns,
+				MissingRelations: re.MissingRelations,
+				TypeMismatches:   re.TypeMismatches,
+			})
+			slog.Warn("validation ruleset skipped: the archive lacks what it needs",
+				"ruleset", src.name, "rules_not_run", len(bundle.Rules),
+				"missing", re.Error())
+			continue
+		}
+		// A bundle may supersede rules of another: the TaxonWorks
+		// round-trip rules restate some core rules against the
+		// columns TaxonWorks actually round-trips, and only one of
+		// the pair should report.
+		sup, err := bundleSupersedes(src.bundle)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%s bundle: %w", src.name, err)
+		}
+		superseded = append(superseded, sup...)
 		mergedRules = append(mergedRules, bundle.Rules...)
+	}
+	if len(superseded) > 0 {
+		drop := make(map[string]bool, len(superseded))
+		for _, id := range superseded {
+			drop[id] = true
+		}
+		kept := mergedRules[:0]
+		for _, r := range mergedRules {
+			if !drop[r.ID] {
+				kept = append(kept, r)
+			}
+		}
+		mergedRules = kept
 	}
 	// Apply per-rule overrides from hive__config_rules — disable
 	// specific rules and rewrite severities. Runs after the merge
 	// so a curator can override rules from any bundle.
 	mergedRules, err = applyRuleOverrides(ctx, db, mergedRules)
 	if err != nil {
-		return nil, nil, fmt.Errorf("apply rule overrides: %w", err)
+		return nil, nil, nil, fmt.Errorf("apply rule overrides: %w", err)
 	}
 	mergedLoader := &mergedRuleLoader{rules: mergedRules}
 	mapper := sfgarules.NewSFGAMapper()
@@ -152,7 +295,7 @@ func newHiveValidator(db *sql.DB, archivePath string) (*usecase.ValidateRecordUs
 
 	uc := usecase.NewValidateRecordUseCase(db, mergedLoader, mapper, registry)
 	uc.SetRelationResolver(resolver)
-	return uc, primaryLoader, nil
+	return uc, primaryLoader, skipped, nil
 }
 
 // mergedRuleLoader satisfies usecase.RuleLoader by returning a

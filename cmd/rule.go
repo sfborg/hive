@@ -127,7 +127,7 @@ var ruleResetCmd = &cobra.Command{
 
 var rulesetCmd = &cobra.Command{
 	Use:   "ruleset",
-	Short: "Manage per-ruleset (hive / clb / tw) toggles",
+	Short: "Manage per-ruleset toggles (hive, clb, tw, tw_iczn, tw_icn, tw_icnp, tw_icvcn)",
 }
 
 var rulesetListCmd = &cobra.Command{
@@ -146,6 +146,9 @@ var rulesetListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		for _, skip := range a.SkippedRulesets() {
+			fmt.Fprintln(os.Stderr, "notice: "+skip.Summary())
+		}
 		if len(cfgs) == 0 {
 			fmt.Fprintln(os.Stderr, "no ruleset overrides set — all rulesets use bundle defaults (enabled)")
 			return nil
@@ -160,7 +163,7 @@ var rulesetListCmd = &cobra.Command{
 }
 
 var rulesetEnableCmd = &cobra.Command{
-	Use:           "enable <archive.db> <hive|clb|tw>",
+	Use:           "enable <archive.db> <ruleset>",
 	Short:         "Enable a ruleset in this archive",
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -176,7 +179,7 @@ var rulesetEnableCmd = &cobra.Command{
 }
 
 var rulesetDisableCmd = &cobra.Command{
-	Use:           "disable <archive.db> <hive|clb|tw>",
+	Use:           "disable <archive.db> <ruleset>",
 	Short:         "Disable a ruleset in this archive (all its rules stop firing)",
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -192,7 +195,7 @@ var rulesetDisableCmd = &cobra.Command{
 }
 
 var rulesetResetCmd = &cobra.Command{
-	Use:           "reset <archive.db> <hive|clb|tw>",
+	Use:           "reset <archive.db> <ruleset>",
 	Short:         "Clear a ruleset's override (revert to default: enabled)",
 	SilenceUsage:  true,
 	SilenceErrors: true,

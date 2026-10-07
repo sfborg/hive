@@ -34,8 +34,12 @@ type FixtureCase struct {
 type RuleFixture struct {
 	RuleID      string
 	Description string
-	Bad         []FixtureCase
-	Good        []FixtureCase
+	// Schema names an optional schema the archive needs before the
+	// rule's bundle loads; "tw_ext" means the TaxonWorks round-trip
+	// columns (ApplyTaxonWorksExtension).
+	Schema string
+	Bad    []FixtureCase
+	Good   []FixtureCase
 }
 
 // RuleFixtures is the canonical registry — every rule hive ships
@@ -204,15 +208,15 @@ func nameShapeFixtures() []RuleFixture {
 			Description: "Genus not in title case",
 			Bad: []FixtureCase{
 				{Note: "lowercase genus", Setup: insertName(map[string]string{
-					"col__scientific_name": "panthera leo",
-					"col__genus":           "panthera",
+					"col__scientific_name":  "panthera leo",
+					"col__genus":            "panthera",
 					"col__specific_epithet": "leo",
 				})},
 			},
 			Good: []FixtureCase{
 				{Note: "title-case genus", Setup: insertName(map[string]string{
-					"col__scientific_name": "Panthera leo",
-					"col__genus":           "Panthera",
+					"col__scientific_name":  "Panthera leo",
+					"col__genus":            "Panthera",
 					"col__specific_epithet": "leo",
 				})},
 			},
@@ -240,18 +244,18 @@ func nameShapeFixtures() []RuleFixture {
 			Description: "Infraspecific epithet not lowercase",
 			Bad: []FixtureCase{
 				{Note: "capitalized infraspecific", Setup: insertName(map[string]string{
-					"col__scientific_name":        "Panthera leo Persica",
-					"col__genus":                  "Panthera",
-					"col__specific_epithet":       "leo",
-					"col__infraspecific_epithet":  "Persica",
+					"col__scientific_name":       "Panthera leo Persica",
+					"col__genus":                 "Panthera",
+					"col__specific_epithet":      "leo",
+					"col__infraspecific_epithet": "Persica",
 				})},
 			},
 			Good: []FixtureCase{
 				{Note: "lowercase infraspecific", Setup: insertName(map[string]string{
-					"col__scientific_name":        "Panthera leo persica",
-					"col__genus":                  "Panthera",
-					"col__specific_epithet":       "leo",
-					"col__infraspecific_epithet":  "persica",
+					"col__scientific_name":       "Panthera leo persica",
+					"col__genus":                 "Panthera",
+					"col__specific_epithet":      "leo",
+					"col__infraspecific_epithet": "persica",
 				})},
 			},
 		},
@@ -366,18 +370,18 @@ func nameShapeFixtures() []RuleFixture {
 			Description: "Publication year outside plausible range",
 			Bad: []FixtureCase{
 				{Note: "year 1000 (pre-Linnaean)", Setup: insertName(map[string]string{
-					"col__scientific_name":     "Panthera antiqua",
-					"col__genus":               "Panthera",
-					"col__specific_epithet":    "antiqua",
-					"col__published_in_year":   "1000",
+					"col__scientific_name":   "Panthera antiqua",
+					"col__genus":             "Panthera",
+					"col__specific_epithet":  "antiqua",
+					"col__published_in_year": "1000",
 				})},
 			},
 			Good: []FixtureCase{
 				{Note: "year 1758", Setup: insertName(map[string]string{
-					"col__scientific_name":     "Panthera leo",
-					"col__genus":               "Panthera",
-					"col__specific_epithet":    "leo",
-					"col__published_in_year":   "1758",
+					"col__scientific_name":   "Panthera leo",
+					"col__genus":             "Panthera",
+					"col__specific_epithet":  "leo",
+					"col__published_in_year": "1758",
 				})},
 			},
 		},
@@ -711,9 +715,9 @@ func miscFixtures() []RuleFixture {
 				{Note: "INFRAORDER rank with specific_epithet", Setup: func(ctx context.Context, a *Archive) error {
 					return a.WithTx(ctx, func(tx *Tx) error {
 						_, err := tx.CreateName(coldp.Name{
-							ScientificName:   "Baru molens Author, 2020",
-							Rank:             ParseRank("infraorder"),
-							SpecificEpithet:  "molens",
+							ScientificName:  "Baru molens Author, 2020",
+							Rank:            ParseRank("infraorder"),
+							SpecificEpithet: "molens",
 						})
 						return err
 					})
@@ -723,10 +727,10 @@ func miscFixtures() []RuleFixture {
 				{Note: "SPECIES rank with specific_epithet", Setup: func(ctx context.Context, a *Archive) error {
 					return a.WithTx(ctx, func(tx *Tx) error {
 						_, err := tx.CreateName(coldp.Name{
-							ScientificName:   "Panthera leo",
-							Rank:             ParseRank("species"),
-							Genus:            "Panthera",
-							SpecificEpithet:  "leo",
+							ScientificName:  "Panthera leo",
+							Rank:            ParseRank("species"),
+							Genus:           "Panthera",
+							SpecificEpithet: "leo",
 						})
 						return err
 					})

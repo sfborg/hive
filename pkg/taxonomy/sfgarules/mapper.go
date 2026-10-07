@@ -62,13 +62,18 @@ func (m *SFGAMapper) GetFieldName(tableName, logicalName string) string {
 // link / annotation tables (vernacular, distribution,
 // species_interaction, name_relation) have no col__id column — sfga
 // identifies rows there by a composite of their FK / value tuple.
-// Hive uses SQLite's implicit rowid as the opaque handle for those
-// tables so gsvalidator's per-record lookup has an addressable
-// column to bind against.
+// type_material has an optional col__id that is often empty, so it
+// is addressed the same way. Hive uses SQLite's implicit rowid as the
+// opaque handle for those tables so gsvalidator's per-record lookup
+// has an addressable column to bind against.
 func (m *SFGAMapper) GetPrimaryKeyField(tableName string) string {
 	switch tableName {
-	case "vernacular", "distribution", "species_interaction", "name_relation":
+	case "vernacular", "distribution", "species_interaction", "name_relation", "type_material",
+		"tw__annotation":
 		return "rowid"
+	case "tw__otu", "tw__term":
+		// The TaxonWorks round-trip tables carry a plain id, not col__id.
+		return "id"
 	}
 	return m.columnPrefix + "id"
 }

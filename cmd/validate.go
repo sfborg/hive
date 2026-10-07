@@ -25,6 +25,13 @@ var validateCmd = &cobra.Command{
 		}
 		defer a.Close()
 
+		// Rulesets the archive cannot satisfy did not run at all.
+		// Always say so, even with --quiet: silence here would read
+		// as "everything was checked".
+		for _, skip := range a.SkippedRulesets() {
+			fmt.Fprintln(os.Stderr, "notice: "+skip.Summary())
+		}
+
 		start := time.Now()
 		var lastReport time.Time
 		err = a.ReindexValidation(context.Background(), func(p hive.ReindexProgress) {

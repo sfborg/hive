@@ -1,0 +1,256 @@
+{
+  "name": "tw_ext_icn_sfga",
+  "version": "0.2.0",
+  "domain": "biodiversity",
+  "author": "sfborg/hive",
+  "description": "TaxonWorks-derived validation rules for names governed by the ICN (col__code_id BOTANICAL). These rules need the TaxonWorks round-trip columns, which are a proposal against the sfga schema and not yet adopted: the bundle's requires block names them, and hive skips the bundle and reports the missing columns when an archive does not have them. Each rule's description names the TaxonWorks class and method it is ported from. Statuses are matched as NOMEN ontology URIs in name.col__status_id. Relations are declared in hive_rules.json. Schema compatibility: SFGA v0.3.x.",
+  "created_at": "2026-09-22T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": [],
+    "columns": {
+      "name.tw__author_ids": "text",
+      "name.tw__nomenclatural_classification": "text",
+      "name.tw__reference_original": "text",
+      "name_relation.tw__name_relationship_type": "text",
+      "type_material.tw__type_type": "text"
+    },
+    "relations": ["name:element-originalgenus", "type_material:name"]
+  },
+  "relations": {},
+  "supersedes": ["tw_icn_missing_author_links", "tw_icn_missing_original_author_links", "tw_icn_missing_original_publication", "tw_icn_status_code_mismatch", "tw_icn_status_not_specific", "tw_icn_type_material_status"],
+  "rules": [
+    {
+      "rule_id": "tw_ext_icn_status_code_mismatch",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Statuses belong to the name's code",
+      "description": "Ported from TaxonWorks TaxonNameClassification#nomenclature_code_matches (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000024|http://purl\\.obolibrary\\.org/obo/NOMEN_0000025|http://purl\\.obolibrary\\.org/obo/NOMEN_0000026|http://purl\\.obolibrary\\.org/obo/NOMEN_0000038|http://purl\\.obolibrary\\.org/obo/NOMEN_0000039|http://purl\\.obolibrary\\.org/obo/NOMEN_0000040|http://purl\\.obolibrary\\.org/obo/NOMEN_0000041|http://purl\\.obolibrary\\.org/obo/NOMEN_0000043|http://purl\\.obolibrary\\.org/obo/NOMEN_0000055|http://purl\\.obolibrary\\.org/obo/NOMEN_0000058|http://purl\\.obolibrary\\.org/obo/NOMEN_0000059|http://purl\\.obolibrary\\.org/obo/NOMEN_0000060|http://purl\\.obolibrary\\.org/obo/NOMEN_0000081|http://purl\\.obolibrary\\.org/obo/NOMEN_0000082|http://purl\\.obolibrary\\.org/obo/NOMEN_0000083|http://purl\\.obolibrary\\.org/obo/NOMEN_0000084|http://purl\\.obolibrary\\.org/obo/NOMEN_0000085|http://purl\\.obolibrary\\.org/obo/NOMEN_0000086|http://purl\\.obolibrary\\.org/obo/NOMEN_0000087|http://purl\\.obolibrary\\.org/obo/NOMEN_0000088|http://purl\\.obolibrary\\.org/obo/NOMEN_0000089|http://purl\\.obolibrary\\.org/obo/NOMEN_0000090|http://purl\\.obolibrary\\.org/obo/NOMEN_0000091|http://purl\\.obolibrary\\.org/obo/NOMEN_0000092|http://purl\\.obolibrary\\.org/obo/NOMEN_0000103|http://purl\\.obolibrary\\.org/obo/NOMEN_0000104|http://purl\\.obolibrary\\.org/obo/NOMEN_0000105|http://purl\\.obolibrary\\.org/obo/NOMEN_0000119|http://purl\\.obolibrary\\.org/obo/NOMEN_0000120|http://purl\\.obolibrary\\.org/obo/NOMEN_0000125|http://purl\\.obolibrary\\.org/obo/NOMEN_0000126|http://purl\\.obolibrary\\.org/obo/NOMEN_0000127|http://purl\\.obolibrary\\.org/obo/NOMEN_0000128|http://purl\\.obolibrary\\.org/obo/NOMEN_0000129|http://purl\\.obolibrary\\.org/obo/NOMEN_0000168|http://purl\\.obolibrary\\.org/obo/NOMEN_0000169|http://purl\\.obolibrary\\.org/obo/NOMEN_0000170|http://purl\\.obolibrary\\.org/obo/NOMEN_0000171|http://purl\\.obolibrary\\.org/obo/NOMEN_0000172|http://purl\\.obolibrary\\.org/obo/NOMEN_0000173|http://purl\\.obolibrary\\.org/obo/NOMEN_0000174|http://purl\\.obolibrary\\.org/obo/NOMEN_0000175|http://purl\\.obolibrary\\.org/obo/NOMEN_0000176|http://purl\\.obolibrary\\.org/obo/NOMEN_0000177|http://purl\\.obolibrary\\.org/obo/NOMEN_0000178|http://purl\\.obolibrary\\.org/obo/NOMEN_0000179|http://purl\\.obolibrary\\.org/obo/NOMEN_0000180|http://purl\\.obolibrary\\.org/obo/NOMEN_0000181|http://purl\\.obolibrary\\.org/obo/NOMEN_0000182|http://purl\\.obolibrary\\.org/obo/NOMEN_0000183|http://purl\\.obolibrary\\.org/obo/NOMEN_0000184|http://purl\\.obolibrary\\.org/obo/NOMEN_0000185|http://purl\\.obolibrary\\.org/obo/NOMEN_0000186|http://purl\\.obolibrary\\.org/obo/NOMEN_0000187|http://purl\\.obolibrary\\.org/obo/NOMEN_0000188|http://purl\\.obolibrary\\.org/obo/NOMEN_0000189|http://purl\\.obolibrary\\.org/obo/NOMEN_0000190|http://purl\\.obolibrary\\.org/obo/NOMEN_0000191|http://purl\\.obolibrary\\.org/obo/NOMEN_0000192|http://purl\\.obolibrary\\.org/obo/NOMEN_0000193|http://purl\\.obolibrary\\.org/obo/NOMEN_0000194|http://purl\\.obolibrary\\.org/obo/NOMEN_0000195|http://purl\\.obolibrary\\.org/obo/NOMEN_0000196|http://purl\\.obolibrary\\.org/obo/NOMEN_0000197|http://purl\\.obolibrary\\.org/obo/NOMEN_0000198|http://purl\\.obolibrary\\.org/obo/NOMEN_0000199|http://purl\\.obolibrary\\.org/obo/NOMEN_0000200|http://purl\\.obolibrary\\.org/obo/NOMEN_0000201|http://purl\\.obolibrary\\.org/obo/NOMEN_0000202|http://purl\\.obolibrary\\.org/obo/NOMEN_0000203|http://purl\\.obolibrary\\.org/obo/NOMEN_0000204|http://purl\\.obolibrary\\.org/obo/NOMEN_0000205|http://purl\\.obolibrary\\.org/obo/NOMEN_0000206|http://purl\\.obolibrary\\.org/obo/NOMEN_0000207|http://purl\\.obolibrary\\.org/obo/NOMEN_0000208|http://purl\\.obolibrary\\.org/obo/NOMEN_0000209|http://purl\\.obolibrary\\.org/obo/NOMEN_0000210|http://purl\\.obolibrary\\.org/obo/NOMEN_0000211|http://purl\\.obolibrary\\.org/obo/NOMEN_0000212|http://purl\\.obolibrary\\.org/obo/NOMEN_0000213|http://purl\\.obolibrary\\.org/obo/NOMEN_0000214|http://purl\\.obolibrary\\.org/obo/NOMEN_0000218|http://purl\\.obolibrary\\.org/obo/NOMEN_0000219|http://purl\\.obolibrary\\.org/obo/NOMEN_0000221|http://purl\\.obolibrary\\.org/obo/NOMEN_0000222|http://purl\\.obolibrary\\.org/obo/NOMEN_0000223|http://purl\\.obolibrary\\.org/obo/NOMEN_0000224|http://purl\\.obolibrary\\.org/obo/NOMEN_0000225|http://purl\\.obolibrary\\.org/obo/NOMEN_0000226|http://purl\\.obolibrary\\.org/obo/NOMEN_0000228|http://purl\\.obolibrary\\.org/obo/NOMEN_0000229|http://purl\\.obolibrary\\.org/obo/NOMEN_0001058|http://purl\\.obolibrary\\.org/obo/NOMEN_0001059|http://purl\\.obolibrary\\.org/obo/NOMEN_0001060|http://purl\\.obolibrary\\.org/obo/NOMEN_0001061)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "A status on this name belongs to another nomenclatural code; ICN names need ICN statuses.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_ext_icn_type_material_status",
+      "table_name": "type_material",
+      "field_name": "tw__type_type",
+      "rule_name": "Type status is used by the ICN",
+      "description": "Ported from TaxonWorks TypeMaterial#check_type_type (app/models/type_material.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "tw__type_type", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "type_material:name"
+        }
+      ],
+      "parameters": {
+        "pattern": "^(?:holotype|paratype|lectotype|neotype|epitype|isotype|syntype|isosyntype|syntypes|isotypes|isosyntypes)$"
+      },
+      "error_message": "This type status is not one the ICN uses.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_ext_icn_conflicting_status_effectively_not_effectively_published",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Conflicting statuses: effectively and not effectively published",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_validate_disjoint_classes (app/models/taxon_name_classification.rb) with disjoint_taxon_name_classes.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000013|http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000019|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000378|http://purl\\.obolibrary\\.org/obo/NOMEN_0000379|http://purl\\.obolibrary\\.org/obo/NOMEN_0000380|http://purl\\.obolibrary\\.org/obo/NOMEN_0000381|http://purl\\.obolibrary\\.org/obo/NOMEN_0000382|http://purl\\.obolibrary\\.org/obo/NOMEN_0000383|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000377)|(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000377).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000013|http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000019|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000378|http://purl\\.obolibrary\\.org/obo/NOMEN_0000379|http://purl\\.obolibrary\\.org/obo/NOMEN_0000380|http://purl\\.obolibrary\\.org/obo/NOMEN_0000381|http://purl\\.obolibrary\\.org/obo/NOMEN_0000382|http://purl\\.obolibrary\\.org/obo/NOMEN_0000383|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name carries statuses that exclude each other (effectively and not effectively published). Keep the one that applies.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_icn_conflicting_status_legitimate_illegitimate",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Conflicting statuses: legitimate and illegitimate",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_validate_disjoint_classes (app/models/taxon_name_classification.rb) with disjoint_taxon_name_classes.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386)|(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name carries statuses that exclude each other (legitimate and illegitimate). Keep the one that applies.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_icn_conflicting_status_validly_invalidly_published",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "Conflicting statuses: validly and invalidly published",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_validate_disjoint_classes (app/models/taxon_name_classification.rb) with disjoint_taxon_name_classes.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000013|http://purl\\.obolibrary\\.org/obo/NOMEN_0000019|http://purl\\.obolibrary\\.org/obo/NOMEN_0000378|http://purl\\.obolibrary\\.org/obo/NOMEN_0000379|http://purl\\.obolibrary\\.org/obo/NOMEN_0000380|http://purl\\.obolibrary\\.org/obo/NOMEN_0000381|http://purl\\.obolibrary\\.org/obo/NOMEN_0000382)|(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000013|http://purl\\.obolibrary\\.org/obo/NOMEN_0000019|http://purl\\.obolibrary\\.org/obo/NOMEN_0000378|http://purl\\.obolibrary\\.org/obo/NOMEN_0000379|http://purl\\.obolibrary\\.org/obo/NOMEN_0000380|http://purl\\.obolibrary\\.org/obo/NOMEN_0000381|http://purl\\.obolibrary\\.org/obo/NOMEN_0000382).*(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000005|http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000009|http://purl\\.obolibrary\\.org/obo/NOMEN_0000010|http://purl\\.obolibrary\\.org/obo/NOMEN_0000011|http://purl\\.obolibrary\\.org/obo/NOMEN_0000014|http://purl\\.obolibrary\\.org/obo/NOMEN_0000015|http://purl\\.obolibrary\\.org/obo/NOMEN_0000016|http://purl\\.obolibrary\\.org/obo/NOMEN_0000020|http://purl\\.obolibrary\\.org/obo/NOMEN_0000021|http://purl\\.obolibrary\\.org/obo/NOMEN_0000022|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000385|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386|http://purl\\.obolibrary\\.org/obo/NOMEN_0000387|http://purl\\.obolibrary\\.org/obo/NOMEN_0000388|http://purl\\.obolibrary\\.org/obo/NOMEN_0003000)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name carries statuses that exclude each other (validly and invalidly published). Keep the one that applies.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_ext_icn_status_not_specific",
+      "table_name": "name",
+      "field_name": "tw__nomenclatural_classification",
+      "rule_name": "More specific status preferred",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_not_specific_classes (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "tw__nomenclatural_classification",
+          "operator": "matches",
+          "value": "(?:http://purl\\.obolibrary\\.org/obo/NOMEN_0000007|http://purl\\.obolibrary\\.org/obo/NOMEN_0000008|http://purl\\.obolibrary\\.org/obo/NOMEN_0000383|http://purl\\.obolibrary\\.org/obo/NOMEN_0000384|http://purl\\.obolibrary\\.org/obo/NOMEN_0000386)"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A status on this name has more specific sub-statuses. Choose the one that states the reason.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_icn_synonym_not_specific",
+      "table_name": "name_relation",
+      "field_name": "tw__name_relationship_type",
+      "rule_name": "Synonym relationship is not specific",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Icn::Unaccepting::Synonym#sv_not_specific_relationship (app/models/taxon_name_relationship/icn/unaccepting/synonym.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {
+          "field": "tw__name_relationship_type",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000372"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Record whether this is a homotypic or a heterotypic synonym.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_ext_icn_missing_author_links",
+      "table_name": "name",
+      "field_name": "tw__author_ids",
+      "rule_name": "Name authors are linked",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_roles (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The authors of this name are not linked to author records.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_ext_icn_missing_original_genus",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Missing original genus",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_original_genus (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        }
+      ],
+      "parameters": {"field": "col__id", "relation": "name:element-originalgenus"},
+      "error_message": "",
+      "warning_message": "No original genus is recorded for this name.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_ext_icn_missing_original_publication",
+      "table_name": "name",
+      "field_name": "tw__reference_original",
+      "rule_name": "Missing original publication",
+      "description": "Ported from TaxonWorks TaxonName#sv_missing_original_publication (app/models/taxon_name.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "No citation of this name is recorded as the original publication.",
+      "is_active": true,
+      "priority": 50
+    }
+  ]
+}

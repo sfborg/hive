@@ -477,8 +477,8 @@ CREATE TABLE IF NOT EXISTS hive__config_rules (
 	updated_by         TEXT    NOT NULL DEFAULT ''
 );
 
--- hive__config_rulesets toggles whole ruleset bundles (hive / clb /
--- tw) on or off. A missing row means the ruleset uses its default
+-- hive__config_rulesets toggles whole ruleset bundles (hive, clb, tw,
+-- tw_<code>) on or off. A missing row means the ruleset uses its default
 -- (enabled). Coarser than hive__config_rules — sits above it in the
 -- precedence order: disabling a ruleset skips all its rules regardless
 -- of per-rule overrides.
@@ -542,6 +542,16 @@ CREATE INDEX IF NOT EXISTS idx_distribution_taxon_id ON distribution (col__taxon
 -- the name→synonym lookup would otherwise scan the 2.7M-row synonym
 -- table.
 CREATE INDEX IF NOT EXISTS idx_synonym_name_id ON synonym (col__name_id);
+
+-- name_relation and type_material indices serve the validation
+-- relations that walk from a name to its relations (type name,
+-- homonym, replacement, basionym) and to its type material. sfga
+-- indexes neither table on its name columns, so each lookup would
+-- scan the whole table once per validated name.
+CREATE INDEX IF NOT EXISTS idx_name_relation_name_id ON name_relation (col__name_id, col__type_id);
+CREATE INDEX IF NOT EXISTS idx_name_relation_related_name_id
+	ON name_relation (col__related_name_id, col__type_id);
+CREATE INDEX IF NOT EXISTS idx_type_material_name_id ON type_material (col__name_id, col__status_id);
 
 -- hive__name_fts is an FTS5 mirror of name.gn__canonical_simple and
 -- name.col__scientific_name, tokenized with unicode61 (word-based,

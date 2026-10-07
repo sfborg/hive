@@ -1,0 +1,2254 @@
+{
+  "name": "tw_icn_sfga",
+  "version": "0.2.0",
+  "domain": "biodiversity",
+  "author": "sfborg/hive",
+  "description": "TaxonWorks-derived validation rules for names governed by the ICN (col__code_id BOTANICAL). Each rule's description names the TaxonWorks class and method it is ported from. Statuses are matched as NOMEN ontology URIs in name.col__status_id. Relations are declared in hive_rules.json. Schema compatibility: SFGA v0.3.x.",
+  "created_at": "2026-09-22T00:00:00Z",
+  "tables": [],
+  "requires": {
+    "tables": [],
+    "columns": {},
+    "relations": ["name:holotype", "name:lectotype", "name:neotype", "name:parent-name", "name:synonym-usage", "name:syntype", "name:type-name", "name_relation:related-name", "name_relation:subject-name", "taxon:owning-name", "taxon:parent-owning-name", "type_material:name"]
+  },
+  "relations": {},
+  "rules": [
+    {
+      "rule_id": "tw_icn_parent_rank_higher",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Parent rank is higher than the rank",
+      "description": "Ported from TaxonWorks Protonym#validate_parent_rank_is_higher (app/models/protonym.rb).",
+      "validator_type": "parent_rank_higher",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "rank_column": "col__rank_id",
+        "code_column": "col__code_id",
+        "join": {"from": "col__name_id", "to": "name.col__id"},
+        "rank_order": {
+          "BOTANICAL": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        }
+      },
+      "error_message": "The parent's rank must be higher than this taxon's rank.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_relation_rank_group_family",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Related name is in the family group",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_subject_and_object_ranks (app/models/taxon_name_relationship.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["LATER_HOMONYM", "REPLACEMENT_NAME", "HOMOTYPIC", "SPELLING_CORRECTION", "SUPERFLUOUS", "CONSERVED", "BASEDON"]
+        },
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"],
+        "skip_if_empty": true
+      },
+      "error_message": "Both names in a homonym, synonym, replacement or spelling relation must be family-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_relation_rank_group_genus",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Related name is in the genus group",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_subject_and_object_ranks (app/models/taxon_name_relationship.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["LATER_HOMONYM", "REPLACEMENT_NAME", "HOMOTYPIC", "SPELLING_CORRECTION", "SUPERFLUOUS", "CONSERVED", "BASEDON"]
+        },
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "Both names in a homonym, synonym, replacement or spelling relation must be genus-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_relation_rank_group_higher",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Related name is in the higher group",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_subject_and_object_ranks (app/models/taxon_name_relationship.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["LATER_HOMONYM", "REPLACEMENT_NAME", "HOMOTYPIC", "SPELLING_CORRECTION", "SUPERFLUOUS", "CONSERVED", "BASEDON"]
+        },
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER"],
+        "skip_if_empty": true
+      },
+      "error_message": "Both names in a homonym, synonym, replacement or spelling relation must be higher-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_relation_rank_group_species",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Related name is in the species group",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_subject_and_object_ranks (app/models/taxon_name_relationship.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["LATER_HOMONYM", "REPLACEMENT_NAME", "HOMOTYPIC", "SPELLING_CORRECTION", "SUPERFLUOUS", "CONSERVED", "BASEDON"]
+        },
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+        "skip_if_empty": true
+      },
+      "error_message": "Both names in a homonym, synonym, replacement or spelling relation must be species-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_relation_same_code",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Related names share the nomenclatural code",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_subject_and_object_share_code (app/models/taxon_name_relationship.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__code_id",
+        "allowed_values": ["BOTANICAL"],
+        "skip_if_empty": true
+      },
+      "error_message": "The two names in this relation are governed by different nomenclatural codes.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_status_code_mismatch",
+      "table_name": "name",
+      "field_name": "col__status_id",
+      "rule_name": "Status belongs to the name's code",
+      "description": "Ported from TaxonWorks TaxonNameClassification#nomenclature_code_matches (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000024", "http://purl.obolibrary.org/obo/NOMEN_0000025", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000038", "http://purl.obolibrary.org/obo/NOMEN_0000039", "http://purl.obolibrary.org/obo/NOMEN_0000040", "http://purl.obolibrary.org/obo/NOMEN_0000041", "http://purl.obolibrary.org/obo/NOMEN_0000043", "http://purl.obolibrary.org/obo/NOMEN_0000055", "http://purl.obolibrary.org/obo/NOMEN_0000058", "http://purl.obolibrary.org/obo/NOMEN_0000059", "http://purl.obolibrary.org/obo/NOMEN_0000060", "http://purl.obolibrary.org/obo/NOMEN_0000081", "http://purl.obolibrary.org/obo/NOMEN_0000082", "http://purl.obolibrary.org/obo/NOMEN_0000083", "http://purl.obolibrary.org/obo/NOMEN_0000084", "http://purl.obolibrary.org/obo/NOMEN_0000085", "http://purl.obolibrary.org/obo/NOMEN_0000086", "http://purl.obolibrary.org/obo/NOMEN_0000087", "http://purl.obolibrary.org/obo/NOMEN_0000088", "http://purl.obolibrary.org/obo/NOMEN_0000089", "http://purl.obolibrary.org/obo/NOMEN_0000090", "http://purl.obolibrary.org/obo/NOMEN_0000091", "http://purl.obolibrary.org/obo/NOMEN_0000092", "http://purl.obolibrary.org/obo/NOMEN_0000103", "http://purl.obolibrary.org/obo/NOMEN_0000104", "http://purl.obolibrary.org/obo/NOMEN_0000105", "http://purl.obolibrary.org/obo/NOMEN_0000119", "http://purl.obolibrary.org/obo/NOMEN_0000120", "http://purl.obolibrary.org/obo/NOMEN_0000125", "http://purl.obolibrary.org/obo/NOMEN_0000126", "http://purl.obolibrary.org/obo/NOMEN_0000127", "http://purl.obolibrary.org/obo/NOMEN_0000128", "http://purl.obolibrary.org/obo/NOMEN_0000129", "http://purl.obolibrary.org/obo/NOMEN_0000168", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000198", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000200", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000202", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000205", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000207", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0000211", "http://purl.obolibrary.org/obo/NOMEN_0000212", "http://purl.obolibrary.org/obo/NOMEN_0000213", "http://purl.obolibrary.org/obo/NOMEN_0000214", "http://purl.obolibrary.org/obo/NOMEN_0000218", "http://purl.obolibrary.org/obo/NOMEN_0000219", "http://purl.obolibrary.org/obo/NOMEN_0000221", "http://purl.obolibrary.org/obo/NOMEN_0000222", "http://purl.obolibrary.org/obo/NOMEN_0000223", "http://purl.obolibrary.org/obo/NOMEN_0000224", "http://purl.obolibrary.org/obo/NOMEN_0000225", "http://purl.obolibrary.org/obo/NOMEN_0000226", "http://purl.obolibrary.org/obo/NOMEN_0000228", "http://purl.obolibrary.org/obo/NOMEN_0000229", "http://purl.obolibrary.org/obo/NOMEN_0001058", "http://purl.obolibrary.org/obo/NOMEN_0001059", "http://purl.obolibrary.org/obo/NOMEN_0001060", "http://purl.obolibrary.org/obo/NOMEN_0001061"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "This status belongs to another nomenclatural code; ICN names need an ICN status.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_type_designation_family_type_rank",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Type of a family-group name is a genus-group name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification::Family/Genus#validate_subject_and_object_ranks (app/models/taxon_name_relationship/typification/*.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__type_id", "operator": "equals", "value": "TYPE"},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "The type of a family-group name must be a genus-group name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_type_designation_genus_type_rank",
+      "table_name": "name_relation",
+      "field_name": "col__related_name_id",
+      "rule_name": "Type of a genus-group name is a species-group name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification::Family/Genus#validate_subject_and_object_ranks (app/models/taxon_name_relationship/typification/*.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__type_id", "operator": "equals", "value": "TYPE"},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:related-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+        "skip_if_empty": true
+      },
+      "error_message": "The type of a genus-group name must be a species-group name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_type_designation_subject_rank",
+      "table_name": "name_relation",
+      "field_name": "col__name_id",
+      "rule_name": "Typified name is a family- or genus-group name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification::Family/Genus#validate_subject_and_object_ranks (app/models/taxon_name_relationship/typification/*.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__type_id", "operator": "equals", "value": "TYPE"},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {
+        "relation": "name_relation:subject-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "Only family-group and genus-group names are typified by a name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_type_material_species_group",
+      "table_name": "type_material",
+      "field_name": "col__name_id",
+      "rule_name": "Type material belongs to a species-group name",
+      "description": "Ported from TaxonWorks TypeMaterial#check_protonym_rank (app/models/type_material.rb).",
+      "validator_type": "related_field_in_set",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "type_material:name"
+        }
+      ],
+      "parameters": {
+        "relation": "type_material:name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+        "skip_if_empty": true
+      },
+      "error_message": "Type specimens can be designated only for species-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_type_material_status",
+      "table_name": "type_material",
+      "field_name": "col__status_id",
+      "rule_name": "Type status is used by the ICN",
+      "description": "Ported from TaxonWorks TypeMaterial#check_type_type (app/models/type_material.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__status_id", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "type_material:name"
+        }
+      ],
+      "parameters": {"pattern": "^(?:HOLOTYPE|PARATYPE|LECTOTYPE|NEOTYPE|EPITYPE|ISOTYPE|SYNTYPE|ISOSYNTYPE)$"},
+      "error_message": "This type status is not used under the ICN.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_icn_class_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Class name ends in -opsida, -phyceae or -mycetes",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::ClassRank.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/class_rank.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["CLASS"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:opsida|phyceae|mycetes))$"},
+      "error_message": "A class name must end in -opsida, -phyceae or -mycetes.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_family_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Family name ends in -aceae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Family.validate_name_format (app/models/nomenclatural_rank/icn/family_group/family.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"}
+      ],
+      "parameters": {
+        "pattern": "^(?:.|.*(?:aceae)|Compositae|Cruciferae|Gramineae|Guttiferae|Labiatae|Leguminosae|Palmae|Umbelliferae)$"
+      },
+      "error_message": "A family name must end in -aceae (or is one of the conserved alternative family names).",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_gender_genus_group_only",
+      "table_name": "name",
+      "field_name": "col__gender_id",
+      "rule_name": "Gender set only on genus-group names",
+      "description": "Ported from TaxonWorks TaxonNameClassification::Latinized::Gender#validate_applicable_rank (app/models/taxon_name_classification/latinized/gender.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__rank_id",
+          "operator": "not_in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__gender_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "Grammatical gender applies only to genus-group names.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_genus_group_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Genus-group name does not end in -virus",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/genus_group.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__uninomial", "operator": "matches", "value": "virus$"}
+      ],
+      "parameters": {},
+      "error_message": "A genus-group name under the ICN must not end in -virus.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_infrageneric_capitalized",
+      "table_name": "name",
+      "field_name": "col__infrageneric_epithet",
+      "rule_name": "Infrageneric epithet is capitalized",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/genus_group.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__infrageneric_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^[^a-z][^A-Z]*$"},
+      "error_message": "The infrageneric epithet must start with an uppercase letter followed by lowercase letters.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_infrageneric_min_length",
+      "table_name": "name",
+      "field_name": "col__infrageneric_epithet",
+      "rule_name": "Infrageneric epithet has at least two letters",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/genus_group.rb).",
+      "validator_type": "length",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__infrageneric_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"min": 2},
+      "error_message": "The infrageneric epithet must be at least two letters long.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_infrageneric_not_viral",
+      "table_name": "name",
+      "field_name": "col__infrageneric_epithet",
+      "rule_name": "Genus-group name does not end in -virus",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/genus_group.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__infrageneric_epithet", "operator": "matches", "value": "virus$"}
+      ],
+      "parameters": {},
+      "error_message": "A genus-group name under the ICN must not end in -virus.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_infraspecific_epithet_min_length",
+      "table_name": "name",
+      "field_name": "col__infraspecific_epithet",
+      "rule_name": "Infraspecific epithet has at least two letters",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::SpeciesAndInfraspeciesGroup.validate_name_format (app/models/nomenclatural_rank/icn/species_and_infraspecies_group.rb).",
+      "validator_type": "length",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"min": 2},
+      "error_message": "The infraspecific epithet must be at least two letters long.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_kingdom_name",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Kingdom name is Plantae, Chromista or Fungi",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Kingdom.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/kingdom.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["KINGDOM"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|Plantae|Chromista|Fungi)$"},
+      "error_message": "Under the ICN the kingdom name must be Plantae, Chromista or Fungi.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_order_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Order name ends in -ales",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Order.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/order.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["ORDER"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:ales))$"},
+      "error_message": "A order name must end in -ales.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_order_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Order name does not end in -virales",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Order.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/order.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["ORDER"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "virales$"}
+      ],
+      "parameters": {},
+      "error_message": "A order name under the ICN must not end in -virales, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_phylum_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Phylum name ends in -phyta, -phycota or -mycota",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Phylum.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/phylum.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["PHYLUM"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:phyta|phycota|mycota))$"},
+      "error_message": "A phylum name must end in -phyta, -phycota or -mycota.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_specific_epithet_min_length",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "Specific epithet has at least two letters",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::SpeciesAndInfraspeciesGroup.validate_name_format (app/models/nomenclatural_rank/icn/species_and_infraspecies_group.rb).",
+      "validator_type": "length",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES"]},
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"min": 2},
+      "error_message": "The specific epithet must be at least two letters long.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subclass_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subclass name ends in -idae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Subclass.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/subclass.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBCLASS"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:idae))$"},
+      "error_message": "A subclass name must end in -idae, -phycidae or -mycetidae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subclass_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subclass name does not end in -viridae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Subclass.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/subclass.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBCLASS"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "viridae$"}
+      ],
+      "parameters": {},
+      "error_message": "A subclass name under the ICN must not end in -viridae, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subfamily_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subfamily name ends in -oideae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Subfamily.validate_name_format (app/models/nomenclatural_rank/icn/family_group/subfamily.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBFAMILY"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"}
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:oideae))$"},
+      "error_message": "A subfamily name must end in -oideae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_suborder_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Suborder name ends in -ineae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Suborder.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/suborder.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBORDER"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:ineae))$"},
+      "error_message": "A suborder name must end in -ineae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_suborder_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Suborder name does not end in -virineae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Suborder.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/suborder.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBORDER"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "virineae$"}
+      ],
+      "parameters": {},
+      "error_message": "A suborder name under the ICN must not end in -virineae, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subphylum_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subphylum name ends in -phytina, -phycotina or -mycotina",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Subphylum.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/subphylum.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBPHYLUM"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:phytina|phycotina|mycotina))$"},
+      "error_message": "A subphylum name must end in -phytina, -phycotina or -mycotina.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subtribe_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subtribe name ends in -inae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Subtribe.validate_name_format (app/models/nomenclatural_rank/icn/family_group/subtribe.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBTRIBE"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"}
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:inae))$"},
+      "error_message": "A subtribe name must end in -inae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_subtribe_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Subtribe name does not end in -virinae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Subtribe.validate_name_format (app/models/nomenclatural_rank/icn/family_group/subtribe.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBTRIBE"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "virinae$"}
+      ],
+      "parameters": {},
+      "error_message": "A subtribe name under the ICN must not end in -virinae, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_superorder_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Superorder name ends in -anae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Superorder.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/superorder.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUPERORDER"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:anae))$"},
+      "error_message": "A superorder name must end in -anae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_superorder_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Superorder name does not end in -viranae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup::Superorder.validate_name_format (app/models/nomenclatural_rank/icn/higher_classification_group/superorder.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUPERORDER"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "viranae$"}
+      ],
+      "parameters": {},
+      "error_message": "A superorder name under the ICN must not end in -viranae, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_tribe_ending",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Tribe name ends in -eae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Tribe.validate_name_format (app/models/nomenclatural_rank/icn/family_group/tribe.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["TRIBE"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"}
+      ],
+      "parameters": {"pattern": "^(?:.|.*(?:eae))$"},
+      "error_message": "A tribe name must end in -eae.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_tribe_not_viral",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Tribe name does not end in -vireae",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::FamilyGroup::Tribe.validate_name_format (app/models/nomenclatural_rank/icn/family_group/tribe.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["TRIBE"]},
+        {"field": "col__uninomial", "operator": "matches", "value": "vireae$"}
+      ],
+      "parameters": {},
+      "error_message": "A tribe name under the ICN must not end in -vireae, which is a virus-name ending.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_uninomial_capitalized",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Uninomial is capitalized",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup/FamilyGroup/GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/*_group.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^[^a-z][^A-Z]*$"},
+      "error_message": "The name must start with an uppercase letter followed by lowercase letters.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_uninomial_capitalized_family_group",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Uninomial is capitalized (family group)",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup/FamilyGroup/GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/*_group.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"]},
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"}
+      ],
+      "parameters": {"pattern": "^[^a-z][^A-Z]*$"},
+      "error_message": "The name must start with an uppercase letter followed by lowercase letters.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_uninomial_min_length",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Uninomial has at least two letters",
+      "description": "Ported from TaxonWorks NomenclaturalRank::Icn::HigherClassificationGroup/FamilyGroup/GenusGroup.validate_name_format (app/models/nomenclatural_rank/icn/*_group.rb).",
+      "validator_type": "length",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"min": 2},
+      "error_message": "The name must be at least two letters long.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_icn_conflicting_subordinate_taxa",
+      "table_name": "taxon",
+      "field_name": "col__id",
+      "rule_name": "Unavailable or invalid name has no subordinate taxa",
+      "description": "Ported from TaxonWorks TaxonName#sv_conflicting_subordinate_taxa (app/models/taxon_name.rb).",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000014", "http://purl.obolibrary.org/obo/NOMEN_0000015", "http://purl.obolibrary.org/obo/NOMEN_0000016", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382", "http://purl.obolibrary.org/obo/NOMEN_0000386"],
+          "relation": "taxon:owning-name"
+        }
+      ],
+      "parameters": {"table": "taxon", "match": [{"target": "col__parent_id", "self": "col__id"}], "expected": {"max": 0}},
+      "error_message": "",
+      "warning_message": "This taxon's name has an unavailable or invalid status, but other taxa are placed under it. Move the children to a valid taxon or correct the status.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_gender_agreement_species_group_only",
+      "table_name": "name",
+      "field_name": "col__gender_agreement",
+      "rule_name": "Gender agreement set only on species-group names",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_proper_classification with Latinized::PartOfSpeech applicable_ranks (app/models/taxon_name_classification/latinized/part_of_speech.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__rank_id",
+          "operator": "not_in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__gender_agreement", "operator": "exists"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Gender agreement (the part of speech of an epithet) applies only to species-group names.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_infrageneric_epithet_format",
+      "table_name": "name",
+      "field_name": "col__infrageneric_epithet",
+      "rule_name": "Infrageneric epithet has no special characters",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_name (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__infrageneric_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z]*(?:-[a-zA-Z]*)?$"},
+      "error_message": "",
+      "warning_message": "The infrageneric epithet should contain only letters; a hyphen is allowed only as two parts joined by one hyphen. Mark misspellings with the appropriate status instead.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_infraspecific_epithet_format",
+      "table_name": "name",
+      "field_name": "col__infraspecific_epithet",
+      "rule_name": "Infraspecific epithet has no special characters",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_name (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z]*(?:-[a-zA-Z]*)?$"},
+      "error_message": "",
+      "warning_message": "The infraspecific epithet should contain only letters; a hyphen is allowed only as two parts joined by one hyphen. Mark misspellings with the appropriate status instead.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_is_valid_name",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Parent is a valid name",
+      "description": "Ported from TaxonWorks TaxonName#sv_parent_is_valid_name (app/models/taxon_name.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000014", "http://purl.obolibrary.org/obo/NOMEN_0000015", "http://purl.obolibrary.org/obo/NOMEN_0000016", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382", "http://purl.obolibrary.org/obo/NOMEN_0000386"],
+          "relation": "taxon:parent-owning-name"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The parent's name has an unavailable or invalid nomenclatural status. Move this taxon to the parent's valid name.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_priority_family_group",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Name not older than its family-group parent",
+      "description": "Ported from TaxonWorks Protonym#sv_parent_priority (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "ancestor_field_check",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "taxon:owning-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"],
+          "relation": "taxon:owning-name"
+        }
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "stop_when": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"]
+        },
+        "assert": {
+          "self_join": {"from": "col__name_id", "to": "name.col__id"},
+          "self_field": "col__published_in_year",
+          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
+          "ancestor_field": "col__published_in_year",
+          "operator": "greater_than_or_equals"
+        }
+      },
+      "error_message": "",
+      "warning_message": "This family-group name is older than its family-group parent. Within a rank group the parent should be the oldest name; check the years and the placement.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_priority_genus_group",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Name not older than its genus-group parent",
+      "description": "Ported from TaxonWorks Protonym#sv_parent_priority (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "ancestor_field_check",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "taxon:owning-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+          "relation": "taxon:owning-name"
+        }
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "stop_when": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        "assert": {
+          "self_join": {"from": "col__name_id", "to": "name.col__id"},
+          "self_field": "col__published_in_year",
+          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
+          "ancestor_field": "col__published_in_year",
+          "operator": "greater_than_or_equals"
+        }
+      },
+      "error_message": "",
+      "warning_message": "This genus-group name is older than its genus-group parent. Within a rank group the parent should be the oldest name; check the years and the placement.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_priority_species_group",
+      "table_name": "taxon",
+      "field_name": "col__parent_id",
+      "rule_name": "Name not older than its species-group parent",
+      "description": "Ported from TaxonWorks Protonym#sv_parent_priority (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "ancestor_field_check",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "taxon:owning-name"
+        },
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+          "relation": "taxon:owning-name"
+        }
+      ],
+      "parameters": {
+        "parent_column": "col__parent_id",
+        "stop_when": {
+          "join": {"from": "col__name_id", "to": "name.col__id"},
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        "assert": {
+          "self_join": {"from": "col__name_id", "to": "name.col__id"},
+          "self_field": "col__published_in_year",
+          "ancestor_join": {"from": "col__name_id", "to": "name.col__id"},
+          "ancestor_field": "col__published_in_year",
+          "operator": "greater_than_or_equals"
+        }
+      },
+      "error_message": "",
+      "warning_message": "This species-group name is older than its species-group parent. Within a rank group the parent should be the oldest name; check the years and the placement.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_family_group",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of family-group names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A family name should be placed under a taxon of rank: kingdom, subkingdom, phylum, subphylum, class, subclass, …. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_form",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of form names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["FORM"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A form name should be placed under a taxon of rank: species, subspecies, variety, subvariety. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_genus_group",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of genus-group names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["GENUS"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A genus name should be placed under a taxon of rank: family, subfamily, tribe, subtribe, genus, subgenus, …. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_higher_group",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of higher-group names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["KINGDOM", "PHYLUM", "CLASS", "SUPERORDER", "ORDER"]
+        }
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A higher-group name should be placed under a taxon of rank: kingdom, subkingdom, phylum, subphylum, class, subclass, …. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_section",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of section names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SECTION", "SECTION_BOTANY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A genus-group name should be placed under a taxon of rank: genus, subgenus. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_series",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of series names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SERIES"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A series name should be placed under a taxon of rank: genus, subgenus, section, subsection. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_species_group",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of species-group names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A species name should be placed under a taxon of rank: genus, subgenus, section, subsection, series, subseries, …. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subclass",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subclass names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBCLASS"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["CLASS"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subclass name should be placed under a taxon of rank: class. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subfamily",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subfamily names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBFAMILY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["FAMILY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subfamily name should be placed under a taxon of rank: family. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subform",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subform names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBFORM"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["FORM"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subform name should be placed under a taxon of rank: form. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subgenus",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subgenus names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBGENUS"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["GENUS"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subgenus name should be placed under a taxon of rank: genus. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subkingdom",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subkingdom names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBKINGDOM"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["KINGDOM"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subkingdom name should be placed under a taxon of rank: kingdom. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_suborder",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of suborder names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBORDER"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["ORDER"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A suborder name should be placed under a taxon of rank: order. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subphylum",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subphylum names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBPHYLUM"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["PHYLUM"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subphylum name should be placed under a taxon of rank: phylum. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subsection",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subsection names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBSECTION", "SUBSECTION_BOTANY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SECTION", "SECTION_BOTANY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A genus-group name should be placed under a taxon of rank: section. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subseries",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subseries names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBSERIES"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SERIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subseries name should be placed under a taxon of rank: series. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subspecies",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subspecies names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBSPECIES"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subspecies name should be placed under a taxon of rank: species. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subtribe",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subtribe names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBTRIBE"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["TRIBE"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subtribe name should be placed under a taxon of rank: tribe. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_subvariety",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of subvariety names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SUBVARIETY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["VARIETY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A subvariety name should be placed under a taxon of rank: variety. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_tribe",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of tribe names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["TRIBE"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SUBFAMILY"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A tribe name should be placed under a taxon of rank: subfamily. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_parent_rank_variety",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Parent rank of variety names",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_parent_rank (app/models/protonym/soft_validation_extensions.rb) with NomenclaturalRank valid_parents.",
+      "validator_type": "related_field_in_set",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["VARIETY"]}
+      ],
+      "parameters": {
+        "relation": "name:parent-name",
+        "related_field": "col__rank_id",
+        "allowed_values": ["SPECIES", "SUBSPECIES"],
+        "skip_if_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A variety name should be placed under a taxon of rank: species, subspecies. If the placement is uncertain, record it as incertae sedis.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_specific_epithet_format",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "Specific epithet has no special characters",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_name (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["SPECIES"]},
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z]*(?:-[a-zA-Z]*)?$"},
+      "error_message": "",
+      "warning_message": "The specific epithet should contain only letters; a hyphen is allowed only as two parts joined by one hyphen. Mark misspellings with the appropriate status instead.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_type_designation_available_name",
+      "table_name": "name_relation",
+      "field_name": "col__type_id",
+      "rule_name": "Typified name is available",
+      "description": "Ported from TaxonWorks TaxonNameRelationship::Typification#sv_specific_relationship (app/models/taxon_name_relationship/typification.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__type_id", "operator": "equals", "value": "TYPE"},
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"],
+          "relation": "name_relation:subject-name"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The typified name has an unavailable status, so it should not have a type designation.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_uninomial_format",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Name has no special characters",
+      "description": "Ported from TaxonWorks Protonym#sv_validate_name (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["KINGDOM", "SUBKINGDOM", "PHYLUM", "SUBPHYLUM", "CLASS", "SUBCLASS", "SUPERORDER", "ORDER", "SUBORDER", "FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z]*(?:-[a-zA-Z]*)?$"},
+      "error_message": "",
+      "warning_message": "The name should contain only letters; a hyphen is allowed only as two parts joined by one hyphen. Mark misspellings with the appropriate status instead.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_icn_primary_type_repository",
+      "table_name": "type_material",
+      "field_name": "col__institution_code",
+      "rule_name": "Primary type repository recorded",
+      "description": "Ported from TaxonWorks Protonym#sv_primary_types_repository (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["HOLOTYPE", "LECTOTYPE", "NEOTYPE", "SYNTYPE"]
+        },
+        {
+          "field": "col__code_id",
+          "operator": "equals",
+          "value": "BOTANICAL",
+          "relation": "type_material:name"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The repository (institution code) of this primary type or syntype is not recorded.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_icn_status_not_specific",
+      "table_name": "name",
+      "field_name": "col__status_id",
+      "rule_name": "More specific status preferred",
+      "description": "Ported from TaxonWorks TaxonNameClassification#sv_not_specific_classes (app/models/taxon_name_classification.rb) and its subclass overrides.",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000007", "http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000383", "http://purl.obolibrary.org/obo/NOMEN_0000384", "http://purl.obolibrary.org/obo/NOMEN_0000386"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This status has more specific sub-statuses. Choose the one that states the reason, for example 'nomen nudum: no description' rather than 'nomen nudum'.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_icn_missing_author_links",
+      "table_name": "name",
+      "field_name": "col__combination_authorship_id",
+      "rule_name": "Missing links to name authors",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_roles (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__authorship", "operator": "matches", "value": "^[^(]"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The authors of this name are not linked to person records.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_gender",
+      "table_name": "name",
+      "field_name": "col__gender_id",
+      "rule_name": "Missing grammatical gender",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_gender (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The grammatical gender of this genus-group name is not recorded.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_original_author_links",
+      "table_name": "name",
+      "field_name": "col__basionym_authorship_id",
+      "rule_name": "Missing links to original name authors",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_roles (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__authorship", "operator": "matches", "value": "^\\("}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The authors of the original combination are not linked to person records.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_original_publication",
+      "table_name": "name",
+      "field_name": "col__reference_id",
+      "rule_name": "Missing original publication",
+      "description": "Ported from TaxonWorks TaxonName#sv_missing_original_publication (app/models/taxon_name.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The original publication of this name is not recorded.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_original_publication_page",
+      "table_name": "name",
+      "field_name": "col__published_in_page",
+      "rule_name": "Missing page of original publication",
+      "description": "Ported from TaxonWorks TaxonName#sv_missing_original_publication (app/models/taxon_name.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE", "GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {"field": "col__reference_id", "operator": "not_equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The page of the original publication is not recorded.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_part_of_speech",
+      "table_name": "name",
+      "field_name": "col__gender_agreement",
+      "rule_name": "Missing part of speech",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_part_of_speech (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Gender agreement (whether the epithet is an adjective or participle that agrees with the genus, or a noun that does not) is not recorded.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_primary_type",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Missing primary type",
+      "description": "Ported from TaxonWorks Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:holotype"},
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:lectotype"},
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:neotype"},
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:syntype"}
+      ],
+      "parameters": {"field": "col__id", "relation": "name:holotype"},
+      "error_message": "",
+      "warning_message": "No holotype, lectotype, neotype or syntype is recorded for this species-group name.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_type_genus",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Missing type genus",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_type_genus (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {"field": "col__rank_id", "operator": "in", "value": ["FAMILY", "SUBFAMILY", "TRIBE", "SUBTRIBE"]},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"field": "col__id", "relation": "name:type-name"},
+      "error_message": "",
+      "warning_message": "No type genus is recorded for this family-group name. Add a type name relation.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_type_species",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Missing type species",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_type_species (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "foreign_key_exists",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {"field": "col__id", "relation": "name:type-name"},
+      "error_message": "",
+      "warning_message": "No type species is recorded for this genus-group name. Add a type name relation.",
+      "is_active": true,
+      "priority": 50
+    },
+    {
+      "rule_id": "tw_icn_missing_etymology",
+      "table_name": "name",
+      "field_name": "col__etymology",
+      "rule_name": "Missing etymology",
+      "description": "Ported from TaxonWorks Protonym#sv_missing_etymology (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "debug",
+      "conditions": [
+        {"field": "col__code_id", "operator": "equals", "value": "BOTANICAL"},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["GENUS", "SUBGENUS", "SECTION", "SECTION_BOTANY", "SUBSECTION", "SUBSECTION_BOTANY", "SERIES", "SUBSERIES", "SPECIES", "SUBSPECIES", "VARIETY", "SUBVARIETY", "FORM", "SUBFORM"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000008", "http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000019", "http://purl.obolibrary.org/obo/NOMEN_0000377", "http://purl.obolibrary.org/obo/NOMEN_0000378", "http://purl.obolibrary.org/obo/NOMEN_0000379", "http://purl.obolibrary.org/obo/NOMEN_0000380", "http://purl.obolibrary.org/obo/NOMEN_0000381", "http://purl.obolibrary.org/obo/NOMEN_0000382"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The etymology of this name is not recorded.",
+      "is_active": true,
+      "priority": 60
+    }
+  ]
+}

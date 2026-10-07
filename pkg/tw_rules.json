@@ -1,16 +1,913 @@
 {
   "name": "tw_sfga",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "domain": "biodiversity",
   "author": "sfborg/hive",
-  "description": "TaxonWorks-derived validation rules. Rule ids and names track TW's validation identifiers so a curator can cross-reference against TW's own soft-validation output. Schema compatibility: SFGA v0.3.x — bundle references the shared schema declared in hive_rules.json rather than redeclaring it.",
-  "created_at": "2026-08-12T00:00:00Z",
+  "description": "TaxonWorks-derived validation rules that apply to names of every nomenclatural code, to name relations, type material and references. Each rule's description names the TaxonWorks class and method it is ported from. Statuses are matched as NOMEN ontology URIs in name.col__status_id. Relations are declared in hive_rules.json. Schema compatibility: SFGA v0.3.x.",
+  "created_at": "2026-09-22T00:00:00Z",
   "tables": [],
   "requires": {
     "tables": [],
     "columns": {},
-    "relations": []
+    "relations": ["name:holotype", "name:lectotype", "name:neotype", "name:parent-name", "name:synonym-usage", "name:syntype", "taxon:parent-taxon", "type_material:name"]
   },
   "relations": {},
-  "rules": []
+  "rules": [
+    {
+      "rule_id": "tw_basionym_unique",
+      "table_name": "name_relation",
+      "field_name": "col__name_id",
+      "rule_name": "One original combination per name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship validates_uniqueness_of :object_taxon_name_id for original combinations (app/models/taxon_name_relationship.rb).",
+      "validator_type": "count_across",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__type_id", "operator": "equals", "value": "BASIONYM"}],
+      "parameters": {
+        "table": "name_relation",
+        "match": [
+          {"target": "col__name_id", "self": "col__name_id"},
+          {"target": "col__type_id", "self": "col__type_id"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "This name has more than one original combination (basionym) link, or the same link twice. Keep a single link.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_parent_same_code",
+      "table_name": "name",
+      "field_name": "col__code_id",
+      "rule_name": "Parent has the same nomenclatural code",
+      "description": "Ported from TaxonWorks Protonym#validate_same_nomenclatural_code (app/models/protonym.rb).",
+      "validator_type": "related_field_equals",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {"relation": "name:parent-name", "field": "col__code_id", "skip_if_either_empty": true},
+      "error_message": "This name and its parent are governed by different nomenclatural codes.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_published_in_year_integer",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Year of publication is an integer",
+      "description": "Ported from TaxonWorks TaxonName validates :year_of_publication, date_year (app/models/taxon_name.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__published_in_year", "operator": "not_equals", "value": ""}],
+      "parameters": {"pattern": "^[0-9]+$"},
+      "error_message": "The year of publication must be a whole number.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_published_in_year_range",
+      "table_name": "name",
+      "field_name": "col__published_in_year",
+      "rule_name": "Year of publication is plausible",
+      "description": "Ported from TaxonWorks TaxonName validates :year_of_publication, date_year (app/models/taxon_name.rb).",
+      "validator_type": "range",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__published_in_year", "operator": "matches", "value": "^[0-9]+$"}],
+      "parameters": {"min": 1000, "max": "current_year"},
+      "error_message": "The year of publication must be between 1000 and the current year.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_rank_required",
+      "table_name": "name",
+      "field_name": "col__rank_id",
+      "rule_name": "Rank is recorded",
+      "description": "Ported from TaxonWorks Protonym validates_presence_of :rank_class (app/models/protonym.rb).",
+      "validator_type": "presence",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {},
+      "error_message": "Every name needs a rank.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_status_code_root",
+      "table_name": "name",
+      "field_name": "col__status_id",
+      "rule_name": "Status is a specific nomenclatural status",
+      "description": "Ported from TaxonWorks TaxonNameClassification#validate_taxon_name_classification (app/models/taxon_name_classification.rb).",
+      "validator_type": "absence",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000107", "http://purl.obolibrary.org/obo/NOMEN_0000109", "http://purl.obolibrary.org/obo/NOMEN_0000110", "http://purl.obolibrary.org/obo/NOMEN_0000111"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "The status is only the name of a nomenclatural code. Choose a specific status.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_type_designation_unique",
+      "table_name": "name_relation",
+      "field_name": "col__name_id",
+      "rule_name": "One type designation per name",
+      "description": "Ported from TaxonWorks TaxonNameRelationship#validate_uniqueness_of_typification_object (app/models/taxon_name_relationship.rb).",
+      "validator_type": "count_across",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__type_id", "operator": "equals", "value": "TYPE"}],
+      "parameters": {
+        "table": "name_relation",
+        "match": [
+          {"target": "col__name_id", "self": "col__name_id"},
+          {"target": "col__type_id", "self": "col__type_id"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "This name has more than one type designation, or the same one twice. Keep a single type name relation.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_type_material_unique",
+      "table_name": "type_material",
+      "field_name": "col__status_id",
+      "rule_name": "Type-material record is unique",
+      "description": "Ported from TaxonWorks TypeMaterial validates_uniqueness_of :type_type (app/models/type_material.rb).",
+      "validator_type": "count_across",
+      "enforcement": "hard",
+      "severity": "error",
+      "parameters": {
+        "table": "type_material",
+        "match": [
+          {"target": "col__name_id", "self": "col__name_id"},
+          {"target": "col__status_id", "self": "col__status_id"},
+          {"target": "col__institution_code", "self": "col__institution_code"},
+          {"target": "col__catalog_number", "self": "col__catalog_number"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "The same specimen is recorded twice with the same type status for this name.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 15
+    },
+    {
+      "rule_id": "tw_basionym_authorship_without_digits",
+      "table_name": "name",
+      "field_name": "col__basionym_authorship",
+      "rule_name": "Author names contain no digits",
+      "description": "Ported from TaxonWorks Protonym#verbatim_author_without_digits (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__basionym_authorship", "operator": "not_equals", "value": ""}],
+      "parameters": {"pattern": "^[^0-9]*$"},
+      "error_message": "Author names must not contain digits; record the year in its own field.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_combination_authorship_without_digits",
+      "table_name": "name",
+      "field_name": "col__combination_authorship",
+      "rule_name": "Author names contain no digits",
+      "description": "Ported from TaxonWorks Protonym#verbatim_author_without_digits (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__combination_authorship", "operator": "not_equals", "value": ""}],
+      "parameters": {"pattern": "^[^0-9]*$"},
+      "error_message": "Author names must not contain digits; record the year in its own field.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_family_group_uninomial_latinized",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Name is latinized (family group)",
+      "description": "Ported from TaxonWorks Protonym#name_is_latinized (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__rank_id",
+          "operator": "in",
+          "value": ["EPIFAMILY", "FAMILY", "INFRAFAMILY", "INFRATRIBE", "SUBFAMILY", "SUBTRIBE", "SUPERFAMILY", "SUPERSUBFAMILY", "SUPERTRIBE", "TRIBE"]
+        },
+        {"field": "col__name_id", "operator": "not_exists", "relation": "name:synonym-usage"},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z|-]*$"},
+      "error_message": "The name must be latinized: letters only, with no digits, spaces or diacritics.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_infrageneric_epithet_latinized",
+      "table_name": "name",
+      "field_name": "col__infrageneric_epithet",
+      "rule_name": "Infrageneric epithet is latinized",
+      "description": "Ported from TaxonWorks Protonym#name_is_latinized (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__infrageneric_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z|-]*$"},
+      "error_message": "The infrageneric epithet must be latinized: letters only, with no digits, spaces or diacritics.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_infraspecific_epithet_latinized",
+      "table_name": "name",
+      "field_name": "col__infraspecific_epithet",
+      "rule_name": "Infraspecific epithet is latinized",
+      "description": "Ported from TaxonWorks Protonym#name_is_latinized (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__infraspecific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__code_id", "operator": "not_equals", "value": "VIRUS"}
+      ],
+      "parameters": {"pattern": "^[a-zA-Z|-]*$"},
+      "error_message": "The infraspecific epithet must be latinized: letters only, with no digits, spaces or diacritics.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_reference_link_format",
+      "table_name": "reference",
+      "field_name": "col__link",
+      "rule_name": "Reference link is a URL",
+      "description": "Ported from TaxonWorks Source::Bibtex validates :url, format (app/models/source/bibtex.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__link", "operator": "not_equals", "value": ""}],
+      "parameters": {"pattern": "(?i)(?:https?|ftp):"},
+      "error_message": "The link must be an http, https or ftp URL.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_reference_year_range",
+      "table_name": "reference",
+      "field_name": "col__issued",
+      "rule_name": "Reference year is plausible",
+      "description": "Ported from TaxonWorks Source::Bibtex validates :year, date_year (app/models/source/bibtex.rb).",
+      "validator_type": "range",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [{"field": "col__issued", "operator": "matches", "value": "^[0-9]{4}"}],
+      "parameters": {"min": 1000, "max": "current_year"},
+      "error_message": "The publication year must be between 1000 and the current year.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_specific_epithet_latinized",
+      "table_name": "name",
+      "field_name": "col__specific_epithet",
+      "rule_name": "Specific epithet is latinized",
+      "description": "Ported from TaxonWorks Protonym#name_is_latinized (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__specific_epithet", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        },
+        {"field": "col__code_id", "operator": "not_equals", "value": "VIRUS"}
+      ],
+      "parameters": {"pattern": "^[a-zA-Z|-]*$"},
+      "error_message": "The specific epithet must be latinized: letters only, with no digits, spaces or diacritics.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_uninomial_latinized",
+      "table_name": "name",
+      "field_name": "col__uninomial",
+      "rule_name": "Name is latinized",
+      "description": "Ported from TaxonWorks Protonym#name_is_latinized (app/models/protonym.rb).",
+      "validator_type": "regex",
+      "enforcement": "hard",
+      "severity": "error",
+      "conditions": [
+        {"field": "col__uninomial", "operator": "not_equals", "value": ""},
+        {
+          "field": "col__rank_id",
+          "operator": "not_in",
+          "value": ["EPIFAMILY", "FAMILY", "INFRAFAMILY", "INFRATRIBE", "SUBFAMILY", "SUBTRIBE", "SUPERFAMILY", "SUPERSUBFAMILY", "SUPERTRIBE", "TRIBE"]
+        },
+        {
+          "field": "col__status_id",
+          "operator": "not_in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000013", "http://purl.obolibrary.org/obo/NOMEN_0000026", "http://purl.obolibrary.org/obo/NOMEN_0000169", "http://purl.obolibrary.org/obo/NOMEN_0000170", "http://purl.obolibrary.org/obo/NOMEN_0000171", "http://purl.obolibrary.org/obo/NOMEN_0000172", "http://purl.obolibrary.org/obo/NOMEN_0000173", "http://purl.obolibrary.org/obo/NOMEN_0000174", "http://purl.obolibrary.org/obo/NOMEN_0000175", "http://purl.obolibrary.org/obo/NOMEN_0000176", "http://purl.obolibrary.org/obo/NOMEN_0000177", "http://purl.obolibrary.org/obo/NOMEN_0000178", "http://purl.obolibrary.org/obo/NOMEN_0000179", "http://purl.obolibrary.org/obo/NOMEN_0000180", "http://purl.obolibrary.org/obo/NOMEN_0000181", "http://purl.obolibrary.org/obo/NOMEN_0000182", "http://purl.obolibrary.org/obo/NOMEN_0000183", "http://purl.obolibrary.org/obo/NOMEN_0000184", "http://purl.obolibrary.org/obo/NOMEN_0000185", "http://purl.obolibrary.org/obo/NOMEN_0000186", "http://purl.obolibrary.org/obo/NOMEN_0000187", "http://purl.obolibrary.org/obo/NOMEN_0000188", "http://purl.obolibrary.org/obo/NOMEN_0000189", "http://purl.obolibrary.org/obo/NOMEN_0000190", "http://purl.obolibrary.org/obo/NOMEN_0000191", "http://purl.obolibrary.org/obo/NOMEN_0000192", "http://purl.obolibrary.org/obo/NOMEN_0000193", "http://purl.obolibrary.org/obo/NOMEN_0000194", "http://purl.obolibrary.org/obo/NOMEN_0000195", "http://purl.obolibrary.org/obo/NOMEN_0000196", "http://purl.obolibrary.org/obo/NOMEN_0000197", "http://purl.obolibrary.org/obo/NOMEN_0000199", "http://purl.obolibrary.org/obo/NOMEN_0000201", "http://purl.obolibrary.org/obo/NOMEN_0000203", "http://purl.obolibrary.org/obo/NOMEN_0000204", "http://purl.obolibrary.org/obo/NOMEN_0000206", "http://purl.obolibrary.org/obo/NOMEN_0000208", "http://purl.obolibrary.org/obo/NOMEN_0000209", "http://purl.obolibrary.org/obo/NOMEN_0000210", "http://purl.obolibrary.org/obo/NOMEN_0001060"]
+        }
+      ],
+      "parameters": {"pattern": "^[a-zA-Z|-]*$"},
+      "error_message": "The name must be latinized: letters only, with no digits, spaces or diacritics.",
+      "warning_message": "",
+      "is_active": true,
+      "priority": 20
+    },
+    {
+      "rule_id": "tw_duplicate_primary_type",
+      "table_name": "type_material",
+      "field_name": "col__status_id",
+      "rule_name": "One primary type of each kind",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb).",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__status_id", "operator": "in", "value": ["HOLOTYPE", "LECTOTYPE", "NEOTYPE"]}],
+      "parameters": {
+        "table": "type_material",
+        "match": [
+          {"target": "col__name_id", "self": "col__name_id"},
+          {"target": "col__status_id", "self": "col__status_id"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "",
+      "warning_message": "Another type-material record of this name has the same primary type status. A name has only one holotype, lectotype or neotype.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_extinct_parent_with_extant_child",
+      "table_name": "taxon",
+      "field_name": "col__extinct",
+      "rule_name": "Extant taxon under an extinct parent",
+      "description": "Ported from TaxonWorks Protonym#sv_extant_children (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "related_field_equals",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__extinct", "operator": "not_equals", "value": 1},
+        {"field": "col__extinct", "operator": "equals", "value": 1, "relation": "taxon:parent-taxon"}
+      ],
+      "parameters": {"relation": "taxon:parent-taxon", "field": "col__extinct", "skip_if_either_empty": false},
+      "error_message": "",
+      "warning_message": "This taxon is not marked extinct, but its parent is. Mark this taxon extinct or correct the parent.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_holotype_with_lectotype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Holotype and lectotype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:holotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:lectotype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a holotype and a lectotype. A name has only one primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_holotype_with_neotype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Holotype and neotype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:holotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:neotype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a holotype and a neotype. A name has only one primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_holotype_with_syntype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Holotype and syntype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:holotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:syntype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a holotype and syntypes. Syntypes conflict with a primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_incomplete_combination",
+      "table_name": "name",
+      "field_name": "col__scientific_name",
+      "rule_name": "Combination is complete",
+      "description": "Ported from TaxonWorks TaxonName#sv_incomplete_combination (TaxonName (app/models/taxon_name.rb)).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__scientific_name",
+          "operator": "matches",
+          "value": "(?:GENUS|SPECIES|VARIETY|FORM) NOT SPECIFIED"
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A rank in this combination is not specified. Complete the combination.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_lectotype_with_neotype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Lectotype and neotype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:lectotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:neotype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a lectotype and a neotype. A name has only one primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_lectotype_with_syntype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Lectotype and syntype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:lectotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:syntype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a lectotype and syntypes. Syntypes conflict with a primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_neotype_with_syntype",
+      "table_name": "name",
+      "field_name": "col__id",
+      "rule_name": "Neotype and syntype on the same name",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_single_primary_type (app/models/type_material.rb) and Protonym#sv_primary_types (app/models/protonym/soft_validation_extensions.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__name_id", "operator": "exists", "relation": "name:neotype"},
+        {"field": "col__name_id", "operator": "exists", "relation": "name:syntype"}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has both a neotype and syntypes. Syntypes conflict with a primary type.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_reference_issued_date",
+      "table_name": "reference",
+      "field_name": "col__issued",
+      "rule_name": "Reference date is a valid date",
+      "description": "Ported from TaxonWorks Source::Bibtex validates :month and :day (app/models/source/bibtex.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__issued", "operator": "matches", "value": "^[0-9]{4}-"}],
+      "parameters": {"pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12][0-9]|3[01]))?$"},
+      "error_message": "",
+      "warning_message": "The publication date must be a year, year-month or year-month-day with a valid month and day.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_reference_title_markup",
+      "table_name": "reference",
+      "field_name": "col__title",
+      "rule_name": "Title markup is paired",
+      "description": "Ported from TaxonWorks Source#sv_html_tags and Source::Bibtex#italics_are_paired (app/models/source.rb, app/models/source/bibtex.rb).",
+      "validator_type": "regex",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__title", "operator": "contains", "value": "<"}],
+      "parameters": {"pattern": "^(?:[^<]|<i>[^<>]*</i>|<[^i/<]|<i[^>]|</[^i]|</i[^>])*$"},
+      "error_message": "",
+      "warning_message": "The title contains an unmatched <i> or </i> tag.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_status_is_grammatical_term",
+      "table_name": "name",
+      "field_name": "col__status_id",
+      "rule_name": "Status is not a grammatical term",
+      "description": "Ported from TaxonWorks TaxonNameClassification::Latinized (app/models/taxon_name_classification/latinized.rb).",
+      "validator_type": "absence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__status_id",
+          "operator": "in",
+          "value": ["http://purl.obolibrary.org/obo/NOMEN_0000045", "http://purl.obolibrary.org/obo/NOMEN_0000046", "http://purl.obolibrary.org/obo/NOMEN_0000047", "http://purl.obolibrary.org/obo/NOMEN_0000048", "http://purl.obolibrary.org/obo/NOMEN_0000049", "http://purl.obolibrary.org/obo/NOMEN_0000050", "http://purl.obolibrary.org/obo/NOMEN_0000051", "http://purl.obolibrary.org/obo/NOMEN_0000052", "http://purl.obolibrary.org/obo/NOMEN_0000053"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The status holds a grammatical gender or part-of-speech term, which is not a nomenclatural status. Record gender in the gender field and clear the status.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_type_designation_not_in_original",
+      "table_name": "type_material",
+      "field_name": "col__reference_id",
+      "rule_name": "Subsequent type designation is not in the original publication",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_type_source (app/models/type_material.rb).",
+      "validator_type": "related_field_not_equals",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__status_id", "operator": "in", "value": ["PARALECTOTYPE", "NEOTYPE", "LECTOTYPE"]}],
+      "parameters": {
+        "relation": "type_material:name",
+        "field": "col__reference_id",
+        "related_field": "col__reference_id",
+        "skip_if_either_empty": true
+      },
+      "error_message": "",
+      "warning_message": "A lectotype, paralectotype or neotype cannot be designated in the publication that described the name.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_type_designation_source",
+      "table_name": "type_material",
+      "field_name": "col__reference_id",
+      "rule_name": "Subsequent type designation has a source",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_type_source (app/models/type_material.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__status_id", "operator": "in", "value": ["PARALECTOTYPE", "NEOTYPE", "LECTOTYPE"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Record the publication in which this lectotype, paralectotype or neotype was designated.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_type_material_source",
+      "table_name": "type_material",
+      "field_name": "col__reference_id",
+      "rule_name": "Type or name has a source",
+      "description": "Ported from TaxonWorks TypeMaterial#sv_type_source (app/models/type_material.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__reference_id", "operator": "equals", "value": "", "relation": "type_material:name"}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "Neither this type-material record nor its name has a reference.",
+      "is_active": true,
+      "priority": 30
+    },
+    {
+      "rule_id": "tw_duplicate_taxon",
+      "table_name": "taxon",
+      "field_name": "col__name_id",
+      "rule_name": "Duplicate taxon for a name",
+      "description": "Ported from TaxonWorks Otu#sv_duplicate_otu (app/models/otu.rb).",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "info",
+      "parameters": {
+        "table": "taxon",
+        "match": [
+          {"target": "col__name_id", "self": "col__name_id"},
+          {"target": "col__name_phrase", "self": "col__name_phrase"}
+        ],
+        "exclude_self": true,
+        "expected": {"max": 0},
+        "skip_if_any_self_empty": false
+      },
+      "error_message": "",
+      "warning_message": "Another taxon uses the same name and name phrase. Merge the duplicates or distinguish them with a name phrase.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_duplicate_title",
+      "table_name": "reference",
+      "field_name": "col__title",
+      "rule_name": "Reference title is unique",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_duplicate_title (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "count_across",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [{"field": "col__title", "operator": "not_equals", "value": ""}],
+      "parameters": {
+        "table": "reference",
+        "match": [{"target": "col__title", "self": "col__title"}],
+        "exclude_self": true,
+        "expected": {"max": 0}
+      },
+      "error_message": "",
+      "warning_message": "Another reference has the same title; it may be a duplicate.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_author",
+      "table_name": "reference",
+      "field_name": "col__author",
+      "rule_name": "Reference has an author",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_authors (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["ARTICLE", "ARTICLE_JOURNAL", "ARTICLE_MAGAZINE", "ARTICLE_NEWSPAPER", "BOOK", "CHAPTER", "PAPER_CONFERENCE", "THESIS", "REPORT", "MANUSCRIPT"]
+        },
+        {"field": "col__author_id", "operator": "equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This type of reference requires an author.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_author_or_editor",
+      "table_name": "reference",
+      "field_name": "col__editor",
+      "rule_name": "Reference has an author or editor",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_contains_a_writer (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__type_id", "operator": "in", "value": ["BOOK", "CHAPTER"]},
+        {"field": "col__author", "operator": "equals", "value": ""},
+        {"field": "col__author_id", "operator": "equals", "value": ""},
+        {"field": "col__editor_id", "operator": "equals", "value": ""}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "A book or book chapter needs an author or an editor.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_book_title",
+      "table_name": "reference",
+      "field_name": "col__container_title",
+      "rule_name": "Chapter or conference paper has a book title",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_booktitle (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "in", "value": ["CHAPTER", "PAPER_CONFERENCE"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This chapter or conference paper has no book title (container title).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_institution",
+      "table_name": "reference",
+      "field_name": "col__publisher",
+      "rule_name": "Thesis or report has an institution",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_school and #sv_has_institution (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "in", "value": ["THESIS", "REPORT"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This thesis or report has no institution (publisher).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_journal",
+      "table_name": "reference",
+      "field_name": "col__container_title",
+      "rule_name": "Article has a journal",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_is_article_missing_journal (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["ARTICLE", "ARTICLE_JOURNAL", "ARTICLE_MAGAZINE", "ARTICLE_NEWSPAPER"]
+        }
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This article has no journal (container title).",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_note",
+      "table_name": "reference",
+      "field_name": "col__remarks",
+      "rule_name": "Unpublished work has a note",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_note (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "in", "value": ["MANUSCRIPT"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This unpublished work needs a note describing it.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_pages",
+      "table_name": "reference",
+      "field_name": "col__page",
+      "rule_name": "Chapter has pages",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_chapter_or_pages (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "in", "value": ["CHAPTER"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This chapter has no page range.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_publisher",
+      "table_name": "reference",
+      "field_name": "col__publisher",
+      "rule_name": "Book has a publisher",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_publisher (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "in", "value": ["BOOK", "CHAPTER"]}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This book or book chapter has no publisher.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_title",
+      "table_name": "reference",
+      "field_name": "col__title",
+      "rule_name": "Reference has a title",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_title (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [{"field": "col__type_id", "operator": "not_equals", "value": ""}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This reference has no title.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_year",
+      "table_name": "reference",
+      "field_name": "col__issued",
+      "rule_name": "Reference has a year",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_some_type_of_year and #sv_has_year (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The publication year of this reference is not recorded.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_year_before_1700",
+      "table_name": "reference",
+      "field_name": "col__issued",
+      "rule_name": "Reference year is 1700 or later",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_has_year (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "range",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {
+          "field": "col__type_id",
+          "operator": "in",
+          "value": ["ARTICLE", "ARTICLE_JOURNAL", "ARTICLE_MAGAZINE", "ARTICLE_NEWSPAPER", "BOOK", "CHAPTER", "PAPER_CONFERENCE", "THESIS", "REPORT"]
+        },
+        {"field": "col__issued", "operator": "matches", "value": "^[0-9]{4}"}
+      ],
+      "parameters": {"min": 1700},
+      "error_message": "",
+      "warning_message": "This publication year is before 1700; check it.",
+      "is_active": true,
+      "priority": 40
+    },
+    {
+      "rule_id": "tw_reference_missing_author_links",
+      "table_name": "reference",
+      "field_name": "col__author_id",
+      "rule_name": "Reference authors are linked",
+      "description": "Ported from TaxonWorks Source::Bibtex#sv_missing_roles (app/models/source/bibtex/soft_validation_extensions.rb).",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "info",
+      "conditions": [{"field": "col__author", "operator": "not_equals", "value": ""}],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "The authors of this reference are not linked to person records.",
+      "is_active": true,
+      "priority": 50
+    }
+  ]
 }

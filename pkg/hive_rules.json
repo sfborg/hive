@@ -293,6 +293,742 @@
         }
       ],
       "description": "From a distribution row, walk to its owning taxon."
+    },
+    "name:parent-name": {
+      "target_table": "name",
+      "target_alias": "parent_name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "taxon.col__name_id"
+        },
+        {
+          "from": "taxon.col__parent_id",
+          "to": "taxon.col__id",
+          "alias": "parent_taxon"
+        },
+        {
+          "from": "parent_taxon.col__name_id",
+          "to": "name.col__id",
+          "alias": "parent_name"
+        }
+      ],
+      "description": "From a name row, walk to its taxon, the parent taxon, and the parent's name."
+    },
+    "name:type-name": {
+      "target_table": "name",
+      "target_alias": "type_name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "TYPE"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "type_name"
+        }
+      ],
+      "description": "From a family- or genus-group name, walk through the TYPE name_relation to its type name."
+    },
+    "name:type-name-later-homonym": {
+      "target_table": "name_relation",
+      "target_alias": "type_homonymy",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "TYPE"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "type_name"
+        },
+        {
+          "from": "type_name.col__id",
+          "to": "name_relation.col__name_id",
+          "alias": "type_homonymy",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "LATER_HOMONYM"
+            }
+          ]
+        }
+      ],
+      "description": "From a name, walk to its type name and then to a LATER_HOMONYM name_relation of that type name."
+    },
+    "name:senior-homonym": {
+      "target_table": "name",
+      "target_alias": "senior_homonym",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "LATER_HOMONYM"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "senior_homonym"
+        }
+      ],
+      "description": "From a later homonym, walk through the LATER_HOMONYM name_relation to the senior homonym."
+    },
+    "name:replaced-by": {
+      "target_table": "name",
+      "target_alias": "replacement_name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "col__type_id",
+              "equals": "REPLACEMENT_NAME"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__name_id",
+          "to": "name.col__id",
+          "alias": "replacement_name"
+        }
+      ],
+      "description": "From a replaced name, walk through the REPLACEMENT_NAME name_relation to the replacement name."
+    },
+    "name:synonym-usage": {
+      "target_table": "synonym",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "synonym.col__name_id"
+        }
+      ],
+      "description": "From a name row, walk to a synonym row that uses it."
+    },
+    "name:holotype": {
+      "target_table": "type_material",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "type_material.col__name_id",
+          "where": [
+            {
+              "column": "col__status_id",
+              "equals": "HOLOTYPE"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to one of its type_material rows with status HOLOTYPE."
+    },
+    "name:lectotype": {
+      "target_table": "type_material",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "type_material.col__name_id",
+          "where": [
+            {
+              "column": "col__status_id",
+              "equals": "LECTOTYPE"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to one of its type_material rows with status LECTOTYPE."
+    },
+    "name:neotype": {
+      "target_table": "type_material",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "type_material.col__name_id",
+          "where": [
+            {
+              "column": "col__status_id",
+              "equals": "NEOTYPE"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to one of its type_material rows with status NEOTYPE."
+    },
+    "name:syntype": {
+      "target_table": "type_material",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "type_material.col__name_id",
+          "where": [
+            {
+              "column": "col__status_id",
+              "equals": "SYNTYPE"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to one of its type_material rows with status SYNTYPE."
+    },
+    "type_material:name": {
+      "target_table": "name",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "type_material.col__name_id",
+          "to": "name.col__id"
+        }
+      ],
+      "description": "From a type_material row, walk to the name it is the type of."
+    },
+    "name:element-originalgenus": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalGenus"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalGenus."
+    },
+    "name:element-originalsubgenus": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalSubgenus"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalSubgenus."
+    },
+    "name:element-originalspecies": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalSpecies"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalSpecies."
+    },
+    "name:element-originalsubspecies": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalSubspecies"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalSubspecies."
+    },
+    "name:element-originalvariety": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalVariety"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalVariety."
+    },
+    "name:element-originalsubvariety": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalSubvariety"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalSubvariety."
+    },
+    "name:element-originalform": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalForm"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalForm."
+    },
+    "name:element-originalsubform": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::OriginalCombination::OriginalSubform"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::OriginalCombination::OriginalSubform."
+    },
+    "name:element-genus": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Genus"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Genus."
+    },
+    "name:element-subgenus": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subgenus"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subgenus."
+    },
+    "name:element-section": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Section"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Section."
+    },
+    "name:element-subsection": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subsection"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subsection."
+    },
+    "name:element-series": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Series"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Series."
+    },
+    "name:element-subseries": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subseries"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subseries."
+    },
+    "name:element-species": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Species"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Species."
+    },
+    "name:element-subspecies": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subspecies"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subspecies."
+    },
+    "name:element-variety": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Variety"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Variety."
+    },
+    "name:element-subvariety": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subvariety"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subvariety."
+    },
+    "name:element-form": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Form"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Form."
+    },
+    "name:element-subform": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Combination::Subform"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Combination::Subform."
+    },
+    "name:forgotten-relation": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000106"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000106."
+    },
+    "name:secondary1961-relation": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000292"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000292."
+    },
+    "name:family-before-1961-relation": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000042"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000042."
+    },
+    "name:replacement-for": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000270"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000270."
+    },
+    "name:unnecessary-replacement": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000279"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000279."
+    },
+    "name:replaced-homonym-incoming": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000112"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type http://purl.obolibrary.org/obo/NOMEN_0000112."
+    },
+    "name:subsequent-designation-of": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentDesignation"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentDesignation."
+    },
+    "name:subsequent-monotypy-of": {
+      "target_table": "name_relation",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__related_name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentMonotypy"
+            }
+          ]
+        }
+      ],
+      "description": "From a name row, walk to a name_relation of TaxonWorks type TaxonNameRelationship::Typification::Genus::Subsequent::SubsequentMonotypy."
+    },
+    "name:homonym-of-suppressed": {
+      "target_table": "name_relation",
+      "target_alias": "suppression",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "name_relation.col__name_id",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000289"
+            }
+          ]
+        },
+        {
+          "from": "name_relation.col__related_name_id",
+          "to": "name.col__id",
+          "alias": "senior"
+        },
+        {
+          "from": "senior.col__id",
+          "to": "name_relation.col__name_id",
+          "alias": "suppression",
+          "where": [
+            {
+              "column": "tw__name_relationship_type",
+              "equals": "http://purl.obolibrary.org/obo/NOMEN_0000283"
+            }
+          ]
+        }
+      ],
+      "description": "From a later homonym, walk to the senior homonym and on to a total-suppression relationship of that senior name."
+    },
+    "name:otu": {
+      "target_table": "tw__otu",
+      "cardinality": "one",
+      "join": [
+        {
+          "from": "name.col__id",
+          "to": "tw__otu.name_id"
+        }
+      ],
+      "description": "From a name row, walk to a TaxonWorks OTU of that name."
     }
   },
   "rules": [

@@ -67,6 +67,13 @@ type Archive struct {
 	// Validation engine.
 	validator *usecase.ValidateRecordUseCase
 
+	// rulesetSkips records bundles that did not load because the
+	// archive lacks tables or columns their Requires block names —
+	// the TaxonWorks round-trip bundles need tw__ columns that are
+	// still a proposal against the sfga schema. Surfaced by
+	// SkippedRulesets so callers can report the rules that did not run.
+	rulesetSkips []RulesetSkip
+
 	// ruleLoader is the same bundle loader wired into `validator`.
 	// Kept as a direct reference so RefreshTimeBasedIssues can read
 	// Rule metadata (Trigger, RecheckDays) without going through the
@@ -157,7 +164,7 @@ func openReadOnly(path string, o openOpts) (*Archive, error) {
 		Lookup:             o.lookup,
 	}
 	var vErr error
-	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
+	a.validator, a.ruleLoader, a.rulesetSkips, vErr = newHiveValidator(db, path)
 	if vErr != nil {
 		db.Close()
 		return nil, vErr
@@ -209,7 +216,7 @@ func openReadWrite(path string, o openOpts) (*Archive, error) {
 		Lookup:             o.lookup,
 	}
 	var vErr error
-	a.validator, a.ruleLoader, vErr = newHiveValidator(db, path)
+	a.validator, a.ruleLoader, a.rulesetSkips, vErr = newHiveValidator(db, path)
 	if vErr != nil {
 		db.Close()
 		return nil, vErr
@@ -614,3 +621,10 @@ func (t *Tx) Context() context.Context { return t.ctx }
 // SQL returns the underlying *sql.Tx for aggregate-specific mutation code in
 // pkg/taxon.go, pkg/name.go, etc. Not intended for callers outside pkg/.
 func (t *Tx) SQL() *sql.Tx { return t.tx }
+
+// SkippedRulesets returns the rule bundles that did not load because
+// this archive lacks tables or columns they need. Their rules did not
+// run. Empty on an archive that satisfies every bundle.
+func (a *Archive) SkippedRulesets() []RulesetSkip {
+	return a.rulesetSkips
+}

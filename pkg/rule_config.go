@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -24,7 +25,7 @@ type RuleConfig struct {
 // records rows for rulesets a curator has explicitly changed;
 // missing row means "use default (enabled)".
 type RulesetConfig struct {
-	RulesetName string // "hive" | "clb" | "tw"
+	RulesetName string // one of KnownRulesets()
 	Enabled     bool
 	UpdatedAt   string
 	UpdatedBy   string
@@ -211,15 +212,15 @@ func (a *Archive) ListRulesetConfigs(ctx context.Context) ([]RulesetConfig, erro
 }
 
 // SetRulesetConfig upserts a ruleset toggle. name must be one of
-// the known bundle names ("hive" | "clb" | "tw") — enforced here
-// to avoid orphan rows for typos of nonexistent bundles.
+// the known bundle names (see KnownRulesets) — enforced here to
+// avoid orphan rows for typos of nonexistent bundles.
 func (a *Archive) SetRulesetConfig(ctx context.Context, name string, enabled bool) error {
 	if a.readOnly {
 		return ErrReadOnly
 	}
 	if !isKnownRuleset(name) {
-		return fmt.Errorf("core: set ruleset config: %w: unknown ruleset %q (must be one of hive|clb|tw)",
-			ErrValidation, name)
+		return fmt.Errorf("core: set ruleset config: %w: unknown ruleset %q (must be one of %s)",
+			ErrValidation, name, strings.Join(KnownRulesets(), "|"))
 	}
 	actor := ActorFromContext(ctx)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -260,12 +261,23 @@ func (a *Archive) ClearRulesetConfig(ctx context.Context, name string) error {
 }
 
 // isKnownRuleset gates SetRulesetConfig — typos in ruleset names
-// shouldn't silently persist as inert rows. Kept in sync with the
-// bundle list in newHiveValidator.
+// shouldn't silently persist as inert rows. Checks against the
+// embedded bundle list in rulesetSources.
 func isKnownRuleset(name string) bool {
-	switch name {
-	case "hive", "clb", "tw":
-		return true
+	for _, src := range rulesetSources {
+		if src.name == name {
+			return true
+		}
 	}
 	return false
+}
+
+// KnownRulesets returns the names of every embedded ruleset in
+// load order.
+func KnownRulesets() []string {
+	out := make([]string, len(rulesetSources))
+	for i, src := range rulesetSources {
+		out[i] = src.name
+	}
+	return out
 }
