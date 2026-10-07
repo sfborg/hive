@@ -52,3 +52,10 @@ docker-compose.yml
 # Fabricated fixture JATS documents (Order Tribbulida etc.) are
 # checked-in test data, distinct from real per-machine paper JATS.
 !testdata/**/*.jats.xml
+
+# Release build output (GoReleaser) and the notices file it generates.
+/dist/
+/THIRD_PARTY_NOTICES.txt
+
+# Python bytecode from the tools/ generators.
+__pycache__/
