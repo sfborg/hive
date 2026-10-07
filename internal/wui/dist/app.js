@@ -1115,7 +1115,8 @@ async function nomenResolver(uri) {
 }
 
 // referenceSource — combobox source that hits /api/reference/search
-// (server-side substring across author/title/citation/doi). Each
+// (server-side substring across author/title/citation/doi, plus an
+// ID-prefix match for queries of 8+ characters). Each
 // match renders as "Author (Year) Title" so the picker line reads
 // like a citation. Empty query returns [] to skip flashing the whole
 // list.
@@ -8080,7 +8081,7 @@ class SfgaDetail extends LitElement {
               <label>Original nomenclatural act citation</label>
               <sfga-combobox
                 min-search-chars="2"
-                placeholder="Search author / title / citation / DOI…"
+                placeholder="Search author / title / citation / DOI / ID…"
                 .source=${referenceSource}
                 .resolver=${referenceResolver}
                 .value=${bDraft.reference_id || ""}
@@ -10663,7 +10664,7 @@ class SfgaDetail extends LitElement {
             <label>Reference</label>
             <sfga-combobox
               min-search-chars="2"
-              placeholder="Search author / title / citation / DOI…"
+              placeholder="Search author / title / citation / DOI / ID…"
               .source=${referenceSource}
               .resolver=${referenceResolver}
               .value=${d.reference_id || ""}
@@ -15090,6 +15091,16 @@ class SfgaMetadata extends LitElement {
 // detail on the right. Read-only in this slice; add-by-DOI / add-by-
 // BibTeX and edit come later. Fetches its own data on connect.
 
+// REFERENCE_FILTERS are the workflow-stage filter chips in the
+// reference list sidebar. Values match the `filter` query parameter
+// of GET /api/reference and /api/reference/search.
+const REFERENCE_FILTERS = [
+  { value: "", label: "All", title: "Show all references" },
+  { value: "runs", label: "Runs", title: "References with at least one extraction run" },
+  { value: "assertions", label: "Assertions", title: "References with extracted assertions" },
+  { value: "pending", label: "Pending", title: "References with assertions awaiting review" },
+];
+
 class SfgaReferences extends LitElement {
   static properties = {
     // Public: when set (e.g. by the shell routing an Issues click),
@@ -15239,6 +15250,10 @@ class SfgaReferences extends LitElement {
     // "author" is the alphabetical fallback for curators who
     // specifically want to scan by name. Persisted in localStorage.
     _sort: { state: true },
+    // Workflow-stage filter for the reference list (one of the
+    // REFERENCE_FILTERS values; "" = all). Applies to both the
+    // paginated list and search. Persisted in localStorage.
+    _filter: { state: true },
     // Infinite-scroll state: true when there are more references
     // to fetch past the currently-loaded window. False once we've
     // paginated to the end (or a search returns everything at once).
@@ -16518,7 +16533,7 @@ class SfgaReferences extends LitElement {
       overflow: auto;
       padding: var(--sp-2);
       display: grid;
-      grid-template-rows: auto auto 1fr;
+      grid-template-rows: auto auto auto 1fr;
       gap: var(--sp-1);
       align-content: start;
     }
@@ -16630,7 +16645,7 @@ class SfgaReferences extends LitElement {
       border-right: 1px solid var(--border);
       font-family: var(--font-mono);
       font-size: var(--fs-sm);
-      grid-template-rows: auto auto 1fr;
+      grid-template-rows: auto auto auto 1fr;
     }
     aside .search-row {
       display: flex;
@@ -16676,6 +16691,9 @@ class SfgaReferences extends LitElement {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: var(--sp-1);
+    }
+    aside .filter-row {
+      grid-template-columns: repeat(4, 1fr);
     }
     aside .sort-chip {
       min-width: 0;
@@ -16972,6 +16990,11 @@ class SfgaReferences extends LitElement {
       localStorage.getItem("hive.references.sort") === "author"
         ? "author"
         : "recent";
+    this._filter = "";
+    try {
+      const f = localStorage.getItem("hive.references.filter");
+      if (REFERENCE_FILTERS.some((o) => o.value === f)) this._filter = f;
+    } catch {}
     this._hasMore = true;
     this._dashboard = null;
     this._activeTool = "read";
@@ -17223,12 +17246,15 @@ class SfgaReferences extends LitElement {
       if (q) {
         // Search returns relevance-ranked results in one shot; no
         // pagination. Sort toggle doesn't apply during search.
-        const page = await api.reference.search({ q, limit });
+        const opts = { q, limit };
+        if (this._filter) opts.filter = this._filter;
+        const page = await api.reference.search(opts);
         items = page.items || [];
         this._hasMore = false;
       } else {
         const opts = { limit, offset };
         if (this._sort === "recent") opts.sort = "recent";
+        if (this._filter) opts.filter = this._filter;
         const page = await api.reference.list(opts);
         items = page.items || [];
         this._hasMore = items.length === limit;
@@ -17246,6 +17272,15 @@ class SfgaReferences extends LitElement {
     this._sort = sort;
     try {
       localStorage.setItem("hive.references.sort", sort);
+    } catch {}
+    this._fetchPage(true);
+  }
+
+  _setFilter(filter) {
+    if (this._filter === filter) return;
+    this._filter = filter;
+    try {
+      localStorage.setItem("hive.references.filter", filter);
     } catch {}
     this._fetchPage(true);
   }
@@ -18946,7 +18981,7 @@ class SfgaReferences extends LitElement {
           <input
             class="search"
             type="text"
-            placeholder="Search author / title / citation / DOI…"
+            placeholder="Search author / title / citation / DOI / ID…"
             .value=${this._query}
             @input=${(e) => this._onQueryChange(e.target.value)}
           />
@@ -18980,12 +19015,27 @@ class SfgaReferences extends LitElement {
             A–Z
           </button>
         </div>
+        <div class="sort-row filter-row" role="group" aria-label="Filter references">
+          ${REFERENCE_FILTERS.map(
+            (o) => html`
+              <button
+                class=${"sort-chip" + (this._filter === o.value ? " active" : "")}
+                type="button"
+                title=${o.title}
+                aria-pressed=${this._filter === o.value ? "true" : "false"}
+                @click=${() => this._setFilter(o.value)}
+              >
+                ${o.label}
+              </button>
+            `,
+          )}
+        </div>
         ${this._loading && this._hits.length === 0
           ? html`<div class="empty" role="status">Loading…</div>`
           : this._hits.length === 0
             ? html`<div class="empty">
-                ${this._query
-                  ? "(No references match the search)"
+                ${this._query || this._filter
+                  ? "(No references match the search or filter)"
                   : "(No references)"}
               </div>`
             : html`

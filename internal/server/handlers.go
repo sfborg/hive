@@ -3694,6 +3694,7 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Param        limit query int false "Page size"
 // @Param        offset query int false "Row offset"
 // @Param        sort query string false "Sort: author|recent"
+// @Param        filter query string false "Workflow filter: runs|assertions|pending"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
@@ -3708,7 +3709,12 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("sort") == "recent" {
 		sort = hive.ReferenceSortRecent
 	}
-	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset, sort)
+	filter, ok := hive.ParseReferenceFilter(r.URL.Query().Get("filter"))
+	if !ok {
+		writeBadRequest(w, r, "invalid 'filter' value")
+		return
+	}
+	hits, total, err := s.a.ListReferencesPage(r.Context(), limit, offset, sort, filter)
 	if err != nil {
 		writeProblem(w, r, err)
 		return
@@ -3724,21 +3730,23 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// handleReferenceSearch returns references whose author, title, or
-// citation matches q as a case-insensitive substring.
+// handleReferenceSearch returns references whose author, title,
+// citation, or DOI matches q as a case-insensitive substring, or
+// whose ID starts with q.
 //
 // @Summary      Search references
-// @Description  Case-insensitive substring search across author, title, and citation.
+// @Description  Case-insensitive substring search across author, title, citation, and DOI; queries of 8+ characters also match an ID prefix.
 // @Tags         references
 // @Produce      json
 // @Param        q query string true "Query string"
 // @Param        limit query int false "Page size"
+// @Param        filter query string false "Workflow filter: runs|assertions|pending"
 // @Success      200 {object} apiPage[apiReferenceHit]
 // @Failure      400 {object} problem
 // @Failure      500 {object} problem
 // @Router       /reference/search [get]
 func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		writeBadRequest(w, r, "query parameter 'q' is required")
 		return
@@ -3752,7 +3760,12 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	hits, err := s.a.SearchReferences(r.Context(), q, limit)
+	filter, ok := hive.ParseReferenceFilter(r.URL.Query().Get("filter"))
+	if !ok {
+		writeBadRequest(w, r, "invalid 'filter' value")
+		return
+	}
+	hits, err := s.a.SearchReferences(r.Context(), q, limit, filter)
 	if err != nil {
 		writeProblem(w, r, err)
 		return

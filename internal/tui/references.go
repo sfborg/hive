@@ -58,7 +58,7 @@ type referenceDetailMsg struct {
 func (m referencesModel) Load() tea.Cmd {
 	a := m.a
 	return func() tea.Msg {
-		hits, total, err := a.ListReferencesPage(context.Background(), 200, 0, hive.ReferenceSortAuthor)
+		hits, total, err := a.ListReferencesPage(context.Background(), 200, 0, hive.ReferenceSortAuthor, hive.ReferenceFilterNone)
 		return referencesLoadedMsg{hits: hits, total: total, err: err}
 	}
 }

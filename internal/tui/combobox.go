@@ -438,7 +438,7 @@ func referenceComboSource(a *hive.Archive) comboboxSource {
 			if len(trimmed) < 2 {
 				return comboboxResultsMsg{query: q, results: nil}
 			}
-			hits, err := a.SearchReferences(context.Background(), trimmed, 20)
+			hits, err := a.SearchReferences(context.Background(), trimmed, 20, hive.ReferenceFilterNone)
 			if err != nil {
 				return comboboxResultsMsg{query: q, results: nil}
 			}

@@ -361,7 +361,7 @@ func (m *addRefModel) fireProjectSearch(q string) tea.Cmd {
 	m.err = ""
 	a := m.a
 	return func() tea.Msg {
-		hits, err := a.SearchReferences(context.Background(), q, 15)
+		hits, err := a.SearchReferences(context.Background(), q, 15, hive.ReferenceFilterNone)
 		return projectSearchDone{query: q, hits: hits, err: err}
 	}
 }

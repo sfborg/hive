@@ -4039,6 +4039,10 @@ paths:
         in: query
         name: sort
         type: string
+      - description: 'Workflow filter: runs|assertions|pending'
+        in: query
+        name: filter
+        type: string
       produces:
       - application/json
       responses:
@@ -5032,7 +5036,8 @@ paths:
       - references
   /reference/search:
     get:
-      description: Case-insensitive substring search across author, title, and citation.
+      description: Case-insensitive substring search across author, title, citation,
+        and DOI; queries of 8+ characters also match an ID prefix.
       parameters:
       - description: Query string
         in: query
@@ -5043,6 +5048,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: 'Workflow filter: runs|assertions|pending'
+        in: query
+        name: filter
+        type: string
       produces:
       - application/json
       responses:

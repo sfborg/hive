@@ -2325,6 +2325,12 @@
                         "description": "Sort: author|recent",
                         "name": "sort",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workflow filter: runs|assertions|pending",
+                        "name": "filter",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3052,7 +3058,7 @@
         },
         "/reference/search": {
             "get": {
-                "description": "Case-insensitive substring search across author, title, and citation.",
+                "description": "Case-insensitive substring search across author, title, citation, and DOI; queries of 8+ characters also match an ID prefix.",
                 "produces": [
                     "application/json"
                 ],
@@ -3072,6 +3078,12 @@
                         "type": "integer",
                         "description": "Page size",
                         "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workflow filter: runs|assertions|pending",
+                        "name": "filter",
                         "in": "query"
                     }
                 ],

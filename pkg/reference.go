@@ -187,13 +187,73 @@ const (
 	ReferenceSortRecent
 )
 
+// ReferenceFilter narrows ListReferencesPage and SearchReferences to
+// references at a given stage of the extraction workflow.
+type ReferenceFilter string
+
+const (
+	// ReferenceFilterNone applies no workflow filter.
+	ReferenceFilterNone ReferenceFilter = ""
+	// ReferenceFilterRuns keeps references with at least one
+	// non-deleted extraction run, including runs that produced no
+	// assertions.
+	ReferenceFilterRuns ReferenceFilter = "runs"
+	// ReferenceFilterAssertions keeps references with at least one
+	// assertion whose source run (if any) is not soft-deleted.
+	ReferenceFilterAssertions ReferenceFilter = "assertions"
+	// ReferenceFilterPending keeps references with at least one
+	// visible assertion still in 'pending' status.
+	ReferenceFilterPending ReferenceFilter = "pending"
+)
+
+// ParseReferenceFilter maps a wire value to a ReferenceFilter. The
+// boolean is false for unrecognized values.
+func ParseReferenceFilter(s string) (ReferenceFilter, bool) {
+	switch f := ReferenceFilter(s); f {
+	case ReferenceFilterNone, ReferenceFilterRuns,
+		ReferenceFilterAssertions, ReferenceFilterPending:
+		return f, true
+	}
+	return ReferenceFilterNone, false
+}
+
+// referenceFilterSQL returns a WHERE predicate over the reference
+// table for f, or "" when f applies no filter. Assertions whose
+// source run is soft-deleted are excluded, matching the join-filter
+// semantics documented on hive__reference_assertion.source_run_id.
+func referenceFilterSQL(f ReferenceFilter) string {
+	const visibleAssertion = `EXISTS (
+		SELECT 1 FROM hive__reference_assertion ra
+		LEFT JOIN hive__extraction_run er ON er.run_id = ra.source_run_id
+		WHERE ra.reference_id = reference.col__id
+		  AND er.deleted_at IS NULL`
+	switch f {
+	case ReferenceFilterRuns:
+		return `EXISTS (
+		SELECT 1 FROM hive__extraction_run er
+		WHERE er.reference_id = reference.col__id
+		  AND er.deleted_at IS NULL)`
+	case ReferenceFilterAssertions:
+		return visibleAssertion + `)`
+	case ReferenceFilterPending:
+		return visibleAssertion + ` AND ra.status = 'pending')`
+	}
+	return ""
+}
+
 // ListReferencesPage returns references with SQL-level LIMIT/OFFSET
 // pagination. limit == 0 disables the LIMIT clause. Sort order
-// selected by the sort parameter.
-func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sort ReferenceSort) ([]ReferenceHit, int, error) {
+// selected by the sort parameter; filter restricts the rows (and the
+// returned total) to a workflow stage.
+func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sort ReferenceSort, filter ReferenceFilter) ([]ReferenceHit, int, error) {
+	where := ""
+	if pred := referenceFilterSQL(filter); pred != "" {
+		where = " WHERE " + pred
+	}
+
 	var total int
 	if err := a.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reference`,
+		`SELECT COUNT(*) FROM reference`+where,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("core: count references: %w", err)
 	}
@@ -214,7 +274,7 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sor
 		COALESCE(col__title, ''),
 		COALESCE(col__citation, ''),
 		COALESCE(col__type_id, '')
-	FROM reference
+	FROM reference` + where + `
 	ORDER BY ` + orderBy
 
 	args := []any{}
@@ -225,14 +285,36 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sor
 	return a.scanReferenceHits(ctx, q, args, total)
 }
 
-// SearchReferences returns references whose author, title, or citation
-// matches q as a case-insensitive substring. Ordered by author + year
-// for stable browsing.
-func (a *Archive) SearchReferences(ctx context.Context, q string, limit int) ([]ReferenceHit, error) {
+// minIDPrefixLen is the shortest query SearchReferences treats as a
+// possible col__id prefix. Shorter queries would match unrelated
+// UUIDs that happen to start with common hex-letter words.
+const minIDPrefixLen = 8
+
+// SearchReferences returns references whose author, title, citation,
+// or DOI matches q as a case-insensitive substring, or whose col__id
+// starts with q (when q is at least minIDPrefixLen characters).
+// filter restricts results to a workflow stage. Ordered by author +
+// year for stable browsing.
+func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, filter ReferenceFilter) ([]ReferenceHit, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	const query = `SELECT
+	pattern := "%" + q + "%"
+	match := `(LOWER(col__author)   LIKE LOWER(?)
+		   OR LOWER(col__title)    LIKE LOWER(?)
+		   OR LOWER(col__citation) LIKE LOWER(?)
+		   OR LOWER(col__doi)      LIKE LOWER(?)`
+	args := []any{pattern, pattern, pattern, pattern}
+	if len(q) >= minIDPrefixLen {
+		match += `
+		   OR LOWER(col__id) LIKE LOWER(?)`
+		args = append(args, q+"%")
+	}
+	match += `)`
+	if pred := referenceFilterSQL(filter); pred != "" {
+		match += " AND " + pred
+	}
+	query := `SELECT
 		col__id,
 		COALESCE(col__author, ''),
 		COALESCE(substr(col__issued, 1, 4), ''),
@@ -240,16 +322,11 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int) ([]
 		COALESCE(col__citation, ''),
 		COALESCE(col__type_id, '')
 	FROM reference
-	WHERE LOWER(col__author)   LIKE LOWER(?)
-	   OR LOWER(col__title)    LIKE LOWER(?)
-	   OR LOWER(col__citation) LIKE LOWER(?)
-	   OR LOWER(col__doi)      LIKE LOWER(?)
+	WHERE ` + match + `
 	ORDER BY col__author, col__issued, col__title
 	LIMIT ?`
-	pattern := "%" + q + "%"
-	hits, _, err := a.scanReferenceHits(
-		ctx, query, []any{pattern, pattern, pattern, pattern, limit}, 0,
-	)
+	args = append(args, limit)
+	hits, _, err := a.scanReferenceHits(ctx, query, args, 0)
 	return hits, err
 }
 
