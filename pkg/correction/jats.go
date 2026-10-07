@@ -1,8 +1,12 @@
 package correction
 
 import (
+	"bytes"
 	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -145,4 +149,19 @@ func XMLEscape(s string) string {
 		">", "&gt;",
 	)
 	return r.Replace(s)
+}
+
+// CheckWellFormed reports whether doc parses as well-formed XML.
+// Appliers splice raw bytes, so every applied correction is checked
+// before the result is stored.
+func CheckWellFormed(doc []byte) error {
+	dec := xml.NewDecoder(bytes.NewReader(doc))
+	for {
+		if _, err := dec.Token(); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("not well-formed XML: %w", err)
+		}
+	}
 }

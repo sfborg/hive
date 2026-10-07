@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -928,7 +929,7 @@ func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 	if !ok {
 		return jats, nil
 	}
-	wrapper := renderNoiseWrapper(c.ID, payload.Text)
+	wrapper := renderNoiseWrapper(c.ID, jats[openIdx:closeIdx])
 	var out bytes.Buffer
 	out.Grow(len(jats) + len(wrapper) - (closeIdx - openIdx))
 	out.Write(jats[:openIdx])
@@ -940,13 +941,28 @@ func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 // blockTagOpenRegex matches the opening tag of a removable body
 // block — <p> or <title>. Reader-side click handler targets the same
 // element set (paragraphs and section headings), so the applier's
-// scan needs to cover both. Excludes hive-namespaced infrastructure
-// (page-break wrappers, noise wrappers) via post-match content
-// checks in findBlockByText.
-var blockTagOpenRegex = regexp.MustCompile(`<(p|title)\b([^>]*)>`)
+// scan needs to cover both. The name must be followed by whitespace
+// or '>' so that <title-group> and similar names don't match.
+// Excludes hive-namespaced infrastructure (page-break wrappers, noise
+// wrappers) via post-match content checks in findBlockByText.
+var blockTagOpenRegex = regexp.MustCompile(`<(p|title)(\s[^>]*)?>`)
+
+var (
+	pageBreakRegex = regexp.MustCompile(`<hive:page-break\s+page="(\d+)"`)
+	commentRegex   = regexp.MustCompile(`(?s)<!--.*?-->`)
+	tagRegex       = regexp.MustCompile(`<[^>]+>`)
+	spaceRegex     = regexp.MustCompile(`\s+`)
+)
 
 // findBlockByText walks every <p>…</p> and <title>…</title> in the
 // JATS looking for one whose normalized text content equals wantText.
+// Text content has comments and tags removed and entities decoded, so
+// it compares equal to the browser's textContent of the same element.
+// Nested blocks (a <p> inside a list inside a <p>) are candidates too,
+// and the closing tag is found by depth so the returned range always
+// covers one complete element. Comments are skipped, so the copy of a
+// removed element kept inside a <hive:noise> wrapper never matches.
+//
 // When pdfPage is non-zero, the match is filtered to blocks whose
 // nearest preceding <hive:page-break page="N"/> marker matches
 // pdfPage — resolves ambiguity when identical noise text appears on
@@ -959,7 +975,6 @@ func findBlockByText(jats []byte, wantText string, pdfPage int) (openIdx, closeI
 	if wantNormalized == "" {
 		return 0, 0, false
 	}
-	pageBreakRe := regexp.MustCompile(`<hive:page-break\s+page="(\d+)"`)
 	pos := 0
 	for pos < len(jats) {
 		next := blockTagOpenRegex.FindSubmatchIndex(jats[pos:])
@@ -968,27 +983,37 @@ func findBlockByText(jats []byte, wantText string, pdfPage int) (openIdx, closeI
 		}
 		absStart := pos + next[0]
 		absOpenEnd := pos + next[1]
+		if c := bytes.Index(jats[pos:absStart], []byte("<!--")); c >= 0 {
+			end := bytes.Index(jats[pos+c+4:], []byte("-->"))
+			if end < 0 {
+				return 0, 0, false
+			}
+			pos = pos + c + 4 + end + 3
+			continue
+		}
+		if bytes.HasSuffix(jats[absStart:absOpenEnd], []byte("/>")) {
+			pos = absOpenEnd
+			continue
+		}
 		elemName := string(jats[pos+next[2] : pos+next[3]])
-		closeTag := []byte("</" + elemName + ">")
-		closeStart := bytes.Index(jats[absOpenEnd:], closeTag)
-		if closeStart < 0 {
+		absCloseEnd, found := matchingCloseEnd(jats, absOpenEnd, elemName)
+		if !found {
 			return 0, 0, false
 		}
-		absCloseEnd := absOpenEnd + closeStart + len(closeTag)
 		// Skip infrastructure paragraphs (hive:page-break wrappers)
 		// so they don't get scanned as content candidates.
 		if bytes.Contains(jats[absStart:absOpenEnd], []byte(`content-type="hive-page-break"`)) {
 			pos = absCloseEnd
 			continue
 		}
-		content := stripXMLTags(jats[absOpenEnd : absCloseEnd-len(closeTag)])
-		gotNormalized := collapseWhitespace(strings.TrimSpace(content))
-		if gotNormalized == wantNormalized {
+		closeLen := len("</" + elemName + ">")
+		content := elementText(jats[absOpenEnd : absCloseEnd-closeLen])
+		if collapseWhitespace(strings.TrimSpace(content)) == wantNormalized {
 			if pdfPage == 0 {
 				return absStart, absCloseEnd, true
 			}
 			currentPage := 0
-			for _, m := range pageBreakRe.FindAllSubmatchIndex(jats[:absStart], -1) {
+			for _, m := range pageBreakRegex.FindAllSubmatchIndex(jats[:absStart], -1) {
 				if n, err := strconv.Atoi(string(jats[m[2]:m[3]])); err == nil {
 					currentPage = n
 				}
@@ -997,60 +1022,97 @@ func findBlockByText(jats []byte, wantText string, pdfPage int) (openIdx, closeI
 				return absStart, absCloseEnd, true
 			}
 		}
-		pos = absCloseEnd
+		// Continue inside this element so nested blocks are scanned.
+		pos = absOpenEnd
 	}
 	return 0, 0, false
 }
 
-// renderNoiseWrapper produces the <hive:noise correction-id="…">
-// element that replaces a text-remove target. The original text goes
-// inside an XML comment so every generic renderer drops it; hive-aware
-// tools inspect the wrapper by correction-id.
-//
-// XML comments can't contain the "--" sequence. Sanitize by inserting
-// a zero-width space between adjacent hyphens — invisible to human
-// inspection, reversible for any tool that wants exact bytes (though
-// the authoritative source is the correction row's payload).
-func renderNoiseWrapper(correctionID, originalText string) string {
-	// Trim + normalize whitespace for the hint. Long headers get
-	// truncated so the comment doesn't balloon; the full text is
-	// always in the correction row's payload.
-	hint := strings.TrimSpace(originalText)
-	hint = collapseWhitespace(hint)
-	const maxHint = 200
-	if len(hint) > maxHint {
-		hint = hint[:maxHint] + "…"
+// matchingCloseEnd returns the offset just past the closing tag that
+// balances an opening <name> tag ending at from. Same-name elements
+// nested inside are counted; comments are skipped.
+func matchingCloseEnd(jats []byte, from int, name string) (int, bool) {
+	openTag := []byte("<" + name)
+	closeTag := []byte("</" + name + ">")
+	depth := 1
+	i := from
+	for i < len(jats) {
+		lt := bytes.IndexByte(jats[i:], '<')
+		if lt < 0 {
+			return 0, false
+		}
+		i += lt
+		rest := jats[i:]
+		switch {
+		case bytes.HasPrefix(rest, []byte("<!--")):
+			end := bytes.Index(rest[4:], []byte("-->"))
+			if end < 0 {
+				return 0, false
+			}
+			i += 4 + end + 3
+		case bytes.HasPrefix(rest, closeTag):
+			depth--
+			i += len(closeTag)
+			if depth == 0 {
+				return i, true
+			}
+		case bytes.HasPrefix(rest, openTag) && len(rest) > len(openTag) &&
+			isTagNameEnd(rest[len(openTag)]):
+			gt := bytes.IndexByte(rest, '>')
+			if gt < 0 {
+				return 0, false
+			}
+			if rest[gt-1] != '/' {
+				depth++
+			}
+			i += gt + 1
+		default:
+			i++
+		}
 	}
-	// Escape "--" per the XML spec's ban on double-hyphen inside
-	// comments. Zero-width space (U+200B) between the two hyphens
-	// leaves the sequence recognizable but no longer a syntax
-	// collision.
-	hint = strings.ReplaceAll(hint, "--", "-​-")
-	// A trailing hyphen would make the closing "-->" a triple-hyphen
-	// sequence; the XML spec bans "---" too when it ends a comment.
-	// Guard by inserting a trailing space when needed.
-	if strings.HasSuffix(hint, "-") {
-		hint += " "
-	}
-	return fmt.Sprintf(`<hive:noise correction-id="%s"><!-- %s --></hive:noise>`,
-		correction.XMLEscape(correctionID), hint)
+	return 0, false
 }
 
-// stripXMLTags removes all XML tags from a byte slice and returns the
-// text content. Used as a fallback when a text-remove correction
-// arrives without a payload — the applier reads the current element
-// content directly so the wrapper still carries a hint.
-func stripXMLTags(src []byte) string {
-	re := regexp.MustCompile(`<[^>]+>`)
-	return string(re.ReplaceAll(src, []byte("")))
+func isTagNameEnd(b byte) bool {
+	return b == '>' || b == '/' || b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
+// elementText returns the text content of an XML fragment: comments
+// and tags removed, entity and character references decoded.
+func elementText(src []byte) string {
+	s := commentRegex.ReplaceAll(src, nil)
+	s = tagRegex.ReplaceAll(s, nil)
+	return html.UnescapeString(string(s))
+}
+
+// renderNoiseWrapper produces the <hive:noise correction-id="…">
+// element that replaces a text-remove target. The removed element's
+// XML is kept verbatim inside an XML comment, so generic renderers
+// drop it while restore can splice it back unchanged, inline markup
+// included. The original="element" attribute marks this form;
+// wrappers without it hold a plain-text hint instead.
+func renderNoiseWrapper(correctionID string, original []byte) string {
+	return fmt.Sprintf(`<hive:noise correction-id="%s" original="element"><!-- %s --></hive:noise>`,
+		correction.XMLEscape(correctionID), escapeComment(string(original)))
+}
+
+// escapeComment makes s safe to embed in an XML comment, which may
+// not contain "--" or end in "-". Every hyphen is followed by a
+// zero-width space (U+200B); unescapeComment reverses it.
+func escapeComment(s string) string {
+	return strings.ReplaceAll(s, "-", "-\u200b")
+}
+
+// unescapeComment reverses escapeComment. It also decodes the older
+// hint form, which put a zero-width space only between paired
+// hyphens.
+func unescapeComment(s string) string {
+	return strings.ReplaceAll(s, "-\u200b", "-")
 }
 
 // collapseWhitespace normalizes runs of whitespace to a single space.
-// Keeps the noise-comment hint readable regardless of how the source
-// element wrapped its text.
 func collapseWhitespace(s string) string {
-	re := regexp.MustCompile(`\s+`)
-	return re.ReplaceAllString(s, " ")
+	return spaceRegex.ReplaceAllString(s, " ")
 }
 
 // ApplyTextRestoreToJATS reverses a text-remove correction: locates
@@ -1082,11 +1144,14 @@ func ApplyTextRestoreToJATS(jats []byte, c *correction.Correction) ([]byte, erro
 	if payload.RemoveCorrectionID == "" {
 		return nil, fmt.Errorf("apply text-restore: payload.remove_correction_id required")
 	}
-	openIdx, closeIdx, original, ok := findNoiseWrapper(jats, payload.RemoveCorrectionID)
+	openIdx, closeIdx, original, isElement, ok := findNoiseWrapper(jats, payload.RemoveCorrectionID)
 	if !ok {
 		return jats, nil
 	}
-	replacement := "<p>" + correction.XMLEscape(original) + "</p>"
+	replacement := original
+	if !isElement {
+		replacement = "<p>" + correction.XMLEscape(original) + "</p>"
+	}
 	var out bytes.Buffer
 	out.Grow(len(jats) + len(replacement) - (closeIdx - openIdx))
 	out.Write(jats[:openIdx])
@@ -1095,47 +1160,36 @@ func ApplyTextRestoreToJATS(jats []byte, c *correction.Correction) ([]byte, erro
 	return out.Bytes(), nil
 }
 
-// noiseWrapperRegex matches the opening tag of a hive:noise wrapper
-// keyed by correction-id. Capture group 1 is the whole opening tag
-// span (so callers know where the element starts).
-var noiseWrapperRegex = regexp.MustCompile(
-	`<hive:noise\s+correction-id="([^"]+)"\s*>`)
-
 // findNoiseWrapper locates the <hive:noise correction-id="X"> element
 // matching the given correction id, returning its byte range and the
-// original text recovered from the XML comment inside. Reverses the
-// -/ZWSP/- escape renderNoiseWrapper applies so the recovered text is
-// the original bytes (modulo the safe-hint truncation the wrapper's
-// comment carried — which is why callers targeting exact-bytes
-// training-data should read the text-remove correction's payload
-// rather than the wrapper).
-func findNoiseWrapper(jats []byte, removeCorrectionID string) (openIdx, closeIdx int, original string, ok bool) {
-	pattern := `<hive:noise\s+correction-id="` + regexp.QuoteMeta(removeCorrectionID) + `"\s*>`
+// content recovered from the XML comment inside. isElement reports
+// whether that content is the removed element's XML (the
+// original="element" form) rather than an older plain-text hint,
+// which may be truncated; exact text for training data comes from the
+// text-remove correction's payload either way.
+func findNoiseWrapper(jats []byte, removeCorrectionID string) (openIdx, closeIdx int, original string, isElement, ok bool) {
+	pattern := `<hive:noise\s+correction-id="` + regexp.QuoteMeta(removeCorrectionID) + `"([^>]*)>`
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return 0, 0, "", false
+		return 0, 0, "", false, false
 	}
-	loc := re.FindIndex(jats)
+	loc := re.FindSubmatchIndex(jats)
 	if loc == nil {
-		return 0, 0, "", false
+		return 0, 0, "", false, false
 	}
+	isElement = bytes.Contains(jats[loc[2]:loc[3]], []byte(`original="element"`))
 	closeTag := []byte("</hive:noise>")
 	closeStart := bytes.Index(jats[loc[1]:], closeTag)
 	if closeStart < 0 {
-		return 0, 0, "", false
+		return 0, 0, "", false, false
 	}
 	inner := jats[loc[1] : loc[1]+closeStart]
-	// The wrapper's child is a single XML comment; strip the
-	// "<!--" and "-->" delimiters and the sanitize-escape ZWSP so
-	// the recovered text reads naturally.
-	commentText := ""
 	if commentOpen := bytes.Index(inner, []byte("<!--")); commentOpen >= 0 {
 		commentClose := bytes.Index(inner[commentOpen:], []byte("-->"))
 		if commentClose >= 0 {
 			raw := inner[commentOpen+4 : commentOpen+commentClose]
-			commentText = strings.TrimSpace(string(raw))
-			commentText = strings.ReplaceAll(commentText, "-​-", "--")
+			original = unescapeComment(strings.TrimSpace(string(raw)))
 		}
 	}
-	return loc[0], loc[1] + closeStart + len(closeTag), commentText, true
+	return loc[0], loc[1] + closeStart + len(closeTag), original, isElement, true
 }

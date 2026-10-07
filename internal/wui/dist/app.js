@@ -15405,6 +15405,9 @@ class SfgaReferences extends LitElement {
     _corrections: { state: true },
     _bboxForm: { state: true },
     _bboxFormBusy: { state: true },
+    // Problem reported by the last correction save, shown above the
+    // pane it came from: { side: "reader" | "pdf", text }.
+    _correctionWarning: { state: true },
     // GROBID-extracted regions from the JATS sidecar — rendered
     // as muted overlays on the PDF viewer alongside the curator
     // corrections so the curator sees every detected region at a
@@ -19081,6 +19084,7 @@ class SfgaReferences extends LitElement {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      await this._noteCorrectionResult(r, "pdf");
       if (r.ok) {
         this._closeBBoxForm();
         await this._fetchCorrections(this._current.id);
@@ -19375,6 +19379,7 @@ class SfgaReferences extends LitElement {
           }),
         }),
       });
+      await this._noteCorrectionResult(r, "reader");
       if (r.ok) {
         await this._fetchCorrections(this._current.id);
         this._reloadReaderIframe();
@@ -19404,6 +19409,7 @@ class SfgaReferences extends LitElement {
           payload: JSON.stringify({ text, pdf_page: pdfPage || 0 }),
         }),
       });
+      await this._noteCorrectionResult(r, "reader");
       if (r.ok) {
         await this._fetchCorrections(this._current.id);
         this._reloadReaderIframe();
@@ -19414,14 +19420,47 @@ class SfgaReferences extends LitElement {
     }
   }
 
-  // _reloadReaderIframe forces the reader pane to re-fetch its
+  // _noteCorrectionResult records any problem a correction save
+  // reported: the error body of a failed request, or the warnings of
+  // a saved correction whose JATS update did not apply cleanly.
+  // Reads a clone so callers can still consume the response.
+  async _noteCorrectionResult(r, side) {
+    let text = "";
+    try {
+      if (r.ok) {
+        const body = await r.clone().json();
+        if (Array.isArray(body?.warnings) && body.warnings.length > 0) {
+          text = "Correction saved, but the document was not updated: " +
+            body.warnings.join("; ");
+        }
+      } else {
+        const body = await r.clone().json().catch(() => null);
+        text = "Correction failed: " + (body?.detail || body?.title || `HTTP ${r.status}`);
+      }
+    } catch (err) {
+      text = "";
+    }
+    this._correctionWarning = text ? { side, text } : null;
+  }
+
+  _renderCorrectionWarning(side) {
+    const w = this._correctionWarning;
+    if (!w || w.side !== side) return "";
+    return html`<div class="error" role="alert">${w.text}</div>`;
+  }
+
+  // _reloadReaderIframe asks each reader pane to re-fetch its
   // sidecar so the JATS mutation (new fig/table-wrap added by the
-  // just-saved correction) becomes visible. Simplest reliable
-  // mechanism: reassign the iframe's src to the same URL with a
-  // cache-busting query param.
+  // just-saved correction) becomes visible. The reader swaps the
+  // document in place and keeps its page; a pane whose window is not
+  // available yet is reloaded by resetting its src.
   _reloadReaderIframe() {
     const iframes = this.renderRoot?.querySelectorAll("iframe.pane.reader") || [];
     for (const iframe of iframes) {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: "hive:reload-doc" }, "*");
+        continue;
+      }
       const base = iframe.src.replace(/[?&]t=\d+$/, "");
       const sep = base.includes("?") ? "&" : "?";
       iframe.src = `${base}${sep}t=${Date.now()}`;
@@ -20201,6 +20240,7 @@ class SfgaReferences extends LitElement {
                       @click=${() => this._setActiveTool("text-remove")}
                     >Remove noise</button>
                   </div>
+                  ${this._renderCorrectionWarning("reader")}
                   <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
                 </div>
                 <div class="pdf-column">
@@ -20220,6 +20260,7 @@ class SfgaReferences extends LitElement {
                       @click=${() => this._setActiveTool("bbox")}
                     >BBox</button>
                   </div>
+                  ${this._renderCorrectionWarning("pdf")}
                   ${this._renderChipStrip()}
                   <sfga-pdf-viewer
                     class="pane pdf"

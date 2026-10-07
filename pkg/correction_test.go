@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -184,7 +185,7 @@ func TestApplyBBoxAddRejectsBadContentType(t *testing.T) {
 
 // TestApplyTextRemoveWrapsMatchingParagraph covers the common case:
 // a body paragraph whose text matches the payload gets replaced by a
-// <hive:noise> wrapper carrying the original text inside a comment.
+// <hive:noise> wrapper carrying the original element inside a comment.
 // Untouched paragraphs stay put.
 func TestApplyTextRemoveWrapsMatchingParagraph(t *testing.T) {
 	jats := []byte(`<article><body>
@@ -205,13 +206,13 @@ func TestApplyTextRemoveWrapsMatchingParagraph(t *testing.T) {
 		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
 	}
 	got := string(out)
-	if !strings.Contains(got, `<hive:noise correction-id="c-abc123">`) {
+	if !strings.Contains(got, `<hive:noise correction-id="c-abc123" original="element">`) {
 		t.Errorf("missing hive:noise wrapper:\n%s", got)
 	}
-	if !strings.Contains(got, `<!-- Journal of Taxonomy Vol. 60 -->`) {
-		t.Errorf("missing text hint in comment:\n%s", got)
+	if !strings.Contains(got, `<!-- <p>Journal of Taxonomy Vol. 60</p> -->`) {
+		t.Errorf("missing original element in comment:\n%s", got)
 	}
-	if strings.Contains(got, `<p>Journal of Taxonomy Vol. 60</p>`) {
+	if strings.Contains(withoutComments(got), `<p>Journal of Taxonomy Vol. 60</p>`) {
 		t.Errorf("original <p> should be replaced:\n%s", got)
 	}
 	if !strings.Contains(got, `<p>Real body content that should stay.</p>`) {
@@ -245,14 +246,14 @@ func TestApplyTextRemoveDisambiguatesByPage(t *testing.T) {
 		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
 	}
 	got := string(out)
-	wrapIdx := strings.Index(got, `<hive:noise correction-id="c-page2">`)
+	wrapIdx := strings.Index(got, `<hive:noise correction-id="c-page2"`)
 	page2Idx := strings.Index(got, `page="2"`)
 	if wrapIdx < 0 || wrapIdx < page2Idx {
 		t.Errorf("wrapper should appear after page 2 marker:\nwrap=%d page2=%d\n%s",
 			wrapIdx, page2Idx, got)
 	}
 	// The page-1 occurrence should still be a plain <p>.
-	if strings.Count(got, `<p>Header text</p>`) != 1 {
+	if strings.Count(withoutComments(got), `<p>Header text</p>`) != 1 {
 		t.Errorf("expected page-1 Header text unchanged:\n%s", got)
 	}
 }
@@ -282,7 +283,7 @@ func TestApplyTextRemoveSanitizesDoubleHyphenInHint(t *testing.T) {
 	if strings.Contains(got, `<!-- Author -- Title`) {
 		t.Errorf("literal -- inside comment breaks XML:\n%s", got)
 	}
-	if !strings.Contains(got, `<hive:noise correction-id="c-hyphen">`) {
+	if !strings.Contains(got, `<hive:noise correction-id="c-hyphen"`) {
 		t.Errorf("missing wrapper:\n%s", got)
 	}
 }
@@ -308,7 +309,7 @@ func TestApplyTextRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
 	}
-	if !strings.Contains(string(afterRemove), `<hive:noise correction-id="c-rm">`) {
+	if !strings.Contains(string(afterRemove), `<hive:noise correction-id="c-rm"`) {
 		t.Fatalf("remove didn't wrap:\n%s", afterRemove)
 	}
 	rsPayload, _ := json.Marshal(correction.TextRestorePayload{
@@ -354,5 +355,132 @@ func TestApplyTextRestoreIdempotentWhenAlreadyUnwrapped(t *testing.T) {
 	}
 	if !bytes.Equal(out, jats) {
 		t.Errorf("expected unchanged JATS, got:\n%s", out)
+	}
+}
+
+// withoutComments drops XML comments, so assertions see only the
+// live document and not the removed copy inside a noise wrapper.
+func withoutComments(s string) string {
+	return regexp.MustCompile(`(?s)<!--.*?-->`).ReplaceAllString(s, "")
+}
+
+// applyTextRemove is a test helper that applies a text-remove for
+// text and fails the test on error or malformed output.
+func applyTextRemove(t *testing.T, jats []byte, id, text string) []byte {
+	t.Helper()
+	payload, _ := json.Marshal(correction.TextRemovePayload{Text: text})
+	out, err := refmanager.ApplyTextRemoveToJATS(jats, &correction.Correction{
+		ID: id, Kind: correction.KindTextRemove, Payload: string(payload),
+	})
+	if err != nil {
+		t.Fatalf("ApplyTextRemoveToJATS: %v", err)
+	}
+	if err := correction.CheckWellFormed(out); err != nil {
+		t.Fatalf("output is not well-formed: %v\n%s", err, out)
+	}
+	return out
+}
+
+// TestApplyTextRemoveHyphenRuns covers removed text with runs of
+// three or more hyphens and a trailing hyphen, which must not
+// produce "--" inside the wrapper's comment.
+func TestApplyTextRemoveHyphenRuns(t *testing.T) {
+	for _, text := range []string{
+		"ABC ----------*-*--*-*------ DEF",
+		"---",
+		"ends with a hyphen -",
+		"comment-like <!-- inner --> text",
+	} {
+		para := correction.XMLEscape(text)
+		jats := []byte(`<article><body><p>` + para + `</p></body></article>`)
+		out := applyTextRemove(t, jats, "c-runs", text)
+		if !strings.Contains(string(out), `<hive:noise correction-id="c-runs"`) {
+			t.Errorf("%q: missing wrapper:\n%s", text, out)
+		}
+	}
+}
+
+// TestApplyTextRemoveMatchesEntities covers paragraphs whose text
+// contains escaped characters: the payload carries decoded text.
+func TestApplyTextRemoveMatchesEntities(t *testing.T) {
+	jats := []byte(`<article><body><p>A &amp; B &lt; C</p></body></article>`)
+	out := applyTextRemove(t, jats, "c-ent", "A & B < C")
+	if !strings.Contains(string(out), `<hive:noise correction-id="c-ent"`) {
+		t.Errorf("entity paragraph not matched:\n%s", out)
+	}
+}
+
+// TestApplyTextRemoveSkipsTitleGroup ensures <title-group> is not
+// taken for a <title> block.
+func TestApplyTextRemoveSkipsTitleGroup(t *testing.T) {
+	jats := []byte(`<article><front><title-group><article-title>Running head</article-title></title-group></front>` +
+		`<body><sec><title>Running head</title></sec></body></article>`)
+	out := string(applyTextRemove(t, jats, "c-tg", "Running head"))
+	if !strings.Contains(out, `<title-group><article-title>Running head</article-title></title-group>`) {
+		t.Errorf("title-group should be untouched:\n%s", out)
+	}
+	if strings.Contains(withoutComments(out), `<title>Running head</title>`) {
+		t.Errorf("section title should be wrapped:\n%s", out)
+	}
+}
+
+// TestApplyTextRemoveNestedParagraph covers a paragraph inside a
+// list inside a paragraph: the inner one can be removed, and the
+// outer one's range covers its whole subtree.
+func TestApplyTextRemoveNestedParagraph(t *testing.T) {
+	jats := []byte(`<article><body><p>Intro <list><list-item><p>Inner item</p></list-item></list></p></body></article>`)
+	out := string(applyTextRemove(t, jats, "c-inner", "Inner item"))
+	if !strings.Contains(out, `<list-item><hive:noise correction-id="c-inner"`) {
+		t.Errorf("inner paragraph not wrapped:\n%s", out)
+	}
+	out = string(applyTextRemove(t, jats, "c-outer", "Intro Inner item"))
+	if !strings.Contains(out, `<body><hive:noise correction-id="c-outer"`) ||
+		strings.Contains(out, `</list></p></body>`) {
+		t.Errorf("outer paragraph not wrapped whole:\n%s", out)
+	}
+}
+
+// TestApplyTextRemoveIgnoresWrappedCopy ensures re-applying a removal
+// does not match the copy of the element kept inside the comment.
+func TestApplyTextRemoveIgnoresWrappedCopy(t *testing.T) {
+	jats := []byte(`<article><body><p>Header</p></body></article>`)
+	once := applyTextRemove(t, jats, "c-once", "Header")
+	twice := applyTextRemove(t, once, "c-once", "Header")
+	if !bytes.Equal(once, twice) {
+		t.Errorf("second apply changed the document:\n%s", twice)
+	}
+}
+
+// TestApplyTextRestoreKeepsMarkup covers a lossless restore: element
+// name, attributes, inline markup and hyphen runs come back intact.
+func TestApplyTextRestoreKeepsMarkup(t *testing.T) {
+	orig := `<title id="s1">Results <italic>in</italic> part -- one ---</title>`
+	jats := []byte(`<article><body><sec>` + orig + `</sec></body></article>`)
+	removed := applyTextRemove(t, jats, "c-mk", "Results in part -- one ---")
+	rsPayload, _ := json.Marshal(correction.TextRestorePayload{RemoveCorrectionID: "c-mk"})
+	restored, err := refmanager.ApplyTextRestoreToJATS(removed, &correction.Correction{
+		ID: "c-rs", Kind: correction.KindTextRestore, Payload: string(rsPayload),
+	})
+	if err != nil {
+		t.Fatalf("ApplyTextRestoreToJATS: %v", err)
+	}
+	if !bytes.Equal(restored, jats) {
+		t.Errorf("restore not lossless:\nwant %s\ngot  %s", jats, restored)
+	}
+}
+
+// TestApplyTextRestoreLegacyHint covers wrappers written before the
+// original="element" form, whose comment holds a text hint.
+func TestApplyTextRestoreLegacyHint(t *testing.T) {
+	jats := []byte("<article><body><hive:noise correction-id=\"c-old\"><!-- A -\u200b- B --></hive:noise></body></article>")
+	rsPayload, _ := json.Marshal(correction.TextRestorePayload{RemoveCorrectionID: "c-old"})
+	out, err := refmanager.ApplyTextRestoreToJATS(jats, &correction.Correction{
+		ID: "c-rs", Kind: correction.KindTextRestore, Payload: string(rsPayload),
+	})
+	if err != nil {
+		t.Fatalf("ApplyTextRestoreToJATS: %v", err)
+	}
+	if !strings.Contains(string(out), `<p>A -- B</p>`) {
+		t.Errorf("legacy restore wrong:\n%s", out)
 	}
 }

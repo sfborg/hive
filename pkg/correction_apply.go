@@ -16,6 +16,9 @@ import (
 // a future taxonomy-side kind would union its own Appliers() into
 // the same map.
 //
+// The result is checked for XML well-formedness; a correction that
+// would produce malformed JATS returns an error instead.
+//
 // Callers that need to filter kinds by content-type (defensive
 // figure/table check for bbox-* kinds) or status (skip reverted
 // corrections) do so BEFORE calling — see correction.IsBBoxKind.
@@ -24,7 +27,14 @@ func (a *Archive) ApplyCorrection(jats []byte, c *correction.Correction) ([]byte
 	if !ok {
 		return nil, fmt.Errorf("apply correction: unsupported kind: %s", c.Kind)
 	}
-	return app.Apply(jats, c)
+	out, err := app.Apply(jats, c)
+	if err != nil {
+		return nil, err
+	}
+	if err := correction.CheckWellFormed(out); err != nil {
+		return nil, fmt.Errorf("apply correction %s: %w", c.Kind, err)
+	}
+	return out, nil
 }
 
 // buildCorrectionAppliers assembles the kind → applier map from every

@@ -1071,6 +1071,12 @@ class SfgaReader extends LitElement {
         this._workflow = d.workflow;
         this.setAttribute("data-workflow", d.workflow);
       }
+      // The shell saved a correction that changed the JATS. Swap in
+      // the new document without navigating, so the current page
+      // and scroll position are kept.
+      if (d.type === "hive:reload-doc") {
+        this._reloadInPlace();
+      }
     };
     window.addEventListener("message", this._onShellMessage);
   }
@@ -1640,6 +1646,15 @@ class SfgaReader extends LitElement {
     }
     const article = this.renderRoot.querySelector(".layout.paginated article");
     if (!article) return;
+    // A hidden pane measures zero width; keep the current pagination
+    // until it is shown (the resize that follows re-measures).
+    if (article.clientWidth === 0) return;
+    // Re-measuring is not a page turn: disable the slide transition
+    // so the article jumps straight to the current page.
+    article.style.transition = "none";
+    requestAnimationFrame(() => {
+      article.style.transition = "";
+    });
     // Reset transform so scrollWidth reflects true content width.
     article.style.transform = "";
     // Measure the actual column layout so page-turns advance by a
@@ -1729,6 +1744,36 @@ class SfgaReader extends LitElement {
       this._needsReannotate = false;
     } finally {
       this._reannotating = false;
+    }
+  }
+
+  // _reloadInPlace re-fetches the JATS and replaces _doc while
+  // keeping the current page and scroll offset. Any failure falls
+  // back to _load, which reports the error.
+  async _reloadInPlace() {
+    if (!this._doc) return this._load();
+    const page = this._page;
+    const scrollY = window.scrollY;
+    try {
+      const res = await fetch(
+        `/api/reference/library/${encodeURIComponent(this._sha)}/taxpub`,
+      );
+      if (!res.ok) return this._load();
+      const doc = new DOMParser().parseFromString(await res.text(), "application/xml");
+      if (doc.querySelector("parsererror")) return this._load();
+      this._doc = doc;
+      await this.updateComplete;
+      // _recomputePages runs on the frame after the commit and
+      // clamps _page to the new page count; restore on the frame
+      // after that.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (this._paginated) {
+          this._page = Math.max(0, Math.min(page, this._pageCount - 1));
+        }
+        window.scrollTo(0, scrollY);
+      }));
+    } catch (e) {
+      return this._load();
     }
   }
 
@@ -3605,14 +3650,22 @@ class SfgaReader extends LitElement {
   // removal needs the correction context the shell holds.
   _renderNoiseMarker(el) {
     const correctionID = el.getAttribute("correction-id") || "";
-    // The child comment is the removed-text hint. commentText is
-    // the plain-text bytes between "<!--" and "-->". Reverse the
-    // hyphen-ZWSP-hyphen sanitize so tooltips read naturally.
+    // The child comment holds the removed element's XML
+    // (original="element") or, in older wrappers, a plain-text
+    // hint. Every hyphen in it is followed by a zero-width space so
+    // the comment stays valid; reverse that, then reduce the XML to
+    // its text so the tooltip reads naturally.
     let removedText = "";
     for (const child of el.childNodes) {
       if (child.nodeType === Node.COMMENT_NODE) {
-        removedText = (child.nodeValue || "").trim();
-        removedText = removedText.replace(/-​-/g, "--");
+        removedText = (child.nodeValue || "").trim().replace(/-\u200b/g, "-");
+        if (el.getAttribute("original") === "element") {
+          // Tags are dropped and entities decoded with an inert
+          // template; the fragment is never attached to the page.
+          const t = document.createElement("template");
+          t.innerHTML = removedText.replace(/<[^>]+>/g, "");
+          removedText = (t.content.textContent || "").replace(/\s+/g, " ").trim();
+        }
         break;
       }
     }
