@@ -6,6 +6,7 @@ import (
 	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/hiveext"
 	"github.com/sfborg/hive/pkg/refmanager"
+	"github.com/sfborg/hive/pkg/taxonomy"
 )
 
 // ApplyCorrection dispatches a correction to its kind-specific
@@ -32,6 +33,9 @@ func (a *Archive) ApplyCorrection(jats []byte, c *correction.Correction) ([]byte
 func buildCorrectionAppliers() map[correction.Kind]hiveext.CorrectionApplier {
 	m := map[correction.Kind]hiveext.CorrectionApplier{}
 	for _, app := range refmanager.Appliers() {
+		m[app.Kind()] = app
+	}
+	for _, app := range taxonomy.Appliers() {
 		m[app.Kind()] = app
 	}
 	return m

@@ -242,6 +242,49 @@ type TextRestorePayload struct {
 	RemoveCorrectionID string `json:"remove_correction_id"`
 }
 
+// ChipFeedbackPayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'chip-feedback'. Records a curator's verdict on one
+// <tp:taxon-name> chip produced by the annotator (GNfinder +
+// GNverifier).
+//
+// The chip is identified by its text and its occurrence index in
+// the document rather than by an element id: re-annotation
+// regenerates the markup, so ids do not survive a re-run, while
+// text and document order do. Occurrence is 1-based over the chips
+// whose text matches Text.
+//
+// Original* and Corrected* are stored side by side so the row is a
+// self-contained training example, the same shape
+// AssertionEditPayload uses.
+type ChipFeedbackPayload struct {
+	// Action is one of "reject" (this span is not a scientific
+	// name), "reclassify" (change gn:source) or "edit" (change the
+	// full-name attribute).
+	Action     string `json:"action"`
+	Text       string `json:"text"`
+	Occurrence int    `json:"occurrence,omitempty"`
+
+	OriginalSource    string `json:"original_source,omitempty"`
+	CorrectedSource   string `json:"corrected_source,omitempty"`
+	OriginalFullName  string `json:"original_full_name,omitempty"`
+	CorrectedFullName string `json:"corrected_full_name,omitempty"`
+	// Reason categorizes a reject: why the span is not a name
+	// ("not a name", "wrong boundary", "wrong classification",
+	// "other"). Feeds per-cause aggregates and, later, the feedback
+	// payload sent upstream. Empty when the curator didn't pick one.
+	Reason string `json:"reason,omitempty"`
+	// Notes records the curator's rationale when they give one.
+	Notes string `json:"notes,omitempty"`
+}
+
+// Chip-feedback actions.
+const (
+	ChipActionReject     = "reject"
+	ChipActionReclassify = "reclassify"
+	ChipActionEdit       = "edit"
+)
+
 // AssertionEditPayload is the JSON stored in
 // hive__extraction_correction.payload when correction_kind =
 // 'assertion-edit'. Records the curator's fix to a single NER-
