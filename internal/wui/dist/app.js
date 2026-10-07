@@ -572,7 +572,6 @@ const idBadgeStyles = css`
     line-height: 1;
   }
   .idmark.ror { background: #53baa1; }
-  .idnote { color: var(--dim); }
 `;
 
 // Shared button vocabulary. Included in every component that renders
@@ -849,9 +848,9 @@ const ID_SCOPES = {
     valid: (v) => /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(v),
     // hive's iDs come from ingested papers, curator entry and imports
     // from other systems, where authentication status is unknown --
-    // the ORCID definition of unauthenticated. The authenticated icon is
-    // vendored alongside for iDs verified through ORCID sign-in.
-    unauthenticated: true,
+    // the ORCID definition of unauthenticated, hence the unauthenticated
+    // icon. The authenticated icon is vendored alongside for iDs verified
+    // through ORCID sign-in.
   },
   ror: {
     name: "ROR",
@@ -862,9 +861,8 @@ const ID_SCOPES = {
 
 // idBadge renders an external identifier as its scope mark plus the
 // identifier, linked to that scope's resolver -- the ORCID "compact" format,
-// applied to every scope. Unauthenticated ORCID iDs carry the
-// "(unauthenticated)" suffix the guidelines call for. Unknown scopes, and
-// values that fail their scope's validator, fall through as plain text.
+// applied to every scope. Unknown scopes, and values that fail their
+// scope's validator, fall through as plain text.
 function idBadge(scope, value) {
   if (!value) return "";
   const s = ID_SCOPES[scope];
@@ -881,9 +879,7 @@ function idBadge(scope, value) {
     aria-label="View ${s.name} record - ${value}"
     >${mark}<span class="idvalue">${value}</span></a
   >`;
-  return s.unauthenticated
-    ? html`${link} <span class="idnote">(unauthenticated)</span>`
-    : link;
+  return link;
 }
 
 // renderStars produces a filled/empty star row plus a numeric readout.
@@ -23054,10 +23050,8 @@ class SfgaAgentCard extends LitElement {
       align-items: center;
       gap: var(--sp-1);
     }
-    /* Identifier rows wrap as whole units rather than ellipsizing, so a
-       narrow card drops the "(unauthenticated)" suffix to a second line
-       instead of clipping it; the identifier itself never breaks
-       (see idBadgeStyles). */
+    /* Identifier rows wrap as whole units rather than ellipsizing; the
+       identifier itself never breaks (see idBadgeStyles). */
     .card > .line {
       flex-wrap: wrap;
       row-gap: 0;
