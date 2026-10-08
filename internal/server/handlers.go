@@ -4270,6 +4270,19 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		if body.ContentType == "" {
 			body.ContentType = "text"
 		}
+	case string(correction.KindTextTag):
+		tp, err := correction.ParseTextTagPayload(body.Payload)
+		if err != nil {
+			writeBadRequest(w, r, "text-tag "+err.Error())
+			return
+		}
+		if tp.Action == correction.TextTagMoveToCaption && body.TargetElementID == "" {
+			writeBadRequest(w, r, "target_element_id required for move-to-caption")
+			return
+		}
+		if body.ContentType == "" {
+			body.ContentType = "text"
+		}
 	case string(correction.KindTextRestore):
 		if body.Payload == "" || body.Payload == "{}" {
 			writeBadRequest(w, r, "payload with remove_correction_id required for text-restore")
@@ -4365,7 +4378,11 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 			rows, err := pdftext.ExtractTable(pdfPath, c.BBoxPage,
 				c.BBox.X, c.BBox.Y, c.BBox.W, c.BBox.H)
 			if err == nil && len(rows) > 0 {
-				payload := correction.BBoxAddPayload{TableRows: rows}
+				var payload correction.BBoxAddPayload
+				if c.Payload != "" && c.Payload != "{}" {
+					_ = json.Unmarshal([]byte(c.Payload), &payload)
+				}
+				payload.TableRows = rows
 				if b, err := json.Marshal(payload); err == nil {
 					c.Payload = string(b)
 				}
@@ -4417,7 +4434,20 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 	// correction is still a valid training signal; the UI shows
 	// warnings if the JATS didn't mutate cleanly and a retry can
 	// re-attempt the apply.
-	warnings := s.applyBBoxCorrectionToSidecar(c)
+	warnings, applyErr := s.applyBBoxCorrectionToSidecar(c)
+	// A text correction that could not be applied (its text was not
+	// found, or the result would not be well-formed) is marked
+	// reverted so a later rebuild of the sidecar does not apply it
+	// unexpectedly.
+	if applyErr != nil && strings.HasPrefix(string(c.Kind), "text-") {
+		reason := applyErr.Error()
+		if err := s.a.WithTx(r.Context(), func(tx *hive.Tx) error {
+			return tx.RevertCorrection(c.ID, reason)
+		}); err == nil {
+			c.Status = correction.StatusReverted
+			c.RevertedReason = reason
+		}
+	}
 
 	// Re-run reference-scoped validators so hive_citation_coverage
 	// et al. reflect the mutated sidecar — a bbox-add for the
@@ -4436,18 +4466,21 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 // patch an existing element for bbox-modify), writes it back, then
 // re-runs figextract so PNG crops stay in sync. Best-effort: each
 // step returns a warning string on failure rather than aborting.
-func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) []string {
-	var warnings []string
+//
+// applyErr is non-nil when the correction itself could not be
+// applied to the JATS, as opposed to a sidecar I/O or figure
+// extraction problem.
+func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) (warnings []string, applyErr error) {
 	jats, err := sidecar.Read(s.archivePath, c.SidecarSHA, "jats.xml")
 	if err != nil || jats == nil {
-		return []string{"jats sidecar not found for sha " + c.SidecarSHA}
+		return []string{"jats sidecar not found for sha " + c.SidecarSHA}, nil
 	}
 	mutated, err := s.a.ApplyCorrection(jats, c)
 	if err != nil {
-		return []string{"apply " + string(c.Kind) + ": " + err.Error()}
+		return []string{"apply " + string(c.Kind) + ": " + err.Error()}, err
 	}
 	if err := sidecar.Store(s.archivePath, c.SidecarSHA, "jats.xml", mutated); err != nil {
-		return []string{"write jats sidecar: " + err.Error()}
+		return []string{"write jats sidecar: " + err.Error()}, nil
 	}
 	// Figure extraction: pdftocairo cropping the new region. Only
 	// runs when the source PDF is on disk (the common case; a
@@ -4455,13 +4488,13 @@ func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) []string
 	pdfPath := sidecar.Path(s.archivePath, c.SidecarSHA, "pdf")
 	if _, err := os.Stat(pdfPath); err != nil {
 		warnings = append(warnings, "source pdf missing; skipped figextract")
-		return warnings
+		return warnings, nil
 	}
 	outDir := filepath.Join(sidecar.Dir(s.archivePath), c.SidecarSHA+".figures")
 	if _, err := figextract.Extract(mutated, pdfPath, outDir); err != nil {
 		warnings = append(warnings, "figextract: "+err.Error())
 	}
-	return warnings
+	return warnings, nil
 }
 
 // handlePreviewCorrection dry-runs a bbox: crops the region to
@@ -4588,8 +4621,9 @@ func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Re
 			ID:     rg.ID,
 			Label:  rg.Text,
 			Kind:   rg.Kind,
-			Page:   rg.Page,
-			Origin: rg.Origin,
+			Page:    rg.Page,
+			Origin:  rg.Origin,
+			Caption: rg.Caption,
 		}
 		if rg.BBox != nil {
 			item.BBox = &apiBBox{X: rg.BBox.X, Y: rg.BBox.Y, W: rg.BBox.W, H: rg.BBox.H}
@@ -4604,12 +4638,13 @@ type apiRegionList struct {
 }
 
 type apiRegion struct {
-	ID     string   `json:"id"`
-	Label  string   `json:"label,omitempty"`
-	Kind   string   `json:"kind"`
-	Page   int      `json:"page,omitempty"`
-	Origin string   `json:"origin"`
-	BBox   *apiBBox `json:"bbox,omitempty"`
+	ID      string   `json:"id"`
+	Label   string   `json:"label,omitempty"`
+	Kind    string   `json:"kind"`
+	Page    int      `json:"page,omitempty"`
+	Origin  string   `json:"origin"`
+	BBox    *apiBBox `json:"bbox,omitempty"`
+	Caption string   `json:"caption,omitempty"`
 }
 
 // apiPreviewCorrectionRequest is the wire shape for a dry-run

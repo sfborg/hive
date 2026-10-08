@@ -123,6 +123,18 @@ class SfgaReader extends LitElement {
     // remove" toggles hover-highlight + click-to-remove on body
     // paragraphs. Standalone reader (no parent shell) stays "read".
     _activeTool: { state: true },
+    // Text selection the toolbar acts on, in the Digitize workflow:
+    // { segments, text, x, y } or null. _selMenu is "" or "remove"
+    // (the Remove-as label list is open); _capPicker opens the
+    // figure-caption picker dialog.
+    // Workflow the shell hosts this reader in (hive:set-workflow):
+    // "digitize" enables text editing and restore buttons.
+    _workflow: { state: true },
+    _sel: { state: true },
+    // Change list opened from a margin dot: { x, y, items } or null.
+    _changePop: { state: true },
+    _selMenu: { state: true },
+    _capPicker: { state: true },
   };
 
   static styles = css`
@@ -287,57 +299,102 @@ class SfgaReader extends LitElement {
     article p {
       margin: var(--sp-2) 0;
     }
-    /* text-remove tool mode: body paragraphs become click-to-remove
-       targets. Cursor + outline signal hover; a small delete glyph
-       inline-left of the paragraph makes the target unambiguous.
-       Skips the paper header, references list, figure captions, and
-       already-wrapped hive:noise elements so curators can only click
-       actual body paragraphs. */
-    .tool-text-remove article :is(p, h1, h2, h3, h4, h5, h6):not(.page-break):hover {
-      outline: 2px dashed color-mix(in oklab, var(--sev-warn) 60%, transparent);
-      outline-offset: 2px;
-      cursor: pointer;
-      background: color-mix(in oklab, var(--sev-warn) 8%, transparent);
+    /* Change marker: a small red dot in the left margin beside the
+       line where text was removed, moved or merged, like a change
+       mark in an editor gutter. Dots that would sit close together
+       are shown as one (see _clusterMarkers). Hovering, focusing or
+       clicking a dot opens the change list with restore buttons.
+       The transparent border enlarges the hit area around the dot. */
+    article :is(p, h2, section) {
+      position: relative;
     }
-    .tool-text-remove article :is(p, h1, h2, h3, h4, h5, h6):not(.page-break):hover::before {
-      content: "✕ ";
-      color: var(--sev-warn);
-      font-weight: bold;
-    }
-    /* Paper header stays untouchable — metadata is not body noise. */
-    .tool-text-remove article .paper-header :is(p, h1, h2, h3, h4, h5, h6):hover {
-      outline: none;
-      background: transparent;
-      cursor: default;
-    }
-    .tool-text-remove article .paper-header :is(p, h1, h2, h3, h4, h5, h6):hover::before {
-      content: "";
-    }
-    /* Inline marker for an applied text-remove correction. Compact
-       red dot the curator can hover to see the removed text
-       (native title tooltip) and click to restore. Kept small so it
-       doesn't disrupt reading flow; interactive affordances only
-       fire on the marker itself, not adjacent text. */
     .hive-noise-marker {
-      display: inline-block;
-      width: 1em;
-      height: 1em;
-      line-height: 1em;
-      text-align: center;
-      margin: 0 0.15em;
-      padding: 0 0.1em;
+      position: absolute;
+      left: calc(-1 * var(--sp-3) - 0.3em);
+      width: 0.5em;
+      height: 0.5em;
+      margin: 0.25em 0 0;
+      padding: 0;
+      border: 0.3em solid transparent;
       border-radius: 50%;
-      background: var(--sev-err);
-      color: var(--bg);
-      font-weight: bold;
+      background: var(--sev-error);
+      background-clip: content-box;
+      box-sizing: content-box;
       cursor: pointer;
-      vertical-align: middle;
       user-select: none;
     }
-    .hive-noise-marker:hover,
+    .hive-noise-marker.clustered {
+      display: none;
+    }
     .hive-noise-marker:focus-visible {
-      outline: 2px solid color-mix(in oklab, var(--sev-err) 40%, transparent);
-      outline-offset: 2px;
+      outline: 2px solid color-mix(in oklab, var(--sev-error) 50%, transparent);
+      outline-offset: 0;
+    }
+    /* A paragraph whose text was all removed or moved keeps its
+       markers but takes no space. */
+    article p.emptied {
+      margin: 0;
+    }
+    .change-pop {
+      position: fixed;
+      z-index: 95;
+      width: min(22rem, calc(100vw - 2 * var(--sp-2)));
+      max-height: 60vh;
+      overflow: auto;
+      padding: var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
+      font-size: var(--fs-sm);
+    }
+    .change-pop ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+    }
+    .change-pop li + li {
+      border-top: 1px solid var(--border);
+      padding-top: var(--sp-2);
+    }
+    .change-pop-what {
+      font-weight: 600;
+    }
+    .change-pop-text {
+      color: var(--dim);
+      margin: var(--sp-1) 0;
+      overflow-wrap: anywhere;
+    }
+    .change-pop button {
+      font: inherit;
+      color: var(--fg);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-1) var(--sp-2);
+      cursor: pointer;
+    }
+    .change-pop button:hover,
+    .change-pop button:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .page-break-inline {
+      display: inline-block;
+      margin: 0 0.3em;
+      padding: 0 0.4em;
+      border-left: 1px dashed var(--border);
+      border-right: 1px dashed var(--border);
+      color: var(--dim);
+      font-size: 0.75em;
+      font-style: normal;
+      line-height: 1.4;
+      user-select: none;
+      white-space: nowrap;
     }
     /* Page-break divider — horizontal dashed line with the
        journal-labeled source-PDF page number sitting mid-line.
@@ -636,6 +693,86 @@ class SfgaReader extends LitElement {
     article a.fig-list-link:hover,
     article a.fig-inline-link:hover {
       text-decoration: underline;
+    }
+    /* Selection toolbar: floats under selected text in the Digitize
+       workflow with the actions that apply to it. */
+    .sel-toolbar {
+      position: fixed;
+      z-index: 90;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--sp-1);
+      max-width: min(36rem, calc(100vw - 2 * var(--sp-2)));
+      padding: var(--sp-1);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
+      font-size: var(--fs-sm);
+    }
+    .sel-toolbar button,
+    .cap-picker-item {
+      font: inherit;
+      color: var(--fg);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--sp-1) var(--sp-2);
+      cursor: pointer;
+    }
+    .sel-toolbar button:hover,
+    .sel-toolbar button:focus-visible,
+    .cap-picker-item:hover,
+    .cap-picker-item:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .sel-toolbar-prompt {
+      color: var(--dim);
+      padding: 0 var(--sp-1);
+    }
+    .cap-picker {
+      width: min(40rem, 90vw);
+    }
+    .cap-picker-quote {
+      margin: 0;
+      color: var(--dim);
+      font-style: italic;
+    }
+    .cap-picker-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+    }
+    .cap-picker-item {
+      display: grid;
+      grid-template-columns: 4rem 1fr;
+      gap: var(--sp-2);
+      align-items: start;
+      width: 100%;
+      text-align: left;
+    }
+    .cap-picker-item img {
+      width: 4rem;
+      height: 3rem;
+      object-fit: contain;
+      background: var(--surface, transparent);
+    }
+    .cap-picker-label {
+      font-weight: 600;
+      display: block;
+    }
+    .cap-picker-caption {
+      color: var(--dim);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
     /* Figure/table modal. Full-screen backdrop dims the page;
        centered modal box scales to the viewport with scroll for
@@ -1020,8 +1157,29 @@ class SfgaReader extends LitElement {
     document.addEventListener("keydown", this._onKeyDown);
     // Recompute page count on window resize so the "Page N of M"
     // indicator and page-turn translation stay accurate.
-    this._onResize = () => this._recomputePages();
+    this._onResize = () => {
+      this._recomputePages();
+      this._clusterMarkers();
+    };
     window.addEventListener("resize", this._onResize);
+    // Selection toolbar: re-read the selection after pointer and
+    // keyboard gestures; drop the toolbar when the selection goes
+    // away (unless the caption picker is using it).
+    this._onSelGesture = () => setTimeout(() => this._updateSelection(), 0);
+    this.addEventListener("pointerup", this._onSelGesture);
+    // Only keys that can change the selection re-read it; Delete
+    // opens the Remove-as choices for the current one.
+    this._onSelKeyUp = (e) => {
+      if (["Delete", "Backspace", "Escape", "Tab", "Enter"].includes(e.key)) return;
+      this._onSelGesture();
+    };
+    this.addEventListener("keyup", this._onSelKeyUp);
+    this._onSelChange = () => {
+      if (this._sel && !this._capPicker && !this._currentRange()) {
+        this._clearSelection();
+      }
+    };
+    document.addEventListener("selectionchange", this._onSelChange);
     // Shell → reader message channel. The shell sends hive:set-tool
     // when the curator switches the active correction tool from the
     // reader-toolbar; the reader updates its interaction mode
@@ -1398,6 +1556,9 @@ class SfgaReader extends LitElement {
     document.removeEventListener("keydown", this._onKeyDown);
     window.removeEventListener("resize", this._onResize);
     window.removeEventListener("message", this._onShellMessage);
+    this.removeEventListener("pointerup", this._onSelGesture);
+    this.removeEventListener("keyup", this._onSelKeyUp);
+    document.removeEventListener("selectionchange", this._onSelChange);
     super.disconnectedCallback();
   }
 
@@ -1419,6 +1580,7 @@ class SfgaReader extends LitElement {
       // before we measure.
       requestAnimationFrame(() => {
         this._recomputePages();
+        this._clusterMarkers();
         // Re-apply any pending NER annotations after the paper
         // DOM has committed — this catches the race where the
         // shell posted hive:set-annotations before _doc loaded,
@@ -1487,6 +1649,16 @@ class SfgaReader extends LitElement {
       this._closeFigModal();
       return;
     }
+    // Delete or Backspace on a selection asks what the text is, the
+    // way deleting would in an editor: the removal needs a label.
+    if ((e.key === "Delete" || e.key === "Backspace") && this._sel && !this._capPicker) {
+      e.preventDefault();
+      this._selMenu = "remove";
+      this.updateComplete.then(() =>
+        this.renderRoot.querySelector(".sel-toolbar button")?.focus(),
+      );
+      return;
+    }
     if (!this._paginated) return;
     // Ignore keys when the curator is focused in an input.
     const tag = (document.activeElement && document.activeElement.tagName) || "";
@@ -1526,87 +1698,402 @@ class SfgaReader extends LitElement {
     if (this._page > 0) this._page -= 1;
   }
 
-  // _onLayoutClick dispatches based on the active correction tool.
-  // In text-remove mode: intercept clicks on body paragraphs and
-  // send a hive:remove-text postMessage; other click behavior
-  // (page-turn, xref jump-to-pdf) is suppressed so a click doesn't
-  // simultaneously turn the page and stage a removal. In "read"
-  // mode: fall through to the paginated page-turn handler.
+  // _onLayoutClick turns pages in paginated mode. A click that ends
+  // a text selection is not a page turn.
   _onLayoutClick(e) {
-    if (this._activeTool === "text-remove") {
-      this._handleTextRemoveClick(e);
-      return;
-    }
+    if (this._currentRange()) return;
     if (this._paginated) this._onPageClick(e);
   }
 
-  // _handleTextRemoveClick walks up from the click target to find a
-  // removable block element (paragraph or section heading — a JATS
-  // <p> or <title>). Both are common noise carriers: <p> for running
-  // headers/footers GROBID pulled into body prose, <title> for
-  // spurious section headings like "Corresponding author" that ended
-  // up misclassified. Rejects page-break wrappers, hive:noise
-  // markers themselves (already removed), and any target inside the
-  // paper's own <header> block (metadata, not body noise).
-  //
-  // Standalone reader (no parent shell): warns and no-ops since the
-  // correction needs archive context the shell holds.
-  _handleTextRemoveClick(e) {
-    let el = e.target;
-    // Walk up to the nearest removable block. Bail if we escape the
-    // article.
-    const removable = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
-    while (el && !removable.has(el.tagName)) {
-      if (el.tagName === "ARTICLE") return;
-      el = el.parentElement;
+  // _pdfPageFor returns the page number of the last page-break
+  // marker before el in document order, or 0. Markers can sit inside
+  // earlier sections or inline in an earlier paragraph, so this
+  // compares document positions rather than walking siblings.
+  _pdfPageFor(el) {
+    const article = el.closest("article");
+    if (!article) return 0;
+    let page = 0;
+    for (const m of article.querySelectorAll(".page-break, .page-break-inline")) {
+      if (!(m.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+      const n = parseInt(m.dataset.pdfPage || "", 10);
+      if (Number.isFinite(n) && n > 0) page = n;
     }
-    if (!el) return;
-    // Reject infrastructure elements the tool isn't meant for.
-    if (el.classList.contains("page-break")) return;
-    if (el.classList.contains("hive-noise-marker")) return;
-    // Reject anything inside the paper-header block (title, byline,
-    // abstract) — that's metadata, not body noise.
-    if (el.closest(".paper-header")) return;
-    if (!(window.parent && window.parent !== window)) {
-      // eslint-disable-next-line no-console
-      console.warn("text-remove requires the shell — open via References tab");
+    return page;
+  }
+
+  // _currentRange returns the non-empty selection inside the reader
+  // as a Range, or null. The reader renders into a shadow root,
+  // which browsers expose through different selection APIs.
+  _currentRange() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    let r = null;
+    try {
+      if (typeof sel.getComposedRanges === "function") {
+        let ranges;
+        try {
+          ranges = sel.getComposedRanges({ shadowRoots: [this.renderRoot] });
+        } catch (e) {
+          ranges = sel.getComposedRanges(this.renderRoot);
+        }
+        const sr = ranges && ranges[0];
+        if (sr && !sr.collapsed) {
+          r = document.createRange();
+          r.setStart(sr.startContainer, sr.startOffset);
+          r.setEnd(sr.endContainer, sr.endOffset);
+        }
+      } else if (typeof this.renderRoot.getSelection === "function") {
+        const inner = this.renderRoot.getSelection();
+        if (inner && inner.rangeCount > 0) r = inner.getRangeAt(0);
+      } else {
+        r = sel.getRangeAt(0);
+      }
+    } catch (e) {
+      return null;
+    }
+    if (!r || r.collapsed) return null;
+    const article = this.renderRoot.querySelector("article");
+    if (!article || !article.contains(r.commonAncestorContainer)) return null;
+    return r;
+  }
+
+  // _textOf returns the text of a node as block text is defined for
+  // corrections: text nodes in order, skipping elements marked
+  // data-decor (reader-only decoration) and substituting
+  // data-src-text where the reader shows different text than the
+  // JATS holds. pkg/refmanager computes the same text server-side.
+  _textOf(node) {
+    let out = "";
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === Node.TEXT_NODE) {
+          out += c.nodeValue;
+        } else if (c.nodeType === Node.ELEMENT_NODE) {
+          if (c.hasAttribute("data-decor")) continue;
+          if (c.dataset && c.dataset.srcText !== undefined) {
+            out += c.dataset.srcText;
+            continue;
+          }
+          walk(c);
+        }
+      }
+    };
+    walk(node);
+    return out;
+  }
+
+  // _updateSelection turns the current selection into one segment
+  // per body block it touches and shows the toolbar. Only the
+  // Digitize workflow edits text; elsewhere selection is plain
+  // reading.
+  _updateSelection() {
+    if (this._capPicker) return;
+    if (this._workflow !== "digitize" || !(window.parent && window.parent !== window)) {
+      if (this._sel) this._clearSelection();
       return;
     }
-    const text = (el.textContent || "").trim();
-    if (!text) return;
-    // Recover pdf_page from the nearest preceding .page-break
-    // element in DOM order. Walk previousElementSibling of the
-    // target, then step up to the parent and repeat — so a
-    // paragraph inside a <section> can still find the page-break
-    // that preceded its section.
-    let pdfPage = 0;
-    let cursor = el;
-    outer: while (cursor) {
-      let prev = cursor.previousElementSibling;
-      while (prev) {
-        if (prev.classList && prev.classList.contains("page-break")) {
-          const n = parseInt(prev.dataset.pdfPage || "", 10);
-          if (Number.isFinite(n) && n > 0) {
-            pdfPage = n;
-          }
-          break outer;
-        }
-        prev = prev.previousElementSibling;
-      }
-      cursor = cursor.parentElement;
-      if (!cursor || cursor.tagName === "ARTICLE") break;
+    const r = this._currentRange();
+    if (!r) {
+      if (this._sel) this._clearSelection();
+      return;
     }
-    // eslint-disable-next-line no-console
-    console.log("hive:remove-text →", { sha: this._sha, text: text.slice(0, 60), pdfPage });
+    const article = this.renderRoot.querySelector("article");
+    let blocks = [...article.querySelectorAll("p, h2")].filter(
+      (el) =>
+        !el.classList.contains("page-break") &&
+        !el.closest(".paper-header, .figures-list, [data-decor]") &&
+        r.intersectsNode(el),
+    );
+    blocks = blocks.filter((el) => !blocks.some((o) => o !== el && el.contains(o)));
+    const segments = [];
+    for (const el of blocks) {
+      const startIn = el.contains(r.startContainer);
+      const endIn = el.contains(r.endContainer);
+      const pre = document.createRange();
+      pre.setStart(el, 0);
+      if (startIn) pre.setEnd(r.startContainer, r.startOffset);
+      else pre.setEnd(el, 0);
+      const part = document.createRange();
+      if (startIn) part.setStart(r.startContainer, r.startOffset);
+      else part.setStart(el, 0);
+      if (endIn) part.setEnd(r.endContainer, r.endOffset);
+      else part.setEnd(el, el.childNodes.length);
+      const blockText = this._textOf(el);
+      const exact = this._textOf(part.cloneContents());
+      if (!exact.trim()) continue;
+      const start = this._textOf(pre.cloneContents()).length;
+      const end = start + exact.length;
+      segments.push({
+        block_text: blockText,
+        exact,
+        prefix: blockText.slice(Math.max(0, start - 32), start),
+        suffix: blockText.slice(end, end + 32),
+        start,
+        end,
+        pdf_page: this._pdfPageFor(el),
+      });
+    }
+    if (segments.length === 0) {
+      if (this._sel) this._clearSelection();
+      return;
+    }
+    const rect = r.getBoundingClientRect();
+    const width = Math.min(36 * 16, window.innerWidth - 16);
+    // Merging: a selection inside one paragraph offers joining it
+    // with the next; a selection across paragraphs (with no heading
+    // among them) offers joining them all. The first and last
+    // paragraphs with text are named by their whole text so a
+    // selection that only clips one of them still identifies it.
+    const textBlocks = blocks.filter((el) => this._textOf(el).trim());
+    const allParagraphs = blocks.every((el) => el.tagName === "P");
+    const wholeBlock = (el) => {
+      const t = this._textOf(el);
+      return { block_text: t, exact: t, start: 0, end: t.length, pdf_page: this._pdfPageFor(el) };
+    };
+    let mergeSegments = null;
+    if (allParagraphs && textBlocks.length >= 2) {
+      mergeSegments = [wholeBlock(textBlocks[0]), wholeBlock(textBlocks[textBlocks.length - 1])];
+    }
+    this._sel = {
+      segments,
+      mergeSegments,
+      mergeable: allParagraphs && textBlocks.length === 1,
+      text: segments.map((g) => g.exact.trim()).join(" "),
+      x: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+      y: Math.min(rect.bottom + 6, window.innerHeight - 48),
+    };
+    this._selMenu = "";
+  }
+
+  _clearSelection() {
+    this._sel = null;
+    this._selMenu = "";
+    this._capPicker = false;
+  }
+
+  // Labels for Remove as…; the value is the structural label stored
+  // with the correction for training data.
+  static REMOVE_LABELS = [
+    ["running-head", "Running head"],
+    ["page-number", "Page number"],
+    ["footer", "Footer or footnote"],
+    ["figure-text", "Text inside a figure"],
+    ["other", "Other"],
+  ];
+
+  _renderSelToolbar() {
+    if (!this._sel || this._capPicker) return nothing;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this._clearSelection();
+        window.getSelection()?.removeAllRanges();
+      }
+    };
+    // mousedown is cancelled so clicking a button keeps the
+    // selection the button acts on.
+    return html`<div
+      class="sel-toolbar"
+      role="toolbar"
+      aria-label="Selected text"
+      style=${`left:${this._sel.x}px;top:${this._sel.y}px`}
+      @mousedown=${(e) => e.preventDefault()}
+      @pointerup=${(e) => e.stopPropagation()}
+      @keyup=${(e) => e.stopPropagation()}
+      @click=${(e) => e.stopPropagation()}
+      @keydown=${onKey}
+    >
+      ${this._selMenu === "remove"
+        ? html`<span class="sel-toolbar-prompt">Remove as</span>
+            ${SfgaReader.REMOVE_LABELS.map(
+              ([value, label]) => html`<button
+                type="button"
+                @click=${() => this._submitRemove(value)}
+              >${label}</button>`,
+            )}
+            <button type="button" @click=${() => (this._selMenu = "")}>Back</button>`
+        : html`<button
+              type="button"
+              aria-haspopup="true"
+              @click=${() => (this._selMenu = "remove")}
+            >Remove as…</button>
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              @click=${() => this._openCaptionPicker()}
+            >Move to caption…</button>
+            ${this._sel.mergeSegments
+              ? html`<button
+                  type="button"
+                  title="Join the selected paragraphs into one, across page breaks and removed text"
+                  @click=${() => this._submitMergeNext()}
+                >Merge paragraphs</button>`
+              : this._sel.mergeable
+                ? html`<button
+                    type="button"
+                    title="Join this paragraph with the next one, across page breaks and removed text"
+                    @click=${() => this._submitMergeNext()}
+                  >Merge with next paragraph</button>`
+                : nothing}`}
+    </div>`;
+  }
+
+  // _postTextCorrection hands a correction to the shell, which owns
+  // the archive context and the save.
+  _postTextCorrection(kind, payload, targetElementID = "") {
     window.parent.postMessage(
-      {
-        type: "hive:remove-text",
-        sha: this._sha,
-        text,
-        pdfPage,
-      },
+      { type: "hive:text-correction", sha: this._sha, kind, payload, targetElementID },
       "*",
     );
+    this._clearSelection();
+    window.getSelection()?.removeAllRanges();
+  }
+
+  _submitRemove(label) {
+    if (!this._sel) return;
+    this._postTextCorrection("text-remove", {
+      text: this._sel.text,
+      label,
+      segments: this._sel.segments,
+    });
+  }
+
+  _submitMergeNext() {
+    if (!this._sel) return;
+    this._postTextCorrection("text-tag", {
+      action: "merge-next",
+      text: this._sel.text,
+      segments: this._sel.mergeSegments || this._sel.segments,
+    });
+  }
+
+  async _openCaptionPicker() {
+    this._capPicker = true;
+    await this.updateComplete;
+    this.renderRoot.querySelector(".cap-picker-item")?.focus();
+  }
+
+  _submitMoveToCaption(figID) {
+    if (!this._sel) return;
+    this._postTextCorrection(
+      "text-tag",
+      { action: "move-to-caption", text: this._sel.text, segments: this._sel.segments },
+      figID,
+    );
+  }
+
+  // _captionTargets lists the figures and tables text can move into,
+  // ordered by page and then by label number.
+  _captionTargets() {
+    if (!this._doc) return [];
+    const num = (label) => {
+      const m = /(\d+)$/.exec(label);
+      return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+    };
+    return [...this._doc.querySelectorAll("fig, table-wrap")]
+      .filter((n) => n.getAttribute("id"))
+      .map((n) => ({
+        id: n.getAttribute("id"),
+        label:
+          this._figLabelFromCaption(n) ||
+          ((n.getAttribute("id") || "").startsWith("curator_") ? "Drawn region" : "Unlabelled"),
+        caption: this._captionText(n),
+        page: this._pdfPageOf(n),
+      }))
+      .sort((a, b) => (a.page || 1e9) - (b.page || 1e9) || num(a.label) - num(b.label));
+  }
+
+  _renderCaptionPicker() {
+    if (!this._capPicker || !this._sel) return nothing;
+    const close = () => {
+      this._capPicker = false;
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = [...this.renderRoot.querySelectorAll(".cap-picker button")];
+      if (items.length === 0) return;
+      const i = items.indexOf(this.renderRoot.activeElement);
+      const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i + 1) % items.length;
+      e.preventDefault();
+      items[next].focus();
+    };
+    const quote = this._sel.text.length > 160 ? this._sel.text.slice(0, 160) + "…" : this._sel.text;
+    const imgBase = `/api/reference/library/${encodeURIComponent(this._sha)}/figures/`;
+    return html`<div
+      class="fig-modal-backdrop"
+      @click=${(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+      @pointerup=${(e) => e.stopPropagation()}
+      @keyup=${(e) => e.stopPropagation()}
+    >
+      <div
+        class="fig-modal cap-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cap-picker-title"
+        @keydown=${onKey}
+      >
+        <header class="fig-modal-header">
+          <h2 id="cap-picker-title">Move to which caption?</h2>
+          <button class="fig-modal-close" type="button" aria-label="Close" @click=${close}>✕</button>
+        </header>
+        <div class="fig-modal-body">
+          <p class="cap-picker-quote">${quote}</p>
+          <ul class="cap-picker-list">
+            ${this._captionTargets().map(
+              (t) => html`<li>
+                <button
+                  type="button"
+                  class="cap-picker-item"
+                  @click=${() => this._submitMoveToCaption(t.id)}
+                >
+                  <img src=${imgBase + encodeURIComponent(t.id)} alt="" @error=${(e) => (e.target.hidden = true)} />
+                  <span>
+                    <span class="cap-picker-label">${t.label}${t.page ? html` · page ${t.page}` : nothing}</span>
+                    <span class="cap-picker-caption">${t.caption || "No caption yet"}</span>
+                  </span>
+                </button>
+              </li>`,
+            )}
+          </ul>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // _isPlaceholderPara reports whether a caption paragraph is the
+  // label placeholder of a curator-drawn figure that has since
+  // received caption text moved from the body; such placeholders are
+  // hidden.
+  _isPlaceholderPara(p) {
+    if (p.hasAttribute("hive:moved-from")) return false;
+    const cap = p.parentNode;
+    if (!cap || cap.localName !== "caption") return false;
+    const fig = cap.parentNode;
+    if (!fig || !(fig.getAttribute("id") || "").startsWith("curator_")) return false;
+    return [...cap.children].some(
+      (c) => c.localName === "p" && c.hasAttribute("hive:moved-from"),
+    );
+  }
+
+  // _captionText returns a figure's visible caption text.
+  _captionText(figNode) {
+    const caption = this._directChild(figNode, "caption");
+    if (!caption) return "";
+    let text = "";
+    for (const c of caption.childNodes) {
+      if (c.nodeType === Node.ELEMENT_NODE && c.localName === "p" && this._isPlaceholderPara(c)) {
+        continue;
+      }
+      text += " " + (c.textContent || "");
+    }
+    return text.replace(/\s+/g, " ").trim();
   }
 
   // Click-to-turn: left third goes back, right third goes forward,
@@ -1965,6 +2452,9 @@ class SfgaReader extends LitElement {
             `
         : nothing}
       ${this._renderFigModal()}
+      ${this._renderSelToolbar()}
+      ${this._renderCaptionPicker()}
+      ${this._renderChangePop()}
     `;
   }
 
@@ -2635,9 +3125,9 @@ class SfgaReader extends LitElement {
         out.push(this._renderTaxonName(node));
         continue;
       }
-      // <hive:noise> — a text-remove correction's applied wrapper.
-      // Renders as a compact red-dot marker sitting where the noise
-      // used to be. Tooltip carries the removed text so curators
+      // <hive:noise> — a text-remove or text-tag correction's applied
+      // wrapper. Renders as a small restore marker sitting where the
+      // text used to be. Tooltip carries the removed text so curators
       // can verify without opening anything; click sends a
       // hive:restore-text postMessage that stages the un-remove.
       if (node.prefix === "hive" && local === "noise") {
@@ -2682,13 +3172,14 @@ class SfgaReader extends LitElement {
           const aria = approx
             ? "Source PDF page approximately " + pageNum + " begins"
             : "Source PDF page " + pageNum + " begins";
-          out.push(html`<div class="page-break" role="separator"
+          out.push(html`<div class="page-break" role="separator" data-decor
             aria-label=${aria} data-pdf-page=${pageNum}>
             <span class="page-break-num">page ${label}</span>
           </div>`);
           continue;
         }
-        out.push(html`<p>${this._renderNodes(node.childNodes)}</p>`);
+        if (this._isPlaceholderPara(node)) continue;
+        out.push(html`<p class=${this._hasVisibleText(node) ? nothing : "emptied"}>${this._renderNodes(node.childNodes)}</p>`);
         continue;
       }
       // <sec sec-type="figures"> gets a special compact-list
@@ -2731,6 +3222,7 @@ class SfgaReader extends LitElement {
         const label = this._figLabelFromCaption(node) || figID;
         out.push(html`<a
           class="fig-inline-link"
+          data-decor
           role="button"
           tabindex="0"
           @click=${(e) => this._openFigModal(e, figID)}
@@ -2929,6 +3421,19 @@ class SfgaReader extends LitElement {
       }
       if (local === "sub") {
         out.push(html`<sub>${this._renderNodes(node.childNodes)}</sub>`);
+        continue;
+      }
+      // A page break inside a paragraph, left where a merge joined
+      // the two halves of a paragraph split across pages.
+      if (local === "page-break") {
+        const pageNum = node.getAttribute("page") || "";
+        out.push(html`<span
+          class="page-break-inline"
+          data-decor
+          data-pdf-page=${pageNum}
+          role="separator"
+          aria-label=${"Source PDF page " + pageNum + " begins"}
+          >page ${pageNum}</span>`);
         continue;
       }
       // Unknown element — wrap in an inline span. JATS phrase-
@@ -3144,9 +3649,8 @@ class SfgaReader extends LitElement {
   // with the label; the extractFigLabel logic in jatsconv follows
   // the same convention on the emit side.
   _figLabelFromCaption(figNode) {
-    const caption = this._directChild(figNode, "caption");
-    if (!caption) return "";
-    const text = (caption.textContent || "").trim();
+    const text = this._captionText(figNode);
+    if (!text) return "";
     const m = /^(fig(?:ure)?|tab(?:le)?)\.?\s*(\d+)/i.exec(text);
     if (!m) return "";
     const kind = m[1].toLowerCase();
@@ -3169,9 +3673,7 @@ class SfgaReader extends LitElement {
     const present = new Set();
     const blocks = this._doc.querySelectorAll("fig, table-wrap");
     for (const b of blocks) {
-      const cap = b.querySelector("caption");
-      if (!cap) continue;
-      const m = labelRe.exec(cap.textContent || "");
+      const m = labelRe.exec(this._captionText(b));
       labelRe.lastIndex = 0;
       if (m) present.add(canon(m[1], m[2]));
     }
@@ -3638,9 +4140,9 @@ class SfgaReader extends LitElement {
   }
 
   // _renderNoiseMarker renders a <hive:noise correction-id="…">
-  // element as a compact red-dot marker. The marker sits inline
-  // where the removed paragraph used to be, so a curator sees at a
-  // glance that noise was removed at that spot. Tooltip carries the
+  // element as a small labelled "↺ removed" / "↺ moved" marker. The
+  // marker sits inline where the text used to be, so a curator sees
+  // at a glance that text was removed or moved at that spot. Tooltip carries the
   // removed text (recovered from the child XML comment) so the
   // curator can verify without opening a modal. Click stages an
   // un-remove by sending hive:restore-text to the shell.
@@ -3659,7 +4161,7 @@ class SfgaReader extends LitElement {
     for (const child of el.childNodes) {
       if (child.nodeType === Node.COMMENT_NODE) {
         removedText = (child.nodeValue || "").trim().replace(/-\u200b/g, "-");
-        if (el.getAttribute("original") === "element") {
+        if (["element", "fragment"].includes(el.getAttribute("original"))) {
           // Tags are dropped and entities decoded with an inert
           // template; the fragment is never attached to the page.
           const t = document.createElement("template");
@@ -3669,26 +4171,196 @@ class SfgaReader extends LitElement {
         break;
       }
     }
-    const title = removedText
-      ? "Removed: " + removedText + "\nClick to restore"
-      : "Removed noise — click to restore";
+    const movedTo = el.getAttribute("moved-to") || "";
+    const label = el.getAttribute("label") || "";
+    let what = "Removed";
+    if (label === "merge") {
+      what = "Merged with the next paragraph";
+    } else if (movedTo) {
+      const fig = this._doc?.querySelector(`[id="${CSS.escape(movedTo)}"]`);
+      const figLabel = fig && this._figLabelFromCaption(fig);
+      const page = fig && this._pdfPageOf(fig);
+      what = "Moved to the caption of " + (figLabel ||
+        (movedTo.startsWith("curator_") ? "a drawn region" : "a figure") + (page ? " on page " + page : ""));
+    } else if (label) {
+      const named = SfgaReader.REMOVE_LABELS.find(([v]) => v === label);
+      what = "Removed as " + (named ? named[1].toLowerCase() : label);
+    }
+    const text = label === "merge" ? "" : removedText;
     return html`<span
       class="hive-noise-marker"
+      data-decor
       role="button"
       tabindex="0"
-      title=${title}
+      aria-haspopup="dialog"
+      aria-label=${what}
       data-correction-id=${correctionID}
+      data-what=${what}
+      data-text=${text}
+      @pointerenter=${(e) => this._openChangePop(e.currentTarget, false)}
+      @pointerleave=${() => this._scheduleChangePopClose()}
+      @focus=${(e) => this._openChangePop(e.currentTarget, false)}
       @click=${(e) => {
         e.stopPropagation();
-        this._restoreNoise(correctionID);
+        this._openChangePop(e.currentTarget, true);
       }}
       @keydown=${(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          this._restoreNoise(correctionID);
+          this._openChangePop(e.currentTarget, true);
         }
       }}
-    >·</span>`;
+    ></span>`;
+  }
+
+  // _hasVisibleText reports whether a JATS element has text the
+  // reader shows, ignoring change wrappers.
+  _hasVisibleText(node) {
+    for (const c of node.childNodes) {
+      if (c.nodeType === Node.TEXT_NODE && c.nodeValue.trim()) return true;
+      if (c.nodeType !== Node.ELEMENT_NODE) continue;
+      if (c.prefix === "hive" && c.localName === "noise") continue;
+      if (c.localName === "page-break") return true;
+      if (this._hasVisibleText(c)) return true;
+    }
+    return false;
+  }
+
+  // _clusterMarkers shows one dot for markers that would sit close
+  // together in the margin: same column, and each within about a
+  // line of the previous one. The first dot of a cluster carries the
+  // whole cluster's change list.
+  _clusterMarkers() {
+    const markers = [...this.renderRoot.querySelectorAll("article .hive-noise-marker")];
+    for (const m of markers) m.classList.remove("clustered");
+    const article = this.renderRoot.querySelector("article");
+    const line = (article && parseFloat(getComputedStyle(article).lineHeight)) || 24;
+    const rects = markers.map((m) => m.getBoundingClientRect());
+    this._clusterItems = new Map();
+    let group = null;
+    markers.forEach((m, i) => {
+      const r = rects[i];
+      if (r.width === 0 && r.height === 0) return;
+      if (group && Math.abs(r.left - group.left) < 4 && r.top - group.bottom < line) {
+        group.items.push(this._changeItem(m));
+        group.bottom = Math.max(group.bottom, r.bottom);
+        m.classList.add("clustered");
+        return;
+      }
+      group = { left: r.left, bottom: r.bottom, items: [this._changeItem(m)] };
+      this._clusterItems.set(m, group.items);
+    });
+  }
+
+  _changeItem(m) {
+    return { id: m.dataset.correctionId, what: m.dataset.what, text: m.dataset.text || "" };
+  }
+
+  // _openChangePop shows the change list for a dot. Hover opens it
+  // unpinned; a click or keyboard activation pins it, and a pinned
+  // list stays open until Escape or a click elsewhere. The list
+  // opens touching the dot, and an unpinned list waits before
+  // closing, so moving the pointer from the dot into the list never
+  // loses it.
+  _openChangePop(el, pin) {
+    clearTimeout(this._changePopTimer);
+    if (this._changePop?.pinned && this._changePopAnchor === el && !pin) return;
+    const r = el.getBoundingClientRect();
+    const items = this._clusterItems?.get(el) || [this._changeItem(el)];
+    this._changePopAnchor = el;
+    this._changePop = {
+      items,
+      pinned: !!pin,
+      x: Math.max(8, Math.min(r.right - 2, window.innerWidth - 22 * 16 - 8)),
+      y: Math.max(8, Math.min(r.top - 8, window.innerHeight * 0.4)),
+    };
+    if (pin) {
+      this._pinChangePop();
+      this.updateComplete.then(() => this.renderRoot.querySelector(".change-pop button")?.focus());
+    }
+  }
+
+  // _pinChangePop keeps the open list until Escape or a pointer
+  // press outside it and its dot.
+  _pinChangePop() {
+    if (!this._changePop) return;
+    if (!this._changePop.pinned) this._changePop = { ...this._changePop, pinned: true };
+    if (this._onOutsidePointer) return;
+    this._onOutsidePointer = (e) => {
+      const path = e.composedPath();
+      const pop = this.renderRoot.querySelector(".change-pop");
+      if (pop && !path.includes(pop) && !path.includes(this._changePopAnchor)) {
+        this._closeChangePop();
+      }
+    };
+    window.addEventListener("pointerdown", this._onOutsidePointer, true);
+  }
+
+  _closeChangePop() {
+    clearTimeout(this._changePopTimer);
+    this._changePop = null;
+    if (this._onOutsidePointer) {
+      window.removeEventListener("pointerdown", this._onOutsidePointer, true);
+      this._onOutsidePointer = null;
+    }
+  }
+
+  _scheduleChangePopClose() {
+    clearTimeout(this._changePopTimer);
+    if (this._changePop?.pinned) return;
+    this._changePopTimer = setTimeout(() => {
+      if (!this.renderRoot.querySelector(".change-pop:focus-within")) this._closeChangePop();
+    }, 500);
+  }
+
+  _renderChangePop() {
+    const pop = this._changePop;
+    if (!pop) return nothing;
+    const canRestore = window.parent && window.parent !== window;
+    const close = () => {
+      this._closeChangePop();
+      this._changePopAnchor?.focus();
+    };
+    const clip = (t) => (t.length > 240 ? t.slice(0, 240) + "…" : t);
+    return html`<div
+      class="change-pop"
+      role="dialog"
+      aria-label="Changes to the text here"
+      style=${`left:${pop.x}px;top:${pop.y}px`}
+      @pointerenter=${() => clearTimeout(this._changePopTimer)}
+      @pointerdown=${() => this._pinChangePop()}
+      @pointerleave=${() => this._scheduleChangePopClose()}
+      @focusout=${(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) this._scheduleChangePopClose();
+      }}
+      @keydown=${(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close();
+        }
+      }}
+      @pointerup=${(e) => e.stopPropagation()}
+      @keyup=${(e) => e.stopPropagation()}
+      @click=${(e) => e.stopPropagation()}
+    >
+      <ul>
+        ${pop.items.map(
+          (it) => html`<li>
+            <div class="change-pop-what">${it.what}</div>
+            ${it.text ? html`<div class="change-pop-text">${clip(it.text)}</div>` : nothing}
+            ${canRestore
+              ? html`<button
+                  type="button"
+                  @click=${() => {
+                    this._closeChangePop();
+                    this._restoreNoise(it.id);
+                  }}
+                >${it.what.startsWith("Merged") ? "Undo merge" : "Restore"}</button>`
+              : nothing}
+          </li>`,
+        )}
+      </ul>
+    </div>`;
   }
 
   // _restoreNoise asks the shell to post a text-restore correction
@@ -3767,6 +4439,7 @@ class SfgaReader extends LitElement {
       class="taxon-name ${cls}"
       title=${title}
       data-full-name=${fullName}
+      data-src-text=${expanded ? el.textContent : nothing}
       >${body}</span
     >`;
   }

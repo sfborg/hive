@@ -298,8 +298,8 @@ CREATE INDEX IF NOT EXISTS idx_hive__reference_assertion_asserted_by
 --                   (fig/table default to trailing sec).
 --   payload         correction-kind-specific JSON. For bbox-add
 --                   it's usually {} (text extracted at apply time);
---                   for text-tag it's {selection_start,
---                   selection_end, tag_reason}; for xref-fix it's
+--                   for text-tag it's {action, segments, text}
+--                   (see correction.TextTagPayload); for xref-fix it's
 --                   {xref_element_id, old_rid, new_rid,
 --                   xref_text}; for chip-feedback it's {action,
 --                   chip_element_id, old_source, new_source,

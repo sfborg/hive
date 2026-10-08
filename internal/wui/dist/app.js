@@ -16089,6 +16089,33 @@ class SfgaReferences extends LitElement {
       gap: var(--sp-1);
       font-size: var(--fs-sm);
     }
+    .bbox-attach {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-2);
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+      max-height: 12rem;
+      overflow: auto;
+    }
+    .bbox-attach legend {
+      font-size: var(--fs-sm);
+      padding: 0 var(--sp-1);
+    }
+    .bbox-form .bbox-attach label {
+      flex-direction: row;
+      align-items: baseline;
+    }
+    .bbox-attach .dim {
+      color: var(--dim);
+    }
+    .bbox-attach-caption {
+      display: block;
+      color: var(--dim);
+      font-size: var(--fs-xs);
+    }
     .bbox-form input,
     .bbox-form select,
     .bbox-form textarea {
@@ -17484,11 +17511,11 @@ class SfgaReferences extends LitElement {
     this._workspaceTab = "bibliography";
     // _pdfPage drives the PDF iframe's #page=N fragment. Updated
     // when a curator clicks a figure xref in the reader — see
-    // _onReaderMessage. Starts at 1 for each new reference; the
-    // constructor runs once but _select() also resets it on
-    // reference switch so navigating to a new reference doesn't
-    // leave a stale page number.
-    this._pdfPage = 1;
+    // _onReaderMessage. 0 means no page was requested, so the PDF
+    // pane keeps the position it restored; _select() resets it on
+    // reference switch so a new reference doesn't inherit a stale
+    // page number.
+    this._pdfPage = 0;
     {
       let saved = "";
       try {
@@ -17570,17 +17597,17 @@ class SfgaReferences extends LitElement {
         });
         return;
       }
-      if (d.type === "hive:remove-text" && d.text && this._current) {
-        // eslint-disable-next-line no-console
-        console.log("shell got hive:remove-text", {
-          msgSha: d.sha,
-          currentSha,
-          text: (d.text || "").slice(0, 60),
-        });
-        this._postTextRemoveCorrection({
+      if (
+        d.type === "hive:text-correction" &&
+        (d.kind === "text-remove" || d.kind === "text-tag") &&
+        d.payload &&
+        this._current
+      ) {
+        this._postTextCorrection({
           sha: d.sha || currentSha,
-          text: d.text,
-          pdfPage: d.pdfPage || 0,
+          kind: d.kind,
+          payload: d.payload,
+          targetElementID: d.targetElementID || "",
         });
         return;
       }
@@ -18142,10 +18169,10 @@ class SfgaReferences extends LitElement {
     this._grobidRegions = [];
     this._activeTool = "read";
     this._fetchCorrections(id);
-    // Fresh reference → fresh PDF page. Otherwise the new
-    // reference's PDF iframe would open at whatever page the
-    // previous reference was last showing.
-    this._pdfPage = 1;
+    // Fresh reference → no requested PDF page, so the new
+    // reference's PDF opens at its own saved position rather than
+    // the page the previous reference was showing.
+    this._pdfPage = 0;
     // Clear active-reader sha so the reader falls back to the
     // reference's default first attachment (PDF, per the sort in
     // buildAttachedFiles). Otherwise a curator who last clicked
@@ -18866,6 +18893,11 @@ class SfgaReferences extends LitElement {
       extractedText: "",
       existingLabels: [],
       editingID: "", // empty = new correction; set = edit existing
+      // attachTo names a figure or table that has a caption but no
+      // region; saving attaches the drawn box to it instead of
+      // creating a new element.
+      attachTo: "",
+      caption: "",
     };
     this._fetchBBoxPreview();
   }
@@ -18998,12 +19030,25 @@ class SfgaReferences extends LitElement {
       // caption text always beats a numeric fallback.
       if (body.detected_type) next.contentType = body.detected_type;
       if (body.detected_label) next.label = body.detected_label;
+      // A caption-only figure with the label found in the drawn
+      // region is almost certainly the figure being drawn.
+      if (!next.editingID && !next.targetElementID && !next.attachTo && body.detected_label) {
+        const match = this._captionOnlyRegions().find((g) => g.label === body.detected_label);
+        if (match) next.attachTo = match.id;
+      }
       this._bboxForm = next;
     } catch (err) {
       if (this._bboxForm) {
         this._bboxForm = { ...this._bboxForm, previewLoading: false };
       }
     }
+  }
+
+  // _captionOnlyRegions lists figures and tables found by their
+  // caption with no region on the PDF — targets a drawn box can be
+  // attached to.
+  _captionOnlyRegions() {
+    return (this._grobidRegions || []).filter((g) => !g.bbox);
   }
 
   _closeBBoxForm() {
@@ -19031,6 +19076,9 @@ class SfgaReferences extends LitElement {
     const f = this._bboxForm;
     const editingID = f.editingID || "";
     const targetID = f.targetElementID || "";
+    const attach = !targetID && !editingID && f.attachTo
+      ? this._captionOnlyRegions().find((g) => g.id === f.attachTo)
+      : null;
     try {
       if (editingID) {
         await fetch(
@@ -19039,7 +19087,23 @@ class SfgaReferences extends LitElement {
         );
       }
       let body;
-      if (targetID) {
+      if (attach) {
+        // Attach the drawn box to a caption-only figure or table:
+        // the element gains its region (and so its image) and keeps
+        // its caption.
+        body = {
+          reference_id: this._current.id,
+          sidecar_sha: sha,
+          kind: "bbox-modify",
+          content_type: attach.kind || f.contentType,
+          target_element_id: attach.id,
+          label: attach.label || f.label,
+          payload: JSON.stringify({
+            original: { content_type: attach.kind || "", label: attach.label || "" },
+            corrected: { bbox: f.bbox, page: f.page },
+          }),
+        };
+      } else if (targetID) {
         // bbox-modify path — patch an existing GROBID element.
         const payload = {
           original: {
@@ -19078,6 +19142,9 @@ class SfgaReferences extends LitElement {
           bbox: f.bbox,
           label: f.label,
         };
+        if (f.caption && f.caption.trim()) {
+          body.payload = JSON.stringify({ caption: f.caption.trim() });
+        }
       }
       const r = await fetch("/api/reference/correction", {
         method: "POST",
@@ -19389,25 +19456,31 @@ class SfgaReferences extends LitElement {
     }
   }
 
-  // _postTextRemoveCorrection posts a text-remove correction for a
-  // paragraph the curator flagged via the reader's remove-text tool.
-  // Payload carries the paragraph's exact text (authoritative training-
-  // data source) and pdf_page hint (disambiguates identical noise text
-  // repeated on multiple pages). Applier finds the matching <p> by
-  // text-content match and wraps it in <hive:noise>.
-  async _postTextRemoveCorrection({ sha, text, pdfPage }) {
-    if (!sha || !text || !this._current) return;
+  // _postTextCorrection saves a correction made with the reader's
+  // selection toolbar: a text-remove (payload carries the selection
+  // segments and a structural label) or a text-tag (payload carries
+  // the action and segments; targetElementID names the figure or
+  // table for move-to-caption).
+  async _postTextCorrection({ sha, kind, payload, targetElementID }) {
+    if (!sha || !this._current) return;
     try {
+      const body = {
+        reference_id: this._current.id,
+        sidecar_sha: sha,
+        kind,
+        content_type:
+          kind === "text-remove"
+            ? payload.label || "text"
+            : payload.action === "merge-next"
+              ? "paragraph"
+              : "caption",
+        payload: JSON.stringify(payload),
+      };
+      if (targetElementID) body.target_element_id = targetElementID;
       const r = await fetch("/api/reference/correction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reference_id: this._current.id,
-          sidecar_sha: sha,
-          kind: "text-remove",
-          content_type: "text",
-          payload: JSON.stringify({ text, pdf_page: pdfPage || 0 }),
-        }),
+        body: JSON.stringify(body),
       });
       await this._noteCorrectionResult(r, "reader");
       if (r.ok) {
@@ -19415,8 +19488,7 @@ class SfgaReferences extends LitElement {
         this._reloadReaderIframe();
       }
     } catch (err) {
-      // Same swallow pattern as _postRefMergeCorrection — the tool is
-      // one-shot per click, curator can retry.
+      this._correctionWarning = { side: "reader", text: "Correction failed: " + (err.message || err) };
     }
   }
 
@@ -19430,8 +19502,10 @@ class SfgaReferences extends LitElement {
       if (r.ok) {
         const body = await r.clone().json();
         if (Array.isArray(body?.warnings) && body.warnings.length > 0) {
-          text = "Correction saved, but the document was not updated: " +
-            body.warnings.join("; ");
+          text = body?.correction?.status === "reverted"
+            ? "Not applied: " + body.warnings.join("; ")
+            : "Correction saved, but the document was not updated: " +
+              body.warnings.join("; ");
         }
       } else {
         const body = await r.clone().json().catch(() => null);
@@ -19561,7 +19635,38 @@ class SfgaReferences extends LitElement {
                   No caption prefix detected — pick content type and
                   label manually.
                 </div>`}
-          <label>
+          ${!f.editingID && !f.targetElementID && this._captionOnlyRegions().length > 0
+            ? html`<fieldset class="bbox-attach">
+                <legend>Attach to</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="bbox-attach"
+                    .checked=${!f.attachTo}
+                    @change=${() => (this._bboxForm = { ...f, attachTo: "" })}
+                  />
+                  <span>A new figure or table</span>
+                </label>
+                ${this._captionOnlyRegions().map(
+                  (g) => html`<label>
+                    <input
+                      type="radio"
+                      name="bbox-attach"
+                      .checked=${f.attachTo === g.id}
+                      @change=${() => (this._bboxForm = { ...f, attachTo: g.id })}
+                    />
+                    <span>
+                      <strong>${g.label || (g.kind === "table" ? "Table" : "Figure")}</strong>
+                      <span class="dim"> — found by caption only</span>
+                      ${g.caption ? html`<span class="bbox-attach-caption">${g.caption}</span>` : nothing}
+                    </span>
+                  </label>`,
+                )}
+              </fieldset>`
+            : nothing}
+          ${f.attachTo
+            ? nothing
+            : html`<label>
             Content type
             <select
               .value=${f.contentType}
@@ -19598,18 +19703,18 @@ class SfgaReferences extends LitElement {
               @input=${(e) => (this._bboxForm = { ...f, label: e.target.value })}
             />
           </label>
-          ${f.targetElementID
-            ? html`<label>
-                Caption
-                <textarea
-                  rows="3"
-                  placeholder="Corrected caption text — leave blank to keep the extractor's caption"
-                  .value=${f.caption || ""}
-                  @input=${(e) =>
-                    (this._bboxForm = { ...f, caption: e.target.value })}
-                ></textarea>
-              </label>`
-            : nothing}
+          <label>
+            Caption
+            <textarea
+              rows="3"
+              placeholder=${f.targetElementID
+                ? "Corrected caption text — leave blank to keep the extractor's caption"
+                : "Caption text, if the paper has one — leave blank to use the label"}
+              .value=${f.caption || ""}
+              @input=${(e) =>
+                (this._bboxForm = { ...f, caption: e.target.value })}
+            ></textarea>
+          </label>`}
           ${f.existingLabels && f.existingLabels.length > 0
             ? html`<div class="bbox-existing-labels">
                 <div class="bbox-existing-labels-title">
@@ -20224,24 +20329,20 @@ class SfgaReferences extends LitElement {
           ? html`
               <div class="digitize-grid">
                 <div class="reader-column">
-                  <div class="reader-toolbar" role="toolbar" aria-label="Reader tools">
-                    <button
-                      type="button"
-                      class=${"tool-btn" + (this._activeTool === "read" ? " active" : "")}
-                      aria-pressed=${this._activeTool === "read"}
-                      title="Read — no active reader-side correction tool"
-                      @click=${() => this._setActiveTool("read")}
-                    >Read</button>
-                    <button
-                      type="button"
-                      class=${"tool-btn" + (this._activeTool === "text-remove" ? " active" : "")}
-                      aria-pressed=${this._activeTool === "text-remove"}
-                      title="Remove noise — click a paragraph in the reader to remove header/footer text GROBID pulled into the body"
-                      @click=${() => this._setActiveTool("text-remove")}
-                    >Remove noise</button>
+                  <div class="reader-toolbar">
+                    <span class="toolbar-hint">Select text to remove it, move it into a caption, or merge its paragraph with the next.</span>
                   </div>
                   ${this._renderCorrectionWarning("reader")}
-                  <iframe class="pane reader" title="Reader" src=${readerSrc}></iframe>
+                  <iframe
+                    class="pane reader"
+                    title="Reader"
+                    src=${readerSrc}
+                    @load=${(e) =>
+                      e.target.contentWindow?.postMessage(
+                        { type: "hive:set-workflow", workflow: "digitize" },
+                        "*",
+                      )}
+                  ></iframe>
                 </div>
                 <div class="pdf-column">
                   <div class="pdf-toolbar" role="toolbar" aria-label="PDF tools">
@@ -24928,6 +25029,53 @@ class SfgaPdfViewer extends LitElement {
       position: relative;
       display: block;
     }
+    /* pdf.js text layer: transparent text positioned over the canvas
+       so PDF text can be selected, copied and found with the
+       browser's find. Rules follow pdf.js's own viewer stylesheet. */
+    .textLayer {
+      position: absolute;
+      text-align: initial;
+      inset: 0;
+      overflow: clip;
+      line-height: 1;
+      text-size-adjust: none;
+      forced-color-adjust: none;
+      transform-origin: 0 0;
+      caret-color: CanvasText;
+      z-index: 0;
+      --min-font-size: 1;
+      --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+      --min-font-size-inv: calc(1 / var(--min-font-size));
+    }
+    .textLayer :is(span, br) {
+      color: transparent;
+      position: absolute;
+      white-space: pre;
+      cursor: text;
+      transform-origin: 0% 0%;
+    }
+    .textLayer > :not(.markedContent),
+    .textLayer .markedContent span:not(.markedContent) {
+      z-index: 1;
+      --font-height: 0;
+      font-size: calc(var(--text-scale-factor) * var(--font-height));
+      --scale-x: 1;
+      --rotate: 0deg;
+      transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+    }
+    .textLayer .markedContent {
+      display: contents;
+    }
+    .textLayer span[role="img"] {
+      user-select: none;
+      cursor: default;
+    }
+    .textLayer ::selection {
+      background: color-mix(in oklab, var(--accent, #4a90e2) 35%, transparent);
+    }
+    .textLayer br::selection {
+      background: transparent;
+    }
     .pages canvas {
       background: white;
       display: block;
@@ -25130,6 +25278,10 @@ class SfgaPdfViewer extends LitElement {
       let saveTimer = 0;
       this.addEventListener("scroll", () => {
         if (!this._loadedSrc) return;
+        this._updateCurrentPage();
+        // Scrolling done by loading itself (content cleared, pages
+        // appended, the restore) is not the curator's position.
+        if (this._loading || this._pendingScroll != null) return;
         if (saveTimer) clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
           try {
@@ -25144,6 +25296,15 @@ class SfgaPdfViewer extends LitElement {
       });
     }
     try {
+      // Read the saved position before anything can scroll and
+      // overwrite it.
+      let savedScroll = NaN;
+      try {
+        const saved = localStorage.getItem("hive:pdf-scroll:" + this.src);
+        if (saved != null) savedScroll = Number.parseInt(saved, 10);
+      } catch (err) {
+        // Storage disabled — start at the top.
+      }
       const pdfjsLib = await import("/vendor/pdfjs-6.2.108/pdf.mjs");
       pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs-6.2.108/pdf.worker.mjs";
       // pdf.js 6.x requires an options object — a bare string URL
@@ -25168,12 +25329,20 @@ class SfgaPdfViewer extends LitElement {
         wrapper.className = "page-wrapper";
         wrapper.dataset.page = String(i);
         wrapper.style.width = viewport.width + "px";
+        // Scale variables the text layer sizes itself from.
+        wrapper.style.setProperty("--scale-factor", String(PDF_RENDER_SCALE));
+        wrapper.style.setProperty("--total-scale-factor", String(PDF_RENDER_SCALE));
+        wrapper.style.setProperty("--scale-round-x", "1px");
+        wrapper.style.setProperty("--scale-round-y", "1px");
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         canvas.dataset.page = String(i);
         canvas.className = "pdf-page";
         wrapper.appendChild(canvas);
+        const textDiv = document.createElement("div");
+        textDiv.className = "textLayer";
+        wrapper.appendChild(textDiv);
         const overlay = document.createElement("div");
         overlay.className = "bbox-layer";
         overlay.dataset.page = String(i);
@@ -25185,25 +25354,62 @@ class SfgaPdfViewer extends LitElement {
           canvasContext: canvas.getContext("2d"),
           viewport,
         }).promise;
+        try {
+          await new pdfjsLib.TextLayer({
+            textContentSource: page.streamTextContent(),
+            container: textDiv,
+            viewport,
+          }).render();
+        } catch (err) {
+          // A page without extractable text (a scan) still renders.
+        }
       }
       // Overlay existing bboxes now that dimensions are known.
       this._syncBboxes();
       // Restore last scroll position for this PDF so reload
       // lands on the same page the curator was reading.
-      try {
-        const saved = localStorage.getItem("hive:pdf-scroll:" + this._loadedSrc);
-        if (saved != null) {
-          const n = Number.parseInt(saved, 10);
-          if (Number.isFinite(n)) this.scrollTop = n;
-        }
-      } catch (err) {
-        // Ignore — restore is best-effort.
-      }
+      if (Number.isFinite(savedScroll)) this._restoreScroll(savedScroll);
     } catch (err) {
       this._error = "Failed to load PDF: " + (err?.message || String(err));
     } finally {
       this._loading = false;
     }
+  }
+
+  // _restoreScroll scrolls to a saved offset. A viewer in a hidden
+  // tab has no layout, and setting scrollTop there is ignored, so the
+  // restore waits until the viewer has a size.
+  _restoreScroll(offset) {
+    if (this.clientHeight > 0) {
+      this.scrollTop = offset;
+      this._updateCurrentPage();
+      return;
+    }
+    this._pendingScroll = offset;
+    if (this._sizeObserver) return;
+    this._sizeObserver = new ResizeObserver(() => {
+      if (this.clientHeight === 0 || this._pendingScroll == null) return;
+      this.scrollTop = this._pendingScroll;
+      this._pendingScroll = null;
+      this._updateCurrentPage();
+      this._sizeObserver.disconnect();
+      this._sizeObserver = null;
+    });
+    this._sizeObserver.observe(this);
+  }
+
+  // _updateCurrentPage sets the status-bar page to the page whose
+  // top edge was scrolled past most recently, measured a third of
+  // the way down the pane.
+  _updateCurrentPage() {
+    if (this.clientHeight === 0) return;
+    const line = this.scrollTop + this.clientHeight / 3;
+    let current = 1;
+    for (const w of this.renderRoot?.querySelectorAll(".page-wrapper") || []) {
+      if (w.offsetTop <= line) current = Number(w.dataset.page) || current;
+      else break;
+    }
+    if (current !== this._currentPage) this._currentPage = current;
   }
 
   // goToPage scrolls the given 1-indexed page canvas into view.

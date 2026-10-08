@@ -32,7 +32,15 @@ func Appliers() []hiveext.CorrectionApplier {
 		refEditApplier{},
 		textRemoveApplier{},
 		textRestoreApplier{},
+		textTagApplier{},
 	}
+}
+
+type textTagApplier struct{}
+
+func (textTagApplier) Kind() correction.Kind { return correction.KindTextTag }
+func (textTagApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
+	return ApplyTextTagToJATS(jats, c)
 }
 
 type bboxAddApplier struct{}
@@ -164,6 +172,12 @@ func ApplyBBoxModifyToJATS(jats []byte, c *correction.Correction) ([]byte, error
 			payload.Corrected.BBox.X, payload.Corrected.BBox.Y,
 			payload.Corrected.BBox.W, payload.Corrected.BBox.H)
 		newBytes = replacePdfBBoxAttr(newBytes, newBBoxAttr)
+	}
+	// A region drawn for an element that had none (a figure found
+	// only by its caption) also needs its page, which figextract
+	// requires before it crops an image.
+	if payload.Corrected.Page > 0 {
+		newBytes = replacePdfPageAttr(newBytes, payload.Corrected.Page)
 	}
 
 	// Replace caption content if new caption is provided.
@@ -734,6 +748,27 @@ func replacePdfBBoxAttr(elem []byte, newValue string) []byte {
 	return out.Bytes()
 }
 
+var pdfPageAttrRegex = regexp.MustCompile(`(\shive:pdf-page=")[^"]*(")`)
+
+// replacePdfPageAttr sets the hive:pdf-page attribute on the
+// element's opening tag, adding it when absent.
+func replacePdfPageAttr(elem []byte, page int) []byte {
+	gt := bytes.IndexByte(elem, '>')
+	if gt < 0 {
+		return elem
+	}
+	value := strconv.Itoa(page)
+	if pdfPageAttrRegex.Match(elem[:gt]) {
+		head := pdfPageAttrRegex.ReplaceAll(elem[:gt], []byte("${1}"+value+"${2}"))
+		return append(head, elem[gt:]...)
+	}
+	var out bytes.Buffer
+	out.Write(elem[:gt])
+	out.WriteString(` hive:pdf-page="` + value + `"`)
+	out.Write(elem[gt:])
+	return out.Bytes()
+}
+
 // replaceTableBlock swaps the first <table>...</table> block in
 // the element for the given replacement. When no <table> is
 // present, inserts one after the caption; when there's no caption
@@ -922,8 +957,11 @@ func ApplyTextRemoveToJATS(jats []byte, c *correction.Correction) ([]byte, error
 	if err := json.Unmarshal([]byte(c.Payload), &payload); err != nil {
 		return nil, fmt.Errorf("apply text-remove: parse payload: %w", err)
 	}
+	if len(payload.Segments) > 0 {
+		return ApplyTextRangeRemoveToJATS(jats, c, payload)
+	}
 	if strings.TrimSpace(payload.Text) == "" {
-		return nil, fmt.Errorf("apply text-remove: payload.text required")
+		return nil, fmt.Errorf("apply text-remove: payload.text or payload.segments required")
 	}
 	openIdx, closeIdx, ok := findBlockByText(jats, payload.Text, payload.PDFPage)
 	if !ok {
@@ -1144,52 +1182,73 @@ func ApplyTextRestoreToJATS(jats []byte, c *correction.Correction) ([]byte, erro
 	if payload.RemoveCorrectionID == "" {
 		return nil, fmt.Errorf("apply text-restore: payload.remove_correction_id required")
 	}
-	openIdx, closeIdx, original, isElement, ok := findNoiseWrapper(jats, payload.RemoveCorrectionID)
-	if !ok {
-		return jats, nil
-	}
-	replacement := original
-	if !isElement {
-		replacement = "<p>" + correction.XMLEscape(original) + "</p>"
-	}
-	var out bytes.Buffer
-	out.Grow(len(jats) + len(replacement) - (closeIdx - openIdx))
-	out.Write(jats[:openIdx])
-	out.WriteString(replacement)
-	out.Write(jats[closeIdx:])
-	return out.Bytes(), nil
+	return restoreWrappers(jats, payload.RemoveCorrectionID)
 }
 
 // findNoiseWrapper locates the <hive:noise correction-id="X"> element
 // matching the given correction id, returning its byte range and the
-// content recovered from the XML comment inside. isElement reports
-// whether that content is the removed element's XML (the
-// original="element" form) rather than an older plain-text hint,
-// which may be truncated; exact text for training data comes from the
+// content recovered from the XML comment inside. form is the
+// wrapper's original attribute: "element" (the removed element's
+// XML), "fragment" (a removed range's XML) or empty for older
+// wrappers holding a plain-text hint, which may be truncated; exact text for training data comes from the
 // text-remove correction's payload either way.
-func findNoiseWrapper(jats []byte, removeCorrectionID string) (openIdx, closeIdx int, original string, isElement, ok bool) {
+func findNoiseWrapper(jats []byte, removeCorrectionID string) (openIdx, closeIdx int, original, form string, ok bool) {
 	pattern := `<hive:noise\s+correction-id="` + regexp.QuoteMeta(removeCorrectionID) + `"([^>]*)>`
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return 0, 0, "", false, false
+		return 0, 0, "", "", false
 	}
 	loc := re.FindSubmatchIndex(jats)
 	if loc == nil {
-		return 0, 0, "", false, false
+		return 0, 0, "", "", false
 	}
-	isElement = bytes.Contains(jats[loc[2]:loc[3]], []byte(`original="element"`))
-	closeTag := []byte("</hive:noise>")
-	closeStart := bytes.Index(jats[loc[1]:], closeTag)
-	if closeStart < 0 {
-		return 0, 0, "", false, false
+	if m := regexp.MustCompile(`\boriginal="([a-z]+)"`).FindSubmatch(jats[loc[2]:loc[3]]); m != nil {
+		form = string(m[1])
 	}
-	inner := jats[loc[1] : loc[1]+closeStart]
+	end := noiseWrapperEnd(jats, loc[0])
+	if end < 0 {
+		return 0, 0, "", "", false
+	}
+	inner := jats[loc[1] : end-len("</hive:noise>")]
 	if commentOpen := bytes.Index(inner, []byte("<!--")); commentOpen >= 0 {
 		commentClose := bytes.Index(inner[commentOpen:], []byte("-->"))
 		if commentClose >= 0 {
 			raw := inner[commentOpen+4 : commentOpen+commentClose]
-			original = unescapeComment(strings.TrimSpace(string(raw)))
+			if form == "" {
+				original = unescapeComment(strings.TrimSpace(string(raw)))
+			} else {
+				// Drop only the single spaces renderNoiseWrapper and
+				// wrapSegment put around the content; the content's
+				// own edge whitespace is part of the document.
+				body := strings.TrimPrefix(string(raw), " ")
+				original = unescapeComment(strings.TrimSuffix(body, " "))
+			}
 		}
 	}
-	return loc[0], loc[1] + closeStart + len(closeTag), original, isElement, true
+	return loc[0], end, original, form, true
+}
+
+// noiseWrapperEnd returns the offset just past the </hive:noise>
+// closing the wrapper that starts at start, or -1. The wrapper's
+// comment can hold XML with its own </hive:noise> tags (a merge keeps
+// the original blocks, wrappers included), so the comment is skipped
+// before looking for the closing tag.
+func noiseWrapperEnd(jats []byte, start int) int {
+	gt := bytes.IndexByte(jats[start:], '>')
+	if gt < 0 {
+		return -1
+	}
+	pos := start + gt + 1
+	if bytes.HasPrefix(jats[pos:], []byte("<!--")) {
+		end := bytes.Index(jats[pos+4:], []byte("-->"))
+		if end < 0 {
+			return -1
+		}
+		pos += 4 + end + 3
+	}
+	closeStart := bytes.Index(jats[pos:], []byte("</hive:noise>"))
+	if closeStart < 0 {
+		return -1
+	}
+	return pos + closeStart + len("</hive:noise>")
 }

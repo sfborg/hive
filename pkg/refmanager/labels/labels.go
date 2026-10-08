@@ -41,8 +41,9 @@ type Label struct {
 // regions from GROBID-detected ones by their id prefix.
 type Region struct {
 	Label
-	BBox   *correction.BBox // nil when hive:pdf-bbox missing or unparseable
-	Origin string           // "grobid" (default) or "curator" (id starts with "curator_")
+	BBox    *correction.BBox // nil when hive:pdf-bbox missing or unparseable
+	Origin  string           // "grobid" (default) or "curator" (id starts with "curator_")
+	Caption string           // caption text, whitespace-collapsed, at most 160 characters
 }
 
 // extractedLabelRegex mirrors the caption prefix jatsconv looks
@@ -217,6 +218,9 @@ func ExtractRegions(jats []byte) ([]Region, error) {
 				if inCaption == 1 {
 					captionBuf.Reset()
 				}
+			} else if inCaption > 0 && t.Name.Local == "p" {
+				// Separate caption paragraphs in the snippet.
+				captionBuf.WriteByte(' ')
 			}
 		case xml.EndElement:
 			if t.Name.Local == "caption" && inCaption > 0 {
@@ -246,8 +250,9 @@ func ExtractRegions(jats []byte) ([]Region, error) {
 						Page:  currentPage,
 						ID:    currentID,
 					},
-					BBox:   currentBBox,
-					Origin: origin,
+					BBox:    currentBBox,
+					Origin:  origin,
+					Caption: captionSnippet(captionBuf.String()),
 				})
 				inFigOrTable = false
 				currentKind = ""
@@ -299,4 +304,14 @@ func labelSortLess(a, b Label) bool {
 	// Same-page tiebreak on label so figs and tables interleave
 	// predictably.
 	return a.Text < b.Text
+}
+
+// captionSnippet collapses whitespace and shortens caption text for
+// display in pickers.
+func captionSnippet(s string) string {
+	r := []rune(strings.Join(strings.Fields(s), " "))
+	if len(r) > 160 {
+		return string(r[:160]) + "…"
+	}
+	return string(r)
 }

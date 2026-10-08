@@ -81,16 +81,22 @@ func BBoxAddFigureJATSElement(c *Correction) (string, error) {
 	// Optional structured-table body when payload carries parsed
 	// rows (populated at handler save time via pdftext.ExtractTable).
 	tableBody := ""
-	if c.ContentType == "table" && c.Payload != "" && c.Payload != "{}" {
+	captionText := safeLabel
+	if c.Payload != "" && c.Payload != "{}" {
 		var p BBoxAddPayload
-		if err := json.Unmarshal([]byte(c.Payload), &p); err == nil && len(p.TableRows) > 0 {
-			tableBody = RenderJATSTableFromRows(p.TableRows)
+		if err := json.Unmarshal([]byte(c.Payload), &p); err == nil {
+			if c.ContentType == "table" && len(p.TableRows) > 0 {
+				tableBody = RenderJATSTableFromRows(p.TableRows)
+			}
+			if strings.TrimSpace(p.Caption) != "" {
+				captionText = XMLEscape(strings.TrimSpace(p.Caption))
+			}
 		}
 	}
 
 	return fmt.Sprintf(
 		`<%s id="%s" hive:pdf-page="%d" hive:pdf-bbox="%s"><caption><p>%s</p></caption>%s</%s>`,
-		elemName, elemID, c.BBoxPage, bbox, safeLabel, tableBody, elemName,
+		elemName, elemID, c.BBoxPage, bbox, captionText, tableBody, elemName,
 	), nil
 }
 

@@ -199,3 +199,22 @@ func (t *Tx) DeleteCorrection(id string) error {
 	}
 	return nil
 }
+
+// RevertCorrection marks a correction reverted with a reason. The row
+// stays for the training corpus but is no longer applied when the
+// sidecar is rebuilt.
+func (t *Tx) RevertCorrection(id, reason string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := t.tx.ExecContext(t.ctx,
+		`UPDATE hive__extraction_correction
+		 SET status = 'reverted', reverted_reason = ?, updated_at = ?
+		 WHERE correction_id = ?`, reason, now, id)
+	if err != nil {
+		return fmt.Errorf("core: revert correction %s: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

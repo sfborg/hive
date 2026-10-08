@@ -148,7 +148,9 @@ func findMissingFigTableLabels(jats []byte) []string {
 			present[label] = true
 		}
 	}
-	body := figBlockRegex.ReplaceAll(jats, nil)
+	// Comments hold removed text (hive:noise wrappers), which is not
+	// part of the paper's prose.
+	body := commentRegex.ReplaceAll(figBlockRegex.ReplaceAll(jats, nil), nil)
 	cited := make(map[string]bool)
 	for _, m := range citationLabelRegex.FindAllSubmatch(body, -1) {
 		if label := labelFromMatch(m); label != "" {

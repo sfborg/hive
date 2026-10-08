@@ -10,7 +10,11 @@
 // types here — the shared home keeps the two sides from cycling.
 package correction
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 // Correction is one row of hive__extraction_correction — a durable,
 // re-applicable curator correction to the attached-PDF extraction
@@ -135,6 +139,9 @@ type AnchorPtr struct {
 // of an empty placeholder.
 type BBoxAddPayload struct {
 	TableRows [][]string `json:"table_rows,omitempty"`
+	// Caption is caption text the curator typed for the new region.
+	// Empty means the label stands in as a placeholder caption.
+	Caption string `json:"caption,omitempty"`
 }
 
 // BBoxModifyPayload is the JSON stored in
@@ -228,6 +235,70 @@ type TextRemovePayload struct {
 	// hints for the extraction model. Empty when the curator didn't
 	// pick a reason.
 	Reason string `json:"reason,omitempty"`
+	// Label is what the removed text is, from a fixed set
+	// (running-head, page-number, footer, figure-text, other). It is
+	// the structural label used for training data.
+	Label string `json:"label,omitempty"`
+	// Segments carries a range selection, one segment per block the
+	// selection touches. Empty for whole-block removals made by
+	// clicking an element, which match on Text alone.
+	Segments []TextSegment `json:"segments,omitempty"`
+}
+
+// TextSegment anchors the part of a selection that falls in one body
+// block, using text-quote and text-position selectors. Text quotes
+// survive re-digitization; Start and End are hints.
+type TextSegment struct {
+	// BlockText is the block's full text when the selection was made.
+	BlockText string `json:"block_text"`
+	// Exact is the selected text.
+	Exact string `json:"exact"`
+	// Prefix and Suffix are up to 32 characters of block text before
+	// and after the selection.
+	Prefix string `json:"prefix,omitempty"`
+	Suffix string `json:"suffix,omitempty"`
+	// Start and End are character offsets of the selection in
+	// BlockText.
+	Start int `json:"start"`
+	End   int `json:"end"`
+	// PDFPage is the printed page of the nearest preceding page
+	// marker, or zero.
+	PDFPage int `json:"pdf_page,omitempty"`
+}
+
+// TextTagMoveToCaption moves the selected text into the caption of
+// the figure or table named by the correction's TargetElementID.
+const TextTagMoveToCaption = "move-to-caption"
+
+// TextTagMergeNext joins the paragraph holding the selection with the
+// next paragraph that has text, absorbing page breaks and emptied
+// paragraphs between them.
+const TextTagMergeNext = "merge-next"
+
+// TextTagPayload is the JSON stored in
+// hive__extraction_correction.payload when correction_kind =
+// 'text-tag': a selection plus what to do with it.
+type TextTagPayload struct {
+	Action   string        `json:"action"`
+	Segments []TextSegment `json:"segments"`
+	// Text is the selected text joined across segments, kept for the
+	// training corpus.
+	Text string `json:"text,omitempty"`
+}
+
+// ParseTextTagPayload decodes and checks a text-tag payload.
+func ParseTextTagPayload(raw string) (TextTagPayload, error) {
+	var p TextTagPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return p, fmt.Errorf("parse payload: %w", err)
+	}
+	if p.Action == "" {
+		return p, fmt.Errorf("payload.action required")
+	}
+	if len(p.Segments) == 0 {
+		return p, fmt.Errorf("payload.segments required")
+	}
+	return p, nil
 }
 
 // TextRestorePayload is the JSON stored in
