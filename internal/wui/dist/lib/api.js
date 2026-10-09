@@ -107,6 +107,12 @@ const nomenCodePrefix = {
 };
 
 export const api = {
+  // Per-user interface settings (stored on the server per ORCID).
+  settings: {
+    list: () => j("GET", "/api/settings"),
+    put: (key, value) => j("PUT", `/api/settings/${encodeURIComponent(key)}`, value),
+    remove: (key) => j("DELETE", `/api/settings/${encodeURIComponent(key)}`),
+  },
   health: () => j("GET", "/api/health"),
   // services reports whether GROBID, OCR and pandoc are available:
   // {grobid, ocr, pandoc}, each "ok" / "not_configured" / "unavailable".

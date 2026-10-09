@@ -101,6 +101,9 @@ type IssueSummary struct {
 	// the badge color on the WUI side via the shared
 	// validationSeverityBadge helper.
 	MaxSeverity string
+	// BySeverity counts the open issues per severity ("error",
+	// "warn", "info", "debug"); absent severities are omitted.
+	BySeverity map[string]int
 }
 
 // batchIssueSummaries is the shared per-record summary query used by
@@ -126,7 +129,9 @@ func (a *Archive) batchIssueSummaries(ctx context.Context, table string, ids []s
 				WHEN 'info'  THEN 1
 				WHEN 'debug' THEN 0
 				ELSE 0
-			END) AS sev_rank
+			END) AS sev_rank,
+			SUM(severity = 'error'), SUM(severity = 'warn'),
+			SUM(severity = 'info'), SUM(severity = 'debug')
 		FROM __gsvalidator_results
 		WHERE table_name = ?
 		  AND (acknowledged_at IS NULL OR acknowledged_at = '')
@@ -144,16 +149,24 @@ func (a *Archive) batchIssueSummaries(ctx context.Context, table string, ids []s
 	defer rows.Close()
 	for rows.Next() {
 		var (
-			id      string
-			count   int
-			sevRank int
+			id                         string
+			count                      int
+			sevRank                    int
+			nErr, nWarn, nInfo, nDebug int
 		)
-		if err := rows.Scan(&id, &count, &sevRank); err != nil {
+		if err := rows.Scan(&id, &count, &sevRank, &nErr, &nWarn, &nInfo, &nDebug); err != nil {
 			return nil, fmt.Errorf("core: scan issue summary: %w", err)
+		}
+		by := map[string]int{}
+		for sev, n := range map[string]int{"error": nErr, "warn": nWarn, "info": nInfo, "debug": nDebug} {
+			if n > 0 {
+				by[sev] = n
+			}
 		}
 		out[id] = IssueSummary{
 			Count:       count,
 			MaxSeverity: severityFromRank(sevRank),
+			BySeverity:  by,
 		}
 	}
 	return out, rows.Err()

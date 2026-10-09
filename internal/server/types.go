@@ -729,6 +729,25 @@ type apiReferenceHit struct {
 	// legacy row with no source document doesn't clutter the wire
 	// shape. Falsy today until PDF ingest slice lands.
 	HasSourceDoc bool `json:"has_source_doc,omitempty"`
+	// Pages, Words and Characters size the reference's first attached
+	// file: the PDF's page count and the words and characters of its
+	// JATS sidecar. Omitted when not yet known.
+	Pages      int `json:"pages,omitempty"`
+	Words      int `json:"words,omitempty"`
+	Characters int `json:"characters,omitempty"`
+	// TokensIn and TokensOut total the provider-reported token usage
+	// of the reference's extraction runs; present only when it has
+	// runs.
+	TokensIn  *int `json:"tokens_in,omitempty"`
+	TokensOut *int `json:"tokens_out,omitempty"`
+	// Modified is when the reference row last changed.
+	Modified string `json:"modified,omitempty"`
+	// Issues counts the open validation issues per severity.
+	Issues map[string]int `json:"issues,omitempty"`
+	// Taxa holds the most-mentioned taxon per rank ("kingdom" …
+	// "genus", and "name" for names as written) from the name-mention
+	// index. Discovery data.
+	Taxa map[string]apiTaxonSummary `json:"taxa,omitempty"`
 	// Workflow is the reference's state for each workflow step
 	// ("none" | "partial" | "done"). Drives the library's status dots.
 	Workflow *apiReferenceWorkflow `json:"workflow,omitempty"`
@@ -847,7 +866,7 @@ type apiAttachedFile struct {
 }
 
 func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
-	return apiReferenceHit{
+	a := apiReferenceHit{
 		ID:          h.ID,
 		Author:      h.Author,
 		Year:        h.Year,
@@ -864,7 +883,44 @@ func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 		IndexFamilySource:   sourceKey(h.IndexFamilySourceID),
 		IndexFamilyMentions: h.IndexFamilyMentions,
 		IndexMatch:          indexMatchToAPI(h.IndexMatch),
+		Pages:               h.Pages,
+		Words:               h.Words,
+		Characters:          h.Characters,
+		Modified:            h.Modified,
+		Issues:              h.IssuesBySeverity,
 	}
+	if h.HasRuns {
+		in, out := h.TokensIn, h.TokensOut
+		a.TokensIn, a.TokensOut = &in, &out
+	}
+	if len(h.Taxa) > 0 {
+		a.Taxa = make(map[string]apiTaxonSummary, len(h.Taxa))
+		for rank, ts := range h.Taxa {
+			top := make([]apiNameCount, len(ts.Top))
+			for i, nc := range ts.Top {
+				top[i] = apiNameCount{Name: nc.Name, Count: nc.Count}
+			}
+			a.Taxa[rank] = apiTaxonSummary{
+				Name: ts.Name, Mentions: ts.Mentions, Distinct: ts.Distinct,
+				Source: sourceKey(ts.SourceID), Top: top,
+			}
+		}
+	}
+	return a
+}
+
+// apiTaxonSummary is a reference's most-mentioned taxon at one rank.
+type apiTaxonSummary struct {
+	Name     string         `json:"name"`
+	Mentions int            `json:"mentions"`
+	Distinct int            `json:"distinct"`
+	Source   string         `json:"source,omitempty"`
+	Top      []apiNameCount `json:"top"`
+}
+
+type apiNameCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // sourceKey returns a verifier source's key ("ncbi", "col"), or "" for

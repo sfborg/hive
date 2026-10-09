@@ -28,6 +28,10 @@
  */
 
 import { LitElement, html, css, nothing, svg } from "/vendor/lit-3.x.x.min.js";
+import { loadSettings, getSetting, setSetting } from "/lib/settings.js";
+
+// Per-user settings load before the reader reads them.
+await loadSettings();
 
 // TaxPub + GN + hive namespaces from pkg/annotator and pkg/jatsconv.
 // Kept in sync manually since Go and JS can't share constants — if
@@ -1148,9 +1152,7 @@ class SfgaReader extends LitElement {
     this._doc = null;
     this._showExpanded = false;
     this._showTagSources = true;
-    try {
-      this._showTagSources = localStorage.getItem("hive.reader.tagSources") !== "off";
-    } catch {}
+    this._showTagSources = getSetting("reader.tagSources") !== "off";
     this._showPDF = false;
     // Columned view is on by default — journal-style multi-column
     // layout with paginated navigation. column-width naturally
@@ -2362,7 +2364,7 @@ class SfgaReader extends LitElement {
       // stash the pending position and let updated() apply it
       // when _pageCount transitions to its real value.
       try {
-        const saved = localStorage.getItem("hive:reader-pos:" + this._sha);
+        const saved = getSetting("reader.pos:" + this._sha);
         if (saved != null) {
           const pos = JSON.parse(saved);
           this._pendingPositionRestore = pos;
@@ -2371,7 +2373,7 @@ class SfgaReader extends LitElement {
         // Ignore — restore is best-effort.
       }
       // Attach listeners once. Debounced save so rapid
-      // scrolling / page-turns don't hammer localStorage.
+      // scrolling / page-turns don't send a save per event.
       if (!this._posListenerAttached) {
         this._posListenerAttached = true;
         let saveTimer = 0;
@@ -2379,19 +2381,12 @@ class SfgaReader extends LitElement {
           if (!this._sha) return;
           if (saveTimer) clearTimeout(saveTimer);
           saveTimer = setTimeout(() => {
-            try {
-              const pos = {
-                scrollY: window.scrollY,
-                page: this._page,
-              };
-              localStorage.setItem(
-                "hive:reader-pos:" + this._sha,
-                JSON.stringify(pos),
-              );
-            } catch (err) {
-              // Storage disabled / quota — best-effort feature.
-            }
-          }, 250);
+            const pos = {
+              scrollY: window.scrollY,
+              page: this._page,
+            };
+            setSetting("reader.pos:" + this._sha, JSON.stringify(pos));
+          }, 500);
         };
         window.addEventListener("scroll", save);
         // Also save on page-turn — _page is a reactive property so
@@ -2437,9 +2432,7 @@ class SfgaReader extends LitElement {
               .checked=${this._showTagSources}
               @change=${(e) => {
                 this._showTagSources = e.target.checked;
-                try {
-                  localStorage.setItem("hive.reader.tagSources", e.target.checked ? "on" : "off");
-                } catch {}
+                setSetting("reader.tagSources", e.target.checked ? "on" : "off");
               }}
             />
             Tag sources

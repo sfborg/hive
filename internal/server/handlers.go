@@ -223,6 +223,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/reference/correction", s.handleCreateCorrection)
 	mux.HandleFunc("POST /api/reference/correction/preview", s.handlePreviewCorrection)
 	mux.HandleFunc("DELETE /api/reference/correction/{id}", s.handleDeleteCorrection)
+	mux.HandleFunc("GET /api/settings", s.handleListSettings)
+	mux.HandleFunc("PUT /api/settings/{key}", s.handlePutSetting)
+	mux.HandleFunc("DELETE /api/settings/{key}", s.handleDeleteSetting)
 	mux.HandleFunc("GET /api/reference/{id}/corrections", s.handleListCorrections)
 	// Add-reference modal helpers. All three return *unsaved* previews
 	// — the modal shows a form the curator confirms, then POSTs to
@@ -3696,7 +3699,7 @@ func (s *server) handleDeleteCascade(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Param        limit query int false "Page size"
 // @Param        offset query int false "Row offset"
-// @Param        sort query string false "Sort: author|recent|year"
+// @Param        sort query string false "Sort: author|recent|year, or columns in order as column:asc|desc separated by commas (author, year, title, modified, license, pages, words, characters, tokens)"
 // @Param        filter query string false "Comma-separated workflow filters, all of which must hold: runs, assertions, pending, bibliographic, digitized, imported, and no-bibliographic, no-digitized, no-assertions, no-imported"
 // @Param        col_parent query string false "Papers mentioning names the Catalogue of Life places in this higher taxon"
 // @Param        ncbi_parent query string false "Papers mentioning names NCBI Taxonomy places in this higher taxon"
@@ -3868,6 +3871,17 @@ func (s *server) handleTaxonTree(w http.ResponseWriter, r *http.Request) {
 func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 	qv := r.URL.Query()
 	var rq hive.ReferenceQuery
+	// "author", "recent" and "year" are the single-sort values handled
+	// by the list handler; anything else is a column sort list.
+	switch raw := qv.Get("sort"); raw {
+	case "", "author", "recent", "year":
+	default:
+		keys, err := hive.ParseReferenceSort(raw)
+		if err != nil {
+			return hive.ReferenceQuery{}, "invalid 'sort' value: " + err.Error()
+		}
+		rq.Sort = keys
+	}
 	if raw := qv.Get("filter"); raw != "" {
 		for _, v := range strings.Split(raw, ",") {
 			f, ok := hive.ParseReferenceFilter(strings.TrimSpace(v))
@@ -4488,7 +4502,7 @@ func (s *server) applyBBoxCorrectionToSidecar(c *correction.Correction) (warning
 	if err != nil {
 		return []string{"apply " + string(c.Kind) + ": " + err.Error()}, err
 	}
-	if err := sidecar.Store(s.archivePath, c.SidecarSHA, "jats.xml", mutated); err != nil {
+	if err := s.a.StoreJATS(context.Background(), c.SidecarSHA, mutated); err != nil {
 		return []string{"write jats sidecar: " + err.Error()}, nil
 	}
 	// Figure extraction: pdftocairo cropping the new region. Only
@@ -4825,7 +4839,7 @@ func (s *server) redoBBoxCorrectionsForReference(refID, sha string) []string {
 		}
 		jats = mutated
 	}
-	if err := sidecar.Store(s.archivePath, sha, "jats.xml", jats); err != nil {
+	if err := s.a.StoreJATS(context.Background(), sha, jats); err != nil {
 		warnings = append(warnings, "write sidecar: "+err.Error())
 		return warnings
 	}
@@ -6281,7 +6295,7 @@ func (s *server) handleReferenceLibraryReannotate(w http.ResponseWriter, r *http
 		return
 	}
 	augmented = s.reapplyCorrectionsForSHA(r.Context(), sha, augmented)
-	if err := sidecar.Store(s.archivePath, sha, "jats.xml", augmented); err != nil {
+	if err := s.a.StoreJATS(r.Context(), sha, augmented); err != nil {
 		writeJSON(w, http.StatusOK, apiReannotateResult{
 			SHA512: sha, Status: "failed", Error: "store: " + err.Error(),
 		})
@@ -6321,7 +6335,7 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 			return "failed", 0
 		}
 		augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
-		if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+		if err := s.a.StoreJATS(ctx, res.SHA512, augmented); err != nil {
 			slog.Warn("annotate: augmented JATS store failed",
 				"sha", res.SHA512[:12], "err", err)
 			return "failed", 0
@@ -6356,7 +6370,7 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 			return "failed", 0
 		}
 		augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
-		if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+		if err := s.a.StoreJATS(ctx, res.SHA512, augmented); err != nil {
 			slog.Warn("annotate: augmented JATS store failed",
 				"sha", res.SHA512[:12], "err", err)
 			return "failed", 0
@@ -6410,7 +6424,7 @@ func (s *server) tryAnnotate(ctx context.Context, res *sidecar.IngestResult, tei
 	// across a re-import + re-annotate cycle — otherwise the fresh
 	// GROBID JATS overwrites the curator work with a clean slate.
 	augmented = s.reapplyCorrectionsForSHA(ctx, res.SHA512, augmented)
-	if err := sidecar.Store(s.archivePath, res.SHA512, "jats.xml", augmented); err != nil {
+	if err := s.a.StoreJATS(ctx, res.SHA512, augmented); err != nil {
 		slog.Warn("annotate: augmented JATS store failed",
 			"sha", res.SHA512[:12], "err", err)
 		return "failed", 0

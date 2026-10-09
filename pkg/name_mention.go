@@ -170,7 +170,7 @@ func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source s
 				return fmt.Errorf("core: insert mention %q: %w", name, err)
 			}
 		}
-		return nil
+		return refreshTaxonSummary(tx, referenceID)
 	})
 }
 

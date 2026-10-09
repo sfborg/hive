@@ -171,6 +171,8 @@ type ReferenceHit struct {
 	// validationSeverityBadge helper — same signal appears on every
 	// picker/list rendering this record.
 	MaxSeverity string
+	// IssuesBySeverity counts the open issues per severity.
+	IssuesBySeverity map[string]int
 	// Workflow is the per-step progress of the reference through the
 	// four-step reference workflow.
 	Workflow ReferenceWorkflow
@@ -189,6 +191,19 @@ type ReferenceHit struct {
 	// IndexMatch is set for queries with Parents: the reference's
 	// strongest matching mention.
 	IndexMatch *IndexMatch
+	// Pages, Words and Characters size the reference's first
+	// attached file: the PDF's page count and the words and
+	// characters of its JATS sidecar. Zero when not yet known.
+	Pages, Words, Characters int
+	// TokensIn and TokensOut total the provider-reported token
+	// usage of the reference's extraction runs; HasRuns says whether
+	// there were any.
+	TokensIn, TokensOut int
+	HasRuns             bool
+	// Modified is col__modified.
+	Modified string	// Taxa holds the most-mentioned taxon per rank (SummaryRanks and
+	// SummaryRankName) from the name-mention index.
+	Taxa map[string]TaxonSummary
 }
 
 // WorkflowState is how far a reference has got through one workflow
@@ -437,6 +452,9 @@ type ReferenceQuery struct {
 	// MinMentions counts only names mentioned at least this many times
 	// toward Parents. Values below 1 mean 1.
 	MinMentions int
+	// Sort, when set, orders results by these columns in turn and
+	// overrides the single ReferenceSort.
+	Sort []ReferenceSortKey
 }
 
 // IndexParent is a higher taxon in one verifier source's
@@ -505,58 +523,37 @@ func (a *Archive) addMentionSummaries(ctx context.Context, hits []ReferenceHit, 
 	}
 
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT m.reference_id, m.raw__source, COALESCE(t.col__family, ''), SUM(m.mention_count)
-		FROM hive__name_mention m
-		LEFT JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
-		WHERE m.reference_id IN (`+in+`)
-		GROUP BY m.reference_id, m.raw__source, COALESCE(t.col__family, '')`, idArgs...)
+		SELECT DISTINCT reference_id FROM hive__name_mention
+		WHERE reference_id IN (`+in+`)`, idArgs...)
 	if err != nil {
-		return fmt.Errorf("core: mention families: %w", err)
+		return fmt.Errorf("core: indexed references: %w", err)
 	}
-	type famBest struct {
-		family string
-		n      int
-	}
-	// best[referenceID][sourceID]
-	best := map[string]map[int]famBest{}
 	for rows.Next() {
-		var id, source, family string
-		var n int
-		if err := rows.Scan(&id, &source, &family, &n); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return err
 		}
-		h := byID[id]
-		if h == nil {
-			continue
-		}
-		h.MentionsIndexed = true
-		if family == "" {
-			continue
-		}
-		var sid int
-		if _, err := fmt.Sscanf(source, "gnverifier:%d@", &sid); err != nil {
-			continue
-		}
-		if best[id] == nil {
-			best[id] = map[int]famBest{}
-		}
-		cur := best[id][sid]
-		if n > cur.n || (n == cur.n && family < cur.family) {
-			best[id][sid] = famBest{family, n}
+		if h := byID[id]; h != nil {
+			h.MentionsIndexed = true
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for id, bySource := range best {
-		for _, src := range mentions.Sources {
-			if fb, ok := bySource[src.ID]; ok {
-				h := byID[id]
-				h.IndexFamily, h.IndexFamilyMentions, h.IndexFamilySourceID = fb.family, fb.n, src.ID
-				break
-			}
+	summaries, err := a.batchTaxonSummaries(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for id, ranks := range summaries {
+		h := byID[id]
+		if h == nil {
+			continue
+		}
+		h.Taxa = ranks
+		if fam, ok := ranks["family"]; ok {
+			h.IndexFamily, h.IndexFamilyMentions, h.IndexFamilySourceID = fam.Name, fam.Mentions, fam.SourceID
 		}
 	}
 
@@ -619,6 +616,9 @@ func (a *Archive) ListReferencesPage(ctx context.Context, limit, offset int, sor
 		// Undated references sort last.
 		orderBy = "COALESCE(col__issued, '') = '', col__issued DESC, col__author, col__title, col__id"
 	}
+	if len(rq.Sort) > 0 {
+		orderBy = sortOrderBy(rq.Sort)
+	}
 
 	q := `SELECT
 		col__id,
@@ -668,6 +668,10 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, rq 
 		match += " AND " + pred
 		args = append(args, predArgs...)
 	}
+	orderBy := "col__author, col__issued, col__title"
+	if len(rq.Sort) > 0 {
+		orderBy = sortOrderBy(rq.Sort)
+	}
 	query := `SELECT
 		col__id,
 		COALESCE(col__author, ''),
@@ -677,7 +681,7 @@ func (a *Archive) SearchReferences(ctx context.Context, q string, limit int, rq 
 		COALESCE(col__type_id, '')
 	FROM reference
 	WHERE ` + match + `
-	ORDER BY col__author, col__issued, col__title
+	ORDER BY ` + orderBy + `
 	LIMIT ?`
 	args = append(args, limit)
 	hits, _, err := a.scanReferenceHits(ctx, query, args, 0, rq)
@@ -721,6 +725,7 @@ func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []an
 			if s, ok := summaries[hits[i].ID]; ok {
 				hits[i].IssueCount = s.Count
 				hits[i].MaxSeverity = s.MaxSeverity
+				hits[i].IssuesBySeverity = s.BySeverity
 			}
 		}
 		status, err := a.batchReferenceStatus(ctx, ids)
@@ -735,6 +740,21 @@ func (a *Archive) scanReferenceHits(ctx context.Context, query string, args []an
 		}
 		if err := a.addMentionSummaries(ctx, hits, ids, rq); err != nil {
 			return nil, 0, err
+		}
+		sizes, err := a.batchReferenceSizes(ctx, ids)
+		if err != nil {
+			return nil, 0, err
+		}
+		for i := range hits {
+			if sz, ok := sizes[hits[i].ID]; ok {
+				hits[i].Pages = sz.Pages
+				hits[i].Words = sz.Words
+				hits[i].Characters = sz.Characters
+				hits[i].TokensIn = sz.TokensIn
+				hits[i].TokensOut = sz.TokensOut
+				hits[i].HasRuns = sz.HasRuns
+				hits[i].Modified = sz.Modified
+			}
 		}
 	}
 

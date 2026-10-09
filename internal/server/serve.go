@@ -288,6 +288,20 @@ func Run(archivePath string, opts Options) error {
 	// state table. No-op on read-only archives.
 	if !opts.ReadOnly {
 		go refreshTicker(ctx, a)
+		// Size counts and taxon summaries for papers processed before
+		// they existed; later writes keep them current.
+		go func() {
+			if n, err := a.BackfillJATSStats(ctx); err != nil {
+				slog.Warn("jats stats backfill stopped", "err", err, "filled", n)
+			} else if n > 0 {
+				slog.Info("jats stats backfilled", "files", n)
+			}
+			if n, err := a.BackfillTaxonSummaries(ctx); err != nil {
+				slog.Warn("taxon summary backfill stopped", "err", err, "filled", n)
+			} else if n > 0 {
+				slog.Info("taxon summaries backfilled", "references", n)
+			}
+		}()
 	}
 
 	serverErr := make(chan error, 1)

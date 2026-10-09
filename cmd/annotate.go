@@ -96,7 +96,7 @@ func runAnnotateRetag(cmd *cobra.Command, args []string) error {
 			if dryRun {
 				continue
 			}
-			if err := sidecar.Store(a.Path(), sha, "jats.xml", doc); err != nil {
+			if err := a.StoreJATS(ctx, sha, doc); err != nil {
 				return fmt.Errorf("%s: store: %w", sha, err)
 			}
 		}

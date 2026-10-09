@@ -880,6 +880,50 @@ CREATE TABLE IF NOT EXISTS hive__reference_license (
 
 CREATE INDEX IF NOT EXISTS idx_hive__reference_license_license
     ON hive__reference_license (license);
+
+-- hive__user_setting holds each user's interface preferences (column
+-- choices, sort order, theme, reading positions) keyed by actor, the
+-- ORCID iD in hosted mode or the configured local identity. Values
+-- are JSON. Kept in the archive so settings survive clearing browser
+-- data and stay separate per user on a shared server.
+CREATE TABLE IF NOT EXISTS hive__user_setting (
+    actor       TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (actor, key)
+);
+
+-- hive__reference_taxon_summary records, per reference and rank
+-- (kingdom … genus), the most-mentioned taxon among the names the
+-- paper mentions, from the first verifier source that classifies one;
+-- rank 'name' holds the most-mentioned name as written. distinct_count
+-- is how many taxa of that rank are mentioned and top_json the five
+-- most mentioned as [[name, count], …]. Discovery data from the
+-- name-mention index; refreshed whenever the paper's mentions are
+-- indexed.
+CREATE TABLE IF NOT EXISTS hive__reference_taxon_summary (
+    reference_id    TEXT NOT NULL,
+    rank            TEXT NOT NULL,
+    source_id       INTEGER NOT NULL,
+    name            TEXT NOT NULL,
+    mentions        INTEGER NOT NULL,
+    distinct_count  INTEGER NOT NULL,
+    top_json        TEXT NOT NULL,
+    PRIMARY KEY (reference_id, rank)
+);
+
+-- hive__jats_stats records the size of each attached file's JATS
+-- sidecar, the text sent to extraction models: words in its text,
+-- characters in the file (markup included), and the source PDF's page
+-- count. Refreshed whenever the JATS sidecar is written.
+CREATE TABLE IF NOT EXISTS hive__jats_stats (
+    sha512      TEXT PRIMARY KEY,
+    pdf_pages   INTEGER,
+    words       INTEGER NOT NULL,
+    characters  INTEGER NOT NULL,
+    updated_at  TEXT NOT NULL
+);
 `
 
 // ensureHiveTables applies the DDL for every hive-managed metadata

@@ -10,9 +10,13 @@
  * platform. No build step, no bundler; the browser resolves the imports.
  */
 
-import { LitElement, html, css, svg, unsafeHTML, nothing } from "/vendor/lit-3.x.x.min.js";
+import { LitElement, html, css, svg, unsafeHTML, nothing, live, repeat } from "/vendor/lit-3.x.x.min.js";
 import { api, Problem } from "/lib/api.js";
 import { sentenceCase, titleCase, nameCase } from "/lib/casing.js";
+import { loadSettings, getSetting, setSetting } from "/lib/settings.js";
+
+// Per-user settings load before any component reads them.
+await loadSettings();
 
 // ---------- icons ----------
 // Inline SVG shapes hand-picked from Lucide (MIT license, lucide.dev).
@@ -154,6 +158,22 @@ const iconPaths = {
     <line x1="10" x2="10" y1="11" y2="17" />
     <line x1="14" x2="14" y1="11" y2="17" />
   `,
+  // settings — gear for configuring a view (Lucide).
+  settings: svg`
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  `,
+  // grip-vertical — drag handle (Lucide).
+  "grip-vertical": svg`
+    <circle cx="9" cy="12" r="1" />
+    <circle cx="9" cy="5" r="1" />
+    <circle cx="9" cy="19" r="1" />
+    <circle cx="15" cy="12" r="1" />
+    <circle cx="15" cy="5" r="1" />
+    <circle cx="15" cy="19" r="1" />
+  `,
+  "chevron-up": svg`<path d="m18 15-6-6-6 6" />`,
+  "chevron-down": svg`<path d="m6 9 6 6 6-6" />`,
   // triangle-alert — warning triangle → Issues screen. Neutral hue
   // in the sidebar; the screen itself carries the severity color via
   // per-row chips. Lucide's triangle-alert.
@@ -226,10 +246,10 @@ const iconPathsFilled = {
 // key covers both the edit form and the create form's step-1 preview
 // since a curator wanting one usually wants the other.
 function readAtomizedPref() {
-  return localStorage.getItem("hive-show-atomized") === "true";
+  return getSetting("names.showAtomized") === "true";
 }
 function writeAtomizedPref(v) {
-  localStorage.setItem("hive-show-atomized", v ? "true" : "false");
+  setSetting("names.showAtomized", v ? "true" : "false");
 }
 
 // ---------- modal stack ----------
@@ -1629,8 +1649,8 @@ class SfgaApp extends LitElement {
     // selected. Synced with location.hash so reloads land back on
     // the tab the curator was on.
     _pendingWorkspaceTab: { state: true },
-    // Omnibox filter state — persists to localStorage under
-    // "hive-search-filters". See DESIGN.md § Search combobox filter
+    // Omnibox filter state — persists in the user's settings under
+    // "search.filters". See DESIGN.md § Search combobox filter
     // chips. `mode` is "prefix" (default) / "partial" / "fuzzy" —
     // matches the /api/taxon/search backend contract. `synonyms` is
     // the affirmative form of the "Accepted only" chip (checked =
@@ -2196,9 +2216,9 @@ class SfgaApp extends LitElement {
     this.metadata = null;
     this.selectedId = "";
     this.error = "";
-    this.theme = localStorage.getItem("hive-theme") || "auto";
+    this.theme = getSetting("theme") || "auto";
     this.screen = "taxa";
-    this.sidebarCollapsed = localStorage.getItem("hive-sidebar") === "collapsed";
+    this.sidebarCollapsed = getSetting("sidebar") === "collapsed";
     this.helpOpen = false;
     this.llmProvidersOpen = false;
     this._pendingWarnings = null;
@@ -2231,15 +2251,15 @@ class SfgaApp extends LitElement {
     this._onGlobalKey = this._onGlobalKey.bind(this);
   }
 
-  // _loadSearchFilters reads persisted omnibox toggles from
-  // localStorage; returns the defaults from § Search combobox filter
+  // _loadSearchFilters reads persisted omnibox toggles from the
+  // user's settings; returns the defaults from § Search combobox filter
   // chips (prefix mode, synonyms on) for a fresh curator or any
   // parse failure. Guarded against schema drift by validating each
   // field before accepting it.
   _loadSearchFilters() {
     const defaults = { mode: "prefix", synonyms: true };
     try {
-      const raw = localStorage.getItem("hive-search-filters");
+      const raw = getSetting("search.filters");
       if (!raw) return defaults;
       const parsed = JSON.parse(raw);
       const mode = ["prefix", "partial", "fuzzy"].includes(parsed.mode)
@@ -2254,15 +2274,7 @@ class SfgaApp extends LitElement {
   }
 
   _saveSearchFilters() {
-    try {
-      localStorage.setItem(
-        "hive-search-filters",
-        JSON.stringify(this._searchFilters),
-      );
-    } catch (_) {
-      // localStorage unavailable (private mode, quota) — filters
-      // still work for the session, just don't persist.
-    }
+    setSetting("search.filters", JSON.stringify(this._searchFilters));
   }
 
   // _onSearchFilterChange handles a `filter-change` event from the
@@ -2445,6 +2457,7 @@ class SfgaApp extends LitElement {
     const selector = {
       metadata: "sfga-metadata",
       taxa: "sfga-detail",
+      references: "sfga-references",
     }[this.screen];
     if (!selector) return "";
     const el = this.renderRoot?.querySelector(selector);
@@ -2791,7 +2804,7 @@ class SfgaApp extends LitElement {
 
   _toggleSidebar() {
     this.sidebarCollapsed = !this.sidebarCollapsed;
-    localStorage.setItem("hive-sidebar", this.sidebarCollapsed ? "collapsed" : "expanded");
+    setSetting("sidebar", this.sidebarCollapsed ? "collapsed" : "expanded");
   }
 
   _applyTheme() {
@@ -2807,7 +2820,7 @@ class SfgaApp extends LitElement {
     const order = ["auto", "light", "dark"];
     const next = order[(order.indexOf(this.theme) + 1) % order.length];
     this.theme = next;
-    localStorage.setItem("hive-theme", next);
+    setSetting("theme", next);
     this._applyTheme();
   }
 
@@ -3447,8 +3460,8 @@ class SfgaApp extends LitElement {
           <button
             class="icon-btn subtle"
             @click=${() => (this.helpOpen = true)}
-            title="keyboard shortcuts  (?)"
-            aria-label="keyboard shortcuts"
+            title="help and keyboard shortcuts  (?)"
+            aria-label="help and keyboard shortcuts"
           >
             ${renderIcon("help-circle", 18)}
           </button>
@@ -4636,7 +4649,7 @@ class SfgaDetail extends LitElement {
     // section. When true, each row renders the hybrid form
     //   <canonical> (basionym_author, basionym_year) combination_author, combination_year
     // instead of the code-conventional pre-formatted Authorship string.
-    // Persisted to localStorage as "hive-standardized-authorship" so
+    // Persisted in the user's settings as "names.standardizedAuthorship" so
     // curators' preference carries across sessions. See
     // DESIGN.md § Standardized authorship.
     _standardizedAuthorship: { state: true },
@@ -5996,7 +6009,7 @@ class SfgaDetail extends LitElement {
     this._speciesInteractionForm = null;
     this._synonymDelete = null;
     this._standardizedAuthorship =
-      localStorage.getItem("hive-standardized-authorship") === "true";
+      getSetting("names.standardizedAuthorship") === "true";
     this._error = "";
     this._loading = false;
     this._creating = false;
@@ -6006,7 +6019,7 @@ class SfgaDetail extends LitElement {
     this._createLastParsedVerbatim = "";
     this._createParseQuality = null;
     this._createParseTail = null;
-    // Both atomized toggles seed from localStorage so a curator who
+    // Both atomized toggles seed from the user's settings so a curator who
     // wants to see the parser's atomization gets that view immediately
     // on every taxon they open (not just the first). Persists across
     // sessions too.
@@ -9286,7 +9299,7 @@ class SfgaDetail extends LitElement {
   // _renderStandardizedAuthorshipToggle draws the small chip that flips
   // between the code-conventional pre-formatted Authorship string and
   // the hybrid "(basionym_author, basionym_year) combination_author,
-  // combination_year" render. Persist state to localStorage so the
+  // combination_year" render. Persist state in the user's settings so the
   // preference carries across sessions. Hotkey is `a` when the taxa
   // screen has focus and the curator isn't typing — see SfgaApp's
   // _onGlobalKey.
@@ -9314,15 +9327,10 @@ class SfgaDetail extends LitElement {
   // screen.
   toggleStandardizedAuthorship() {
     this._standardizedAuthorship = !this._standardizedAuthorship;
-    try {
-      localStorage.setItem(
-        "hive-standardized-authorship",
-        this._standardizedAuthorship ? "true" : "false",
-      );
-    } catch (_) {
-      // localStorage unavailable (private mode / quota) — preference
-      // is session-only, which is fine.
-    }
+    setSetting(
+      "names.standardizedAuthorship",
+      this._standardizedAuthorship ? "true" : "false",
+    );
   }
 
   // _addNomenEntry handles the Nomenclatural History + button — opens
@@ -15181,14 +15189,60 @@ const indexSourceLabel = (key) =>
 const indexSourceShort = (key) =>
   (INDEX_SOURCES.find((s) => s.key === key) || {}).short || key;
 
-// REFERENCE_SORTS are the library's sort options. Values match the
-// `sort` query parameter of GET /api/reference ("author" is the
-// server default).
-const REFERENCE_SORTS = [
-  { value: "recent", label: "Recent", title: "Most recently added or edited first" },
-  { value: "author", label: "A–Z", title: "Alphabetical by author" },
-  { value: "year", label: "Year", title: "Newest publication year first" },
+// REFERENCE_COLUMNS lists the reference table's columns in their
+// default order. `sort` names the server sort column (absent when the
+// column cannot be sorted); `shown` marks the default selection. Each
+// user's choice and order is kept in the "references.columns"
+// setting, and their sort in "references.sort".
+const REFERENCE_COLUMNS = [
+  { id: "status", label: "Status", shown: true },
+  { id: "author", label: "Authors", sort: "author", shown: true },
+  { id: "year", label: "Year", sort: "year", shown: true },
+  { id: "title", label: "Title", sort: "title", shown: true },
+  ...["kingdom", "phylum", "class", "order", "family", "genus"].map((rank) => ({
+    id: rank,
+    label: rank[0].toUpperCase() + rank.slice(1),
+    sort: rank,
+    rank,
+    shown: rank === "family",
+    title: `Most-mentioned ${rank} according to NCBI Taxonomy, or the Catalogue of Life where NCBI has none`,
+  })),
+  {
+    id: "name",
+    label: "Top name",
+    sort: "name",
+    rank: "name",
+    title: "The scientific name the paper mentions most often, as written",
+  },
+  {
+    id: "issues",
+    label: "Issues",
+    sort: "issues",
+    numeric: true,
+    title: "Open validation issues on the reference record; sorts by worst severity, then count",
+  },
+  { id: "license", label: "License", sort: "license", shown: true },
+  { id: "pages", label: "Pages", sort: "pages", numeric: true, shown: true, title: "Pages in the source PDF" },
+  { id: "words", label: "Words", sort: "words", numeric: true, shown: true, title: "Words in the digitized text (JATS) sent to extraction models" },
+  {
+    id: "characters",
+    label: "Characters",
+    sort: "characters",
+    numeric: true,
+    title: "Characters in the JATS file sent to extraction models, markup included",
+  },
+  {
+    id: "tokens",
+    label: "Tokens used",
+    sort: "tokens",
+    numeric: true,
+    title: "Provider-reported tokens used by this paper's extraction runs (input / output). Verify actual token usage on your provider's dashboard.",
+  },
+  { id: "modified", label: "Modified", sort: "modified", title: "When the reference record last changed" },
+  { id: "actions", label: "Actions", shown: true },
 ];
+const REFERENCE_COLUMN_IDS = new Set(REFERENCE_COLUMNS.map((c) => c.id));
+const DEFAULT_REFERENCE_SORT = [{ column: "modified", desc: true }];
 
 // WORKFLOW_STEPS maps each reference workflow step to the workspace
 // tab where it is done. Keys match the `workflow` object on
@@ -15373,10 +15427,19 @@ class SfgaReferences extends LitElement {
     // for a large archive where alphabetical scan is impractical.
     // "author" is the alphabetical fallback for curators who
     // specifically want to scan by name. Persisted in localStorage.
-    _sort: { state: true },
+    // Column sort, most significant first: [{ column, desc }].
+    _sortKeys: { state: true },
+    // Visible columns in display order (REFERENCE_COLUMNS ids).
+    _columns: { state: true },
+    _columnMenuOpen: { state: true },
+    // Row height: "full", "two" (default) or "one" line.
+    _rowHeight: { state: true },
+    // Column being dragged in the column menu: { id, before } where
+    // before is the column it will land in front of ("" = last).
+    _colDrag: { state: true },
     // Workflow-step filters: STEP_FILTERS key → "needs" | "has" | ""
     // (off). Active steps combine with AND. Applies to both the
-    // paginated list and search. Persisted in localStorage.
+    // paginated list and search. Persisted in the user's settings.
     _stepFilters: { state: true },
     _stepHelpOpen: { state: true },
     // Higher-taxon filter over the name-mention index: the taxon, the
@@ -15448,6 +15511,13 @@ class SfgaReferences extends LitElement {
       gap: var(--sp-3);
       min-width: 0;
     }
+    /* The table scrolls in its own frame, both ways, so the heading,
+       search and filters above it stay in place. */
+    .ref-table-frame {
+      flex: 1 1 auto;
+      min-height: 12rem;
+      overflow: auto;
+    }
     .library-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -15473,6 +15543,121 @@ class SfgaReferences extends LitElement {
       width: 100%;
       border-collapse: collapse;
       font-size: var(--fs-sm);
+    }
+    .ref-table .th-sort {
+      font: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      display: inline-flex;
+      gap: var(--sp-1);
+      align-items: baseline;
+      text-align: left;
+    }
+    .ref-table .th-sort:hover,
+    .ref-table .th-sort:focus-visible {
+      color: var(--accent);
+    }
+    .ref-table .sort-ind {
+      font-size: 0.85em;
+      color: var(--accent);
+    }
+    .ref-table .numeric {
+      text-align: right;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .ref-table th.numeric .th-sort {
+      flex-direction: row-reverse;
+    }
+    .ref-table .col-actions {
+      white-space: nowrap;
+    }
+    .ref-table .th-wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+    }
+    .ref-table th.numeric .th-wrap {
+      justify-content: flex-end;
+    }
+    .ref-table .col-menu-btn {
+      margin-left: auto;
+      padding: 2px;
+    }
+    .col-menu {
+      position: fixed;
+      z-index: 20;
+      max-height: calc(100vh - 6rem);
+      overflow: auto;
+      min-width: 14rem;
+      padding: var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
+      font-weight: normal;
+      font-size: var(--fs-sm);
+    }
+    .col-menu-hint {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-bottom: var(--sp-1);
+    }
+
+    .col-menu ul {
+      list-style: none;
+      margin: 0 0 var(--sp-2);
+      padding: 0;
+    }
+    .col-menu li {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-1);
+      padding: 2px 0;
+    }
+    .col-menu li.drop-before {
+      box-shadow: 0 -2px 0 var(--accent);
+    }
+    .col-menu-grip[title] {
+      cursor: grab;
+      touch-action: none;
+    }
+    .col-menu label {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .col-menu-grip {
+      display: inline-flex;
+      width: 14px;
+      color: var(--dim);
+    }
+    .col-menu-reset {
+      font: inherit;
+      color: var(--fg);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-1) var(--sp-2);
+      cursor: pointer;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
     .ref-table th {
       text-align: left;
@@ -15501,11 +15686,38 @@ class SfgaReferences extends LitElement {
     .ref-table .col-authors {
       max-width: 18rem;
     }
-    .ref-table .col-authors span {
+    /* Row height (gear menu): long cells clip to two lines or one,
+       or show their full text. */
+    .ref-table:not(.rows-full) .col-authors span,
+    .ref-table:not(.rows-full) .col-title a {
       display: -webkit-box;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
+    }
+    .ref-table.rows-one .col-authors span,
+    .ref-table.rows-one .col-title a {
+      -webkit-line-clamp: 1;
+    }
+    .ref-table.rows-one .col-match {
+      display: none;
+    }
+    .col-menu fieldset {
+      border: 0;
+      margin: 0 0 var(--sp-2);
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1) var(--sp-2);
+    }
+    .col-menu fieldset label {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .col-menu legend {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      margin-bottom: var(--sp-1);
     }
     .library-head {
       display: flex;
@@ -15691,6 +15903,29 @@ class SfgaReferences extends LitElement {
     }
     .ref-table .col-family {
       white-space: nowrap;
+    }
+    .ref-table.rows-full .col-family {
+      white-space: normal;
+    }
+    .ref-table .issue-counts {
+      display: inline-flex;
+      gap: var(--sp-2);
+      text-decoration: none;
+    }
+    .ref-table .issue-count {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .ref-table .issue-count.sev-error {
+      color: var(--sev-error);
+    }
+    .ref-table .issue-count.sev-warn {
+      color: var(--sev-warn);
+    }
+    .ref-table .issue-count.sev-info,
+    .ref-table .issue-count.sev-debug {
+      color: var(--dim);
     }
     .ref-table .dim {
       color: var(--dim);
@@ -17516,20 +17751,19 @@ class SfgaReferences extends LitElement {
     // reference switch so a new reference doesn't inherit a stale
     // page number.
     this._pdfPage = 0;
-    {
-      let saved = "";
-      try {
-        saved = localStorage.getItem("hive.references.sort") || "";
-      } catch {}
-      this._sort = REFERENCE_SORTS.some((o) => o.value === saved) ? saved : "recent";
-    }
+    this._sortKeys = this._loadSortKeys();
+    this._columns = this._loadColumns();
+    this._columnMenuOpen = false;
+    this._rowHeight = ["full", "two", "one"].includes(getSetting("references.rowHeight"))
+      ? getSetting("references.rowHeight")
+      : "two";
     this._indexParent = "";
     this._indexSource = "ncbi";
     this._minMentions = 1;
     this._stepFilters = {};
     this._stepHelpOpen = false;
     try {
-      const saved = JSON.parse(localStorage.getItem("hive.references.steps") || "{}");
+      const saved = JSON.parse(getSetting("references.steps") || "{}");
       for (const st of STEP_FILTERS) {
         if (saved[st.key] === "needs" || saved[st.key] === "has") {
           this._stepFilters[st.key] = saved[st.key];
@@ -17724,6 +17958,10 @@ class SfgaReferences extends LitElement {
   disconnectedCallback() {
     if (this._resizeObserver) this._resizeObserver.disconnect();
     if (this._scrollObserver) this._scrollObserver.disconnect();
+    // Rebuilt by _observeSentinel if the component is attached again.
+    this._scrollObserverRoot = null;
+    this._observedSentinel = null;
+    this._closeColumnMenu();
     if (this._onReaderMessage) {
       window.removeEventListener("message", this._onReaderMessage);
     }
@@ -17742,26 +17980,35 @@ class SfgaReferences extends LitElement {
   }
 
   firstUpdated() {
-    // Attach the infinite-scroll observer whose root is the scrolling
-    // library pane. IntersectionObserver fires when the sentinel
-    // scrolls into view, triggering the next page fetch. Sentinel
-    // re-observation happens in updated() because the sentinel
-    // doesn't exist until _hits has content.
-    this._scrollObserver = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting && this._hasMore && !this._loading && !this._query.trim()) {
-            this._fetchPage(false);
-          }
-        }
-      },
-      { root: this.renderRoot.querySelector(".library"), rootMargin: "200px" },
-    );
+    // The app header shows this screen's Add button; ask the shell to
+    // render it now that the component exists.
+    this.dispatchEvent(new CustomEvent("screen-actions-changed", { bubbles: true, composed: true }));
     this._observeSentinel();
   }
 
+  // _observeSentinel watches the sentinel after the last row for
+  // infinite scroll. The observer's root is the table's scrolling
+  // frame, which only exists once there are rows, so the observer is
+  // (re)created whenever the frame changes. Called from updated()
+  // because the sentinel doesn't exist until _hits has content.
   _observeSentinel() {
-    if (!this._scrollObserver) return;
+    const frame = this.renderRoot.querySelector(".ref-table-frame");
+    if (!frame) return;
+    if (this._scrollObserverRoot !== frame) {
+      if (this._scrollObserver) this._scrollObserver.disconnect();
+      this._scrollObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting && this._hasMore && !this._loading && !this._query.trim()) {
+              this._fetchPage(false);
+            }
+          }
+        },
+        { root: frame, rootMargin: "200px" },
+      );
+      this._scrollObserverRoot = frame;
+      this._observedSentinel = null;
+    }
     const sentinel = this.renderRoot.querySelector(".scroll-sentinel");
     if (!sentinel || sentinel === this._observedSentinel) return;
     if (this._observedSentinel) this._scrollObserver.unobserve(this._observedSentinel);
@@ -17783,16 +18030,14 @@ class SfgaReferences extends LitElement {
     try {
       let items;
       if (q) {
-        // Search returns relevance-ranked results in one shot; no
-        // pagination. Sort toggle doesn't apply during search.
-        const opts = { q, limit, ...this._indexOpts() };
+        // Search returns its matches in one shot; no pagination.
+        const opts = { q, limit, sort: this._sortParam(), ...this._indexOpts() };
         if (this._stepFilterParam()) opts.filter = this._stepFilterParam();
         const page = await api.reference.search(opts);
         items = page.items || [];
         this._hasMore = false;
       } else {
-        const opts = { limit, offset, ...this._indexOpts() };
-        if (this._sort !== "author") opts.sort = this._sort;
+        const opts = { limit, offset, sort: this._sortParam(), ...this._indexOpts() };
         if (this._stepFilterParam()) opts.filter = this._stepFilterParam();
         const page = await api.reference.list(opts);
         items = page.items || [];
@@ -17806,13 +18051,438 @@ class SfgaReferences extends LitElement {
     }
   }
 
-  _setSort(sort) {
-    if (this._sort === sort) return;
-    this._sort = sort;
-    try {
-      localStorage.setItem("hive.references.sort", sort);
-    } catch {}
+  // _loadSortKeys reads the user's column sort, falling back to the
+  // single sort earlier versions saved, then to most recently
+  // changed first.
+  _loadSortKeys() {
+    const sortable = new Set(REFERENCE_COLUMNS.filter((c) => c.sort).map((c) => c.sort));
+    const saved = getSetting("references.sort");
+    if (Array.isArray(saved)) {
+      const keys = saved.filter((k) => k && sortable.has(k.column)).map((k) => ({ column: k.column, desc: !!k.desc }));
+      if (keys.length) return keys;
+    }
+    const legacy = {
+      recent: [{ column: "modified", desc: true }],
+      author: [{ column: "author", desc: false }],
+      year: [{ column: "year", desc: true }],
+    }[getSetting("references.legacySort")];
+    return legacy || DEFAULT_REFERENCE_SORT;
+  }
+
+  _sortParam() {
+    return this._sortKeys.map((k) => `${k.column}:${k.desc ? "desc" : "asc"}`).join(",");
+  }
+
+  // _onSortHeader sorts by a column header click. A plain click sorts
+  // by that column alone, reversing it when it already is the only
+  // sort; Shift-click adds the column as the next sort, or reverses
+  // it when it is already one of them.
+  _onSortHeader(e, column) {
+    const keys = this._sortKeys;
+    const i = keys.findIndex((k) => k.column === column);
+    let next;
+    if (e.shiftKey) {
+      next = keys.slice();
+      if (i >= 0) next[i] = { column, desc: !keys[i].desc };
+      else next.push({ column, desc: false });
+    } else if (i === 0 && keys.length === 1) {
+      next = [{ column, desc: !keys[0].desc }];
+    } else {
+      next = [{ column, desc: false }];
+    }
+    this._sortKeys = next;
+    setSetting("references.sort", next);
     this._fetchPage(true);
+  }
+
+  // _loadColumns reads the user's visible columns in order, dropping
+  // unknown ids, or returns the defaults.
+  _loadColumns() {
+    const saved = getSetting("references.columns");
+    if (Array.isArray(saved)) {
+      const cols = [...new Set(saved.filter((id) => REFERENCE_COLUMN_IDS.has(id)))];
+      if (cols.length) return cols;
+    }
+    return REFERENCE_COLUMNS.filter((c) => c.shown).map((c) => c.id);
+  }
+
+  _setColumns(cols) {
+    this._columns = cols;
+    setSetting("references.columns", cols);
+  }
+
+  _toggleColumn(id, show) {
+    if (show && !this._columns.includes(id)) this._setColumns([...this._columns, id]);
+    if (!show && this._columns.length > 1) this._setColumns(this._columns.filter((c) => c !== id));
+  }
+
+  _moveColumn(id, delta) {
+    const cols = this._columns.slice();
+    const i = cols.indexOf(id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= cols.length) return;
+    [cols[i], cols[j]] = [cols[j], cols[i]];
+    this._setColumns(cols);
+  }
+
+  // Column-menu dragging uses pointer events on the grip, captured
+  // so the drag continues outside it. The drop position is the shown
+  // column whose row midpoint lies below the pointer.
+  _startColumnDrag(e, id) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    this._colDrag = { id, before: id };
+  }
+
+  _moveColumnDrag(e) {
+    if (!this._colDrag) return;
+    let before = "";
+    for (const li of this.renderRoot.querySelectorAll(".col-menu li[data-col]")) {
+      const r = li.getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) {
+        before = li.dataset.col;
+        break;
+      }
+    }
+    if (before !== this._colDrag.before) this._colDrag = { ...this._colDrag, before };
+  }
+
+  _endColumnDrag() {
+    const drag = this._colDrag;
+    this._colDrag = null;
+    if (!drag || drag.before === drag.id) return;
+    const cols = this._columns.filter((c) => c !== drag.id);
+    const at = drag.before ? cols.indexOf(drag.before) : cols.length;
+    cols.splice(at < 0 ? cols.length : at, 0, drag.id);
+    this._setColumns(cols);
+  }
+
+  // The menu is fixed under the gear rather than inside the header
+  // cell, so it keeps the page's text size and stays in place while
+  // the list scrolls under the sticky header.
+  _openColumnMenu() {
+    const r = this.renderRoot.querySelector(".col-menu-btn")?.getBoundingClientRect();
+    this._colMenuPos = r
+      ? { top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }
+      : { top: 80, right: 16 };
+    this._columnMenuOpen = true;
+    // A dialog opening over the list (help, add reference) closes the
+    // menu; popovers sit above dialogs, so it would otherwise stay on
+    // top of the dialog's backdrop.
+    if (!this._unsubColumnMenuModals) {
+      const depth = _modalStack.length;
+      this._unsubColumnMenuModals = subscribeModalStack(() => {
+        if (_modalStack.length > depth) this._closeColumnMenu();
+      });
+    }
+    if (!this._onColumnMenuOutside) {
+      this._onColumnMenuOutside = (e) => {
+        const path = e.composedPath();
+        const menu = this.renderRoot.querySelector(".col-menu");
+        const btn = this.renderRoot.querySelector(".col-menu-btn");
+        if (menu && !path.includes(menu) && !path.includes(btn)) this._closeColumnMenu();
+      };
+      window.addEventListener("pointerdown", this._onColumnMenuOutside, true);
+    }
+    this.updateComplete.then(() => this.renderRoot.querySelector(".col-menu input")?.focus());
+  }
+
+  _closeColumnMenu() {
+    this._columnMenuOpen = false;
+    if (this._unsubColumnMenuModals) {
+      this._unsubColumnMenuModals();
+      this._unsubColumnMenuModals = null;
+    }
+    if (this._onColumnMenuOutside) {
+      window.removeEventListener("pointerdown", this._onColumnMenuOutside, true);
+      this._onColumnMenuOutside = null;
+    }
+  }
+
+  // _renderColumnMenu lists every column with a checkbox; shown
+  // columns come first, in display order, and can be dragged or moved
+  // with the arrow buttons.
+  _renderColumnMenu() {
+    if (!this._columnMenuOpen) return nothing;
+    const byID = Object.fromEntries(REFERENCE_COLUMNS.map((c) => [c.id, c]));
+    const shown = this._columns.map((id) => byID[id]);
+    const hidden = REFERENCE_COLUMNS.filter((c) => !this._columns.includes(c.id));
+    const close = () => {
+      this._closeColumnMenu();
+      this.renderRoot.querySelector(".col-menu-btn")?.focus();
+    };
+    const pos = this._colMenuPos || { top: 80, right: 16 };
+    return html`<div
+      class="col-menu"
+      role="dialog"
+      aria-label="Columns"
+      style=${`top:${pos.top}px;right:${pos.right}px`}
+      @keydown=${(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          close();
+        }
+      }}
+    >
+      <fieldset>
+        <legend>Rows</legend>
+        ${[
+          ["full", "Full text"],
+          ["two", "Two lines"],
+          ["one", "One line"],
+        ].map(
+          ([value, label]) => html`<label>
+            <input
+              type="radio"
+              name="ref-row-height"
+              .checked=${this._rowHeight === value}
+              @change=${() => {
+                this._rowHeight = value;
+                setSetting("references.rowHeight", value);
+              }}
+            />
+            ${label}
+          </label>`,
+        )}
+      </fieldset>
+      <div class="col-menu-hint">Columns: drag or use the arrows to reorder</div>
+      <ul>
+        ${repeat(
+          shown,
+          (c) => c.id,
+          (c, i) => html`<li
+            data-col=${c.id}
+            class=${this._colDrag && this._colDrag.before === c.id && this._colDrag.id !== c.id ? "drop-before" : ""}
+          >
+            <span
+              class="col-menu-grip"
+              aria-hidden="true"
+              title="Drag to reorder"
+              @pointerdown=${(e) => this._startColumnDrag(e, c.id)}
+              @pointermove=${(e) => this._moveColumnDrag(e)}
+              @pointerup=${() => this._endColumnDrag()}
+              @pointercancel=${() => (this._colDrag = null)}
+            >${renderIcon("grip-vertical", 14)}</span>
+            <label>
+              <input
+                type="checkbox"
+                .checked=${live(true)}
+                ?disabled=${this._columns.length === 1}
+                @change=${() => this._toggleColumn(c.id, false)}
+              />
+              ${c.label}
+            </label>
+            <button
+              type="button"
+              class="icon-btn"
+              aria-label=${"Move " + c.label + " left"}
+              title="Move left"
+              ?disabled=${i === 0}
+              @click=${() => this._moveColumn(c.id, -1)}
+            >${renderIcon("chevron-up", 14)}</button>
+            <button
+              type="button"
+              class="icon-btn"
+              aria-label=${"Move " + c.label + " right"}
+              title="Move right"
+              ?disabled=${i === shown.length - 1}
+              @click=${() => this._moveColumn(c.id, 1)}
+            >${renderIcon("chevron-down", 14)}</button>
+          </li>`,
+        )}
+        ${repeat(
+          hidden,
+          (c) => c.id,
+          (c) => html`<li class="col-menu-hidden">
+            <span class="col-menu-grip" aria-hidden="true"></span>
+            <label>
+              <input type="checkbox" .checked=${live(false)} @change=${() => this._toggleColumn(c.id, true)} />
+              ${c.label}
+            </label>
+          </li>`,
+        )}
+      </ul>
+      <button
+        type="button"
+        class="col-menu-reset"
+        @click=${() => this._setColumns(REFERENCE_COLUMNS.filter((c) => c.shown).map((c) => c.id))}
+      >Reset to defaults</button>
+    </div>`;
+  }
+
+  // _renderReferenceHeader renders one column header. Sortable
+  // headers are buttons showing the sort direction and, when several
+  // columns sort, the column's position in the sort.
+  // The last header also holds the column menu's gear button, so the
+  // menu takes no column of its own.
+  _renderReferenceHeader(col, last = false) {
+    const i = this._sortKeys.findIndex((k) => k.column === col.sort);
+    const key = i >= 0 ? this._sortKeys[i] : null;
+    const ariaSort = i === 0 ? (key.desc ? "descending" : "ascending") : nothing;
+    return html`<th
+      scope="col"
+      class=${"col-" + col.id + (col.numeric ? " numeric" : "")}
+      aria-sort=${ariaSort}
+      title=${col.title || nothing}
+    >
+      <div class="th-wrap">
+      ${col.sort
+        ? html`<button
+            type="button"
+            class="th-sort"
+            title=${"Sort by " + col.label.toLowerCase() + "; Shift-click to add it as a further sort"}
+            @mousedown=${(e) => {
+              // Shift-click would otherwise extend a text selection.
+              if (e.shiftKey) e.preventDefault();
+            }}
+            @click=${(e) => this._onSortHeader(e, col.sort)}
+          >
+            ${col.label}${key
+              ? html`<span class="sort-ind" aria-hidden="true"
+                  >${key.desc ? "▼" : "▲"}${this._sortKeys.length > 1 ? i + 1 : ""}</span
+                ><span class="sr-only">${key.desc ? ", sorted descending" : ", sorted ascending"}</span>`
+              : nothing}
+          </button>`
+        : col.label}
+      ${last
+        ? html`<button
+              type="button"
+              class="icon-btn col-menu-btn"
+              title="Choose and order columns"
+              aria-label="Choose and order columns"
+              aria-haspopup="dialog"
+              aria-expanded=${this._columnMenuOpen ? "true" : "false"}
+              @click=${() => (this._columnMenuOpen ? this._closeColumnMenu() : this._openColumnMenu())}
+            >${renderIcon("settings", 14)}</button>`
+        : nothing}
+      </div>
+    </th>`;
+  }
+
+  // _renderReferenceCell renders one row's cell for a column.
+  _renderReferenceCell(col, h) {
+    const num = (n) => (n ? n.toLocaleString() : html`<span class="dim">—</span>`);
+    switch (col.id) {
+      case "status":
+        return html`<td>${this._renderStatusDots(h.workflow, h.id)}</td>`;
+      case "author":
+        return html`<td class="col-authors"><span title=${h.author || nothing}>${h.author || "(no author)"}</span></td>`;
+      case "year":
+        return html`<td class="col-year">${h.year || ""}</td>`;
+      case "title":
+        return html`<td class="col-title">
+          <a href=${"#/reference/" + encodeURIComponent(h.id)} title="Open this paper (or double-click the row)"
+            >${h.title || h.citation || "(untitled)"}</a
+          >
+          ${h.index_match
+            ? html`<div class="col-match">
+                <span class="col-badge">${indexSourceShort(h.index_match.source)}</span>
+                Mentions <i>${h.index_match.mention}</i>
+                (${h.index_match.count}×), which
+                ${indexSourceLabel(h.index_match.source)} places in
+                ${h.index_match.parent}.
+              </div>`
+            : nothing}
+        </td>`;
+      case "issues":
+        return html`<td class="numeric">${this._renderIssueBreakdown(h)}</td>`;
+      case "license":
+        return html`<td class="col-license">${h.license || "—"}</td>`;
+      case "pages":
+        return html`<td class="numeric">${num(h.pages)}</td>`;
+      case "words":
+        return html`<td class="numeric">${num(h.words)}</td>`;
+      case "characters":
+        return html`<td class="numeric">${num(h.characters)}</td>`;
+      case "tokens":
+        return html`<td class="numeric">
+          ${h.tokens_in == null
+            ? html`<span class="dim" title="No extraction runs yet">—</span>`
+            : html`<span title="Provider-reported: ${h.tokens_in.toLocaleString()} input, ${h.tokens_out.toLocaleString()} output tokens"
+                >${h.tokens_in.toLocaleString()} / ${h.tokens_out.toLocaleString()}</span
+              >`}
+        </td>`;
+      case "modified":
+        return html`<td class="col-year">${(h.modified || "").slice(0, 10)}</td>`;
+      case "actions":
+        return html`<td class="col-actions">
+          <button
+            class="icon-btn"
+            type="button"
+            title="Edit reference"
+            aria-label=${"Edit " + (h.title || h.citation || "reference")}
+            @click=${() => (this._editRefID = h.id)}
+          >${renderIcon("pencil", 14)}</button>
+          <button
+            class="icon-btn danger"
+            type="button"
+            title="Delete reference"
+            aria-label=${"Delete " + (h.title || h.citation || "reference")}
+            @click=${() => this._deleteReferenceByID(h.id, h.title || h.citation || h.id)}
+          >${renderIcon("trash-2", 14)}</button>
+        </td>`;
+    }
+    if (col.rank) return html`<td class="col-family">${this._renderRankCell(h, col.rank)}</td>`;
+    return html`<td></td>`;
+  }
+
+  // _renderIssueBreakdown shows a reference's open validation issues
+  // as a count per severity, most severe first, linking to the paper.
+  _renderIssueBreakdown(h) {
+    const by = h.issues || {};
+    const parts = [
+      ["error", "triangle-alert", "error"],
+      ["warn", "triangle-alert", "warning"],
+      ["info", "info", "info"],
+      ["debug", "info", "debug"],
+    ].filter(([sev]) => by[sev]);
+    if (parts.length === 0) return html`<span class="dim">—</span>`;
+    return html`<a class="issue-counts" href=${"#/reference/" + encodeURIComponent(h.id)}>
+      ${parts.map(
+        ([sev, icon, word]) => html`<span
+          class=${"issue-count sev-" + sev}
+          title=${`${by[sev]} open ${word}${by[sev] === 1 ? "" : "s"}`}
+          >${renderIcon(icon, 12)}${by[sev]}</span
+        >`,
+      )}
+    </a>`;
+  }
+
+  // _renderRankCell shows a reference's most-mentioned taxon at a
+  // rank (or its most-mentioned name), labelled with the index source
+  // and, when it mentions several, "+N" with the top five in the
+  // tooltip.
+  _renderRankCell(h, rank) {
+    if (!h.mentions_indexed) {
+      return html`<span class="dim" title="Name mentions not indexed yet">—</span>`;
+    }
+    const ts = h.taxa && h.taxa[rank];
+    if (!ts) {
+      const what = rank === "name" ? "name" : `name placed in a ${rank}`;
+      return html`<span class="dim" title=${`No mentioned ${what} by an index source`}>—</span>`;
+    }
+    const top = (ts.top || []).map((t) => `${t.name} ${t.count}`).join(" · ");
+    const more = ts.distinct > 1 ? ` (${ts.distinct} in total)` : "";
+    const src = ts.source ? `, ${indexSourceLabel(ts.source)}` : "";
+    return html`<span title=${`${top}${more}${src}`}
+      >${ts.name}${ts.source
+        ? html` <span class="col-badge">${indexSourceShort(ts.source)}</span>`
+        : nothing}${ts.distinct > 1 ? html` <span class="dim">+${ts.distinct - 1}</span>` : nothing}</span
+    >`;
+  }
+
+  // renderHeaderActions supplies the app header's buttons for the
+  // references screen; SfgaApp renders the markup in its own shadow
+  // DOM, so the button uses its shared header classes.
+  renderHeaderActions() {
+    return html`<button
+      class="icon-btn subtle"
+      @click=${() => (this._addingNew = true)}
+      title="Add reference"
+      aria-label="Add reference"
+    >
+      ${renderIcon("plus", 18)}
+    </button>`;
   }
 
   // _indexOpts returns the higher-taxon filter parameters
@@ -17860,9 +18530,7 @@ class SfgaReferences extends LitElement {
     if (next) filters[key] = next;
     else delete filters[key];
     this._stepFilters = filters;
-    try {
-      localStorage.setItem("hive.references.steps", JSON.stringify(filters));
-    } catch {}
+    setSetting("references.steps", JSON.stringify(filters));
     this._fetchPage(true);
   }
 
@@ -19905,32 +20573,7 @@ class SfgaReferences extends LitElement {
             .value=${this._query}
             @input=${(e) => this._onQueryChange(e.target.value)}
           />
-          <button
-            class="add-btn"
-            type="button"
-            title="Add reference"
-            aria-label="Add reference"
-            @click=${() => (this._addingNew = true)}
-          >
-            +
-          </button>
-        </div>
-        <div class="chip-group" role="group" aria-label="Sort references">
-          <span class="chip-group-label">Sort</span>
-          ${REFERENCE_SORTS.map(
-            (o) => html`
-              <button
-                class=${"sort-chip" + (this._sort === o.value ? " active" : "")}
-                type="button"
-                title=${o.title}
-                aria-pressed=${this._sort === o.value ? "true" : "false"}
-                ?disabled=${!!this._query.trim()}
-                @click=${() => this._setSort(o.value)}
-              >
-                ${o.label}
-              </button>
-            `,
-          )}
+
         </div>
         <div class="col-filter" role="group" aria-label="Higher-taxon filter">
           <span class="chip-group-label">In</span>
@@ -19991,44 +20634,25 @@ class SfgaReferences extends LitElement {
                   : "(No references)"}
             </div>`
           : html`
-              <table class="ref-table">
+              <div class="ref-table-frame">
+              <table class=${"ref-table rows-" + this._rowHeight}>
                 <thead>
                   <tr>
-                    <th scope="col">Status</th>
-                    <th scope="col">Authors</th>
-                    <th scope="col">Year</th>
-                    <th scope="col">Title</th>
-                    <th scope="col" title="Most-mentioned family according to NCBI Taxonomy, or the Catalogue of Life where NCBI has none">
-                      Family
-                    </th>
-                    <th scope="col">License</th>
+                    ${this._columns.map((id, i) =>
+                      this._renderReferenceHeader(
+                        REFERENCE_COLUMNS.find((c) => c.id === id),
+                        i === this._columns.length - 1,
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   ${this._hits.map(
                     (h) => html`
                       <tr @dblclick=${(e) => this._onRowDblClick(e, h.id)}>
-                        <td>${this._renderStatusDots(h.workflow, h.id)}</td>
-                        <td class="col-authors"><span>${h.author || "(no author)"}</span></td>
-                        <td class="col-year">${h.year || ""}</td>
-                        <td class="col-title">
-                          <a
-                            href=${"#/reference/" + encodeURIComponent(h.id)}
-                            title="Open this paper (or double-click the row)"
-                            >${h.title || h.citation || "(untitled)"}</a
-                          >
-                          ${h.index_match
-                            ? html`<div class="col-match">
-                                <span class="col-badge">${indexSourceShort(h.index_match.source)}</span>
-                                Mentions <i>${h.index_match.mention}</i>
-                                (${h.index_match.count}×), which
-                                ${indexSourceLabel(h.index_match.source)} places in
-                                ${h.index_match.parent}.
-                              </div>`
-                            : nothing}
-                        </td>
-                        <td class="col-family">${this._renderColFamily(h)}</td>
-                        <td class="col-license">${h.license || "—"}</td>
+                        ${this._columns.map((id) =>
+                          this._renderReferenceCell(REFERENCE_COLUMNS.find((c) => c.id === id), h),
+                        )}
                       </tr>
                     `,
                   )}
@@ -20038,24 +20662,10 @@ class SfgaReferences extends LitElement {
               ${this._loading && this._hits.length > 0
                 ? html`<div class="empty" role="status">Loading more…</div>`
                 : nothing}
+              </div>
+              ${this._renderColumnMenu()}
             `}
     `;
-  }
-
-  // _renderColFamily shows a reference's most-mentioned family
-  // according to an index source, labelled with that source.
-  _renderColFamily(h) {
-    if (!h.mentions_indexed) {
-      return html`<span class="dim" title="Name mentions not indexed yet">—</span>`;
-    }
-    if (!h.index_family) {
-      return html`<span class="dim" title="No mentioned name is placed in a family by an index source">—</span>`;
-    }
-    const label = indexSourceLabel(h.index_family_source);
-    return html`<span title=${`${h.index_family_mentions} mentions of names in this family (${label})`}
-      >${h.index_family}
-      <span class="col-badge">${indexSourceShort(h.index_family_source)}</span></span
-    >`;
   }
 
   // _onRowDblClick opens a paper from anywhere on its row. Clicks on
@@ -21989,7 +22599,7 @@ class SfgaReferences extends LitElement {
     // in the modal are visible immediately. Also refresh the list
     // so any author / title / citation edits update the visible
     // list row.
-    if (id) {
+    if (id && id === this._selectedId) {
       try {
         this._current = await api.reference.get(id);
       } catch {}
@@ -22067,15 +22677,6 @@ class SfgaReferences extends LitElement {
           />
           <span>in test set</span>
         </label>
-        <button
-          class="icon-btn"
-          type="button"
-          @click=${() => (this._addingNew = true)}
-          title="Add reference"
-          aria-label="Add reference"
-        >
-          ${renderIcon("plus", 16)}
-        </button>
         <button
           class="icon-btn"
           type="button"
@@ -22268,8 +22869,15 @@ class SfgaReferences extends LitElement {
 
   async _deleteReference() {
     if (!this._selectedId || !this._current) return;
-    const label =
-      this._current.title || this._current.citation || this._selectedId;
+    await this._deleteReferenceByID(
+      this._selectedId,
+      this._current.title || this._current.citation || this._selectedId,
+    );
+  }
+
+  // _deleteReferenceByID confirms and deletes a reference, from the
+  // open paper or from a row's Actions column.
+  async _deleteReferenceByID(id, label) {
     if (
       !confirm(
         `Delete this reference?\n\n${label}\n\nThe reference row is removed only when no other record cites it; otherwise the delete fails and you'll need to un-cite it first.`,
@@ -22278,7 +22886,7 @@ class SfgaReferences extends LitElement {
       return;
     }
     try {
-      await api.reference.delete(this._selectedId);
+      await api.reference.delete(id);
     } catch (err) {
       alert(
         `Delete failed: ${
@@ -22287,12 +22895,15 @@ class SfgaReferences extends LitElement {
       );
       return;
     }
-    this._current = null;
-    this._selectedId = "";
-    // Refresh list and pick a neighboring reference so the pane
-    // isn't blank after the delete.
+    const wasOpen = id === this._selectedId;
+    if (wasOpen) {
+      this._current = null;
+      this._selectedId = "";
+    }
     await this._fetchPage(true);
-    if (this._hits.length > 0) this._select(this._hits[0].id);
+    // After deleting the open paper, pick a neighboring reference so
+    // the pane isn't blank.
+    if (wasOpen && this._hits.length > 0) this._select(this._hits[0].id);
   }
 
   async _copy(text, event) {
@@ -22381,7 +22992,8 @@ class SfgaReferences extends LitElement {
 }
 
 // ---------- <sfga-help-modal> ----------
-// Keyboard shortcut reference. Rendered when the shell's helpOpen
+// Help: how hive finds scientific names, and the keyboard shortcut
+// reference. Rendered when the shell's helpOpen
 // state is true; fires a "close" CustomEvent when the user dismisses.
 // The shell owns open/close state so the ? global shortcut and the
 // header help button both flow through the same path.
@@ -22477,6 +23089,15 @@ class SfgaHelpModal extends LitElement {
       dd {
         margin: 0;
       }
+      section p {
+        margin: 0 0 var(--sp-2);
+        line-height: 1.5;
+      }
+      .modal > h3 {
+        margin: var(--sp-2) 0 0;
+        font-size: var(--fs-lg);
+        color: var(--accent);
+      }
     `,
   ];
 
@@ -22493,9 +23114,9 @@ class SfgaHelpModal extends LitElement {
           if (e.target === e.currentTarget) this._close();
         }}
       >
-        <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
+        <div class="modal" role="dialog" aria-labelledby="help-title">
           <header>
-            <h3>Keyboard shortcuts</h3>
+            <h3 id="help-title">Help</h3>
             <button
               class="close-x"
               type="button"
@@ -22506,6 +23127,34 @@ class SfgaHelpModal extends LitElement {
               ×
             </button>
           </header>
+          <section>
+            <h4>Scientific names in papers</h4>
+            <p>
+              Hive uses the Global Names tools to find every scientific
+              name in a paper. GNfinder detects the names in the text, and
+              GNverifier matches them against NCBI Taxonomy and the
+              Catalogue of Life. In the reader, a <b>GN</b> mark shows a
+              name tagged this way; names without it were tagged by the
+              publisher.
+            </p>
+            <p>
+              The reference list's classification columns (Kingdom through
+              Genus, and Top name) and the higher-taxon filter are
+              calculated automatically from those matches, so you can find
+              and explore papers by classification. Each column shows the
+              taxon the paper mentions most at that rank and the source
+              that placed it; <b>+N</b> means the paper mentions others,
+              and hovering lists the top five.
+            </p>
+            <p>
+              These values are for discovery only. They show where the
+              sources place the names a paper mentions, not what the paper
+              itself says, and they are never added to your project's
+              taxonomy. A name shared by unrelated organisms can place a
+              paper under the wrong group.
+            </p>
+          </section>
+          <h3>Keyboard shortcuts</h3>
           ${SfgaHelpModal.scopeOrder.map((so) => this._renderSection(so))}
           <div class="hint">
             Esc or click outside to close.
@@ -25273,8 +25922,8 @@ class SfgaPdfViewer extends LitElement {
     // Imperative because Lit doesn't manage the .pages children.
     const container = this.renderRoot?.querySelector(".pages");
     if (container) container.innerHTML = "";
-    // Attach scroll listener once. Saves current scrollTop into
-    // localStorage keyed by the PDF URL so a reload/return to the
+    // Attach scroll listener once. Saves current scrollTop in the
+    // user's settings keyed by the PDF's sha so a reload/return to the
     // same reference lands roughly where the curator was reading.
     if (!this._scrollListenerAttached) {
       this._scrollListenerAttached = true;
@@ -25288,10 +25937,7 @@ class SfgaPdfViewer extends LitElement {
         if (saveTimer) clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
           try {
-            localStorage.setItem(
-              "hive:pdf-scroll:" + this._loadedSrc,
-              String(this.scrollTop),
-            );
+            setSetting(this._scrollKey(this._loadedSrc), String(this.scrollTop));
           } catch (err) {
             // Storage disabled / quota — best-effort feature.
           }
@@ -25303,7 +25949,7 @@ class SfgaPdfViewer extends LitElement {
       // overwrite it.
       let savedScroll = NaN;
       try {
-        const saved = localStorage.getItem("hive:pdf-scroll:" + this.src);
+        const saved = getSetting(this._scrollKey(this.src));
         if (saved != null) savedScroll = Number.parseInt(saved, 10);
       } catch (err) {
         // Storage disabled — start at the top.
@@ -25377,6 +26023,13 @@ class SfgaPdfViewer extends LitElement {
     } finally {
       this._loading = false;
     }
+  }
+
+  // _scrollKey names the setting holding a PDF's scroll position,
+  // keyed by the PDF's sha (taken from its library URL).
+  _scrollKey(src) {
+    const m = /\/library\/([^/]+)\/source/.exec(src || "");
+    return "pdf.scroll:" + (m ? m[1] : src);
   }
 
   // _restoreScroll scrolls to a saved offset. A viewer in a hidden
