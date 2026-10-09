@@ -322,7 +322,7 @@ CREATE TABLE IF NOT EXISTS hive__extraction_correction (
 	                        'text-tag', 'text-remove', 'text-restore',
 	                        'xref-fix', 'chip-feedback',
 	                        'ref-merge', 'ref-edit',
-	                        'assertion-edit')),
+	                        'assertion-edit', 'page-numbering')),
 	content_type       TEXT NOT NULL,
 	bbox_page          INTEGER,
 	bbox_json          TEXT,
@@ -1170,7 +1170,7 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 	// Probe with the newest correction kind — the rebuild target
 	// includes every kind up through today, so any archive whose
 	// CHECK doesn't accept the newest kind needs rebuilding.
-	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "assertion-edit")
+	needsRebuild, err := checkAcceptsCorrectionKind(ctx, db, "page-numbering")
 	if err != nil {
 		return err
 	}
@@ -1188,7 +1188,7 @@ func migrateExtractionCorrectionForModify(ctx context.Context, db *sql.DB) error
 				                        'text-tag', 'text-remove', 'text-restore',
 				                        'xref-fix', 'chip-feedback',
 				                        'ref-merge', 'ref-edit',
-				                        'assertion-edit')),
+				                        'assertion-edit', 'page-numbering')),
 				content_type       TEXT NOT NULL,
 				bbox_page          INTEGER,
 				bbox_json          TEXT,

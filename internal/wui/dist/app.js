@@ -17599,7 +17599,7 @@ class SfgaReferences extends LitElement {
       }
       if (
         d.type === "hive:text-correction" &&
-        (d.kind === "text-remove" || d.kind === "text-tag") &&
+        ["text-remove", "text-tag", "page-numbering"].includes(d.kind) &&
         d.payload &&
         this._current
       ) {
@@ -19456,11 +19456,12 @@ class SfgaReferences extends LitElement {
     }
   }
 
-  // _postTextCorrection saves a correction made with the reader's
-  // selection toolbar: a text-remove (payload carries the selection
-  // segments and a structural label) or a text-tag (payload carries
-  // the action and segments; targetElementID names the figure or
-  // table for move-to-caption).
+  // _postTextCorrection saves a correction made in the reader: a
+  // text-remove (payload carries the selection segments and a
+  // structural label), a text-tag (payload carries the action and
+  // segments; targetElementID names the figure or table for
+  // move-to-caption), or a page-numbering (payload carries the
+  // printed page of PDF page 1).
   async _postTextCorrection({ sha, kind, payload, targetElementID }) {
     if (!sha || !this._current) return;
     try {
@@ -19469,11 +19470,13 @@ class SfgaReferences extends LitElement {
         sidecar_sha: sha,
         kind,
         content_type:
-          kind === "text-remove"
-            ? payload.label || "text"
-            : payload.action === "merge-next"
-              ? "paragraph"
-              : "caption",
+          kind === "page-numbering"
+            ? "page-number"
+            : kind === "text-remove"
+              ? payload.label || "text"
+              : payload.action === "merge-next"
+                ? "paragraph"
+                : "caption",
         payload: JSON.stringify(payload),
       };
       if (targetElementID) body.target_element_id = targetElementID;

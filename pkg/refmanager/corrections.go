@@ -33,7 +33,15 @@ func Appliers() []hiveext.CorrectionApplier {
 		textRemoveApplier{},
 		textRestoreApplier{},
 		textTagApplier{},
+		pageNumberingApplier{},
 	}
+}
+
+type pageNumberingApplier struct{}
+
+func (pageNumberingApplier) Kind() correction.Kind { return correction.KindPageNumbering }
+func (pageNumberingApplier) Apply(jats []byte, c *correction.Correction) ([]byte, error) {
+	return ApplyPageNumberingToJATS(jats, c)
 }
 
 type textTagApplier struct{}

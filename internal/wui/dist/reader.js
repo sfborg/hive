@@ -186,6 +186,32 @@ class SfgaReader extends LitElement {
       gap: var(--sp-2);
       align-items: center;
     }
+    .page-numbering {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-1);
+      font-size: var(--fs-sm);
+      color: var(--dim);
+      margin: 0;
+    }
+    .page-numbering input {
+      width: 5ch;
+      font: inherit;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--sp-1);
+    }
+    .page-numbering button {
+      font: inherit;
+      color: var(--fg);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--sp-1);
+      cursor: pointer;
+    }
     .controls label {
       display: inline-flex;
       align-items: center;
@@ -1705,10 +1731,41 @@ class SfgaReader extends LitElement {
     if (this._paginated) this._onPageClick(e);
   }
 
-  // _pdfPageFor returns the page number of the last page-break
-  // marker before el in document order, or 0. Markers can sit inside
-  // earlier sections or inline in an earlier paragraph, so this
-  // compares document positions rather than walking siblings.
+  // _renderPageNumbering shows, in the Digitize workflow, the printed
+  // page number of PDF page 1. Changing it saves a page-numbering
+  // correction, which renumbers the page markers and the article's
+  // first and last pages.
+  _renderPageNumbering() {
+    if (this._workflow !== "digitize" || !(window.parent && window.parent !== window)) {
+      return nothing;
+    }
+    const current = this._pdfPageOffset() + 1;
+    return html`<form
+      class="page-numbering"
+      title="The printed page number of the PDF's first page, as shown in the journal's page range"
+      @submit=${(e) => {
+        e.preventDefault();
+        const n = Number.parseInt(e.currentTarget.querySelector("input").value, 10);
+        if (!Number.isFinite(n) || n < 1 || n === current) return;
+        window.parent.postMessage(
+          { type: "hive:text-correction", sha: this._sha, kind: "page-numbering", payload: { pdf_page_1: n } },
+          "*",
+        );
+      }}
+    >
+      <label for="pdf-page-1">PDF page 1 is page</label>
+      <input id="pdf-page-1" type="number" min="1" .value=${String(current)} />
+      <button type="submit">Set</button>
+    </form>`;
+  }
+
+  // _pdfPageFor returns the PDF page index of the last page-break
+  // marker before el in document order, or 0. Markers show printed
+  // page numbers; subtracting the article's page offset gives the
+  // PDF's own page, which stays valid when pages are renumbered.
+  // Markers can sit inside earlier sections or inline in an earlier
+  // paragraph, so this compares document positions rather than
+  // walking siblings.
   _pdfPageFor(el) {
     const article = el.closest("article");
     if (!article) return 0;
@@ -1718,7 +1775,7 @@ class SfgaReader extends LitElement {
       const n = parseInt(m.dataset.pdfPage || "", 10);
       if (Number.isFinite(n) && n > 0) page = n;
     }
-    return page;
+    return page ? page - this._pdfPageOffset() : 0;
   }
 
   // _currentRange returns the non-empty selection inside the reader
@@ -2415,6 +2472,7 @@ class SfgaReader extends LitElement {
             />
             Columned view
           </label>
+          ${this._renderPageNumbering()}
         </div>
       </header>
       ${this._busy ? html`<p class="empty" role="status">Loading…</p>` : nothing}

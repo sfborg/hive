@@ -102,6 +102,11 @@ const (
 	// NER training against the same paper can pair "what the model
 	// said" with "what the curator said" without a JOIN chain.
 	KindAssertionEdit Kind = "assertion-edit"
+	// KindPageNumbering records the printed page number of PDF page
+	// 1. Applying it renumbers the page-break markers and the
+	// article's fpage/lpage; each marker keeps its PDF page index
+	// recoverable through the article's hive:pdf-page-offset.
+	KindPageNumbering Kind = "page-numbering"
 )
 
 // Status tracks whether a correction still applies to the current
@@ -261,9 +266,18 @@ type TextSegment struct {
 	// BlockText.
 	Start int `json:"start"`
 	End   int `json:"end"`
-	// PDFPage is the printed page of the nearest preceding page
-	// marker, or zero.
+	// PDFPage is the PDF page index (1-based) of the nearest
+	// preceding page marker, or zero when unknown. It is the PDF's
+	// own page, not the printed page number, so renumbering pages
+	// never invalidates it.
 	PDFPage int `json:"pdf_page,omitempty"`
+}
+
+// PageNumberingPayload is the JSON stored for a page-numbering
+// correction.
+type PageNumberingPayload struct {
+	// PDFPage1 is the printed page number of the PDF's first page.
+	PDFPage1 int `json:"pdf_page_1"`
 }
 
 // TextTagMoveToCaption moves the selected text into the caption of

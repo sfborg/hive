@@ -286,12 +286,13 @@ func normalizeWord(s string) string {
 // Returns 0 (no error) when no page range is found; caller falls
 // back to raw PDF-index page numbers in that case.
 //
-// Detection is deliberately conservative: matches `\d{1,4}-\d{1,4}\.?`
-// on page 1 words only, requires the two numbers to be plausibly
+// Detection is deliberately conservative: matches a page range such
+// as `175-188`, `175–188` or `82:175–188` (volume:range) on page 1
+// words only, requires the two numbers to be plausibly
 // consecutive-ish (second > first, second - first < 200) and
 // small enough to be page numbers.
 func JournalPageOfPDFPage1(words []WordPage) int {
-	rangeRe := regexp.MustCompile(`^(\d{1,4})-(\d{1,4})\.?$`)
+	rangeRe := regexp.MustCompile(`^(?:\d{1,4}:)?(\d{1,4})[-\x{2010}-\x{2015}](\d{1,4})[.,;]?$`)
 	for _, w := range words {
 		if w.Page != 1 {
 			if w.Page > 1 {

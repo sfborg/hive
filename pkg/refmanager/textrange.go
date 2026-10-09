@@ -482,8 +482,9 @@ func findSegmentBlock(jats []byte, seg correction.TextSegment) (*blockSpan, erro
 	return nil, fmt.Errorf("selected text not found")
 }
 
-// pageBefore returns the page number of the last page-break marker
-// before offset, or 0.
+// pageBefore returns the PDF page index of the last page-break
+// marker before offset, or 0. Markers carry printed page numbers;
+// the article's page offset converts them back.
 func pageBefore(jats []byte, offset int) int {
 	page := 0
 	for _, m := range pageBreakRegex.FindAllSubmatchIndex(jats[:offset], -1) {
@@ -491,7 +492,10 @@ func pageBefore(jats []byte, offset int) int {
 			page = n
 		}
 	}
-	return page
+	if page == 0 {
+		return 0
+	}
+	return page - pageOffset(jats)
 }
 
 // wrapperAttrs holds the attributes written on a range wrapper.

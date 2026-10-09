@@ -4283,6 +4283,15 @@ func (s *server) handleCreateCorrection(w http.ResponseWriter, r *http.Request) 
 		if body.ContentType == "" {
 			body.ContentType = "text"
 		}
+	case string(correction.KindPageNumbering):
+		var pp correction.PageNumberingPayload
+		if err := json.Unmarshal([]byte(body.Payload), &pp); err != nil || pp.PDFPage1 < 1 {
+			writeBadRequest(w, r, "page-numbering needs payload pdf_page_1 of at least 1")
+			return
+		}
+		if body.ContentType == "" {
+			body.ContentType = "page-number"
+		}
 	case string(correction.KindTextRestore):
 		if body.Payload == "" || body.Payload == "{}" {
 			writeBadRequest(w, r, "payload with remove_correction_id required for text-restore")
