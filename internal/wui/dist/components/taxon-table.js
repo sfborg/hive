@@ -4,7 +4,9 @@
  * The Search screen: every name usage in the archive (accepted taxa and
  * synonyms) in a filterable, sortable table with optional columns from
  * the classification, the supplemental tables and validation issues.
- * Double-click or Enter on a row opens its taxon.
+ * Filters: name, usage, rank, a taxon to search within, data a row
+ * has or lacks, and validation issues. Double-click or Enter on a row
+ * opens its taxon.
  *
  * Properties: icon — the app's icon renderer, passed to the table.
  */
@@ -90,6 +92,21 @@ const COLUMNS = [
     cell: (r) => list(r.type_material),
   },
   {
+    id: "media", label: "Media", group: "supplemental", sort: "media",
+    title: "Media of the taxon (accepted rows); sorts by how many",
+    cell: (r) => list(r.media),
+  },
+  {
+    id: "properties", label: "Properties", group: "supplemental", sort: "properties",
+    title: "Taxon properties (accepted rows); sorts by how many",
+    cell: (r) => list(r.properties),
+  },
+  {
+    id: "estimates", label: "Species estimates", group: "supplemental", sort: "estimates",
+    title: "Species estimates of the taxon (accepted rows); sorts by how many",
+    cell: (r) => list(r.estimates),
+  },
+  {
     id: "synonyms", label: "Synonyms", group: "supplemental", sort: "synonyms", numeric: true,
     title: "Number of synonyms of the taxon",
     cell: (r) => count(r.synonyms),
@@ -111,6 +128,31 @@ const COLUMNS = [
   },
 ];
 
+// DATA lists the kinds of supplemental data the Data filter can require
+// or exclude.
+const DATA = [
+  ["vernaculars", "vernacular names"],
+  ["distribution", "distribution"],
+  ["interactions", "interactions"],
+  ["type_material", "type material"],
+  ["synonyms", "synonyms"],
+  ["name_relations", "name relations"],
+  ["media", "media"],
+  ["properties", "properties"],
+  ["estimates", "species estimates"],
+];
+
+// withinSource searches the archive's taxa for the Within picker.
+async function withinSource(q) {
+  if (!q || q.length < 2) return [];
+  try {
+    const page = await api.taxon.search({ q, limit: 20 });
+    return (page.items || []).map((h) => ({ id: h.id, name: h.label?.text || h.name }));
+  } catch (_) {
+    return [];
+  }
+}
+
 const GROUPS = [
   { id: "name", label: "Name" },
   { id: "classification", label: "Classification" },
@@ -125,6 +167,8 @@ class SfgaTaxonTable extends LitElement {
     _usage: { state: true },
     _rank: { state: true },
     _issue: { state: true },
+    _within: { state: true },
+    _data: { state: true },
     _rules: { state: true },
     _total: { state: true },
   };
@@ -175,6 +219,9 @@ class SfgaTaxonTable extends LitElement {
       color: var(--dim);
       font-size: var(--fs-xs);
     }
+    sfga-combobox.within {
+      width: 14rem;
+    }
     sfga-data-table {
       flex: 1 1 auto;
       min-height: 0;
@@ -188,6 +235,8 @@ class SfgaTaxonTable extends LitElement {
     this._usage = f.usage || "";
     this._rank = f.rank || "";
     this._issue = f.issue || "";
+    this._within = f.within || null; // {id, name}
+    this._data = f.data || ""; // "has:<kind>" | "missing:<kind>"
     this._rules = [];
     this._total = null;
     this.icon = () => nothing;
@@ -197,6 +246,9 @@ class SfgaTaxonTable extends LitElement {
         usage: this._usage,
         rank: this._rank,
         issue: this._issue,
+        within: this._within?.id || "",
+        has: this._data.startsWith("has:") ? this._data.slice(4) : "",
+        missing: this._data.startsWith("missing:") ? this._data.slice(8) : "",
         sort: page.sort,
         limit: page.limit,
         offset: page.offset,
@@ -214,7 +266,13 @@ class SfgaTaxonTable extends LitElement {
   _changed(field, value) {
     this[field] = value;
     if (field !== "_q") {
-      setSetting("taxa.table.filters", { usage: this._usage, rank: this._rank, issue: this._issue });
+      setSetting("taxa.table.filters", {
+        usage: this._usage,
+        rank: this._rank,
+        issue: this._issue,
+        within: this._within,
+        data: this._data,
+      });
     }
     clearTimeout(this._debounce);
     this._debounce = setTimeout(() => this.renderRoot.querySelector("sfga-data-table")?.reload(), field === "_q" ? 250 : 0);
@@ -246,6 +304,29 @@ class SfgaTaxonTable extends LitElement {
         <select id="rank" @change=${(e) => this._changed("_rank", e.target.value)}>
           <option value="" ?selected=${!this._rank}>All</option>
           ${ranks.map((r) => html`<option value=${r.id} ?selected=${this._rank === r.id}>${r.name}</option>`)}
+        </select>
+        <label for="within">Within</label>
+        <sfga-combobox
+          id="within"
+          class="within"
+          min-search-chars="2"
+          placeholder="Any taxon"
+          .source=${withinSource}
+          .value=${this._within?.id || ""}
+          .valueName=${this._within?.name || ""}
+          @pick=${(e) => this._changed("_within", e.detail.id ? { id: e.detail.id, name: e.detail.name } : null)}
+        ></sfga-combobox>
+        <label for="data">Data</label>
+        <select id="data" @change=${(e) => this._changed("_data", e.target.value)}>
+          <option value="" ?selected=${!this._data}>Any</option>
+          <optgroup label="Has">
+            ${DATA.map(([k, l]) => html`<option value=${"has:" + k} ?selected=${this._data === "has:" + k}>Has ${l}</option>`)}
+          </optgroup>
+          <optgroup label="Missing">
+            ${DATA.map(
+              ([k, l]) => html`<option value=${"missing:" + k} ?selected=${this._data === "missing:" + k}>Missing ${l}</option>`,
+            )}
+          </optgroup>
         </select>
         <label for="issue">Issues</label>
         <select id="issue" @change=${(e) => this._changed("_issue", e.target.value)}>

@@ -12,7 +12,8 @@ import (
 // taxa and synonyms alike, one row each, with the classification of
 // the accepted taxon and optional columns drawn from the supplemental
 // tables (vernacular names, distribution, interactions, type material,
-// name relations) and from validation issues. It backs the filterable
+// name relations, media, properties, species estimates) and from
+// validation issues. It backs the filterable
 // table in the web interface, as the reference listing backs the
 // reference table.
 
@@ -28,8 +29,13 @@ type TaxonTableQuery struct {
 	// ("error", "warn", "info", "debug"), or "rule:<rule_id>"; "" keeps
 	// all.
 	Issue string
-	Sort  []ReferenceSortKey
-	Limit int
+	// Within keeps the usages of this taxon and every taxon below it.
+	Within string
+	// Has and Missing keep rows that have, or lack, data of a kind
+	// (see TaxonTableData). Taxon-level kinds apply to accepted rows.
+	Has, Missing string
+	Sort         []ReferenceSortKey
+	Limit        int
 	// Offset skips that many rows of the ordered result.
 	Offset int
 }
@@ -61,11 +67,35 @@ type TaxonTableRow struct {
 	Distribution  []string
 	Interactions  []string
 	TypeMaterial  []string
+	Media         []string
+	Properties    []string
+	Estimates     []string
 	Synonyms      int
 	NameRelations int
 
 	IssuesBySeverity map[string]int
 	IssueRules       []string
+}
+
+// TaxonTableData maps the kinds of supplemental data rows can be
+// filtered on to the condition that the usage row u has some.
+var TaxonTableData = map[string]string{
+	"vernaculars":    "EXISTS (SELECT 1 FROM vernacular x WHERE x.col__taxon_id = u.taxon_id)",
+	"distribution":   "EXISTS (SELECT 1 FROM distribution x WHERE x.col__taxon_id = u.taxon_id)",
+	"interactions":   "EXISTS (SELECT 1 FROM species_interaction x WHERE x.col__taxon_id = u.taxon_id)",
+	"media":          "EXISTS (SELECT 1 FROM media x WHERE x.col__taxon_id = u.taxon_id)",
+	"properties":     "EXISTS (SELECT 1 FROM taxon_property x WHERE x.col__taxon_id = u.taxon_id)",
+	"estimates":      "EXISTS (SELECT 1 FROM species_estimate x WHERE x.col__taxon_id = u.taxon_id)",
+	"synonyms":       "EXISTS (SELECT 1 FROM synonym x WHERE x.col__taxon_id = u.taxon_id)",
+	"type_material":  "EXISTS (SELECT 1 FROM type_material x WHERE x.col__name_id = u.name_id)",
+	"name_relations": "EXISTS (SELECT 1 FROM name_relation x WHERE x.col__name_id = u.name_id OR x.col__related_name_id = u.name_id)",
+}
+
+// taxonLevelData are the kinds held on the taxon rather than the name;
+// a synonym row neither has nor misses them.
+var taxonLevelData = map[string]bool{
+	"vernaculars": true, "distribution": true, "interactions": true, "media": true,
+	"properties": true, "estimates": true, "synonyms": true,
 }
 
 // TaxonTableRanks are the classification ranks the table shows.
@@ -116,6 +146,9 @@ var TaxonTableSortColumns = map[string]string{
 		(SELECT COUNT(*) FROM synonym x WHERE x.col__taxon_id = u.taxon_id) END`,
 	"name_relations": `(SELECT COUNT(*) FROM name_relation x
 		WHERE x.col__name_id = u.name_id OR x.col__related_name_id = u.name_id)`,
+	"media":      acceptedCount("media"),
+	"properties": acceptedCount("taxon_property"),
+	"estimates":  acceptedCount("species_estimate"),
 	// Worst open severity (1 = error … 4 = debug), so ascending puts
 	// the most serious first.
 	"issues": `(SELECT MIN(CASE r.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2
@@ -166,6 +199,26 @@ func (q TaxonTableQuery) predicate() (string, []any) {
 	default:
 		conds = append(conds, "EXISTS (SELECT 1 FROM __gsvalidator_results r WHERE "+issueMatch+" AND r.severity = ?)")
 		args = append(args, issue)
+	}
+	if q.Within != "" {
+		conds = append(conds, `u.taxon_id IN (
+			WITH RECURSIVE below(id) AS (
+				SELECT ? UNION SELECT t.col__id FROM taxon t JOIN below ON t.col__parent_id = below.id)
+			SELECT id FROM below)`)
+		args = append(args, q.Within)
+	}
+	for kind, negate := range map[string]bool{q.Has: false, q.Missing: true} {
+		cond, ok := TaxonTableData[kind]
+		if !ok {
+			continue
+		}
+		if negate {
+			cond = "NOT " + cond
+		}
+		if taxonLevelData[kind] {
+			cond = "u.usage = 'accepted' AND " + cond
+		}
+		conds = append(conds, "("+cond+")")
 	}
 	if len(conds) == 0 {
 		return "1", nil
@@ -340,6 +393,16 @@ func (a *Archive) addTaxonTableDetails(ctx context.Context, rows []TaxonTableRow
 				COALESCE(NULLIF(col__institution_code, ''), '') || ' ' || COALESCE(col__catalog_number, ''))
 			FROM type_material WHERE col__name_id IN (?)`,
 			nameIDs, byName, func(r *TaxonTableRow, v string) { appendCapped(&r.TypeMaterial, v) }),
+		list(`SELECT DISTINCT col__taxon_id, COALESCE(NULLIF(col__title, ''), col__url)
+			FROM media WHERE col__taxon_id IN (?) ORDER BY 2`,
+			taxonIDs, byTaxon, func(r *TaxonTableRow, v string) { appendCapped(&r.Media, v) }),
+		list(`SELECT DISTINCT col__taxon_id, col__property || ': ' || COALESCE(col__value, '')
+			FROM taxon_property WHERE col__taxon_id IN (?) ORDER BY col__ordinal, col__property`,
+			taxonIDs, byTaxon, func(r *TaxonTableRow, v string) { appendCapped(&r.Properties, v) }),
+		list(`SELECT DISTINCT col__taxon_id, CAST(col__estimate AS TEXT) ||
+				CASE WHEN COALESCE(col__type_id, '') <> '' THEN ' ' || lower(replace(col__type_id, '_', ' ')) ELSE '' END
+			FROM species_estimate WHERE col__taxon_id IN (?)`,
+			taxonIDs, byTaxon, func(r *TaxonTableRow, v string) { appendCapped(&r.Estimates, v) }),
 		list(`SELECT col__taxon_id, CAST(COUNT(*) AS TEXT) FROM synonym
 			WHERE col__taxon_id IN (?) GROUP BY 1`,
 			taxonIDs, byTaxon, func(r *TaxonTableRow, v string) { fmt.Sscan(v, &r.Synonyms) }),

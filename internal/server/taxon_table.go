@@ -28,6 +28,9 @@ type apiTaxonTableRow struct {
 	Distribution   []string          `json:"distribution,omitempty"`
 	Interactions   []string          `json:"interactions,omitempty"`
 	TypeMaterial   []string          `json:"type_material,omitempty"`
+	Media          []string          `json:"media,omitempty"`
+	Properties     []string          `json:"properties,omitempty"`
+	Estimates      []string          `json:"estimates,omitempty"`
 	Synonyms       int               `json:"synonyms,omitempty"`
 	NameRelations  int               `json:"name_relations,omitempty"`
 	Issues         map[string]int    `json:"issues,omitempty"`
@@ -45,6 +48,9 @@ type apiTaxonTableRow struct {
 // @Param        usage  query string false "accepted | synonym"
 // @Param        rank   query string false "comma-separated rank IDs"
 // @Param        issue  query string false "any | error | warn | info | debug | rule:<rule_id>"
+// @Param        within query string false "taxon ID: keep it and the taxa below it"
+// @Param        has     query string false "keep rows with this data: vernaculars, distribution, interactions, media, properties, estimates, synonyms, type_material, name_relations"
+// @Param        missing query string false "keep rows lacking this data (same kinds as has)"
 // @Param        sort   query string false "col:asc|desc, comma-separated"
 // @Param        limit  query int    false "page size (default 100, max 500)"
 // @Param        offset query int    false "rows to skip"
@@ -53,7 +59,8 @@ type apiTaxonTableRow struct {
 // @Router       /taxon/table [get]
 func (s *server) handleTaxonTable(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
-	q := hive.TaxonTableQuery{Q: v.Get("q"), Usage: v.Get("usage"), Issue: v.Get("issue")}
+	q := hive.TaxonTableQuery{Q: v.Get("q"), Usage: v.Get("usage"), Issue: v.Get("issue"),
+		Within: v.Get("within"), Has: v.Get("has"), Missing: v.Get("missing")}
 	if raw := strings.TrimSpace(v.Get("rank")); raw != "" {
 		q.Ranks = strings.Split(raw, ",")
 	}
@@ -79,6 +86,7 @@ func (s *server) handleTaxonTable(w http.ResponseWriter, r *http.Request) {
 			Classification: row.Classification, Extinct: row.Extinct, Modified: row.Modified,
 			Vernaculars: row.Vernaculars, Distribution: row.Distribution,
 			Interactions: row.Interactions, TypeMaterial: row.TypeMaterial,
+			Media: row.Media, Properties: row.Properties, Estimates: row.Estimates,
 			Synonyms: row.Synonyms, NameRelations: row.NameRelations,
 			Issues: row.IssuesBySeverity, IssueRules: row.IssueRules,
 		}

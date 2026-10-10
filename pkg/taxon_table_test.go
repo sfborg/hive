@@ -82,6 +82,25 @@ func TestTaxonTable(t *testing.T) {
 	if rows[0].Name != "Philaenus spumarius" {
 		t.Errorf("sort by vernaculars: first = %s", rows[0].Name)
 	}
+	// Within the genus: the genus, the species and its synonym.
+	_, total, _ = a.TaxonTable(ctx, TaxonTableQuery{Within: genus})
+	if total != 3 {
+		t.Errorf("within genus = %d rows, want 3", total)
+	}
+	_, total, _ = a.TaxonTable(ctx, TaxonTableQuery{Within: species})
+	if total != 2 {
+		t.Errorf("within species = %d rows, want 2", total)
+	}
+	// Accepted taxa missing vernacular names: only the genus. The
+	// synonym row neither has nor misses taxon-level data.
+	rows, total, _ = a.TaxonTable(ctx, TaxonTableQuery{Missing: "vernaculars"})
+	if total != 1 || rows[0].Name != "Philaenus" {
+		t.Errorf("missing vernaculars = %d rows", total)
+	}
+	_, total, _ = a.TaxonTable(ctx, TaxonTableQuery{Has: "synonyms"})
+	if total != 1 {
+		t.Errorf("has synonyms = %d rows, want 1", total)
+	}
 	if _, err := ParseTaxonTableSort("nope:asc"); err == nil {
 		t.Error("unknown sort column accepted")
 	}
