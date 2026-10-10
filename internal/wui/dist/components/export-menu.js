@@ -13,7 +13,7 @@ import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
 
 const DEFAULT_FORMATS = [
   { id: "csv", label: "CSV", hint: "For spreadsheets" },
-  { id: "sqlite", label: "SQLite", hint: "One table, typed columns" },
+  { id: "sqlite", label: "SQLite", hint: "One flat table, as shown" },
 ];
 
 class SfgaExportMenu extends LitElement {
@@ -21,6 +21,7 @@ class SfgaExportMenu extends LitElement {
     href: { attribute: false },
     formats: { attribute: false },
     _open: { state: true },
+    _right: { state: true },
   };
 
   static styles = css`
@@ -41,21 +42,27 @@ class SfgaExportMenu extends LitElement {
     }
     .menu {
       position: absolute;
-      right: 0;
+      left: 0;
       top: calc(100% + 4px);
       z-index: var(--z-popover);
       display: grid;
       min-width: 14rem;
+      max-width: 22rem;
       padding: var(--sp-1) 0;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
     }
+    .menu.right {
+      left: auto;
+      right: 0;
+    }
     .menu button {
       border: 0;
       border-radius: 0;
       text-align: left;
+      white-space: normal;
       display: grid;
       padding: var(--sp-1) var(--sp-3);
     }
@@ -79,6 +86,9 @@ class SfgaExportMenu extends LitElement {
   _toggle() {
     this._open = !this._open;
     if (this._open) {
+      // Open toward the side with more room.
+      const box = this.getBoundingClientRect();
+      this._right = box.left + box.width / 2 > window.innerWidth / 2;
       this._outside = (e) => {
         if (!e.composedPath().includes(this)) this._close();
       };
@@ -118,7 +128,7 @@ class SfgaExportMenu extends LitElement {
       </button>
       ${this._open
         ? html`<div
-            class="menu"
+            class=${this._right ? "menu right" : "menu"}
             role="menu"
             @keydown=${(e) => {
               if (e.key === "Escape") {

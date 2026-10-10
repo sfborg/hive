@@ -193,6 +193,16 @@ const GROUPS = [
   { id: "issues", label: "Issues" },
 ];
 
+const EXPORT_FORMATS = [
+  { id: "csv", label: "CSV", hint: "For spreadsheets" },
+  { id: "sqlite", label: "SQLite", hint: "One flat table, as shown" },
+  {
+    id: "sfga",
+    label: "SFGA archive",
+    hint: "The matching records with their related tables; taxon_table_view shows them as here",
+  },
+];
+
 class SfgaTaxonTable extends LitElement {
   static properties = {
     icon: { attribute: false },
@@ -403,7 +413,7 @@ class SfgaTaxonTable extends LitElement {
         ${this._picker("data", "Data", "Any", this._dataSource, this._data, (id) => DATA_OPTIONS.find((o) => o.id === id)?.name)}
         ${this._picker("issue", "Issues", "Any or none", this._issueSource, this._issue, (id) => this._issueName(id))}
         <span class="total" role="status">${this._total === null ? "" : `${this._total.toLocaleString()} names`}</span>
-        <sfga-export-menu .href=${(format) => this._exportURL(format)}></sfga-export-menu>
+        <sfga-export-menu .formats=${EXPORT_FORMATS} .href=${(format) => this._exportURL(format)}></sfga-export-menu>
       </div>
       <sfga-data-table
         .columns=${COLUMNS}

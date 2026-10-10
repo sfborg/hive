@@ -195,29 +195,37 @@ func writeExport[T any](w http.ResponseWriter, r *http.Request, format, base, ta
 			writeProblem(w, r, err)
 		}
 	case "sqlite":
-		dir, err := os.MkdirTemp("", "hive-export-")
-		if err != nil {
-			writeProblem(w, r, err)
-			return
-		}
-		defer os.RemoveAll(dir)
-		path := filepath.Join(dir, base+".sqlite")
-		if err := writeSQLite(r.Context(), path, table, cols, rows, info); err != nil {
-			writeProblem(w, r, err)
-			return
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			writeProblem(w, r, err)
-			return
-		}
-		defer f.Close()
-		w.Header().Set("Content-Type", "application/vnd.sqlite3")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.sqlite"`, base, stamp))
-		io.Copy(w, f)
+		sendSQLite(w, r, base+"-"+stamp+".sqlite", func(path string) error {
+			return writeSQLite(r.Context(), path, table, cols, rows, info)
+		})
 	default:
 		writeBadRequest(w, r, "format must be csv or sqlite")
 	}
+}
+
+// sendSQLite builds a SQLite file with write in a temporary directory
+// and sends it as an attachment named name.
+func sendSQLite(w http.ResponseWriter, r *http.Request, name string, write func(path string) error) {
+	dir, err := os.MkdirTemp("", "hive-export-")
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "export.sqlite")
+	if err := write(path); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/vnd.sqlite3")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	io.Copy(w, f)
 }
 
 func writeCSV[T any](w io.Writer, cols []exportColumn[T], rows []T) error {
@@ -339,7 +347,7 @@ func splitColumns(raw string) []string {
 // @Summary      Export the taxon table
 // @Tags         taxa
 // @Produce      text/csv
-// @Param        format  query string false "csv (default) or sqlite"
+// @Param        format  query string false "csv (default), sqlite (one table) or sfga (the matching records and their related tables, with taxon_table_view)"
 // @Param        columns query string false "comma-separated column ids, in order; identifiers always come first"
 // @Success      200 {file} file
 // @Router       /taxon/table/export [get]
@@ -356,9 +364,20 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q.Sort, q.Limit = sort, -1
+	sfga := v.Get("format") == "sfga"
+	if sfga {
+		q.DetailLimit = 0
+	}
 	found, _, err := s.a.TaxonTable(r.Context(), q)
 	if err != nil {
 		writeProblem(w, r, err)
+		return
+	}
+	if sfga {
+		info := s.exportInfo(r, "taxon table")
+		sendSQLite(w, r, "taxa-"+time.Now().Format("2006-01-02")+".sfga.sqlite", func(path string) error {
+			return s.a.ExportTaxaSFGA(r.Context(), path, found, info)
+		})
 		return
 	}
 	rows := make([]apiTaxonTableRow, len(found))
