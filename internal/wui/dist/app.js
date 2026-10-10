@@ -947,8 +947,8 @@ function vocabSource(name) {
   };
 }
 
-// rankLabel returns a rank's display name from the vocabulary ("class",
-// "unranked (clade)"), falling back to the lowercased ID.
+// rankLabel returns a rank's display name from the vocabulary,
+// falling back to the lowercased ID.
 function rankLabel(id) {
   const t = api.vocab.get("rank").find((r) => r.id === id);
   return t?.name || (id || "").toLowerCase();
@@ -1065,7 +1065,7 @@ const sexResolver = isoResolver(api.sex, "id", null, "symbol");
 function childRankSource(allowed) {
   const base = vocabSource("rank");
   if (!allowed || allowed.length === 0) return base;
-  // A clade (unranked) can sit anywhere in the tree, so it is always
+  // An unranked taxon can sit anywhere in the tree, so it is always
   // offered whatever the parent's rank.
   const allowSet = new Set([...allowed.map((r) => r.id), "UNRANKED"]);
   const typicalSet = new Set([...allowed.filter((r) => r.typical_use).map((r) => r.id), "UNRANKED"]);
