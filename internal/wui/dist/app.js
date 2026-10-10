@@ -7063,7 +7063,11 @@ class SfgaDetail extends LitElement {
       // over gnparser's guess. Same rule for code (which is separately
       // pre-seeded from CodeForParent and shouldn't be overwritten by
       // a parse guess).
-      if (!merged.rank && preview.rank) merged.rank = preview.rank;
+      // A guess the parent cannot have as a child rank is dropped, as
+      // in TaxonWorks' predicted child rank: the curator picks instead.
+      const allowed = this._createChildRanks;
+      const fits = !allowed || allowed.some((r) => r.id === preview.rank);
+      if (!merged.rank && preview.rank && fits) merged.rank = preview.rank;
       this._createDraft = merged;
       this._createLastParsedVerbatim = sci;
       this._createParseQuality =
