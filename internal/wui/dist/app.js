@@ -1788,6 +1788,16 @@ class SfgaApp extends LitElement {
       gap: var(--sp-1);
       justify-self: end;
     }
+    /* A button that opens a menu: its icon plus a small caret. */
+    header .add-menu-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+    }
+    header .add-menu-btn .caret {
+      display: inline-flex;
+      margin-left: -2px;
+    }
     main {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -4599,6 +4609,9 @@ class SfgaTree extends LitElement {
 class SfgaDetail extends LitElement {
   static properties = {
     taxonId: { type: String, attribute: false },
+    // Position of the open "Add to this taxon" menu ({top, right}),
+    // null when closed.
+    _addMenu: { state: true },
     editable: { type: Boolean, attribute: false },
     // Soft warnings passed in from the shell after a successful
     // create/update, keyed to this.taxonId. Rendered as a banner
@@ -5005,6 +5018,33 @@ class SfgaDetail extends LitElement {
     /* Vernacular names — compact monospace table. Per DESIGN.md
        § Per-data-type sections. Row hover reveals edit/delete via
        the same .row-actions pattern used elsewhere. */
+    .add-menu {
+      position: fixed;
+      z-index: 20;
+      display: grid;
+      min-width: 12rem;
+      padding: var(--sp-1) 0;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
+      font-size: var(--fs-sm);
+    }
+    .add-menu button {
+      font: inherit;
+      text-align: left;
+      padding: var(--sp-1) var(--sp-3);
+      background: none;
+      color: inherit;
+      border: 0;
+      cursor: pointer;
+    }
+    .add-menu button:hover,
+    .add-menu button:focus-visible {
+      background: var(--hover, color-mix(in oklab, var(--fg) 8%, transparent));
+      outline: none;
+    }
     section.vernaculars {
       margin-top: var(--sp-4);
     }
@@ -6098,7 +6138,8 @@ class SfgaDetail extends LitElement {
     if (
       changed.has("_taxon") ||
       changed.has("_creating") ||
-      changed.has("editable")
+      changed.has("editable") ||
+      changed.has("_addMenu")
     ) {
       this.dispatchEvent(
         new CustomEvent("screen-actions-changed", {
@@ -8890,6 +8931,7 @@ class SfgaDetail extends LitElement {
         ${this._renderSpeciesInteractions()}
         ${this._renderReferences()}
         ${this._renderViewFields()}
+        ${this._renderAddMenu()}
         ${this._vernacularForm ? this._renderVernacularModal() : ""}
         ${this._distributionForm ? this._renderDistributionModal() : ""}
         ${this._speciesInteractionForm ? this._renderSpeciesInteractionModal() : ""}
@@ -9119,6 +9161,16 @@ class SfgaDetail extends LitElement {
     if (!this._taxon) return "";
     return html`
       <button
+        class="icon-btn subtle add-menu-btn"
+        @click=${(e) => (this._addMenu ? this._closeAddMenu() : this._openAddMenu(e.currentTarget))}
+        title="add to this taxon"
+        aria-label="add to this taxon"
+        aria-haspopup="menu"
+        aria-expanded=${this._addMenu ? "true" : "false"}
+      >
+        ${renderIcon("plus", 18)}<span class="caret" aria-hidden="true">${renderIcon("chevron-down", 12)}</span>
+      </button>
+      <button
         class="icon-btn subtle"
         @click=${() => this._openEditTaxon()}
         title="edit (e)"
@@ -9151,6 +9203,85 @@ class SfgaDetail extends LitElement {
         ${renderIcon("trash-2", 18)}
       </button>
     `;
+  }
+
+  // _addMenuItems are the data types a curator can add to a taxon from
+  // the header menu. Empty sections are not shown on the page, so this
+  // menu is how a taxon gets its first row of each type.
+  _addMenuItems() {
+    return [
+      { label: "Synonym", run: () => this._openCreateSynonym() },
+      { label: "Vernacular name", run: () => this._openVernacularCreate() },
+      { label: "Distribution", run: () => this._openDistributionCreate() },
+      { label: "Species interaction", run: () => this._openSpeciesInteractionCreate() },
+    ];
+  }
+
+  // _openAddMenu opens the menu fixed under the header button, which
+  // the app shell renders outside this element.
+  _openAddMenu(button) {
+    this._addMenuButton = button;
+    const r = button?.getBoundingClientRect();
+    this._addMenu = r
+      ? { top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) }
+      : { top: 80, right: 16 };
+    // A dialog opening over the page closes the menu.
+    const depth = _modalStack.length;
+    this._unsubAddMenuModals = subscribeModalStack(() => {
+      if (_modalStack.length > depth) this._closeAddMenu();
+    });
+    this._onAddMenuOutside = (e) => {
+      const path = e.composedPath();
+      const menu = this.renderRoot.querySelector(".add-menu");
+      if (!path.includes(menu) && !path.includes(this._addMenuButton)) this._closeAddMenu();
+    };
+    window.addEventListener("pointerdown", this._onAddMenuOutside, true);
+    this.updateComplete.then(() => this.renderRoot.querySelector(".add-menu button")?.focus());
+  }
+
+  _closeAddMenu(refocus = false) {
+    this._addMenu = null;
+    this._unsubAddMenuModals?.();
+    this._unsubAddMenuModals = null;
+    if (this._onAddMenuOutside) {
+      window.removeEventListener("pointerdown", this._onAddMenuOutside, true);
+      this._onAddMenuOutside = null;
+    }
+    if (refocus) this._addMenuButton?.focus();
+  }
+
+  _renderAddMenu() {
+    if (!this._addMenu) return nothing;
+    const { top, right } = this._addMenu;
+    const items = () => [...this.renderRoot.querySelectorAll(".add-menu button")];
+    return html`<div
+      class="add-menu"
+      role="menu"
+      aria-label="Add to this taxon"
+      style=${`top:${top}px;right:${right}px`}
+      @keydown=${(e) => {
+        const list = items();
+        const i = list.indexOf(this.renderRoot.activeElement);
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this._closeAddMenu(true);
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const d = e.key === "ArrowDown" ? 1 : -1;
+          list[(i + d + list.length) % list.length]?.focus();
+        }
+      }}
+    >
+      ${this._addMenuItems().map(
+        (item) => html`<button
+          role="menuitem"
+          @click=${() => {
+            this._closeAddMenu();
+            item.run();
+          }}
+        >${item.label}</button>`,
+      )}
+    </div>`;
   }
 
   // performAction is the public entry called by SfgaApp when the user
