@@ -7476,6 +7476,10 @@ class SfgaDetail extends LitElement {
       await api.name.patch(n.id, namePatch, this._editingNameEtag);
     }
     this._cancelCreate();
+    // The shell re-selects the same id, which does not re-run _load
+    // (Lit skips unchanged properties), so reload the edited taxon here
+    // for the heading and fields to show the saved values.
+    if (revealID === this.taxonId) await this._load();
     this.dispatchEvent(
       new CustomEvent("taxon-moved", {
         detail: { id: revealID },
