@@ -31,6 +31,17 @@ func TestGuess(t *testing.T) {
 		{"BOTANICAL", "Rosoideae", "SUBFAMILY"},
 		{"BOTANICAL", "Roseae", "TRIBE"},
 		{"BOTANICAL", "Rosales", "ORDER"},
+		{"BOTANICAL", "Rhodophyta", "PHYLUM"},
+		{"BOTANICAL", "Rhodophytina", "SUBPHYLUM"},
+		{"BOTANICAL", "Bangiophyceae", "CLASS"},
+		{"BOTANICAL", "Euglenophyceae", "CLASS"},
+		{"BOTANICAL", "Rhodymeniophycidae", "SUBCLASS"},
+		{"BOTANICAL", "Rhodymeniineae", "SUBORDER"},
+		{"BOTANICAL", "Basidiomycota", "PHYLUM"},
+		{"BOTANICAL", "Agaricomycetes", "CLASS"},
+		{"BOTANICAL", "Magnoliopsida", "CLASS"},
+		{"BACTERIAL", "Cyanobacteriota", "PHYLUM"},
+		{"BACTERIAL", "Nostocaceae", "FAMILY"},
 
 		// Virology suffixes.
 		{"VIRUS", "Coronaviridae", "FAMILY"},

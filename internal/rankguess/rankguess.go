@@ -20,8 +20,9 @@ import (
 //
 //  1. Explicit rank marker from gnparser (e.g. "subsp.", "var.") →
 //     mapped to the corresponding sfga rank. Highest confidence.
-//  2. Family-group suffix rules, scoped by code (-idae, -inae, -oidea
-//     in zoology; -aceae, -oideae, -eae in botany; -viridae, -virinae
+//  2. Suffix rules, scoped by code (-idae, -inae, -oidea in zoology;
+//     -phyta, -phyceae, -ales, -aceae, -oideae, -eae and others in
+//     botany; -ota, -ales, -aceae in bacteriology; -viridae, -virinae
 //     in virology). High confidence when the code+suffix combo is a
 //     well-established convention.
 //  3. Cardinality fallback: 1 → GENUS, 2 → SPECIES, 3 → SUBSPECIES.
@@ -120,17 +121,31 @@ func rankFromSuffix(codeID, word string) string {
 			return "SUBTRIBE"
 		}
 	case "BOTANICAL", "PHYTOSOCIOLOGICAL":
+		// Terminations above the family follow the code's
+		// recommendations for algae (-phyta, -phytina, -phyceae,
+		// -phycidae), fungi (-mycota, -mycotina, -mycetes,
+		// -mycetidae) and plants (-opsida, -idae). Algal and fungal
+		// class names end in -eae, so they are matched before the
+		// tribe ending.
 		switch {
+		case strings.HasSuffix(w, "phytina"), strings.HasSuffix(w, "mycotina"):
+			return "SUBPHYLUM"
+		case strings.HasSuffix(w, "phyta"), strings.HasSuffix(w, "mycota"):
+			return "PHYLUM"
+		case strings.HasSuffix(w, "phyceae"), strings.HasSuffix(w, "mycetes"),
+			strings.HasSuffix(w, "opsida"):
+			return "CLASS"
+		case strings.HasSuffix(w, "phycidae"), strings.HasSuffix(w, "mycetidae"),
+			strings.HasSuffix(w, "idae"):
+			return "SUBCLASS"
+		case strings.HasSuffix(w, "ales"):
+			return "ORDER"
+		case strings.HasSuffix(w, "ineae"):
+			return "SUBORDER"
 		case strings.HasSuffix(w, "oideae"):
 			return "SUBFAMILY"
 		case strings.HasSuffix(w, "aceae"):
 			return "FAMILY"
-		case strings.HasSuffix(w, "phyta"):
-			return "PHYLUM"
-		case strings.HasSuffix(w, "opsida"):
-			return "CLASS"
-		case strings.HasSuffix(w, "ales"):
-			return "ORDER"
 		case strings.HasSuffix(w, "inae"):
 			return "SUBTRIBE"
 		case strings.HasSuffix(w, "eae"):
@@ -138,12 +153,16 @@ func rankFromSuffix(codeID, word string) string {
 		}
 	case "BACTERIAL":
 		switch {
-		case strings.HasSuffix(w, "aceae"):
-			return "FAMILY"
-		case strings.HasSuffix(w, "oideae"):
-			return "SUBFAMILY"
+		case strings.HasSuffix(w, "ota"):
+			return "PHYLUM"
 		case strings.HasSuffix(w, "ales"):
 			return "ORDER"
+		case strings.HasSuffix(w, "ineae"):
+			return "SUBORDER"
+		case strings.HasSuffix(w, "oideae"):
+			return "SUBFAMILY"
+		case strings.HasSuffix(w, "aceae"):
+			return "FAMILY"
 		case strings.HasSuffix(w, "eae"):
 			return "TRIBE"
 		}
