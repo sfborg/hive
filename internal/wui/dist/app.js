@@ -15995,7 +15995,9 @@ class SfgaReferences extends LitElement {
     // (off). Active steps combine with AND. Applies to both the
     // paginated list and search. Persisted in the user's settings.
     _stepFilters: { state: true },
-    _stepHelpOpen: { state: true },
+    // The help dialog open on the library screen: "steps", "filter"
+    // or null.
+    _help: { state: true },
     // Higher-taxon filter over the name-mention index: the taxon, the
     // source whose classification it uses ("ncbi" | "col"), and the
     // minimum mention count for a name to count toward it. Discovery
@@ -16340,23 +16342,36 @@ class SfgaReferences extends LitElement {
       height: 0.8rem;
       color: var(--accent);
     }
-    .step-help {
+    /* Help buttons: a small round "?" that opens a help dialog. */
+    .help-btn {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.25rem;
+      height: 1.25rem;
+      padding: 0;
       font: inherit;
       font-size: var(--fs-xs);
-      width: 1.8rem;
+      line-height: 1;
       border: 1px solid var(--border);
       border-radius: 50%;
       background: var(--bg);
       color: var(--dim);
       cursor: pointer;
     }
-    .step-help-backdrop {
+    .help-btn:hover,
+    .help-btn:focus-visible {
+      color: var(--fg);
+      border-color: var(--fg);
+    }
+    .help-backdrop {
       position: fixed;
       inset: 0;
       background: color-mix(in oklab, var(--fg) 25%, transparent);
       z-index: 20;
     }
-    .step-help-dialog {
+    .help-dialog {
       position: fixed;
       top: 15vh;
       left: 50%;
@@ -16369,25 +16384,25 @@ class SfgaReferences extends LitElement {
       z-index: 21;
       font-size: var(--fs-sm);
     }
-    .step-help-dialog h3 {
+    .help-dialog h3 {
       margin: 0 0 var(--sp-2);
     }
-    .step-help-dialog dl {
+    .help-dialog dl {
       display: grid;
       grid-template-columns: max-content 1fr;
       gap: var(--sp-1) var(--sp-3);
     }
-    .step-help-dialog dt {
+    .help-dialog dt {
       font-weight: 600;
     }
-    .step-help-dialog dd {
+    .help-dialog dd {
       margin: 0;
     }
-    .step-help-dialog .status-dot {
+    .help-dialog .status-dot {
       vertical-align: -0.2rem;
       color: var(--accent);
     }
-    .step-help-close {
+    .help-close {
       font: inherit;
       padding: var(--sp-1) var(--sp-3);
       border: 1px solid var(--border);
@@ -16409,33 +16424,6 @@ class SfgaReferences extends LitElement {
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: var(--sp-1);
-    }
-    .col-help {
-      position: relative;
-    }
-    .col-help summary {
-      list-style: none;
-      cursor: pointer;
-      color: var(--dim);
-      padding: 0 var(--sp-1);
-    }
-    .col-help summary::-webkit-details-marker {
-      display: none;
-    }
-    .col-help p {
-      position: absolute;
-      right: 0;
-      top: 1.5rem;
-      z-index: 5;
-      width: 22rem;
-      margin: 0;
-      padding: var(--sp-2) var(--sp-3);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      box-shadow: 0 2px 8px color-mix(in oklab, var(--fg) 15%, transparent);
-      font-size: var(--fs-xs);
-      color: var(--fg);
     }
     /* Catalogue of Life data is marked with a dashed outline and a
        "CoL" label so it reads as external classification, not as
@@ -18323,7 +18311,7 @@ class SfgaReferences extends LitElement {
     this._indexSource = "ncbi";
     this._minMentions = 1;
     this._stepFilters = {};
-    this._stepHelpOpen = false;
+    this._help = null;
     try {
       const saved = JSON.parse(getSetting("references.steps") || "{}");
       for (const st of STEP_FILTERS) {
@@ -19158,10 +19146,10 @@ class SfgaReferences extends LitElement {
         })}
         <button
           type="button"
-          class="step-help"
+          class="help-btn"
           aria-label="About the workflow steps"
           title="About the workflow steps"
-          @click=${() => (this._stepHelpOpen = true)}
+          @click=${() => this._openHelp("steps")}
         >
           ?
         </button>
@@ -19169,20 +19157,64 @@ class SfgaReferences extends LitElement {
     `;
   }
 
-  // _renderStepHelp explains the workflow steps and their buttons.
-  _renderStepHelp() {
-    if (!this._stepHelpOpen) return nothing;
-    const close = () => (this._stepHelpOpen = false);
+  // _openHelp opens a help dialog and moves focus into it, so Escape
+  // closes it; closing returns focus to the button that opened it.
+  _openHelp(which) {
+    this._helpOpener = this.renderRoot.activeElement;
+    this._help = which;
+    this.updateComplete.then(() => this.renderRoot.querySelector(".help-close")?.focus());
+  }
+
+  // _renderHelp renders the open help dialog, if any.
+  _renderHelp() {
+    if (!this._help) return nothing;
+    const close = () => {
+      this._help = null;
+      this._helpOpener?.focus?.();
+    };
+    const title = this._help === "filter" ? "Higher-taxon filter" : "Workflow steps";
     return html`
-      <div class="step-help-backdrop" @click=${close}></div>
+      <div class="help-backdrop" @click=${close}></div>
       <div
-        class="step-help-dialog"
+        class="help-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="step-help-title"
+        aria-labelledby="help-dialog-title"
         @keydown=${(e) => e.key === "Escape" && close()}
       >
-        <h3 id="step-help-title">Workflow steps</h3>
+        <h3 id="help-dialog-title">${title}</h3>
+        ${this._help === "filter" ? this._renderFilterHelp() : this._renderStepHelp()}
+        <button type="button" class="help-close" @click=${close}>Close</button>
+      </div>
+    `;
+  }
+
+  // _renderFilterHelp explains the higher-taxon filter.
+  _renderFilterHelp() {
+    return html`
+      <p>
+        Hive fills in the higher classification of the names each paper
+        mentions, using Global Names, so papers can be found by higher taxon
+        even when they name only species or genera. The filter finds papers
+        with names the chosen source places in this taxon.
+      </p>
+      <p>
+        The classification comes from the name source, not from the papers,
+        and is never added to your project; a name matched to the wrong
+        organism can place a paper under the wrong group.
+      </p>
+      <p>
+        Use the source's names: the field browses its classification, with
+        the number of papers in each taxon. Sources cover different groups,
+        and a group a source does not cover cannot be found through it, so
+        searching more than one can find more.
+      </p>
+    `;
+  }
+
+  // _renderStepHelp explains the workflow steps and their buttons.
+  _renderStepHelp() {
+    return html`
         <p>
           Each reference moves through four steps. A button's fill shows how
           many references in the archive have completed that step.
@@ -19208,8 +19240,6 @@ class SfgaReferences extends LitElement {
           (<span class="status-dot done" aria-hidden="true"></span>), then all
           references. Active buttons combine.
         </p>
-        <button type="button" class="step-help-close" @click=${close}>Close</button>
-      </div>
     `;
   }
 
@@ -21137,7 +21167,7 @@ class SfgaReferences extends LitElement {
         >
         ${this._renderStepButtons()}
       </div>
-      ${this._renderStepHelp()}
+      ${this._renderHelp()}
       <div class="library-toolbar">
         <div class="search-row">
           <input
@@ -21181,25 +21211,15 @@ class SfgaReferences extends LitElement {
               (n) => html`<option value=${n} ?selected=${n === this._minMentions}>${n}×</option>`,
             )}
           </select>
-          <details class="col-help">
-            <summary aria-label="About the higher-taxon filter">ⓘ</summary>
-            <p>
-              Hive fills in the higher classification of the names each
-              paper mentions, using Global Names, so papers can be found by
-              higher taxon even when they name only species or genera. This
-              finds papers with names the chosen source places in this
-              taxon. The classification comes from the name source, not from
-              the papers, and is never added to your project; a name matched
-              to the wrong organism can place a paper under the wrong group.
-            </p>
-            <p>
-              Use the source's names; the field browses its classification,
-              with the number of papers in each taxon. Sources cover
-              different groups, and a group a source does not cover cannot
-              be found through it, so searching more than one can find
-              more.
-            </p>
-          </details>
+          <button
+            type="button"
+            class="help-btn"
+            aria-label="About the higher-taxon filter"
+            title="About the higher-taxon filter"
+            @click=${() => this._openHelp("filter")}
+          >
+            ?
+          </button>
         </div>
       </div>
       ${this._loading && this._hits.length === 0
