@@ -8089,6 +8089,10 @@ class SfgaDetail extends LitElement {
             .value=${d.code || ""}
             @pick=${(e) => this._createFieldChange("code", e.detail.id)}
           ></sfga-combobox>
+          <span class="hint" style="grid-column: 1 / -1">
+            Required, except above kingdom and for unranked names such as
+            clades, which no code governs.
+          </span>
         </fieldset>
 
         ${this._editingTaxonID ? this._renderEditTaxonFieldset(d, set) : ""}

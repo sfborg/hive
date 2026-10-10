@@ -1672,6 +1672,25 @@
       "priority": 20
     },
     {
+      "rule_id": "hive_name_missing_code",
+      "table_name": "name",
+      "field_name": "col__code_id",
+      "rule_name": "Missing nomenclatural code",
+      "description": "Names at kingdom rank and below are governed by a nomenclatural code. Names above kingdom and unranked names are not, so they are exempt (see CodeOptional in pkg/rank_code.go). Names without a rank are reported by the rank rule instead.",
+      "validator_type": "presence",
+      "enforcement": "soft",
+      "severity": "warn",
+      "conditions": [
+        {"field": "col__rank_id", "operator": "not_equals", "value": ""},
+        {"field": "col__rank_id", "operator": "not_in", "value": ["SUPERDOMAIN", "DOMAIN", "REALM", "SUBREALM", "EMPIRE", "SUPERKINGDOM", "UNRANKED"]}
+      ],
+      "parameters": {},
+      "error_message": "",
+      "warning_message": "This name has no nomenclatural code. Names at kingdom rank and below are governed by one; set it (botanical, zoological, bacterial, …).",
+      "is_active": true,
+      "priority": 20
+    },
+    {
       "rule_id": "hive_species_interaction_needs_related",
       "table_name": "species_interaction",
       "field_name": "col__related_taxon_id",

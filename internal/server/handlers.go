@@ -3082,8 +3082,8 @@ func (s *server) handleAddBasionym(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "scientific_name is required")
 		return
 	}
-	if strings.TrimSpace(body.Code) == "" {
-		writeBadRequest(w, r, "code is required")
+	if strings.TrimSpace(body.Code) == "" && !hive.CodeOptional(body.Rank) {
+		writeBadRequest(w, r, "code is required (it is optional only above kingdom and for unranked names)")
 		return
 	}
 	// Fetch the current combination's taxon to grab the name id we're
@@ -3193,8 +3193,8 @@ func (s *server) handleAddSynonym(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "scientific_name is required")
 		return
 	}
-	if strings.TrimSpace(body.Code) == "" {
-		writeBadRequest(w, r, "code is required")
+	if strings.TrimSpace(body.Code) == "" && !hive.CodeOptional(body.Rank) {
+		writeBadRequest(w, r, "code is required (it is optional only above kingdom and for unranked names)")
 		return
 	}
 	if body.BasionymNameID != "" && body.Basionym != nil {
@@ -3439,8 +3439,8 @@ func (s *server) handleCreateTaxon(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, r, "scientific_name is required")
 		return
 	}
-	if strings.TrimSpace(body.Code) == "" {
-		writeBadRequest(w, r, "code is required")
+	if strings.TrimSpace(body.Code) == "" && !hive.CodeOptional(body.Rank) {
+		writeBadRequest(w, r, "code is required (it is optional only above kingdom and for unranked names)")
 		return
 	}
 	if body.BasionymNameID != "" && body.Basionym != nil {
