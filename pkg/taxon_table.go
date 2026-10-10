@@ -56,7 +56,7 @@ type TaxonTableRow struct {
 	// Related is the parent's name for accepted rows and the accepted
 	// name for synonym rows.
 	Related        string
-	Classification map[string]string // kingdom … genus of the accepted taxon
+	Classification map[string]string // kingdom … genus of the accepted taxon, itself included
 	Extinct        *bool
 	Modified       string
 
@@ -158,8 +158,46 @@ var TaxonTableSortColumns = map[string]string{
 
 func init() {
 	for _, r := range TaxonTableRanks {
-		TaxonTableSortColumns[r] = "LOWER(at.col__" + r + ")"
+		TaxonTableSortColumns[r] = "LOWER(" + lineageRank(r) + ")"
 	}
+}
+
+// lineageTable defines cls: for every taxon, the names at the table's
+// ranks in its classification (itself included), from one walk of the
+// parent chains.
+const lineageTable = `WITH RECURSIVE up(start, id, d) AS (
+		SELECT col__id, col__id, 0 FROM taxon
+		UNION ALL
+		SELECT up.start, p.col__parent_id, up.d + 1 FROM up JOIN taxon p ON p.col__id = up.id
+		WHERE COALESCE(p.col__parent_id, '') <> '' AND up.d < 60),
+	cls AS MATERIALIZED (SELECT up.start AS taxon_id,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'KINGDOM' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_kingdom,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'PHYLUM' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_phylum,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'CLASS' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_class,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'ORDER' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_order,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'FAMILY' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_family,
+		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'GENUS' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_genus
+		FROM up JOIN taxon x ON x.col__id = up.id JOIN name nn ON nn.col__id = x.col__name_id
+		WHERE UPPER(nn.col__rank_id) IN ('KINGDOM', 'PHYLUM', 'CLASS', 'ORDER', 'FAMILY', 'GENUS')
+		GROUP BY up.start)
+	`
+
+// lineageRank selects the name at rank in the classification of the
+// usage row's accepted taxon: the taxon itself or its nearest ancestor
+// of that rank, found by walking the parent chain. The stored
+// denormalized column (col__family, …), which importers may fill but
+// hive does not maintain, is the fallback when the chain has no taxon
+// of that rank.
+func lineageRank(rank string) string {
+	return `COALESCE((WITH RECURSIVE up(id, d) AS (
+			SELECT u.taxon_id, 0
+			UNION ALL
+			SELECT p.col__parent_id, up.d + 1 FROM up JOIN taxon p ON p.col__id = up.id
+			WHERE COALESCE(p.col__parent_id, '') <> '' AND up.d < 60)
+		SELECT COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name)
+		FROM up JOIN taxon x ON x.col__id = up.id JOIN name nn ON nn.col__id = x.col__name_id
+		WHERE UPPER(nn.col__rank_id) = '` + strings.ToUpper(rank) + `'
+		ORDER BY up.d LIMIT 1), NULLIF(at.col__` + rank + `, ''))`
 }
 
 // ParseTaxonTableSort parses "col:asc,col:desc" against the taxon
@@ -243,14 +281,26 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		return nil, 0, fmt.Errorf("core: count taxon table: %w", err)
 	}
 
-	order := make([]string, 0, 2*len(q.Sort)+2)
+	// Sorting by a classification rank needs every row's lineage: walk
+	// all taxa once into a materialized table rather than per row.
+	ranks := map[string]bool{}
+	for _, r := range TaxonTableRanks {
+		ranks[r] = true
+	}
+	prefix, join := "", ""
+	order := make([]string, 0, len(q.Sort)+2)
 	for _, k := range q.Sort {
 		expr := TaxonTableSortColumns[k.Column]
+		if ranks[k.Column] {
+			prefix, join = lineageTable, ` LEFT JOIN cls ON cls.taxon_id = u.taxon_id`
+			expr = "LOWER(COALESCE(cls.c_" + k.Column + ", NULLIF(at.col__" + k.Column + ", '')))"
+		}
 		dir := "ASC"
 		if k.Desc {
 			dir = "DESC"
 		}
-		order = append(order, "COALESCE("+expr+", '') = ''", expr+" "+dir)
+		// Empty values sort last in either direction.
+		order = append(order, "NULLIF("+expr+", '') "+dir+" NULLS LAST")
 	}
 	order = append(order, "LOWER(n.col__scientific_name)", "u.ord")
 	limit := q.Limit
@@ -269,9 +319,9 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		ELSE (SELECT an.col__scientific_name FROM name an WHERE an.col__id = at.col__name_id) END`,
 	}
 	for _, r := range TaxonTableRanks {
-		cols = append(cols, "COALESCE(at.col__"+r+", '')")
+		cols = append(cols, "COALESCE("+lineageRank(r)+", '')")
 	}
-	rows, err := a.db.QueryContext(ctx, `SELECT `+strings.Join(cols, ", ")+` `+from+
+	rows, err := a.db.QueryContext(ctx, prefix+`SELECT `+strings.Join(cols, ", ")+` `+from+join+
 		` WHERE `+where+` ORDER BY `+strings.Join(order, ", ")+` LIMIT ? OFFSET ?`,
 		append(args, limit, max(q.Offset, 0))...)
 	if err != nil {

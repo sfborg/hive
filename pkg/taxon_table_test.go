@@ -105,3 +105,47 @@ func TestTaxonTable(t *testing.T) {
 		t.Error("unknown sort column accepted")
 	}
 }
+
+func TestTaxonTableClassificationFromParents(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	rank := func(tx *Tx, name, r, parent string) string {
+		nm := insertTestName(t, tx, name)
+		tx.tx.ExecContext(tx.ctx, `UPDATE name SET col__rank_id = ? WHERE col__id = ?`, r, nm)
+		tt := taxonForTest(nm)
+		tt.ParentID = parent
+		id, err := tx.CreateTaxon(tt)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return id
+	}
+	if err := a.WithTx(ctx, func(tx *Tx) error {
+		ph := rank(tx, "Charophyta", "PHYLUM", "")
+		cl := rank(tx, "Zygnematophyceae", "CLASS", ph)
+		rank(tx, "Spirogyra", "GENUS", cl)
+		return nil
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	sort, _ := ParseTaxonTableSort("class:asc,name:asc")
+	rows, _, err := a.TaxonTable(ctx, TaxonTableQuery{Sort: sort})
+	if err != nil {
+		t.Fatalf("table: %v", err)
+	}
+	byName := map[string]map[string]string{}
+	for _, r := range rows {
+		byName[r.Name] = r.Classification
+	}
+	if c := byName["Charophyta"]; c["phylum"] != "Charophyta" || c["class"] != "" {
+		t.Errorf("Charophyta classification = %v, want itself as phylum", c)
+	}
+	if c := byName["Spirogyra"]; c["phylum"] != "Charophyta" || c["class"] != "Zygnematophyceae" || c["genus"] != "Spirogyra" {
+		t.Errorf("Spirogyra classification = %v", c)
+	}
+	// Sorted by class: the two in Zygnematophyceae first, the phylum
+	// without a class last.
+	if rows[len(rows)-1].Name != "Charophyta" {
+		t.Errorf("last row by class = %s, want Charophyta", rows[len(rows)-1].Name)
+	}
+}
