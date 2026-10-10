@@ -63,10 +63,15 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 		return sidecar.Read(a.Path(), sha, "jats.xml")
 	}
 	counts := make(map[string]map[string]int, len(refIDs))
+	// authored[id][name] is the name with the authorship the paper
+	// gives it, verified as well so its author score can pick among
+	// homonyms.
+	authored := make(map[string]map[string]string, len(refIDs))
 	unique := make(map[string]bool)
+	bare := make(map[string]bool)
 	skipped := 0
 	for _, id := range refIDs {
-		c, docs, err := a.NameMentionCounts(ctx, id, read)
+		scan, docs, err := a.NameMentionScan(ctx, id, read)
 		if err != nil {
 			return fmt.Errorf("%s: %w", id, err)
 		}
@@ -74,9 +79,15 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 			skipped++
 			continue
 		}
-		counts[id] = c
-		for name := range c {
+		counts[id] = scan.Names
+		authored[id] = map[string]string{}
+		for name := range scan.Names {
 			unique[name] = true
+			bare[name] = true
+			if auth := mentions.PickAuthorship(scan.Authors[name]); auth != "" {
+				authored[id][name] = auth
+				unique[name+" "+auth] = true
+			}
 		}
 	}
 	names := make([]string, 0, len(unique))
@@ -84,8 +95,13 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	withAuthors := 0
+	for _, byName := range authored {
+		withAuthors += len(byName)
+	}
 
-	fmt.Fprintf(out, "Indexing %d unique names from %d papers", len(names), len(counts))
+	fmt.Fprintf(out, "Indexing %d unique name strings from %d papers (%d names with an authorship)",
+		len(names), len(counts), withAuthors)
 	if skipped > 0 {
 		fmt.Fprintf(out, " (%d papers skipped: no augmented JATS)", skipped)
 	}
@@ -98,13 +114,36 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 		}
 		matches := mentions.Verify(ctx, v, names)
 		for id, c := range counts {
-			if err := a.ReplaceNameMentions(ctx, id, tag, c, matches); err != nil {
+			authors := map[string]hive.NameAuthorship{}
+			for name, auth := range authored[id] {
+				m, ok := matches[name]
+				if !ok {
+					continue
+				}
+				authors[name] = hive.NameAuthorship{Authorship: auth,
+					Scores: mentions.AuthorScores(m, matches[name+" "+auth])}
+			}
+			if err := a.ReplaceNameMentionsWithAuthors(ctx, id, tag, c, matches, authors); err != nil {
 				return fmt.Errorf("%s: %w", id, err)
 			}
 		}
 		byType := map[string]int{}
 		homonyms := 0
+		authorMatched := 0
+		for _, byName := range authored {
+			for name, auth := range byName {
+				for _, sc := range mentions.AuthorScores(matches[name], matches[name+" "+auth]) {
+					if sc > 0 {
+						authorMatched++
+						break
+					}
+				}
+			}
+		}
 		for _, n := range names {
+			if !bare[n] {
+				continue
+			}
 			if m, ok := matches[n]; ok {
 				byType[m.MatchType]++
 				if len(m.Homonyms) > 0 {
@@ -124,6 +163,7 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(out, "  %-14s %d\n", t, byType[t])
 		}
 		fmt.Fprintf(out, "  %d names match more than one lineage (homonyms)\n", homonyms)
+		fmt.Fprintf(out, "  %d of %d paper names with an authorship match a record's authors\n", authorMatched, withAuthors)
 	}
 	return nil
 }

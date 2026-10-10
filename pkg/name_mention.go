@@ -95,6 +95,12 @@ func ensureRawNameTables(ctx context.Context, db *sql.DB) error {
 			-- summaries read only chosen rows, the higher-taxon filter
 			-- reads every row.
 			chosen        INTEGER NOT NULL DEFAULT 1,
+			-- The authorship the paper gives the name, '' when none,
+			-- and the verifier's author-match score for this lineage
+			-- (0–1, -1 when the record has no authorship; NULL when
+			-- the paper gives none).
+			authorship    TEXT NOT NULL DEFAULT '',
+			author_score  REAL,
 			PRIMARY KEY (reference_id, mention, raw__source, candidate)
 		);
 		CREATE INDEX IF NOT EXISTS idx_hive__name_mention_taxon
@@ -110,8 +116,22 @@ func ensureRawNameTables(ctx context.Context, db *sql.DB) error {
 // chosen candidate.
 func migrateNameMentionCandidates(ctx context.Context, db *sql.DB) error {
 	cols, err := tableColumns(ctx, db, "hive__name_mention")
-	if err != nil || len(cols) == 0 || slices.Contains(cols, "candidate") {
+	if err != nil || len(cols) == 0 {
 		return err
+	}
+	if slices.Contains(cols, "candidate") {
+		for _, add := range []struct{ col, ddl string }{
+			{"authorship", `ALTER TABLE hive__name_mention ADD COLUMN authorship TEXT NOT NULL DEFAULT ''`},
+			{"author_score", `ALTER TABLE hive__name_mention ADD COLUMN author_score REAL`},
+		} {
+			if slices.Contains(cols, add.col) {
+				continue
+			}
+			if _, err := db.ExecContext(ctx, add.ddl); err != nil {
+				return fmt.Errorf("core: add hive__name_mention.%s: %w", add.col, err)
+			}
+		}
+		return nil
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -131,6 +151,8 @@ func migrateNameMentionCandidates(ctx context.Context, db *sql.DB) error {
 			verified_at   TEXT NOT NULL,
 			candidate     INTEGER NOT NULL DEFAULT 0,
 			chosen        INTEGER NOT NULL DEFAULT 1,
+			authorship    TEXT NOT NULL DEFAULT '',
+			author_score  REAL,
 			PRIMARY KEY (reference_id, mention, raw__source, candidate)
 		)`,
 		`INSERT INTO hive__name_mention
@@ -188,15 +210,32 @@ var rankColumns = map[string]string{
 
 
 // ReplaceNameMentions replaces a reference's mention rows for one
-// verifier source. counts holds the mention count per name; matches
-// holds the verification result for the names that matched. A name
-// with homonyms gets a row per lineage; the lineage that fits the
-// paper's other names is marked chosen when the summary is refreshed
-// (see chooseHomonyms). Records
-// are upserted into raw__name and raw__taxon, shared by every
-// reference that mentions them.
+// verifier source without authorships (see
+// ReplaceNameMentionsWithAuthors).
 func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source string,
 	counts map[string]int, matches map[string]mentions.Match) error {
+	return a.ReplaceNameMentionsWithAuthors(ctx, referenceID, source, counts, matches, nil)
+}
+
+// NameAuthorship is the authorship a paper gives a name and, per
+// candidate lineage of the name's match, the verifier's author-match
+// score (see mentions.AuthorScores).
+type NameAuthorship struct {
+	Authorship string
+	Scores     []float32
+}
+
+// ReplaceNameMentionsWithAuthors replaces a reference's mention rows
+// for one verifier source. counts holds the mention count per name;
+// matches holds the verification result for the names that matched;
+// authors holds the authorship the paper gives a name, if any. A name
+// with homonyms gets a row per lineage; the lineage that fits the
+// name's authorship, else the paper's other names, is marked chosen
+// when the summary is refreshed (see chooseHomonymRows). Records are
+// upserted into raw__name and raw__taxon, shared by every reference
+// that mentions them.
+func (a *Archive) ReplaceNameMentionsWithAuthors(ctx context.Context, referenceID, source string,
+	counts map[string]int, matches map[string]mentions.Match, authors map[string]NameAuthorship) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return a.WithTx(ctx, func(tx *Tx) error {
 		if _, err := tx.tx.ExecContext(tx.ctx,
@@ -205,13 +244,14 @@ func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source s
 		); err != nil {
 			return fmt.Errorf("core: clear mentions: %w", err)
 		}
-		insert := func(name string, n, candidate int, taxonID any, matchType string, isChosen bool) error {
+		insert := func(name string, n, candidate int, taxonID any, matchType string, score any) error {
 			if _, err := tx.tx.ExecContext(tx.ctx, `
 				INSERT INTO hive__name_mention
-					(reference_id, mention, mention_count, raw__source,
-					 raw_taxon_id, match_type, verified_at, candidate, chosen)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				referenceID, name, n, source, taxonID, matchType, now, candidate, isChosen,
+					(reference_id, mention, mention_count, raw__source, raw_taxon_id,
+					 match_type, verified_at, candidate, chosen, authorship, author_score)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				referenceID, name, n, source, taxonID, matchType, now, candidate,
+				candidate == 0, authors[name].Authorship, score,
 			); err != nil {
 				return fmt.Errorf("core: insert mention %q: %w", name, err)
 			}
@@ -220,16 +260,21 @@ func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source s
 		for name, n := range counts {
 			m, ok := matches[name]
 			if !ok {
-				if err := insert(name, n, 0, nil, "NoMatch", true); err != nil {
+				if err := insert(name, n, 0, nil, "NoMatch", nil); err != nil {
 					return err
 				}
 				continue
 			}
+			au := authors[name]
 			for i, c := range candidates(m) {
 				if err := upsertRawRecord(tx, source, c); err != nil {
 					return err
 				}
-				if err := insert(name, n, i, c.RecordID, m.MatchType, i == 0); err != nil {
+				var score any
+				if au.Authorship != "" && i < len(au.Scores) {
+					score = au.Scores[i]
+				}
+				if err := insert(name, n, i, c.RecordID, m.MatchType, score); err != nil {
 					return err
 				}
 			}
@@ -252,6 +297,52 @@ type homonymGroup struct {
 	// species is true for an exact match of a name below the genus,
 	// which is rarely shared by unrelated organisms.
 	species bool
+	// uninomial is true for a single-word name (a genus or higher).
+	uninomial bool
+	// authorship is what the paper gives the name; scores are the
+	// candidates' author-match scores (see NameAuthorship).
+	authorship string
+	scores     []float64
+}
+
+// Choices returned by chooseHomonyms besides a candidate index.
+const (
+	// noCandidate rejects every candidate: the paper's dated
+	// authorship matches none of them.
+	noCandidate = -1
+)
+
+// byAuthorship returns the candidate the name's authorship points to:
+// the one scoring highest above 0, or noCandidate when the name is a
+// single word, the authorship carries a year, and every candidate's
+// record has an authorship that does not match. Only single-word
+// names are rejected: names below the genus are rarely homonyms, and
+// a mismatch there usually means authors written differently. ok is
+// false when the authorship decides nothing.
+func (g *homonymGroup) byAuthorship() (choice int, ok bool) {
+	if g.authorship == "" || len(g.scores) != len(g.paths) {
+		return 0, false
+	}
+	best, bestScore, tied := 0, 0.0, false
+	allMismatch := true
+	for i, sc := range g.scores {
+		if sc != 0 {
+			allMismatch = false
+		}
+		switch {
+		case sc > bestScore:
+			best, bestScore, tied = i, sc, false
+		case sc == bestScore && sc > 0:
+			tied = true
+		}
+	}
+	if bestScore > 0 && !tied {
+		return best, true
+	}
+	if allMismatch && g.uninomial && mentions.HasYear(g.authorship) {
+		return noCandidate, true
+	}
+	return 0, false
 }
 
 // chooseHomonymRows marks, for each of the reference's names with
@@ -260,7 +351,8 @@ type homonymGroup struct {
 // the same name's homonyms in another.
 func chooseHomonymRows(tx *Tx, referenceID string) error {
 	rows, err := tx.tx.QueryContext(tx.ctx, `
-		SELECT m.raw__source, m.mention, m.candidate, m.mention_count, m.match_type, t.raw__path
+		SELECT m.raw__source, m.mention, m.candidate, m.mention_count, m.match_type,
+			t.raw__path, m.authorship, COALESCE(m.author_score, -1)
 		FROM hive__name_mention m
 		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
 		WHERE m.reference_id = ? AND `+discoveryMatch("m.")+`
@@ -270,24 +362,32 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 	}
 	groups := map[[2]string]*homonymGroup{}
 	for rows.Next() {
-		var source, mention, matchType, path string
+		var source, mention, matchType, path, authorship string
 		var candidate, n int
-		if err := rows.Scan(&source, &mention, &candidate, &n, &matchType, &path); err != nil {
+		var score float64
+		if err := rows.Scan(&source, &mention, &candidate, &n, &matchType, &path, &authorship, &score); err != nil {
 			rows.Close()
 			return err
 		}
 		key := [2]string{source, mention}
 		g := groups[key]
 		if g == nil {
-			g = &homonymGroup{count: n,
-				species: matchType == "Exact" && strings.Contains(mention, " ")}
+			g = &homonymGroup{count: n, authorship: authorship,
+				species:   matchType == "Exact" && strings.Contains(mention, " "),
+				uninomial: !strings.Contains(mention, " ")}
 			groups[key] = g
 		}
 		g.paths = append(g.paths, strings.Split(strings.Trim(path, "|"), "|"))
+		g.scores = append(g.scores, score)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if _, err := tx.tx.ExecContext(tx.ctx,
+		`UPDATE hive__name_mention SET chosen = (candidate = 0) WHERE reference_id = ?`,
+		referenceID); err != nil {
+		return fmt.Errorf("core: reset homonym choices: %w", err)
 	}
 	for key, best := range chooseHomonyms(groups) {
 		if _, err := tx.tx.ExecContext(tx.ctx, `
@@ -300,40 +400,68 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 	return nil
 }
 
-// chooseHomonyms picks, for each group with several candidates, the
-// lineage that shares the most with the paper's unambiguous names:
-// every taxon in an unambiguous name's classification (unranked
-// levels included) is weighted by the name's mention count, and a
-// candidate scores the weights of the taxa in its own classification.
-// Only exact species-level matches give context while the paper has
-// any: a genus or other single-word name can look unambiguous in a
-// source that lacks its homonym, and most words mistaken for names
-// are single words.
-// Taxa every unambiguous name shares (such as Eukaryota) score only
-// when no other taxon separates the candidates, since a candidate
-// with a shorter classification would otherwise lose on them alone.
-// Ties keep the verifier's order. It returns the chosen candidate
-// index per group with homonyms.
+// chooseHomonyms picks a candidate lineage per group. A name whose
+// authorship in the paper matches one lineage takes it, and one whose
+// dated authorship matches none is rejected (noCandidate) unless the
+// paper's other names support one of its lineages. Other
+// names with several candidates take the lineage that shares the most
+// with the paper's settled names: every taxon in a settled name's
+// classification (unranked levels included) is weighted by the name's
+// mention count, and a candidate scores the weights of the taxa in
+// its own classification. A name is settled when it has one
+// candidate or its authorship chose one. Only exact species-level
+// matches and authorship-settled names give context while the paper
+// has any: a genus or other single-word name can look unambiguous in
+// a source that lacks its homonym, and most words mistaken for names
+// are single words. Taxa every context name shares (such as
+// Eukaryota) score only when no other taxon separates the candidates,
+// since a candidate with a shorter classification would otherwise
+// lose on them alone. Ties keep the verifier's order. It returns the
+// choice for every group with several candidates or an authorship.
 func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
-	speciesOnly := false
-	for _, g := range groups {
-		if len(g.paths) == 1 && g.species {
-			speciesOnly = true
+	chosen := map[K]int{}
+	// A context is a settled name's path; strong marks species-level
+	// or authorship evidence.
+	type context struct {
+		path   []string
+		count  int
+		strong bool
+	}
+	var contexts []context
+	var disputed []K
+	for key, g := range groups {
+		if choice, ok := g.byAuthorship(); ok {
+			if choice == noCandidate {
+				disputed = append(disputed, key)
+				continue
+			}
+			chosen[key] = choice
+			contexts = append(contexts, context{g.paths[choice], g.count, true})
+			continue
+		}
+		if len(g.paths) == 1 {
+			contexts = append(contexts, context{g.paths[0], g.count, g.species})
+		}
+	}
+	strongOnly := false
+	for _, c := range contexts {
+		if c.strong {
+			strongOnly = true
 			break
 		}
 	}
 	weight := map[string]int{}
 	total := 0
-	for _, g := range groups {
-		if len(g.paths) != 1 || (speciesOnly && !g.species) {
+	for _, c := range contexts {
+		if strongOnly && !c.strong {
 			continue
 		}
-		total += g.count
+		total += c.count
 		seen := map[string]bool{}
-		for _, name := range g.paths[0] {
+		for _, name := range c.path {
 			if name != "" && !seen[name] {
 				seen[name] = true
-				weight[name] += g.count
+				weight[name] += c.count
 			}
 		}
 	}
@@ -343,9 +471,26 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
 			informative[name] = w
 		}
 	}
-	chosen := map[K]int{}
+	// A name whose authorship matches no lineage is rejected only when
+	// the paper's other names give its lineages no support below the
+	// top two levels (domain, kingdom) either; a higher taxon's
+	// authority is often written differently.
+	for _, key := range disputed {
+		paths := make([][]string, len(groups[key].paths))
+		for i, p := range groups[key].paths {
+			if len(p) > 3 {
+				p = p[2:]
+			}
+			paths[i] = p
+		}
+		if best, ok := bestCandidate(paths, weight); ok {
+			chosen[key] = best
+		} else {
+			chosen[key] = noCandidate
+		}
+	}
 	for key, g := range groups {
-		if len(g.paths) < 2 {
+		if _, done := chosen[key]; done || len(g.paths) < 2 {
 			continue
 		}
 		best, ok := bestCandidate(g.paths, informative)
@@ -422,32 +567,32 @@ func upsertRawRecord(tx *Tx, source string, m mentions.Match) error {
 	return nil
 }
 
-// NameMentionCounts reads a reference's attached documents and returns
-// the merged mention counts across them, with the number of documents
-// that had augmented JATS. read returns a document's augmented JATS,
-// or nil when it has none.
-func (a *Archive) NameMentionCounts(ctx context.Context, referenceID string,
-	read func(sha string) ([]byte, error)) (map[string]int, int, error) {
+// NameMentionScan reads a reference's attached documents and returns
+// their tagged names and authorships merged (see mentions.MergeScans),
+// with the number of documents that had augmented JATS. read returns a
+// document's augmented JATS, or nil when it has none.
+func (a *Archive) NameMentionScan(ctx context.Context, referenceID string,
+	read func(sha string) ([]byte, error)) (mentions.Scan, int, error) {
 	shas, err := a.ReferencePDFs(ctx, referenceID)
 	if err != nil {
-		return nil, 0, err
+		return mentions.Scan{}, 0, err
 	}
-	var sets []map[string]int
+	var scans []mentions.Scan
 	for _, sha := range shas {
 		jats, err := read(sha)
 		if err != nil {
-			return nil, 0, err
+			return mentions.Scan{}, 0, err
 		}
 		if jats == nil {
 			continue
 		}
-		c, err := mentions.Count(jats)
+		s, err := mentions.ScanJATS(jats)
 		if err != nil {
-			return nil, 0, fmt.Errorf("core: count mentions in %s: %w", sha, err)
+			return mentions.Scan{}, 0, fmt.Errorf("core: count mentions in %s: %w", sha, err)
 		}
-		sets = append(sets, c)
+		scans = append(scans, s)
 	}
-	return mentions.Merge(sets...), len(sets), nil
+	return mentions.MergeScans(scans...), len(scans), nil
 }
 
 // ColTaxon is a higher taxon from the name-mention index's verifier

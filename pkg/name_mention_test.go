@@ -359,3 +359,48 @@ func TestHomonymSharedAncestorsDoNotScore(t *testing.T) {
 		t.Errorf("chosen = %d, want 1 (the alga, despite its short classification)", got)
 	}
 }
+
+func TestHomonymChosenByAuthorship(t *testing.T) {
+	animal := []string{"Metazoa", "Cnidaria", "Coccomyxa"}
+	alga := []string{"Viridiplantae", "Trebouxiophyceae", "Coccomyxa"}
+	groups := map[string]*homonymGroup{
+		// Paper context favours the animal, the authorship the alga.
+		"Coccomyxa": {count: 3, paths: [][]string{animal, alga},
+			authorship: "Schmidle, 1901", scores: []float64{0, 1}},
+		"Myxobolus cerebralis": {count: 9, species: true, paths: [][]string{{"Metazoa", "Cnidaria", "Myxobolus"}}},
+		// A dated authorship that matches no lineage's authors rejects
+		// the name.
+		"Luticola": {count: 4, uninomial: true, paths: [][]string{{"Eukaryota", "Metazoa", "Platyhelminthes", "Typhloplanidae", "Luticola"}},
+			authorship: "D.G.Mann in Round, Crawford & Mann 1990", scores: []float64{0}},
+		// An undated one decides nothing.
+		"Ulva": {count: 2, paths: [][]string{{"Viridiplantae", "Ulva"}, {"Metazoa", "Ulva"}},
+			authorship: "Bay", scores: []float64{-1, 0}},
+	}
+	got := chooseHomonyms(groups)
+	if got["Coccomyxa"] != 1 {
+		t.Errorf("Coccomyxa = %d, want 1 (authorship)", got["Coccomyxa"])
+	}
+	if got["Luticola"] != noCandidate {
+		t.Errorf("Luticola = %d, want noCandidate", got["Luticola"])
+	}
+	if _, ok := got["Ulva"]; !ok {
+		t.Errorf("Ulva has no choice")
+	}
+	// A higher taxon whose authority is written differently keeps the
+	// lineage the paper supports.
+	order := map[string]*homonymGroup{
+		"Spirogyrales": {count: 2, uninomial: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyrales"}},
+			authorship: "Clements 1909", scores: []float64{0}},
+		"Spirogyra varians": {count: 5, species: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyra"}}},
+	}
+	if got := chooseHomonyms(order)["Spirogyrales"]; got != 0 {
+		t.Errorf("Spirogyrales = %d, want 0", got)
+	}
+	// A species whose dated authorship matches no record keeps its
+	// match: the authors are usually written differently.
+	species := map[string]*homonymGroup{"Gymnodinium fulgens": {count: 2, species: true,
+		paths: [][]string{{"Dinophyceae", "Gymnodinium"}}, authorship: "Kof. & Swezy 1921", scores: []float64{0}}}
+	if got := chooseHomonyms(species)["Gymnodinium fulgens"]; got != 0 {
+		t.Errorf("Gymnodinium fulgens = %d, want 0", got)
+	}
+}

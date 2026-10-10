@@ -23176,8 +23176,9 @@ class SfgaHelpModal extends LitElement {
               Only exact matches count; a near spelling often belongs to an
               unrelated organism. When a name is used for unrelated
               organisms (a homonym), the filter finds the paper under each,
-              and the columns use the one that fits the paper's other
-              names. Each column lists the taxa at that rank with how many
+              and the columns use the one whose authors match the
+              authorship the paper gives the name, or else the one that
+              fits the paper's other names. Each column lists the taxa at that rank with how many
               mentions fall under each, most first. A tag shows the source:
               the one matching most of the paper's names, or another where
               that one leaves the rank mostly unassigned. Sources cover

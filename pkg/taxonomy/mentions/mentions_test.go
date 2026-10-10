@@ -140,3 +140,89 @@ func TestToMatchKeepsHomonymLineages(t *testing.T) {
 		t.Errorf("homonyms = %+v, want the alga genus g1 only", m.Homonyms)
 	}
 }
+
+func TestScanJATSReadsAuthorships(t *testing.T) {
+	jats := `<article xmlns:tp="http://www.plazi.org/taxpub" xmlns:hive="https://sfborg.org/hive">
+<body>
+<p><tp:taxon-name full-name="Navicula gottlandica"><italic>Navicula gottlandica</italic></tp:taxon-name> <tp:taxon-name full-name="Grunow">Grunow</tp:taxon-name> in Van Heurck 1880. The species is common.</p>
+<p><tp:taxon-name full-name="Coccomyxa">Coccomyxa</tp:taxon-name> Schmidle, 1901 (Trebouxiophyceae) is a genus of algae.</p>
+<p><tp:taxon-name full-name="Coccomyxa">Coccomyxa</tp:taxon-name> cells were counted.</p>
+<p><tp:taxon-name full-name="Ulva rigida">Ulva rigida</tp:taxon-name> C.<hive:noise correction-id="c1"><!-- Running head --></hive:noise>Agardh 1823 and <tp:taxon-name full-name="Ulva lacinulata">U. lacinulata</tp:taxon-name> were found.</p>
+<p><tp:taxon-name full-name="Amphidoma languida">Amphidoma languida</tp:taxon-name></p><p>Tillmann, Salas &amp; Elbrächter, 2012 is a citation in another paragraph.</p>
+</body></article>`
+	s, err := ScanJATS([]byte(jats))
+	if err != nil {
+		t.Fatalf("ScanJATS: %v", err)
+	}
+	wantNames := map[string]int{"Navicula gottlandica": 1, "Coccomyxa": 2, "Ulva rigida": 1, "Ulva lacinulata": 1, "Amphidoma languida": 1}
+	if len(s.Names) != len(wantNames) {
+		t.Errorf("Names = %v, want %v", s.Names, wantNames)
+	}
+	for k, v := range wantNames {
+		if s.Names[k] != v {
+			t.Errorf("Names[%q] = %d, want %d", k, s.Names[k], v)
+		}
+	}
+	wantAuthors := map[string]string{
+		"Navicula gottlandica": "Grunow in Van Heurck 1880.",
+		"Coccomyxa":            "Schmidle, 1901",
+		"Ulva rigida":          "C.Agardh 1823",
+	}
+	if len(s.Authors) != len(wantAuthors) {
+		t.Errorf("Authors = %v, want %v", s.Authors, wantAuthors)
+	}
+	for name, auth := range wantAuthors {
+		if s.Authors[name][auth] != 1 {
+			t.Errorf("Authors[%q] = %v, want %q", name, s.Authors[name], auth)
+		}
+	}
+}
+
+func TestScanJATSUnparseableName(t *testing.T) {
+	jats := `<p xmlns:tp="http://www.plazi.org/taxpub"><tp:taxon-name full-name="1234 ???">x</tp:taxon-name> Smith, 1900</p>`
+	if _, err := ScanJATS([]byte(jats)); err != nil {
+		t.Fatalf("ScanJATS: %v", err)
+	}
+}
+
+func TestScanJATSNameListsAndBasionymAuthors(t *testing.T) {
+	jats := `<article xmlns:tp="http://www.plazi.org/taxpub"><body>
+<p><tp:taxon-name full-name="Grateloupia">Grateloupia</tp:taxon-name> C.Agardh, <tp:taxon-name full-name="Yonagunia">Yonagunia</tp:taxon-name> Kawag. &amp; Masuda, <tp:taxon-name full-name="Prionitis">Prionitis</tp:taxon-name> J.Agardh</p>
+<p><tp:taxon-name full-name="Hantzschia amphioxys">Hantzschia amphioxys</tp:taxon-name> (Kützing) <tp:taxon-name full-name="Grunow">Grunow</tp:taxon-name> 1880 was found.</p>
+</body></article>`
+	s, err := ScanJATS([]byte(jats))
+	if err != nil {
+		t.Fatalf("ScanJATS: %v", err)
+	}
+	want := map[string]string{
+		"Grateloupia":          "C.Agardh",
+		"Yonagunia":            "Kawag. & Masuda",
+		"Prionitis":            "J.Agardh",
+		"Hantzschia amphioxys": "(Kützing) Grunow 1880",
+	}
+	for name, auth := range want {
+		if s.Authors[name][auth] != 1 {
+			t.Errorf("Authors[%q] = %v, want %q", name, s.Authors[name], auth)
+		}
+	}
+	if _, ok := s.Names["Grunow"]; ok || len(s.Names) != 4 {
+		t.Errorf("Names = %v, want the four names without Grunow", s.Names)
+	}
+}
+
+func TestScanJATSAuthorWordInParentheses(t *testing.T) {
+	jats := `<article xmlns:tp="http://www.plazi.org/taxpub"><body>
+<p><tp:taxon-name full-name="Sellaphora seminulum">Sellaphora seminulum</tp:taxon-name> (<tp:taxon-name full-name="Grunow">Grunow</tp:taxon-name>) D.G. Mann 1989 (Figures 4).</p>
+<p><tp:taxon-name full-name="E. frauenfeldii">E. frauenfeldii</tp:taxon-name> <tp:taxon-name full-name="Grunow">Grunow</tp:taxon-name>, and others.</p>
+</body></article>`
+	s, err := ScanJATS([]byte(jats))
+	if err != nil {
+		t.Fatalf("ScanJATS: %v", err)
+	}
+	if s.Authors["Sellaphora seminulum"]["(Grunow) D.G. Mann 1989"] != 1 {
+		t.Errorf("Authors = %v", s.Authors)
+	}
+	if len(s.Names) != 1 || s.Names["Sellaphora seminulum"] != 1 {
+		t.Errorf("Names = %v, want Sellaphora seminulum only", s.Names)
+	}
+}

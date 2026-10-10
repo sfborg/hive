@@ -8,12 +8,8 @@
 package mentions
 
 import (
-	"bytes"
 	"context"
-	"encoding/xml"
-	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -85,64 +81,11 @@ var abbreviated = regexp.MustCompile(`^[A-Z][a-z]?\.\s`)
 // A tag's name is its full-name attribute; publisher TaxPub tags,
 // which carry no full-name, use their text (the joined
 // taxon-name-part pieces). Names that are still unresolved
-// abbreviations are skipped.
+// abbreviations are skipped, and so are words tagged as names that
+// belong to the preceding name's authorship (see ScanJATS).
 func Count(jats []byte) (map[string]int, error) {
-	counts := make(map[string]int)
-	add := func(name string) {
-		name = strings.Join(strings.Fields(name), " ")
-		if name != "" && !abbreviated.MatchString(name) {
-			counts[name]++
-		}
-	}
-	dec := xml.NewDecoder(bytes.NewReader(jats))
-	dec.Strict = false
-	dec.Entity = xml.HTMLEntity
-	// collecting > 0 while inside a tag without full-name; text goes
-	// to buf until that tag closes.
-	var collecting int
-	var buf strings.Builder
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			return counts, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("mentions: parse JATS: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			if t.Name.Local != "taxon-name" {
-				continue
-			}
-			if collecting > 0 {
-				collecting++
-				continue
-			}
-			full := ""
-			for _, attr := range t.Attr {
-				if attr.Name.Local == "full-name" {
-					full = attr.Value
-				}
-			}
-			if full != "" {
-				add(full)
-				continue
-			}
-			collecting = 1
-			buf.Reset()
-		case xml.CharData:
-			if collecting > 0 {
-				buf.Write(t)
-			}
-		case xml.EndElement:
-			if t.Name.Local == "taxon-name" && collecting > 0 {
-				collecting--
-				if collecting == 0 {
-					add(buf.String())
-				}
-			}
-		}
-	}
+	s, err := ScanJATS(jats)
+	return s.Names, err
 }
 
 // Merge combines counts from several files of the same paper (for
@@ -183,6 +126,11 @@ type Match struct {
 	// Path is the classification from the top down, ending at the
 	// matched taxon.
 	Path []Rank
+	// AuthorScore is GNverifier's author-match score (0–1) when the
+	// verified string carried an authorship, the best among the
+	// lineage's records; -1 when the records have no authorship to
+	// compare.
+	AuthorScore float32
 	// Homonyms are the other lineages the name matches with the same
 	// match type, in GNverifier's score order: the same name-string
 	// used for unrelated organisms. Their own Homonyms are empty.
@@ -289,9 +237,11 @@ func toMatch(r vlib.Name) (Match, bool) {
 		m.MatchType = r.MatchType.String()
 		key := lineageKey(m.Path)
 		if i, seen := byLineage[key]; seen {
+			score := max(out[i].AuthorScore, m.AuthorScore)
 			if len(m.Path) < len(out[i].Path) {
 				out[i] = m
 			}
+			out[i].AuthorScore = score
 			continue
 		}
 		if len(out) > maxHomonyms {
@@ -350,10 +300,36 @@ func resultToMatch(b *vlib.ResultData) (Match, bool) {
 	if leaf.ID == "" {
 		return Match{}, false
 	}
+	score := b.ScoreDetails.AuthorMatchScore
+	if strings.TrimSpace(b.MatchedName) == b.MatchedCanonicalFull {
+		score = -1
+	}
 	return Match{
 		RecordID:    leaf.ID,
 		MatchedName: b.MatchedCanonicalSimple,
 		CurrentName: b.CurrentCanonicalSimple,
 		Path:        path,
+		AuthorScore: score,
 	}, true
+}
+
+// AuthorScores aligns an authored verification with a name's
+// candidates (see candidates): each candidate gets the author score
+// of the authored result in the same lineage, or -1 when there is
+// none.
+func AuthorScores(m, authored Match) []float32 {
+	byLineage := map[string]float32{}
+	for _, c := range append([]Match{authored}, authored.Homonyms...) {
+		byLineage[lineageKey(c.Path)] = c.AuthorScore
+	}
+	cands := append([]Match{m}, m.Homonyms...)
+	out := make([]float32, len(cands))
+	for i, c := range cands {
+		score, ok := byLineage[lineageKey(c.Path)]
+		if !ok {
+			score = -1
+		}
+		out[i] = score
+	}
+	return out
 }
