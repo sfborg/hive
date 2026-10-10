@@ -920,6 +920,20 @@ CREATE TABLE IF NOT EXISTS hive__reference_taxon_summary (
     PRIMARY KEY (reference_id, rank)
 );
 
+-- hive__focal_taxonomic_group lists the taxa of the archive that the
+-- dataset is about (its focal taxonomic groups), in order. It belongs
+-- to the metadata row (col__metadata_id, like the ColDP agent tables)
+-- and points at the archive's own taxa, so names and vernacular names
+-- are read through the taxon. Exportable as EML taxonomicCoverage with
+-- this archive as the taxonId provider. Name matching for references
+-- prefers lineages inside these groups.
+CREATE TABLE IF NOT EXISTS hive__focal_taxonomic_group (
+    col__metadata_id INTEGER NOT NULL,
+    taxon_id         TEXT NOT NULL,
+    ordinal          INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (col__metadata_id, taxon_id)
+);
+
 -- hive__jats_stats records the size of each attached file's JATS
 -- sidecar, the text sent to extraction models: words in its text,
 -- characters in the file (markup included), and the source PDF's page

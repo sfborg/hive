@@ -292,7 +292,10 @@ func candidates(m mentions.Match) []mentions.Match {
 // homonymGroup is one name's candidate lineages in one source, as
 // raw__path taxon names.
 type homonymGroup struct {
-	count int
+	// mention is the name as tagged; the same mention in another
+	// source is another group.
+	mention string
+	count   int
 	paths [][]string
 	// species is true for an exact match of a name below the genus,
 	// which is rarely shared by unrelated organisms.
@@ -372,7 +375,7 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 		key := [2]string{source, mention}
 		g := groups[key]
 		if g == nil {
-			g = &homonymGroup{count: n, authorship: authorship,
+			g = &homonymGroup{mention: mention, count: n, authorship: authorship,
 				species:   matchType == "Exact" && strings.Contains(mention, " "),
 				uninomial: !strings.Contains(mention, " ")}
 			groups[key] = g
@@ -389,7 +392,11 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 		referenceID); err != nil {
 		return fmt.Errorf("core: reset homonym choices: %w", err)
 	}
-	for key, best := range chooseHomonyms(groups) {
+	focal, err := focalNames(tx)
+	if err != nil {
+		return err
+	}
+	for key, best := range chooseHomonyms(groups, focal) {
 		if _, err := tx.tx.ExecContext(tx.ctx, `
 			UPDATE hive__name_mention SET chosen = (candidate = ?)
 			WHERE reference_id = ? AND raw__source = ? AND mention = ?`,
@@ -402,8 +409,12 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 
 // chooseHomonyms picks a candidate lineage per group. A name whose
 // authorship in the paper matches one lineage takes it, and one whose
-// dated authorship matches none is rejected (noCandidate) unless the
-// paper's other names support one of its lineages. Other
+// dated authorship matches none is rejected (noCandidate) unless one
+// of its lineages lies in a focal group (focal holds the groups'
+// names) or the paper's other names support one. A name that one
+// source places inside a focal group is rejected in a source that can
+// only place it outside one. Next, a name with exactly one lineage
+// inside the focal groups takes it. Other
 // names with several candidates take the lineage that shares the most
 // with the paper's settled names: every taxon in a settled name's
 // classification (unranked levels included) is weighted by the name's
@@ -418,8 +429,30 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 // since a candidate with a shorter classification would otherwise
 // lose on them alone. Ties keep the verifier's order. It returns the
 // choice for every group with several candidates or an authorship.
-func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
+func chooseHomonyms[K comparable](groups map[K]*homonymGroup, focal map[string]bool) map[K]int {
 	chosen := map[K]int{}
+	// inFocal lists the candidates whose lineage passes through a focal
+	// group.
+	inFocal := func(g *homonymGroup) []int {
+		var in []int
+		for i, path := range g.paths {
+			for _, name := range path {
+				if focal[name] {
+					in = append(in, i)
+					break
+				}
+			}
+		}
+		return in
+	}
+	// separating is inFocal when it tells the candidates apart: some,
+	// not all, lie in focal groups.
+	separating := func(g *homonymGroup) []int {
+		if in := inFocal(g); len(in) < len(g.paths) {
+			return in
+		}
+		return nil
+	}
 	// A context is a settled name's path; strong marks species-level
 	// or authorship evidence.
 	type context struct {
@@ -429,7 +462,22 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
 	}
 	var contexts []context
 	var disputed []K
+	// A mention that one source places inside a focal group, and that
+	// another source places only in lineages sharing nothing with that
+	// one, is a homonym the other source lacks; that source's match is
+	// rejected. Sources may name the focal group differently, so
+	// lineages are compared, not focal names.
+	focalPaths := map[string][][]string{}
+	for _, g := range groups {
+		for _, i := range inFocal(g) {
+			focalPaths[g.mention] = append(focalPaths[g.mention], g.paths[i])
+		}
+	}
 	for key, g := range groups {
+		if fp := focalPaths[g.mention]; len(fp) > 0 && len(inFocal(g)) == 0 && !sharesLineage(g, fp) {
+			chosen[key] = noCandidate
+			continue
+		}
 		if choice, ok := g.byAuthorship(); ok {
 			if choice == noCandidate {
 				disputed = append(disputed, key)
@@ -441,6 +489,11 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
 		}
 		if len(g.paths) == 1 {
 			contexts = append(contexts, context{g.paths[0], g.count, g.species})
+			continue
+		}
+		if in := separating(g); len(in) == 1 {
+			chosen[key] = in[0]
+			contexts = append(contexts, context{g.paths[in[0]], g.count, true})
 		}
 	}
 	strongOnly := false
@@ -476,6 +529,10 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
 	// top two levels (domain, kingdom) either; a higher taxon's
 	// authority is often written differently.
 	for _, key := range disputed {
+		if in := inFocal(groups[key]); len(in) > 0 {
+			chosen[key] = in[0]
+			continue
+		}
 		paths := make([][]string, len(groups[key].paths))
 		for i, p := range groups[key].paths {
 			if len(p) > 3 {
@@ -493,13 +550,59 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
 		if _, done := chosen[key]; done || len(g.paths) < 2 {
 			continue
 		}
-		best, ok := bestCandidate(g.paths, informative)
+		// Several candidates inside focal groups: choose among those.
+		idx := separating(g)
+		paths := g.paths
+		if len(idx) > 1 {
+			paths = make([][]string, len(idx))
+			for i, j := range idx {
+				paths[i] = g.paths[j]
+			}
+		}
+		best, ok := bestCandidate(paths, informative)
 		if !ok {
-			best, _ = bestCandidate(g.paths, weight)
+			best, _ = bestCandidate(paths, weight)
+		}
+		if len(idx) > 1 {
+			best = idx[best]
 		}
 		chosen[key] = best
 	}
 	return chosen
+}
+
+// sharesLineage reports whether any of g's candidates shares a taxon
+// with any of paths below their top two levels (domain, kingdom),
+// leaving out the words of the mention itself, which homonyms share by
+// definition.
+func sharesLineage(g *homonymGroup, paths [][]string) bool {
+	skip := map[string]bool{}
+	for _, w := range strings.Fields(g.mention) {
+		skip[w] = true
+	}
+	skip[g.mention] = true
+	below := func(p []string) []string {
+		if len(p) > 3 {
+			return p[2:]
+		}
+		return p
+	}
+	other := map[string]bool{}
+	for _, p := range paths {
+		for _, name := range below(p) {
+			if !skip[name] {
+				other[name] = true
+			}
+		}
+	}
+	for _, p := range g.paths {
+		for _, name := range below(p) {
+			if other[name] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bestCandidate returns the index of the highest-scoring path under

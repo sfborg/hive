@@ -56,9 +56,39 @@ type apiMetadata struct {
 	Citation        string `json:"citation,omitempty"`
 	Private         *bool  `json:"private,omitempty"`
 
+	// FocalGroups are the taxa of the archive the dataset is about, in
+	// order (hive__focal_taxonomic_group).
+	FocalGroups []apiFocalGroup `json:"focal_groups"`
+
 	// Warnings surfaces stored issues that apply to the metadata row
 	// (e.g. hive_stale_metadata). Same shape as apiTaxon.Warnings.
 	Warnings []apiValidationWarning `json:"warnings,omitempty"`
+}
+
+// apiFocalGroup is a focal taxonomic group with its names read through
+// the taxon.
+type apiFocalGroup struct {
+	TaxonID     string             `json:"taxon_id"`
+	Name        string             `json:"name"`
+	Authorship  string             `json:"authorship,omitempty"`
+	Rank        string             `json:"rank,omitempty"`
+	Vernaculars []apiFocalVernacular `json:"vernaculars,omitempty"`
+}
+
+type apiFocalVernacular struct {
+	Name     string `json:"name"`
+	Language string `json:"language,omitempty"`
+}
+
+func focalGroupsToAPI(groups []hive.FocalGroup) []apiFocalGroup {
+	out := make([]apiFocalGroup, len(groups))
+	for i, g := range groups {
+		out[i] = apiFocalGroup{TaxonID: g.TaxonID, Name: g.Name, Authorship: g.Authorship, Rank: g.Rank}
+		for _, v := range g.Vernaculars {
+			out[i].Vernaculars = append(out[i].Vernaculars, apiFocalVernacular{v.Name, v.Language})
+		}
+	}
+	return out
 }
 
 // apiMetadataPatch is the PATCH body. Pointer-optional throughout so
@@ -83,6 +113,8 @@ type apiMetadataPatch struct {
 	Label           *string `json:"label,omitempty"`
 	Citation        *string `json:"citation,omitempty"`
 	Private         *bool   `json:"private,omitempty"`
+	// FocalGroupIDs replaces the focal taxonomic groups, in order.
+	FocalGroupIDs *[]string `json:"focal_group_ids,omitempty"`
 }
 
 func metadataToAPI(m *hive.Metadata) apiMetadata {

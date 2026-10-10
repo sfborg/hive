@@ -14711,6 +14711,43 @@ class SfgaMetadata extends LitElement {
       form label.agent-label {
         align-self: start;
       }
+      form label.focal-label {
+        align-self: start;
+      }
+      .focal-list {
+        list-style: none;
+        white-space: normal;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: var(--sp-1);
+      }
+      .focal-list li {
+        display: flex;
+        align-items: baseline;
+        gap: var(--sp-2);
+      }
+      .focal-name {
+        font-weight: 600;
+      }
+      .focal-vern,
+      .dim,
+      .hint {
+        color: var(--dim);
+      }
+      .hint {
+        margin: 0 0 var(--sp-1);
+        font-size: var(--fs-sm);
+      }
+      .focal-actions {
+        margin-left: auto;
+        display: inline-flex;
+        gap: var(--sp-1);
+      }
+      .focal-editor {
+        display: grid;
+        gap: var(--sp-2);
+      }
       .toolbar {
         grid-column: 1 / -1;
         display: flex;
@@ -14855,6 +14892,10 @@ class SfgaMetadata extends LitElement {
         }
       }
     }
+    if (Object.hasOwn(patch, "focal_groups")) {
+      patch.focal_group_ids = patch.focal_groups.map((g) => g.taxon_id);
+      delete patch.focal_groups;
+    }
     if (Object.hasOwn(patch, "private")) {
       const v = patch.private;
       if (v === "" || v === null) patch.private = null;
@@ -14883,6 +14924,100 @@ class SfgaMetadata extends LitElement {
     } finally {
       this._saving = false;
     }
+  }
+
+  // _renderFocalGroup shows a focal group: its name and rank, then its
+  // vernacular names, read through the taxon.
+  _renderFocalGroup(g) {
+    const vern = (g.vernaculars || [])
+      .map((v) => (v.language ? `${v.name} (${v.language})` : v.name))
+      .join(", ");
+    return html`<span class="focal-name">${g.name}</span>${g.rank
+        ? html` <span class="dim">${g.rank.toLowerCase()}</span>`
+        : ""}${vern ? html`<span class="focal-vern"> — ${vern}</span>` : ""}`;
+  }
+
+  // _focalDraft returns the focal groups being edited.
+  _focalDraft() {
+    if (Object.hasOwn(this._draft, "focal_groups")) return this._draft.focal_groups;
+    return this._metadata?.focal_groups || [];
+  }
+
+  _setFocal(groups) {
+    this._change("focal_groups", groups);
+  }
+
+  // _renderFocalEditor lists the focal groups with controls to reorder
+  // and remove them, and a search over the archive's taxa to add one.
+  _renderFocalEditor() {
+    const groups = this._focalDraft();
+    const move = (i, d) => {
+      const next = [...groups];
+      [next[i], next[i + d]] = [next[i + d], next[i]];
+      this._setFocal(next);
+    };
+    return html`<div class="focal-editor">
+      ${groups.length
+        ? html`<ul class="focal-list">
+            ${repeat(
+              groups,
+              (g) => g.taxon_id,
+              (g, i) => html`<li>
+                ${this._renderFocalGroup(g)}
+                <span class="focal-actions">
+                  <button
+                    class="icon-btn subtle"
+                    title="Move up"
+                    aria-label=${`Move ${g.name} up`}
+                    ?disabled=${i === 0}
+                    @click=${() => move(i, -1)}
+                  >${renderIcon("chevron-up", 14)}</button>
+                  <button
+                    class="icon-btn subtle"
+                    title="Move down"
+                    aria-label=${`Move ${g.name} down`}
+                    ?disabled=${i === groups.length - 1}
+                    @click=${() => move(i, 1)}
+                  >${renderIcon("chevron-down", 14)}</button>
+                  <button
+                    class="icon-btn subtle"
+                    title="Remove"
+                    aria-label=${`Remove ${g.name}`}
+                    @click=${() => this._setFocal(groups.filter((x) => x.taxon_id !== g.taxon_id))}
+                  >×</button>
+                </span>
+              </li>`,
+            )}
+          </ul>`
+        : html`<p class="hint">None yet. Add the taxa this dataset is about; a dataset that spans several lineages needs several groups.</p>`}
+      <sfga-combobox
+        min-search-chars="2"
+        placeholder="Add a taxon from this archive…"
+        .source=${taxonSource}
+        .value=${""}
+        @pick=${(e) => {
+          this._addFocal(e.detail.id);
+          e.target.value = "";
+          e.target.valueName = "";
+        }}
+      ></sfga-combobox>
+    </div>`;
+  }
+
+  // _addFocal adds a taxon picked in the search, reading its name and
+  // rank from the archive.
+  async _addFocal(id) {
+    if (!id || this._focalDraft().some((g) => g.taxon_id === id)) return;
+    let name = id;
+    let rank = "";
+    try {
+      const t = await api.taxon.get(id);
+      name = t.name || t.label?.text || id;
+      rank = t.rank || "";
+    } catch (_) {
+      /* keep the id */
+    }
+    this._setFocal([...this._focalDraft(), { taxon_id: id, name, rank }]);
   }
 
   // hasUnsavedChanges reports true when the edit form has draft
@@ -14971,6 +15106,12 @@ class SfgaMetadata extends LitElement {
         ${row("Citation", m.citation)}
         ${row("Geographic scope", m.geographic_scope)}
         ${row("Taxonomic scope", m.taxonomic_scope)}
+        ${(m.focal_groups || []).length
+          ? html`<dt>Focal taxonomic groups</dt>
+              <dd><ul class="focal-list">${m.focal_groups.map(
+                (g) => html`<li>${this._renderFocalGroup(g)}</li>`,
+              )}</ul></dd>`
+          : ""}
         ${row("Temporal scope", m.temporal_scope)}
         ${m.confidence !== undefined && m.confidence !== null
           ? html`<dt>Confidence</dt>
@@ -15088,6 +15229,8 @@ class SfgaMetadata extends LitElement {
           .value=${this._fieldValue("taxonomic_scope")}
           @input=${(e) => this._change("taxonomic_scope", e.target.value)}
         />
+        <label class="focal-label">Focal taxonomic groups</label>
+        ${this._renderFocalEditor()}
         <label>Temporal scope</label>
         <input
           type="text"
@@ -23177,8 +23320,9 @@ class SfgaHelpModal extends LitElement {
               unrelated organism. When a name is used for unrelated
               organisms (a homonym), the filter finds the paper under each,
               and the columns use the one whose authors match the
-              authorship the paper gives the name, or else the one that
-              fits the paper's other names. Each column lists the taxa at that rank with how many
+              authorship the paper gives the name, then one inside the
+              focal taxonomic groups set in Metadata, or else the one
+              that fits the paper's other names. Each column lists the taxa at that rank with how many
               mentions fall under each, most first. A tag shows the source:
               the one matching most of the paper's names, or another where
               that one leaves the rank mostly unassigned. Sources cover

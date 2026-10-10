@@ -355,7 +355,7 @@ func TestHomonymSharedAncestorsDoNotScore(t *testing.T) {
 		// while species give context.
 		"Dion": {count: 20, paths: [][]string{{"Eukaryota", "Metazoa", "Cnidaria", "Dion"}}},
 	}
-	if got := chooseHomonyms(groups)["Coccomyxa"]; got != 1 {
+	if got := chooseHomonyms(groups, nil)["Coccomyxa"]; got != 1 {
 		t.Errorf("chosen = %d, want 1 (the alga, despite its short classification)", got)
 	}
 }
@@ -376,7 +376,7 @@ func TestHomonymChosenByAuthorship(t *testing.T) {
 		"Ulva": {count: 2, paths: [][]string{{"Viridiplantae", "Ulva"}, {"Metazoa", "Ulva"}},
 			authorship: "Bay", scores: []float64{-1, 0}},
 	}
-	got := chooseHomonyms(groups)
+	got := chooseHomonyms(groups, nil)
 	if got["Coccomyxa"] != 1 {
 		t.Errorf("Coccomyxa = %d, want 1 (authorship)", got["Coccomyxa"])
 	}
@@ -393,14 +393,14 @@ func TestHomonymChosenByAuthorship(t *testing.T) {
 			authorship: "Clements 1909", scores: []float64{0}},
 		"Spirogyra varians": {count: 5, species: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyra"}}},
 	}
-	if got := chooseHomonyms(order)["Spirogyrales"]; got != 0 {
+	if got := chooseHomonyms(order, nil)["Spirogyrales"]; got != 0 {
 		t.Errorf("Spirogyrales = %d, want 0", got)
 	}
 	// A species whose dated authorship matches no record keeps its
 	// match: the authors are usually written differently.
 	species := map[string]*homonymGroup{"Gymnodinium fulgens": {count: 2, species: true,
 		paths: [][]string{{"Dinophyceae", "Gymnodinium"}}, authorship: "Kof. & Swezy 1921", scores: []float64{0}}}
-	if got := chooseHomonyms(species)["Gymnodinium fulgens"]; got != 0 {
+	if got := chooseHomonyms(species, nil)["Gymnodinium fulgens"]; got != 0 {
 		t.Errorf("Gymnodinium fulgens = %d, want 0", got)
 	}
 }

@@ -709,7 +709,21 @@ func (s *server) handleGetMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	body := metadataToAPI(m)
 	body.Warnings = metadataWarnings(s.a, r.Context(), m.ID)
+	if err := s.addFocalGroups(r.Context(), &body); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// addFocalGroups fills body's focal taxonomic groups.
+func (s *server) addFocalGroups(ctx context.Context, body *apiMetadata) error {
+	groups, err := s.a.FocalTaxonomicGroups(ctx)
+	if err != nil {
+		return err
+	}
+	body.FocalGroups = focalGroupsToAPI(groups)
+	return nil
 }
 
 // handlePatchMetadata applies a partial update to the metadata row.
@@ -743,18 +757,38 @@ func (s *server) handlePatchMetadata(w http.ResponseWriter, r *http.Request) {
 			current = &hive.Metadata{Title: "Untitled archive"}
 		}
 		applyMetadataPatch(current, patch)
-		return tx.UpdateMetadata(*current)
+		if err := tx.UpdateMetadata(*current); err != nil {
+			return err
+		}
+		if patch.FocalGroupIDs != nil {
+			return tx.SetFocalTaxonomicGroups(*patch.FocalGroupIDs)
+		}
+		return nil
 	})
 	if err != nil {
 		writeProblem(w, r, err)
 		return
+	}
+	if patch.FocalGroupIDs != nil {
+		// The reference list's classification columns depend on the
+		// focal groups; recompute them in the background.
+		go func() {
+			if n, err := s.a.BackfillTaxonSummaries(context.Background()); err != nil {
+				slog.Warn("taxon summary refresh stopped", "err", err, "filled", n)
+			}
+		}()
 	}
 	fresh, err := s.a.GetMetadata(r.Context())
 	if err != nil {
 		writeProblem(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, metadataToAPI(fresh))
+	body := metadataToAPI(fresh)
+	if err := s.addFocalGroups(r.Context(), &body); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleArchive returns the archive's identity: path, schema version, and
