@@ -309,6 +309,10 @@ export const api = {
     childRanks: (parentId) =>
       j("GET", `/api/taxon/${encodeURIComponent(parentId)}/child-ranks`),
     search: (opts) => j("GET", `/api/taxon/search${qs(opts)}`),
+    // table returns a page of the taxon table ({items, total}): every
+    // name usage with classification, supplemental data and issues.
+    table: (opts) => j("GET", `/api/taxon/table${qs(opts)}`),
+    tableIssueRules: () => j("GET", "/api/taxon/table/issue-rules"),
     // rowSources returns hive__row_source entries for the taxon's
     // extension rows (type_material, distribution, vernacular).
     // Backs the source badges on the detail-pane extension tables.

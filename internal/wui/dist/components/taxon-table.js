@@ -1,0 +1,282 @@
+/**
+ * <sfga-taxon-table>
+ *
+ * The Search screen: every name usage in the archive (accepted taxa and
+ * synonyms) in a filterable, sortable table with optional columns from
+ * the classification, the supplemental tables and validation issues.
+ * Double-click or Enter on a row opens its taxon.
+ *
+ * Properties: icon — the app's icon renderer, passed to the table.
+ */
+
+import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
+import { api } from "/lib/api.js";
+import { getSetting, setSetting } from "/lib/settings.js";
+import "/components/data-table.js";
+
+const SEVERITIES = ["error", "warn", "info", "debug"];
+const ABOVE_GENUS = new Set([
+  "DOMAIN", "SUPERKINGDOM", "KINGDOM", "SUBKINGDOM", "INFRAKINGDOM", "SUPERPHYLUM", "PHYLUM",
+  "SUBPHYLUM", "DIVISION", "SUBDIVISION", "SUPERCLASS", "CLASS", "SUBCLASS", "INFRACLASS",
+  "SUPERORDER", "ORDER", "SUBORDER", "INFRAORDER", "SUPERFAMILY", "FAMILY", "SUBFAMILY",
+  "TRIBE", "SUBTRIBE", "UNRANKED", "OTHER", "REALM",
+]);
+
+const dash = html`<span class="dim">—</span>`;
+const list = (items) => (items && items.length ? items.join(", ") : dash);
+const count = (n) => (n ? n.toLocaleString() : dash);
+
+// nameCell italicizes names at genus rank and below, as printed in
+// taxonomic works.
+function nameCell(r) {
+  const italic = r.rank ? !ABOVE_GENUS.has(r.rank.toUpperCase()) : r.name.includes(" ");
+  return italic ? html`<i>${r.name}</i>` : r.name;
+}
+
+function issuesCell(r) {
+  const by = r.issues || {};
+  const parts = SEVERITIES.filter((s) => by[s]);
+  if (!parts.length) return dash;
+  return html`<span class="issue-counts">${parts.map(
+    (s) => html`<span class=${"sev sev-" + s} title=${`${by[s]} ${s}`}>${by[s]} ${s}</span>`,
+  )}</span>`;
+}
+
+const COLUMNS = [
+  { id: "name", label: "Name", group: "name", sort: "name", shown: true, cell: nameCell },
+  { id: "authorship", label: "Authorship", group: "name", sort: "authorship", shown: true, cell: (r) => r.authorship || "" },
+  { id: "rank", label: "Rank", group: "name", sort: "rank", shown: true, cell: (r) => (r.rank || "").toLowerCase() },
+  {
+    id: "usage", label: "Usage", group: "name", sort: "usage", shown: true,
+    title: "Accepted taxon or synonym",
+    cell: (r) => (r.usage === "synonym" ? html`<span class="dim">synonym</span>` : "accepted"),
+  },
+  {
+    id: "related", label: "Parent / accepted", group: "name", shown: true,
+    title: "The parent of an accepted taxon; the accepted name of a synonym",
+    cell: (r) => r.related || "",
+  },
+  { id: "status", label: "Status", group: "name", sort: "status", cell: (r) => (r.status || "").toLowerCase().replaceAll("_", " ") },
+  { id: "code", label: "Code", group: "name", sort: "code", cell: (r) => (r.code || "").toLowerCase() },
+  { id: "extinct", label: "Extinct", group: "name", cell: (r) => (r.extinct ? "†" : "") },
+  { id: "modified", label: "Modified", group: "name", sort: "modified", cell: (r) => (r.modified || "").slice(0, 10) },
+  ...["kingdom", "phylum", "class", "order", "family", "genus"].map((rank) => ({
+    id: rank,
+    label: rank[0].toUpperCase() + rank.slice(1),
+    group: "classification",
+    sort: rank,
+    shown: rank === "family",
+    title: `The accepted taxon's ${rank}`,
+    cell: (r) => (r.classification && r.classification[rank]) || "",
+  })),
+  {
+    id: "vernaculars", label: "Vernacular names", group: "supplemental", sort: "vernaculars", shown: true,
+    title: "Vernacular names of the taxon (accepted rows); sorts by how many",
+    cell: (r) => list(r.vernaculars),
+  },
+  {
+    id: "distribution", label: "Distribution", group: "supplemental", sort: "distribution",
+    title: "Distribution areas of the taxon (accepted rows); sorts by how many",
+    cell: (r) => list(r.distribution),
+  },
+  {
+    id: "interactions", label: "Interactions", group: "supplemental", sort: "interactions",
+    title: "Species interactions of the taxon (accepted rows); sorts by how many",
+    cell: (r) => list(r.interactions),
+  },
+  {
+    id: "type_material", label: "Type material", group: "supplemental", sort: "type_material",
+    title: "Type material of the name; sorts by how many",
+    cell: (r) => list(r.type_material),
+  },
+  {
+    id: "synonyms", label: "Synonyms", group: "supplemental", sort: "synonyms", numeric: true,
+    title: "Number of synonyms of the taxon",
+    cell: (r) => count(r.synonyms),
+  },
+  {
+    id: "name_relations", label: "Name relations", group: "supplemental", sort: "name_relations", numeric: true,
+    title: "Number of name relations (basionym, homonym, …) involving the name",
+    cell: (r) => count(r.name_relations),
+  },
+  {
+    id: "issues", label: "Issues", group: "issues", sort: "issues", shown: true,
+    title: "Open validation issues on the name, taxon or synonym, by severity; sorts most serious first",
+    cell: issuesCell,
+  },
+  {
+    id: "issue_rules", label: "Issue types", group: "issues", sort: "issue_rules",
+    title: "The validation rules with open issues; sorts by rule name",
+    cell: (r) => list(r.issue_rules),
+  },
+];
+
+const GROUPS = [
+  { id: "name", label: "Name" },
+  { id: "classification", label: "Classification" },
+  { id: "supplemental", label: "Supplemental data" },
+  { id: "issues", label: "Issues" },
+];
+
+class SfgaTaxonTable extends LitElement {
+  static properties = {
+    icon: { attribute: false },
+    _q: { state: true },
+    _usage: { state: true },
+    _rank: { state: true },
+    _issue: { state: true },
+    _rules: { state: true },
+    _total: { state: true },
+  };
+
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      padding: var(--sp-3) var(--sp-4) 0;
+      box-sizing: border-box;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-2);
+      align-items: center;
+      margin-bottom: var(--sp-2);
+      font-size: var(--fs-sm);
+    }
+    h2 {
+      margin: 0 var(--sp-2) 0 0;
+      font-size: var(--fs-lg);
+    }
+    .total {
+      color: var(--dim);
+    }
+    input[type="search"] {
+      flex: 1 1 18rem;
+      max-width: 32rem;
+      font: inherit;
+      padding: var(--sp-1) var(--sp-2);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    select {
+      font: inherit;
+      padding: var(--sp-1);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    label {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+    }
+    sfga-data-table {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+  `;
+
+  constructor() {
+    super();
+    const f = getSetting("taxa.table.filters") || {};
+    this._q = "";
+    this._usage = f.usage || "";
+    this._rank = f.rank || "";
+    this._issue = f.issue || "";
+    this._rules = [];
+    this._total = null;
+    this.icon = () => nothing;
+    this._fetch = (page) =>
+      api.taxon.table({
+        q: this._q.trim(),
+        usage: this._usage,
+        rank: this._rank,
+        issue: this._issue,
+        sort: page.sort,
+        limit: page.limit,
+        offset: page.offset,
+      });
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    api.taxon
+      .tableIssueRules()
+      .then((res) => (this._rules = res.items || []))
+      .catch(() => {});
+  }
+
+  _changed(field, value) {
+    this[field] = value;
+    if (field !== "_q") {
+      setSetting("taxa.table.filters", { usage: this._usage, rank: this._rank, issue: this._issue });
+    }
+    clearTimeout(this._debounce);
+    this._debounce = setTimeout(() => this.renderRoot.querySelector("sfga-data-table")?.reload(), field === "_q" ? 250 : 0);
+  }
+
+  _open(row) {
+    location.hash = "#/taxon/" + encodeURIComponent(row.taxon_id);
+  }
+
+  render() {
+    const ranks = (api.vocab.get("rank") || []).filter((r) => r.id);
+    return html`
+      <div class="toolbar" role="search">
+        <h2>Search</h2>
+        <input
+          type="search"
+          placeholder="Name contains…"
+          aria-label="Name contains"
+          .value=${this._q}
+          @input=${(e) => this._changed("_q", e.target.value)}
+        />
+        <label for="usage">Usage</label>
+        <select id="usage" @change=${(e) => this._changed("_usage", e.target.value)}>
+          ${[["", "All"], ["accepted", "Accepted"], ["synonym", "Synonyms"]].map(
+            ([v, l]) => html`<option value=${v} ?selected=${this._usage === v}>${l}</option>`,
+          )}
+        </select>
+        <label for="rank">Rank</label>
+        <select id="rank" @change=${(e) => this._changed("_rank", e.target.value)}>
+          <option value="" ?selected=${!this._rank}>All</option>
+          ${ranks.map((r) => html`<option value=${r.id} ?selected=${this._rank === r.id}>${r.name}</option>`)}
+        </select>
+        <label for="issue">Issues</label>
+        <select id="issue" @change=${(e) => this._changed("_issue", e.target.value)}>
+          <option value="" ?selected=${!this._issue}>Any or none</option>
+          <option value="any" ?selected=${this._issue === "any"}>With issues</option>
+          ${SEVERITIES.map((s) => html`<option value=${s} ?selected=${this._issue === s}>With ${s}</option>`)}
+          ${this._rules.length
+            ? html`<optgroup label="Issue type">
+                ${this._rules.map(
+                  (r) => html`<option value=${"rule:" + r.id} ?selected=${this._issue === "rule:" + r.id}>
+                    ${r.name} (${r.count})
+                  </option>`,
+                )}
+              </optgroup>`
+            : nothing}
+        </select>
+        <span class="total" role="status">${this._total === null ? "" : `${this._total.toLocaleString()} names`}</span>
+      </div>
+      <sfga-data-table
+        .columns=${COLUMNS}
+        .groups=${GROUPS}
+        .settingsKey=${"taxa.table"}
+        .fetchPage=${this._fetch}
+        .rowKey=${(r) => `${r.usage}:${r.taxon_id}:${r.name_id}:${r.synonym_id || ""}`}
+        .icon=${this.icon}
+        .defaultSort=${[{ column: "name", desc: false }]}
+        @total-changed=${(e) => (this._total = e.detail.total)}
+        @row-activate=${(e) => this._open(e.detail.row)}
+      ></sfga-data-table>
+    `;
+  }
+}
+
+customElements.define("sfga-taxon-table", SfgaTaxonTable);

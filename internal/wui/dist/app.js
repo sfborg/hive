@@ -77,6 +77,7 @@ const iconPaths = {
   moon: svg`
     <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
   `,
+  search: svg`<circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />`,
   user: svg`<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />`,
   monitor: svg`
     <rect width="20" height="14" x="2" y="3" rx="2" />
@@ -1704,6 +1705,9 @@ class SfgaApp extends LitElement {
   static views = [
     { id: "metadata", label: "Metadata", icon: "info", key: "m" },
     { id: "taxa", label: "Taxa", icon: "network", key: "t" },
+    // Search: every name usage in a filterable table, with columns
+    // from the classification, supplemental tables and issues.
+    { id: "search", label: "Search", icon: "search", key: "s" },
     { id: "references", label: "References", icon: "book", key: "r" },
     // Assembly: curator promotes reviewed extraction assertions
     // (Assertions-tab compose tree) into canonical SFGA rows.
@@ -1972,7 +1976,8 @@ class SfgaApp extends LitElement {
        its shadow root. The taxa screen's two-child pattern (aside
        + section as direct children of the outer grid) doesn't fit
        here because the component is one custom element. */
-    .screen.references {
+    .screen.references,
+    .screen.search {
       grid-template-columns: 1fr;
     }
     /* Assembly + Revision stubs share the metadata-screen shape —
@@ -3718,6 +3723,12 @@ class SfgaApp extends LitElement {
                 }
               }}
             ></sfga-references>
+          </div>
+        `;
+      case "search":
+        return html`
+          <div class="screen search">
+            <sfga-taxon-table .icon=${renderIcon}></sfga-taxon-table>
           </div>
         `;
       case "issues":

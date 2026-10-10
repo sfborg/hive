@@ -504,6 +504,15 @@ CREATE TABLE IF NOT EXISTS hive__config_rulesets (
 -- difference between a snappy tree reveal and a multi-second wait.
 CREATE INDEX IF NOT EXISTS idx_taxon_parent_id ON taxon (col__parent_id);
 
+-- Supplemental-table lookups by taxon or name, for the taxon table's
+-- per-row lists and counts.
+CREATE INDEX IF NOT EXISTS idx_type_material_name_id ON type_material (col__name_id);
+CREATE INDEX IF NOT EXISTS idx_name_relation_name_id ON name_relation (col__name_id);
+CREATE INDEX IF NOT EXISTS idx_name_relation_related_name_id ON name_relation (col__related_name_id);
+CREATE INDEX IF NOT EXISTS idx_media_taxon_id ON media (col__taxon_id);
+CREATE INDEX IF NOT EXISTS idx_taxon_property_taxon_id ON taxon_property (col__taxon_id);
+CREATE INDEX IF NOT EXISTS idx_species_estimate_taxon_id ON species_estimate (col__taxon_id);
+
 -- idx_taxon_name_id lets JOIN-through-taxon queries (SearchTaxa,
 -- classification, synonym resolution) use an index on the taxon side
 -- instead of scanning taxon and looking up name by PK per row.

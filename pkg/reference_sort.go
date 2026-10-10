@@ -68,6 +68,12 @@ func init() {
 // ParseReferenceSort parses "col:asc,col:desc" into sort keys. The
 // direction defaults to ascending.
 func ParseReferenceSort(raw string) ([]ReferenceSortKey, error) {
+	return parseSortKeys(raw, ReferenceSortColumns)
+}
+
+// parseSortKeys parses "col:asc,col:desc" into sort keys over the given
+// column set. The direction defaults to ascending.
+func parseSortKeys(raw string, columns map[string]string) ([]ReferenceSortKey, error) {
 	var keys []ReferenceSortKey
 	for _, part := range strings.Split(raw, ",") {
 		part = strings.TrimSpace(part)
@@ -75,7 +81,7 @@ func ParseReferenceSort(raw string) ([]ReferenceSortKey, error) {
 			continue
 		}
 		col, dir, _ := strings.Cut(part, ":")
-		if _, ok := ReferenceSortColumns[col]; !ok {
+		if _, ok := columns[col]; !ok {
 			return nil, fmt.Errorf("unknown sort column %q", col)
 		}
 		switch dir {
