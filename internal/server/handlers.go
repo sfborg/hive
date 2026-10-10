@@ -778,11 +778,7 @@ func (s *server) handlePatchMetadata(w http.ResponseWriter, r *http.Request) {
 	if patch.FocalGroupIDs != nil {
 		// The reference list's classification columns depend on the
 		// focal groups; recompute them in the background.
-		go func() {
-			if n, err := s.a.BackfillTaxonSummaries(context.Background()); err != nil {
-				slog.Warn("taxon summary refresh stopped", "err", err, "filled", n)
-			}
-		}()
+		go refreshTaxonSummaries(context.Background(), s.a)
 	}
 	fresh, err := s.a.GetMetadata(r.Context())
 	if err != nil {

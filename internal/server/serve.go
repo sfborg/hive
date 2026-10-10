@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -297,12 +298,9 @@ func Run(archivePath string, opts Options) error {
 			} else if n > 0 {
 				slog.Info("jats stats backfilled", "files", n)
 			}
-			if n, err := a.BackfillTaxonSummaries(ctx); err != nil {
-				slog.Warn("taxon summary backfill stopped", "err", err, "filled", n)
-			} else if n > 0 {
-				slog.Info("taxon summaries backfilled", "references", n)
-			}
+			refreshTaxonSummaries(ctx, a)
 		}()
+		go focalScopeTicker(ctx, a)
 	}
 
 	serverErr := make(chan error, 1)
@@ -344,6 +342,42 @@ func refreshTicker(ctx context.Context, a *hive.Archive) {
 			return
 		case <-t.C:
 			_ = a.RefreshTimeBasedIssues(context.Background())
+		}
+	}
+}
+
+// summaryRefresh serializes taxon summary refreshes started from
+// startup, the focal-scope ticker and metadata saves.
+var summaryRefresh sync.Mutex
+
+// refreshTaxonSummaries clears the summaries if the focal groups'
+// names changed, then computes any that are missing.
+func refreshTaxonSummaries(ctx context.Context, a *hive.Archive) {
+	summaryRefresh.Lock()
+	defer summaryRefresh.Unlock()
+	if cleared, err := a.RefreshFocalScope(ctx); err != nil {
+		slog.Warn("focal scope check failed", "err", err)
+	} else if cleared {
+		slog.Info("focal groups changed; recomputing taxon summaries")
+	}
+	if n, err := a.BackfillTaxonSummaries(ctx); err != nil {
+		slog.Warn("taxon summary backfill stopped", "err", err, "filled", n)
+	} else if n > 0 {
+		slog.Info("taxon summaries backfilled", "references", n)
+	}
+}
+
+// focalScopeTicker picks up taxonomy edits under the focal groups (a
+// class added under one, a synonym renamed) every couple of minutes.
+func focalScopeTicker(ctx context.Context, a *hive.Archive) {
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			refreshTaxonSummaries(ctx, a)
 		}
 	}
 }

@@ -934,6 +934,14 @@ CREATE TABLE IF NOT EXISTS hive__focal_taxonomic_group (
     PRIMARY KEY (col__metadata_id, taxon_id)
 );
 
+-- hive__taxon_summary_state records what the reference taxon
+-- summaries were computed against: a fingerprint of the focal groups'
+-- names (see RefreshFocalScope). One row, id = 1.
+CREATE TABLE IF NOT EXISTS hive__taxon_summary_state (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    focal_fingerprint TEXT NOT NULL
+);
+
 -- hive__jats_stats records the size of each attached file's JATS
 -- sidecar, the text sent to extraction models: words in its text,
 -- characters in the file (markup included), and the source PDF's page

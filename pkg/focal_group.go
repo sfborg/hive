@@ -2,7 +2,13 @@ package hive
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // FocalGroup is one of the archive's focal taxonomic groups: a taxon of
@@ -74,8 +80,8 @@ func (a *Archive) FocalTaxonomicGroups(ctx context.Context) ([]FocalGroup, error
 
 // SetFocalTaxonomicGroups replaces the focal taxonomic groups with the
 // given taxa, in order. Every ID must be a taxon of the archive. The
-// reference taxon summaries depend on the groups (see
-// chooseHomonymRows), so they are cleared for recomputation.
+// reference taxon summaries depend on the groups; RefreshFocalScope
+// clears them for recomputation.
 func (t *Tx) SetFocalTaxonomicGroups(taxonIDs []string) error {
 	metadataID := 1
 	if err := t.tx.QueryRowContext(t.ctx,
@@ -107,9 +113,6 @@ func (t *Tx) SetFocalTaxonomicGroups(taxonIDs []string) error {
 			return fmt.Errorf("core: store focal group %s: %w", id, err)
 		}
 	}
-	if _, err := t.tx.ExecContext(t.ctx, `DELETE FROM hive__reference_taxon_summary`); err != nil {
-		return fmt.Errorf("core: clear taxon summaries: %w", err)
-	}
 	if err := touchMetadata(t.ctx, t.tx, metadataID); err != nil {
 		return err
 	}
@@ -118,19 +121,48 @@ func (t *Tx) SetFocalTaxonomicGroups(taxonIDs []string) error {
 }
 
 // focalNames returns the names that identify the focal groups in a
-// name source's classification: each group's scientific name and the
-// names of its synonyms, as canonical forms where parsed.
+// name source's classification: each group, every taxon the archive
+// places under it down to (not including) the genus, and their
+// synonyms, as canonical forms where parsed. Name sources often
+// name and rank the groups themselves differently (Rhodophyta for a
+// project's Rhodophytina), while classes and families below agree far
+// more often. Genera are left out because homonyms share the genus
+// name by definition.
 func focalNames(tx *Tx) (map[string]bool, error) {
-	rows, err := tx.tx.QueryContext(tx.ctx, `
-		SELECT COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name)
-		FROM hive__focal_taxonomic_group f
-		JOIN taxon t ON t.col__id = f.taxon_id
-		JOIN name n ON n.col__id = t.col__name_id
+	return queryFocalNames(tx.ctx, tx.tx)
+}
+
+// focalScopeQuery lists the focal groups and the taxa under them above
+// the genus.
+const focalScopeQuery = `
+	WITH RECURSIVE scope(id) AS (
+		SELECT taxon_id FROM hive__focal_taxonomic_group
 		UNION
-		SELECT COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name)
-		FROM hive__focal_taxonomic_group f
-		JOIN synonym s ON s.col__taxon_id = f.taxon_id
-		JOIN name n ON n.col__id = s.col__name_id`)
+		SELECT t.col__id FROM taxon t
+		JOIN scope ON t.col__parent_id = scope.id
+		JOIN name n ON n.col__id = t.col__name_id
+		WHERE UPPER(COALESCE(n.col__rank_id, '')) NOT IN (` + genusOrBelow + `)
+			AND INSTR(TRIM(COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name)), ' ') = 0
+	)
+	SELECT COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name)
+	FROM scope JOIN taxon t ON t.col__id = scope.id
+	JOIN name n ON n.col__id = t.col__name_id
+	UNION
+	SELECT COALESCE(NULLIF(n.gn__canonical_simple, ''), n.col__scientific_name)
+	FROM scope JOIN synonym s ON s.col__taxon_id = scope.id
+	JOIN name n ON n.col__id = s.col__name_id`
+
+// genusOrBelow lists the ranks that end the walk down a focal group.
+const genusOrBelow = `'GENUS', 'SUBGENUS', 'SECTION', 'SUBSECTION', 'SERIES', 'SUBSERIES',
+	'SPECIES_AGGREGATE', 'SPECIES', 'SUBSPECIES', 'VARIETY', 'SUBVARIETY', 'FORM', 'SUBFORM',
+	'INFRASPECIFIC_NAME', 'INFRASUBSPECIFIC_NAME', 'STRAIN', 'CULTIVAR'`
+
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func queryFocalNames(ctx context.Context, q querier) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, focalScopeQuery)
 	if err != nil {
 		return nil, fmt.Errorf("core: focal names: %w", err)
 	}
@@ -141,9 +173,52 @@ func focalNames(tx *Tx) (map[string]bool, error) {
 		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		if name != "" {
+		if name = strings.TrimSpace(name); name != "" {
 			out[name] = true
 		}
 	}
 	return out, rows.Err()
+}
+
+// RefreshFocalScope clears the reference taxon summaries when the
+// focal groups' names have changed since they were computed (groups
+// picked, or taxa added, renamed or moved under them), so
+// BackfillTaxonSummaries recomputes them. It reports whether they were
+// cleared.
+func (a *Archive) RefreshFocalScope(ctx context.Context) (bool, error) {
+	names, err := queryFocalNames(ctx, a.db)
+	if err != nil {
+		return false, err
+	}
+	list := make([]string, 0, len(names))
+	for n := range names {
+		list = append(list, n)
+	}
+	sort.Strings(list)
+	sum := sha256.Sum256([]byte(strings.Join(list, "\n")))
+	fingerprint := hex.EncodeToString(sum[:])
+	var stored string
+	err = a.db.QueryRowContext(ctx,
+		`SELECT focal_fingerprint FROM hive__taxon_summary_state WHERE id = 1`).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("core: summary state: %w", err)
+	}
+	if stored == fingerprint {
+		return false, nil
+	}
+	err = a.WithTx(ctx, func(tx *Tx) error {
+		if _, err := tx.tx.ExecContext(tx.ctx, `DELETE FROM hive__reference_taxon_summary`); err != nil {
+			return err
+		}
+		_, err := tx.tx.ExecContext(tx.ctx, `
+			INSERT INTO hive__taxon_summary_state (id, focal_fingerprint) VALUES (1, ?)
+			ON CONFLICT (id) DO UPDATE SET focal_fingerprint = excluded.focal_fingerprint`, fingerprint)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("core: refresh focal scope: %w", err)
+	}
+	// A first fingerprint on an archive without focal groups changes
+	// nothing the summaries depend on.
+	return stored != "" || len(names) > 0, nil
 }

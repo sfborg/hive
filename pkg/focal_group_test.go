@@ -118,3 +118,52 @@ func TestFocalTaxonomicGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestFocalScopeFollowsTaxaAboveGenus(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	child := func(tx *Tx, name, rank, parent string) string {
+		nm := insertTestName(t, tx, name)
+		if _, err := tx.tx.ExecContext(tx.ctx, `UPDATE name SET col__rank_id = ? WHERE col__id = ?`, rank, nm); err != nil {
+			t.Fatalf("rank: %v", err)
+		}
+		tx2 := taxonForTest(nm)
+		tx2.ParentID = parent
+		id, err := tx.CreateTaxon(tx2)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return id
+	}
+	var reds, florideo string
+	if err := a.WithTx(ctx, func(tx *Tx) error {
+		reds = child(tx, "Rhodophytina", "SUBPHYLUM", "")
+		florideo = child(tx, "Florideophyceae", "CLASS", reds)
+		child(tx, "Gelidium", "GENUS", florideo)
+		return tx.SetFocalTaxonomicGroups([]string{reds})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	var names map[string]bool
+	if err := a.WithTx(ctx, func(tx *Tx) (err error) { names, err = focalNames(tx); return }); err != nil {
+		t.Fatalf("focalNames: %v", err)
+	}
+	if !names["Rhodophytina"] || !names["Florideophyceae"] || names["Gelidium"] {
+		t.Errorf("focal names = %v, want the group and its class but not the genus", names)
+	}
+
+	// The summaries are cleared once for the new scope, then left
+	// alone until the scope changes.
+	if cleared, err := a.RefreshFocalScope(ctx); err != nil || !cleared {
+		t.Fatalf("first refresh = %v, %v; want cleared", cleared, err)
+	}
+	if cleared, _ := a.RefreshFocalScope(ctx); cleared {
+		t.Errorf("unchanged scope cleared the summaries")
+	}
+	if err := a.WithTx(ctx, func(tx *Tx) error { child(tx, "Bangiophyceae", "CLASS", reds); return nil }); err != nil {
+		t.Fatalf("add class: %v", err)
+	}
+	if cleared, _ := a.RefreshFocalScope(ctx); !cleared {
+		t.Errorf("a class added under a focal group did not refresh the summaries")
+	}
+}
