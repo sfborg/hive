@@ -258,3 +258,104 @@ func TestTaxonSummaryLeavesOutStrayMatches(t *testing.T) {
 		t.Errorf("names = %+v, want all three as written", n.Top)
 	}
 }
+
+func TestHomonymChosenByPaperContext(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedMentions(t, a, ctx)
+	alga := func(genus, id string) mentions.Match {
+		return mentions.Match{MatchType: "Exact", RecordID: id, Path: []mentions.Rank{
+			{Name: "Viridiplantae", Rank: "kingdom", ID: "k1"},
+			{Name: "Chlorophyta", Rank: "phylum", ID: "p1"},
+			{Name: "Trebouxiophyceae", Rank: "class", ID: "c1"},
+			{Name: genus, Rank: "genus", ID: id},
+		}}
+	}
+	// The verifier scores the animal lineage first.
+	homonym := mentions.Match{MatchType: "Exact", RecordID: "g9", Path: []mentions.Rank{
+		{Name: "Metazoa", Rank: "kingdom", ID: "k9"},
+		{Name: "Cnidaria", Rank: "phylum", ID: "p9"},
+		{Name: "Myxosporea", Rank: "class", ID: "c9"},
+		{Name: "Coccomyxa", Rank: "genus", ID: "g9"},
+	}, Homonyms: []mentions.Match{alga("Coccomyxa", "a1")}}
+	if err := a.ReplaceNameMentions(ctx, "ref-c", testSource,
+		map[string]int{"Coccomyxa": 9, "Chlorella vulgaris": 4},
+		map[string]mentions.Match{"Coccomyxa": homonym, "Chlorella vulgaris": alga("Chlorella", "a2")},
+	); err != nil {
+		t.Fatalf("ReplaceNameMentions: %v", err)
+	}
+	sums, err := a.batchTaxonSummaries(ctx, []string{"ref-c"})
+	if err != nil {
+		t.Fatalf("batchTaxonSummaries: %v", err)
+	}
+	if p := sums["ref-c"]["phylum"]; p.Name != "Chlorophyta" || p.Mentions != 13 || len(p.Top) != 1 {
+		t.Errorf("phylum = %+v, want Chlorophyta 13 alone", p)
+	}
+	// The filter still finds the paper under the other lineage.
+	for _, parent := range []string{"Cnidaria", "Chlorophyta"} {
+		hits, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor,
+			ReferenceQuery{Parents: []IndexParent{{mentions.CatalogueOfLife, parent}}})
+		if err != nil {
+			t.Fatalf("query %s: %v", parent, err)
+		}
+		if got := hitIDs(hits); len(got) != 1 || got[0] != "ref-c" {
+			t.Errorf("col_parent %s = %v, want [ref-c]", parent, got)
+		}
+	}
+}
+
+func TestTaxonSummaryFallsBackPerRank(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedMentions(t, a, ctx)
+	counts := map[string]int{"Dinogenus alpha": 10, "Dinogenus beta": 5}
+	// NCBI matches both names but gives no kingdom or phylum; the
+	// Catalogue of Life matches one and does.
+	ncbi := mentions.Match{MatchType: "Exact", RecordID: "nd1", Path: []mentions.Rank{
+		{Name: "Alveolata", Rank: "unranked", ID: "na"},
+		{Name: "Dinophyceae", Rank: "class", ID: "nc"},
+		{Name: "Dinogenus", Rank: "genus", ID: "nd1"},
+	}}
+	col := mentions.Match{MatchType: "Exact", RecordID: "cd1", Path: []mentions.Rank{
+		{Name: "Chromista", Rank: "kingdom", ID: "ck"},
+		{Name: "Myzozoa", Rank: "phylum", ID: "cp"},
+		{Name: "Dinophyceae", Rank: "class", ID: "cc"},
+		{Name: "Dinogenus", Rank: "genus", ID: "cd1"},
+	}}
+	if err := a.ReplaceNameMentions(ctx, "ref-c", "gnverifier:4@2026-09-28", counts,
+		map[string]mentions.Match{"Dinogenus alpha": ncbi, "Dinogenus beta": ncbi}); err != nil {
+		t.Fatalf("ReplaceNameMentions ncbi: %v", err)
+	}
+	if err := a.ReplaceNameMentions(ctx, "ref-c", testSource, counts,
+		map[string]mentions.Match{"Dinogenus alpha": col}); err != nil {
+		t.Fatalf("ReplaceNameMentions col: %v", err)
+	}
+	sums, err := a.batchTaxonSummaries(ctx, []string{"ref-c"})
+	if err != nil {
+		t.Fatalf("batchTaxonSummaries: %v", err)
+	}
+	s := sums["ref-c"]
+	if c := s["class"]; c.SourceID != mentions.NCBI || c.Name != "Dinophyceae" {
+		t.Errorf("class = %+v, want Dinophyceae from NCBI", c)
+	}
+	if p := s["phylum"]; p.SourceID != mentions.CatalogueOfLife || p.Name != "Myzozoa" {
+		t.Errorf("phylum = %+v, want Myzozoa from the Catalogue of Life", p)
+	}
+}
+
+func TestHomonymSharedAncestorsDoNotScore(t *testing.T) {
+	groups := map[string]*homonymGroup{
+		"Coccomyxa": {count: 3, paths: [][]string{
+			{"Eukaryota", "Metazoa", "Cnidaria", "Coccomyxa"},
+			{"Trebouxiophyceae", "Coccomyxa"},
+		}},
+		"Chlorella vulgaris": {count: 4, species: true, paths: [][]string{{"Eukaryota", "Viridiplantae", "Trebouxiophyceae", "Chlorella"}}},
+		"Navicula minima":    {count: 5, species: true, paths: [][]string{{"Eukaryota", "Bacillariophyta", "Navicula"}}},
+		// A single word matched to an animal only does not count
+		// while species give context.
+		"Dion": {count: 20, paths: [][]string{{"Eukaryota", "Metazoa", "Cnidaria", "Dion"}}},
+	}
+	if got := chooseHomonyms(groups)["Coccomyxa"]; got != 1 {
+		t.Errorf("chosen = %d, want 1 (the alga, despite its short classification)", got)
+	}
+}

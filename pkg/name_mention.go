@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -71,6 +72,9 @@ func ensureRawNameTables(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("core: index %s: %w", raw, err)
 		}
 	}
+	if err := migrateNameMentionCandidates(ctx, db); err != nil {
+		return err
+	}
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS hive__name_mention (
 			reference_id  TEXT NOT NULL,
@@ -84,7 +88,14 @@ func ensureRawNameTables(ctx context.Context, db *sql.DB) error {
 			raw_taxon_id  TEXT,
 			match_type    TEXT NOT NULL DEFAULT '',
 			verified_at   TEXT NOT NULL,
-			PRIMARY KEY (reference_id, mention, raw__source)
+			-- A name matching several lineages (homonyms) has one row
+			-- per lineage, numbered in the verifier's score order.
+			candidate     INTEGER NOT NULL DEFAULT 0,
+			-- 1 on the row that fits the paper's other names best;
+			-- summaries read only chosen rows, the higher-taxon filter
+			-- reads every row.
+			chosen        INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (reference_id, mention, raw__source, candidate)
 		);
 		CREATE INDEX IF NOT EXISTS idx_hive__name_mention_taxon
 			ON hive__name_mention (raw__source, raw_taxon_id);`)
@@ -92,6 +103,47 @@ func ensureRawNameTables(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("core: create hive__name_mention: %w", err)
 	}
 	return nil
+}
+
+// migrateNameMentionCandidates rebuilds a hive__name_mention that
+// predates homonym candidates; existing rows become each name's only,
+// chosen candidate.
+func migrateNameMentionCandidates(ctx context.Context, db *sql.DB) error {
+	cols, err := tableColumns(ctx, db, "hive__name_mention")
+	if err != nil || len(cols) == 0 || slices.Contains(cols, "candidate") {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`ALTER TABLE hive__name_mention RENAME TO hive__name_mention_old`,
+		`DROP INDEX IF EXISTS idx_hive__name_mention_taxon`,
+		`CREATE TABLE hive__name_mention (
+			reference_id  TEXT NOT NULL,
+			mention       TEXT NOT NULL,
+			mention_count INTEGER NOT NULL,
+			raw__source   TEXT NOT NULL,
+			raw_taxon_id  TEXT,
+			match_type    TEXT NOT NULL DEFAULT '',
+			verified_at   TEXT NOT NULL,
+			candidate     INTEGER NOT NULL DEFAULT 0,
+			chosen        INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (reference_id, mention, raw__source, candidate)
+		)`,
+		`INSERT INTO hive__name_mention
+			(reference_id, mention, mention_count, raw__source, raw_taxon_id, match_type, verified_at)
+			SELECT reference_id, mention, mention_count, raw__source, raw_taxon_id, match_type, verified_at
+			FROM hive__name_mention_old`,
+		`DROP TABLE hive__name_mention_old`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("core: migrate hive__name_mention: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // tableColumns lists a table's column names in declaration order.
@@ -137,7 +189,10 @@ var rankColumns = map[string]string{
 
 // ReplaceNameMentions replaces a reference's mention rows for one
 // verifier source. counts holds the mention count per name; matches
-// holds the verification result for the names that matched. Records
+// holds the verification result for the names that matched. A name
+// with homonyms gets a row per lineage; the lineage that fits the
+// paper's other names is marked chosen when the summary is refreshed
+// (see chooseHomonyms). Records
 // are upserted into raw__name and raw__taxon, shared by every
 // reference that mentions them.
 func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source string,
@@ -150,28 +205,176 @@ func (a *Archive) ReplaceNameMentions(ctx context.Context, referenceID, source s
 		); err != nil {
 			return fmt.Errorf("core: clear mentions: %w", err)
 		}
-		for name, n := range counts {
-			var taxonID any
-			matchType := "NoMatch"
-			if m, ok := matches[name]; ok {
-				if err := upsertRawRecord(tx, source, m); err != nil {
-					return err
-				}
-				taxonID = m.RecordID
-				matchType = m.MatchType
-			}
+		insert := func(name string, n, candidate int, taxonID any, matchType string, isChosen bool) error {
 			if _, err := tx.tx.ExecContext(tx.ctx, `
 				INSERT INTO hive__name_mention
 					(reference_id, mention, mention_count, raw__source,
-					 raw_taxon_id, match_type, verified_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				referenceID, name, n, source, taxonID, matchType, now,
+					 raw_taxon_id, match_type, verified_at, candidate, chosen)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				referenceID, name, n, source, taxonID, matchType, now, candidate, isChosen,
 			); err != nil {
 				return fmt.Errorf("core: insert mention %q: %w", name, err)
+			}
+			return nil
+		}
+		for name, n := range counts {
+			m, ok := matches[name]
+			if !ok {
+				if err := insert(name, n, 0, nil, "NoMatch", true); err != nil {
+					return err
+				}
+				continue
+			}
+			for i, c := range candidates(m) {
+				if err := upsertRawRecord(tx, source, c); err != nil {
+					return err
+				}
+				if err := insert(name, n, i, c.RecordID, m.MatchType, i == 0); err != nil {
+					return err
+				}
 			}
 		}
 		return refreshTaxonSummary(tx, referenceID)
 	})
+}
+
+// candidates returns a match's lineages: the top-scored one, then its
+// homonyms.
+func candidates(m mentions.Match) []mentions.Match {
+	return append([]mentions.Match{m}, m.Homonyms...)
+}
+
+// homonymGroup is one name's candidate lineages in one source, as
+// raw__path taxon names.
+type homonymGroup struct {
+	count int
+	paths [][]string
+	// species is true for an exact match of a name below the genus,
+	// which is rarely shared by unrelated organisms.
+	species bool
+}
+
+// chooseHomonymRows marks, for each of the reference's names with
+// homonyms, the candidate chosen by chooseHomonyms. Context comes from
+// every source, so a name one source places unambiguously settles
+// the same name's homonyms in another.
+func chooseHomonymRows(tx *Tx, referenceID string) error {
+	rows, err := tx.tx.QueryContext(tx.ctx, `
+		SELECT m.raw__source, m.mention, m.candidate, m.mention_count, m.match_type, t.raw__path
+		FROM hive__name_mention m
+		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
+		WHERE m.reference_id = ? AND `+discoveryMatch("m.")+`
+		ORDER BY m.raw__source, m.mention, m.candidate`, referenceID)
+	if err != nil {
+		return fmt.Errorf("core: homonym candidates: %w", err)
+	}
+	groups := map[[2]string]*homonymGroup{}
+	for rows.Next() {
+		var source, mention, matchType, path string
+		var candidate, n int
+		if err := rows.Scan(&source, &mention, &candidate, &n, &matchType, &path); err != nil {
+			rows.Close()
+			return err
+		}
+		key := [2]string{source, mention}
+		g := groups[key]
+		if g == nil {
+			g = &homonymGroup{count: n,
+				species: matchType == "Exact" && strings.Contains(mention, " ")}
+			groups[key] = g
+		}
+		g.paths = append(g.paths, strings.Split(strings.Trim(path, "|"), "|"))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for key, best := range chooseHomonyms(groups) {
+		if _, err := tx.tx.ExecContext(tx.ctx, `
+			UPDATE hive__name_mention SET chosen = (candidate = ?)
+			WHERE reference_id = ? AND raw__source = ? AND mention = ?`,
+			best, referenceID, key[0], key[1]); err != nil {
+			return fmt.Errorf("core: choose homonym: %w", err)
+		}
+	}
+	return nil
+}
+
+// chooseHomonyms picks, for each group with several candidates, the
+// lineage that shares the most with the paper's unambiguous names:
+// every taxon in an unambiguous name's classification (unranked
+// levels included) is weighted by the name's mention count, and a
+// candidate scores the weights of the taxa in its own classification.
+// Only exact species-level matches give context while the paper has
+// any: a genus or other single-word name can look unambiguous in a
+// source that lacks its homonym, and most words mistaken for names
+// are single words.
+// Taxa every unambiguous name shares (such as Eukaryota) score only
+// when no other taxon separates the candidates, since a candidate
+// with a shorter classification would otherwise lose on them alone.
+// Ties keep the verifier's order. It returns the chosen candidate
+// index per group with homonyms.
+func chooseHomonyms[K comparable](groups map[K]*homonymGroup) map[K]int {
+	speciesOnly := false
+	for _, g := range groups {
+		if len(g.paths) == 1 && g.species {
+			speciesOnly = true
+			break
+		}
+	}
+	weight := map[string]int{}
+	total := 0
+	for _, g := range groups {
+		if len(g.paths) != 1 || (speciesOnly && !g.species) {
+			continue
+		}
+		total += g.count
+		seen := map[string]bool{}
+		for _, name := range g.paths[0] {
+			if name != "" && !seen[name] {
+				seen[name] = true
+				weight[name] += g.count
+			}
+		}
+	}
+	informative := map[string]int{}
+	for name, w := range weight {
+		if w < total {
+			informative[name] = w
+		}
+	}
+	chosen := map[K]int{}
+	for key, g := range groups {
+		if len(g.paths) < 2 {
+			continue
+		}
+		best, ok := bestCandidate(g.paths, informative)
+		if !ok {
+			best, _ = bestCandidate(g.paths, weight)
+		}
+		chosen[key] = best
+	}
+	return chosen
+}
+
+// bestCandidate returns the index of the highest-scoring path under
+// weight, and whether that score is above zero.
+func bestCandidate(paths [][]string, weight map[string]int) (int, bool) {
+	best, bestScore := 0, 0
+	for i, path := range paths {
+		score := 0
+		seen := map[string]bool{}
+		for _, name := range path {
+			if !seen[name] {
+				seen[name] = true
+				score += weight[name]
+			}
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	return best, bestScore > 0
 }
 
 // upsertRawRecord writes a verified record's name and taxon rows.

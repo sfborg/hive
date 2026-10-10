@@ -15205,7 +15205,7 @@ const REFERENCE_COLUMNS = [
     sort: rank,
     rank,
     shown: rank === "family",
-    title: `Taxa at ${rank} rank that the paper's mentioned names fall under, with mention counts, from the name index source with the most exact matches (NCBI Taxonomy or the Catalogue of Life). Not the paper's own classification.`,
+    title: `Taxa at ${rank} rank that the paper's mentioned names fall under, with mention counts, from the tagged name source. Not the paper's own classification.`,
   })),
   {
     id: "name",
@@ -20630,13 +20630,20 @@ class SfgaReferences extends LitElement {
           <details class="col-help">
             <summary aria-label="About the higher-taxon filter">ⓘ</summary>
             <p>
-              Finds papers that mention names the chosen source places in
-              this taxon. The classification comes from NCBI Taxonomy or the
-              Catalogue of Life, not from the papers, and is never added to
-              your project. Use the source's names; the field browses its
-              classification, with the number of papers in each taxon. NCBI
-              Taxonomy covers more algae; groups a source does not cover
-              cannot be found through it.
+              Hive fills in the higher classification of the names each
+              paper mentions, using Global Names, so papers can be found by
+              higher taxon even when they name only species or genera. This
+              finds papers with names the chosen source places in this
+              taxon. The classification comes from the name source, not from
+              the papers, and is never added to your project; a name matched
+              to the wrong organism can place a paper under the wrong group.
+            </p>
+            <p>
+              Use the source's names; the field browses its classification,
+              with the number of papers in each taxon. Sources cover
+              different groups, and a group a source does not cover cannot
+              be found through it, so searching more than one can find
+              more.
             </p>
           </details>
         </div>
@@ -23153,32 +23160,38 @@ class SfgaHelpModal extends LitElement {
             <p>
               Hive uses the Global Names tools to find every scientific
               name in a paper. GNfinder detects the names in the text, and
-              GNverifier matches them against NCBI Taxonomy and the
-              Catalogue of Life. In the reader, a <b>GN</b> mark shows a
+              GNverifier matches them against name sources (currently NCBI
+              Taxonomy and the Catalogue of Life). In the reader, a <b>GN</b> mark shows a
               name tagged this way; names without it were tagged by the
               publisher.
             </p>
             <p>
-              The reference list's classification columns (Kingdom through
-              Genus) and the higher-taxon filter are calculated
-              automatically from those matches, so you can find and explore
-              papers by classification. For each paper, one source is used:
-              the one that matches the most of its names exactly. Each
-              column lists the taxa at that rank with how many mentions fall
-              under each, most first; taxa with less than a tenth of the
-              leading taxon's count are left out. A cell is empty when the
-              source places fewer than a tenth of the paper's matched
-              mentions at that rank, so a few stray matches do not fill it;
-              NCBI Taxonomy, for example, places many algae under unranked
-              groups. Hover a
-              cell for the counts. The Names column lists the names as the
-              paper writes them.
+              Hive fills in the higher classification of those names
+              (kingdom through genus) from those sources, so you can find and explore papers by higher taxon
+              even when a paper names only species or genera. The reference
+              list's classification columns and the higher-taxon filter
+              both come from it.
+            </p>
+            <p>
+              Only exact matches count; a near spelling often belongs to an
+              unrelated organism. When a name is used for unrelated
+              organisms (a homonym), the filter finds the paper under each,
+              and the columns use the one that fits the paper's other
+              names. Each column lists the taxa at that rank with how many
+              mentions fall under each, most first. A tag shows the source:
+              the one matching most of the paper's names, or another where
+              that one leaves the rank mostly unassigned. Sources cover
+              different groups and rank them differently, so using more
+              than one helps discovery. Taxa with less than a tenth of the
+              leading taxon's count are left out, so a few stray matches do
+              not fill a cell. Hover a cell for the counts. The Names column
+              lists the names as the paper writes them.
             </p>
             <p>
               These values are for discovery only. They show where the
               sources place the names a paper mentions, not what the paper
               itself says, and they are never added to your project's
-              taxonomy. A name shared by unrelated organisms can place a
+              taxonomy. A name matched to the wrong organism can place a
               paper under the wrong group.
             </p>
           </section>

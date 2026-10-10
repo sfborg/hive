@@ -102,3 +102,41 @@ func TestSourceTagPrefersReleaseDate(t *testing.T) {
 		t.Errorf("SourceTag = %q, %v", tag, err)
 	}
 }
+
+func TestToMatchKeepsHomonymLineages(t *testing.T) {
+	animal := &vlib.ResultData{
+		MatchType:           vlib.Exact,
+		ClassificationPath:  "Metazoa|Cnidaria|Coccomyxidae|Coccomyxa",
+		ClassificationRanks: "kingdom|phylum|family|genus",
+		ClassificationIDs:   "k9|p9|f9|g9",
+	}
+	alga := &vlib.ResultData{
+		MatchType:           vlib.Exact,
+		ClassificationPath:  "Viridiplantae|Chlorophyta|Coccomyxaceae|Coccomyxa",
+		ClassificationRanks: "kingdom|phylum|family|genus",
+		ClassificationIDs:   "k1|p1|f1|g1",
+	}
+	strain := &vlib.ResultData{
+		MatchType:           vlib.Exact,
+		ClassificationPath:  "Viridiplantae|Chlorophyta|Coccomyxaceae|Coccomyxa|Coccomyxa sp. C-169",
+		ClassificationRanks: "kingdom|phylum|family|genus|strain",
+		ClassificationIDs:   "k1|p1|f1|g1|s1",
+	}
+	fuzzy := &vlib.ResultData{
+		MatchType:           vlib.Fuzzy,
+		ClassificationPath:  "Metazoa|Arthropoda|Coccidae|Coccomyia",
+		ClassificationRanks: "kingdom|phylum|family|genus",
+		ClassificationIDs:   "k9|p8|f8|g8",
+	}
+	m, ok := toMatch(vlib.Name{Name: "Coccomyxa", MatchType: vlib.Exact,
+		Results: []*vlib.ResultData{animal, strain, fuzzy, alga}})
+	if !ok {
+		t.Fatal("toMatch reported no match")
+	}
+	if m.RecordID != "g9" || m.MatchType != "Exact" {
+		t.Errorf("top = %s %s, want g9 Exact", m.RecordID, m.MatchType)
+	}
+	if len(m.Homonyms) != 1 || m.Homonyms[0].RecordID != "g1" {
+		t.Errorf("homonyms = %+v, want the alga genus g1 only", m.Homonyms)
+	}
+}

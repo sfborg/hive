@@ -183,6 +183,10 @@ type Match struct {
 	// Path is the classification from the top down, ending at the
 	// matched taxon.
 	Path []Rank
+	// Homonyms are the other lineages the name matches with the same
+	// match type, in GNverifier's score order: the same name-string
+	// used for unrelated organisms. Their own Homonyms are empty.
+	Homonyms []Match
 }
 
 // Verifier is the subset of the GNverifier client the index uses.
@@ -192,9 +196,13 @@ type Verifier interface {
 }
 
 // NewVerifier returns a GNverifier client restricted to one data
-// source.
+// source. It asks for all matches, so homonyms in the source are
+// returned too.
 func NewVerifier(sourceID int) Verifier {
-	cfg := gnverifierconfig.New(gnverifierconfig.OptDataSources([]int{sourceID}))
+	cfg := gnverifierconfig.New(
+		gnverifierconfig.OptDataSources([]int{sourceID}),
+		gnverifierconfig.OptWithAllMatches(true),
+	)
 	return gnverifier.New(cfg, verifrest.New(cfg.VerifierURL))
 }
 
@@ -235,9 +243,9 @@ func inFuture(date string) bool {
 // batchSize bounds each VerifyBatch call.
 const batchSize = 1000
 
-// Verify verifies names and returns the best result for each name
-// that matched a record with a classification. Names without a match
-// are absent from the result.
+// Verify verifies names and returns the result for each name that
+// matched a record with a classification: the top-scored lineage with
+// any homonyms. Names without a match are absent from the result.
 func Verify(ctx context.Context, v Verifier, names []string) map[string]Match {
 	out := make(map[string]Match, len(names))
 	for start := 0; start < len(names); start += batchSize {
@@ -255,11 +263,74 @@ func Verify(ctx context.Context, v Verifier, names []string) map[string]Match {
 	return out
 }
 
-// toMatch converts a verification result into a Match. It reports
-// false for results without a classification path.
+// maxHomonyms bounds the lineages kept per name.
+const maxHomonyms = 5
+
+// toMatch converts a verification result into a Match. With all
+// matches requested the results list every matching record; records
+// of the name's best match type are grouped by lineage (a source may
+// hold one record per strain), keeping the shortest path of each. It
+// reports false when no record has a classification path.
 func toMatch(r vlib.Name) (Match, bool) {
-	b := r.BestResult
-	if b == nil || b.ClassificationPath == "" {
+	results := r.Results
+	if len(results) == 0 && r.BestResult != nil {
+		results = []*vlib.ResultData{r.BestResult}
+	}
+	var out []Match
+	byLineage := map[string]int{}
+	for _, res := range results {
+		if res == nil || (len(r.Results) > 0 && res.MatchType != r.MatchType) {
+			continue
+		}
+		m, ok := resultToMatch(res)
+		if !ok {
+			continue
+		}
+		m.MatchType = r.MatchType.String()
+		key := lineageKey(m.Path)
+		if i, seen := byLineage[key]; seen {
+			if len(m.Path) < len(out[i].Path) {
+				out[i] = m
+			}
+			continue
+		}
+		if len(out) > maxHomonyms {
+			continue
+		}
+		byLineage[key] = len(out)
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return Match{}, false
+	}
+	best := out[0]
+	if len(out) > 1 {
+		best.Homonyms = out[1:]
+	}
+	return best, true
+}
+
+// lineageKey identifies a classification down to its genus, so
+// records that differ only below the genus (species, strains) count
+// as one lineage.
+func lineageKey(path []Rank) string {
+	end := len(path)
+	for i, r := range path {
+		if r.Rank == "genus" {
+			end = i + 1
+		}
+	}
+	names := make([]string, end)
+	for i := range end {
+		names[i] = path[i].Name
+	}
+	return strings.Join(names, "|")
+}
+
+// resultToMatch converts one result record. It reports false for
+// records without a classification path.
+func resultToMatch(b *vlib.ResultData) (Match, bool) {
+	if b.ClassificationPath == "" {
 		return Match{}, false
 	}
 	names := strings.Split(b.ClassificationPath, "|")
@@ -280,7 +351,6 @@ func toMatch(r vlib.Name) (Match, bool) {
 		return Match{}, false
 	}
 	return Match{
-		MatchType:   r.MatchType.String(),
 		RecordID:    leaf.ID,
 		MatchedName: b.MatchedCanonicalSimple,
 		CurrentName: b.CurrentCanonicalSimple,

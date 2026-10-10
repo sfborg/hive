@@ -896,7 +896,8 @@ CREATE TABLE IF NOT EXISTS hive__user_setting (
 
 -- hive__reference_taxon_summary records, per reference and rank
 -- (kingdom … genus), the taxa the paper's mentioned names fall under,
--- from the verifier source with the most exact matches; rank 'name'
+-- from the verifier source with the most exact matches, or the next
+-- source where that one leaves the rank mostly unassigned; rank 'name'
 -- holds the names as written. name is the most mentioned taxon ('' when
 -- the source places under a tenth of the matched mentions at the
 -- rank), distinct_count how many taxa have at least a tenth of its

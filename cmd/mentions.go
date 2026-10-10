@@ -103,9 +103,13 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 			}
 		}
 		byType := map[string]int{}
+		homonyms := 0
 		for _, n := range names {
 			if m, ok := matches[n]; ok {
 				byType[m.MatchType]++
+				if len(m.Homonyms) > 0 {
+					homonyms++
+				}
 			} else {
 				byType["NoMatch"]++
 			}
@@ -119,6 +123,7 @@ func runMentionsIndex(cmd *cobra.Command, args []string) error {
 		for _, t := range types {
 			fmt.Fprintf(out, "  %-14s %d\n", t, byType[t])
 		}
+		fmt.Fprintf(out, "  %d names match more than one lineage (homonyms)\n", homonyms)
 	}
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 )
@@ -41,9 +43,14 @@ func discoveryMatch(alias string) string {
 	return alias + "match_type IN ('Exact', 'PartialExact')"
 }
 
+// isDiscoveryMatch reports whether a match type passes discoveryMatch.
+func isDiscoveryMatch(matchType string) bool {
+	return matchType == "Exact" || matchType == "PartialExact"
+}
+
 // taxonSummaryMethod versions how summaries are computed; summaries
 // stored by an older method are recomputed by BackfillTaxonSummaries.
-const taxonSummaryMethod = 2
+const taxonSummaryMethod = 3
 
 // minRankCoverage is the share of a reference's matched mentions the
 // source must place at a rank for the rank to be summarized, so a few
@@ -61,22 +68,37 @@ const (
 )
 
 // refreshTaxonSummary recomputes a reference's taxon summary from its
-// name mentions. Higher ranks come from one source, the one with the
-// most discovery matches (see discoveryMatch), and count only those.
+// name mentions. Higher ranks count only discovery matches (see
+// discoveryMatch), taking each homonym's chosen lineage. Each rank
+// comes from the source with the most matched mentions in the paper,
+// or from the next source when that one places too few at the rank.
 func refreshTaxonSummary(tx *Tx, referenceID string) error {
 	if _, err := tx.tx.ExecContext(tx.ctx,
 		`DELETE FROM hive__reference_taxon_summary WHERE reference_id = ?`, referenceID); err != nil {
 		return fmt.Errorf("core: clear taxon summary: %w", err)
 	}
-	sourceTag, sourceID, matched, err := summarySource(tx, referenceID)
+	if err := chooseHomonymRows(tx, referenceID); err != nil {
+		return err
+	}
+	sources, err := summarySources(tx, referenceID)
 	if err != nil {
 		return err
 	}
-	if matched > 0 {
-		for _, rank := range SummaryRanks {
-			if err := summarizeRank(tx, referenceID, rank, sourceTag, sourceID, matched); err != nil {
-				return err
-			}
+	// Lowest rank first: a rank taken from another source counts only
+	// records that agree with the taxa already shown below it. Genera
+	// are not used for that, since homonyms share the genus name.
+	var anchors []string
+	for i := len(SummaryRanks) - 1; i >= 0 && len(sources) > 0; i-- {
+		rank := SummaryRanks[i]
+		kept, err := summarizeRank(tx, referenceID, rank, sources, anchors)
+		if err != nil {
+			return err
+		}
+		if rank == "genus" {
+			continue
+		}
+		for _, nc := range kept {
+			anchors = append(anchors, nc.Name)
 		}
 	}
 	// Names as written: each source repeats the same mention counts,
@@ -98,83 +120,127 @@ func refreshTaxonSummary(tx *Tx, referenceID string) error {
 	return insertTaxonSummary(tx, referenceID, SummaryRankName, 0, names, topNames, total, total)
 }
 
-// summarySource picks the source (raw__source tag and ID) with the
-// most discovery-matched mentions in the reference, preferring the
-// earlier of mentions.Sources on a tie. matched is 0 when no mention
-// has a discovery match.
-func summarySource(tx *Tx, referenceID string) (tag string, id, matched int, err error) {
+// summarySource is a verifier source's release in a reference's
+// mentions, with the mentions it matched.
+type summarySource struct {
+	tag     string // raw__source
+	id      int
+	matched int
+}
+
+// summarySources returns the sources with discovery matches in the
+// reference, most matched mentions first; ties follow
+// mentions.Sources.
+func summarySources(tx *Tx, referenceID string) ([]summarySource, error) {
 	rows, err := tx.tx.QueryContext(tx.ctx, `
 		SELECT raw__source, SUM(mention_count) FROM hive__name_mention
-		WHERE reference_id = ? AND `+discoveryMatch("")+` AND raw_taxon_id IS NOT NULL
+		WHERE reference_id = ? AND `+discoveryMatch("")+` AND chosen = 1 AND raw_taxon_id IS NOT NULL
 		GROUP BY raw__source`, referenceID)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("core: summary source: %w", err)
+		return nil, fmt.Errorf("core: summary sources: %w", err)
 	}
 	defer rows.Close()
-	bySource := map[int]struct {
-		tag string
-		n   int
-	}{}
+	bySource := map[int]summarySource{}
 	for rows.Next() {
-		var t string
-		var n, sid int
-		if err := rows.Scan(&t, &n); err != nil {
-			return "", 0, 0, err
+		var src summarySource
+		if err := rows.Scan(&src.tag, &src.matched); err != nil {
+			return nil, err
 		}
-		if _, err := fmt.Sscanf(t, "gnverifier:%d@", &sid); err != nil {
+		if _, err := fmt.Sscanf(src.tag, "gnverifier:%d@", &src.id); err != nil {
 			continue
 		}
-		if n > bySource[sid].n {
-			bySource[sid] = struct {
-				tag string
-				n   int
-			}{t, n}
+		if src.matched > bySource[src.id].matched {
+			bySource[src.id] = src
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", 0, 0, err
+		return nil, err
 	}
-	for _, src := range mentions.Sources {
-		if b := bySource[src.ID]; b.n > matched {
-			tag, id, matched = b.tag, src.ID, b.n
+	var out []summarySource
+	for _, s := range mentions.Sources {
+		if src, ok := bySource[s.ID]; ok {
+			out = append(out, src)
 		}
 	}
-	return tag, id, matched, nil
+	slices.SortStableFunc(out, func(a, b summarySource) int { return b.matched - a.matched })
+	return out, nil
 }
 
-// summarizeRank stores the reference's taxa at rank from one source.
-// When the source places too few mentions at the rank the row keeps
-// an empty name, so the counts still explain the empty cell.
-func summarizeRank(tx *Tx, referenceID, rank, sourceTag string, sourceID, matched int) error {
+// summarizeRank stores the reference's taxa at rank from the first of
+// sources that places at least minRankCoverage of its matched
+// mentions there, and returns them. Sources after the first count
+// only records whose classification contains one of anchors, the
+// taxa already summarized at lower ranks, so a source that knows few
+// of the paper's names cannot fill the rank with stray matches. When
+// no source qualifies, the row keeps an empty name with the first
+// source's counts, which explain the empty cell.
+func summarizeRank(tx *Tx, referenceID, rank string, sources []summarySource, anchors []string) ([]NameCount, error) {
+	type result struct {
+		src        summarySource
+		kept       []NameCount
+		classified int
+	}
+	var first *result
+	for i, src := range sources {
+		if i > 0 && len(anchors) == 0 {
+			break
+		}
+		var within []string
+		if i > 0 {
+			within = anchors
+		}
+		all, err := rankCounts(tx, referenceID, rank, src.tag, within)
+		if err != nil {
+			return nil, err
+		}
+		r := result{src: src}
+		for _, nc := range all {
+			r.classified += nc.Count
+		}
+		if float64(r.classified) >= minRankCoverage*float64(src.matched) {
+			for _, nc := range all {
+				if float64(nc.Count) >= minTaxonShare*float64(all[0].Count) {
+					r.kept = append(r.kept, nc)
+				}
+			}
+		}
+		if len(r.kept) > 0 {
+			return r.kept, insertTaxonSummary(tx, referenceID, rank, src.id, r.kept, topRanked, r.classified, src.matched)
+		}
+		if first == nil {
+			first = &r
+		}
+	}
+	return nil, insertTaxonSummary(tx, referenceID, rank, first.src.id, nil, topRanked, first.classified, first.src.matched)
+}
+
+// rankCounts returns the mentions per taxon at rank in one source
+// release, most first. A non-empty within keeps only records whose
+// classification contains one of those taxa.
+func rankCounts(tx *Tx, referenceID, rank, sourceTag string, within []string) ([]NameCount, error) {
 	col := "col__" + rank
+	args := []any{referenceID, sourceTag}
+	cond := ""
+	if len(within) > 0 {
+		ors := make([]string, len(within))
+		for i, name := range within {
+			ors[i] = "INSTR(t.raw__path, '|' || ? || '|') > 0"
+			args = append(args, name)
+		}
+		cond = " AND (" + strings.Join(ors, " OR ") + ")"
+	}
 	rows, err := tx.tx.QueryContext(tx.ctx, `
 		SELECT t.`+col+`, SUM(m.mention_count) AS n
 		FROM hive__name_mention m
 		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
-		WHERE m.reference_id = ? AND m.raw__source = ? AND `+discoveryMatch("m.")+`
-			AND COALESCE(t.`+col+`, '') <> ''
+		WHERE m.reference_id = ? AND m.raw__source = ? AND m.chosen = 1 AND `+discoveryMatch("m.")+`
+			AND COALESCE(t.`+col+`, '') <> ''`+cond+`
 		GROUP BY t.`+col+`
-		ORDER BY n DESC, t.`+col, referenceID, sourceTag)
+		ORDER BY n DESC, t.`+col, args...)
 	if err != nil {
-		return fmt.Errorf("core: summarize %s: %w", rank, err)
+		return nil, fmt.Errorf("core: summarize %s: %w", rank, err)
 	}
-	all, err := scanNameCounts(rows)
-	if err != nil {
-		return err
-	}
-	classified := 0
-	for _, nc := range all {
-		classified += nc.Count
-	}
-	var kept []NameCount
-	if float64(classified) >= minRankCoverage*float64(matched) {
-		for _, nc := range all {
-			if float64(nc.Count) >= minTaxonShare*float64(all[0].Count) {
-				kept = append(kept, nc)
-			}
-		}
-	}
-	return insertTaxonSummary(tx, referenceID, rank, sourceID, kept, topRanked, classified, matched)
+	return scanNameCounts(rows)
 }
 
 func scanNameCounts(rows *sql.Rows) ([]NameCount, error) {
