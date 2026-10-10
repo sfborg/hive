@@ -142,6 +142,38 @@ const DATA = [
   ["estimates", "species estimates"],
 ];
 
+// listSource returns a combobox source over fixed options: all of them
+// on focus, narrowed as the curator types, with options whose name (or
+// a word of it) starts with the text first.
+function listSource(options) {
+  return (q) => {
+    const needle = (q || "").trim().toLowerCase();
+    const all = typeof options === "function" ? options() : options;
+    if (!needle) return all;
+    const score = (o) => {
+      const name = o.name.toLowerCase();
+      if (name.startsWith(needle)) return 0;
+      if (name.split(/\s+/).some((w) => w.startsWith(needle))) return 1;
+      return name.includes(needle) ? 2 : 3;
+    };
+    return all
+      .map((o) => [score(o), o])
+      .filter(([sc]) => sc < 3)
+      .sort((a, b) => a[0] - b[0])
+      .map(([, o]) => o);
+  };
+}
+
+const USAGES = [
+  { id: "accepted", name: "Accepted" },
+  { id: "synonym", name: "Synonyms" },
+];
+
+const DATA_OPTIONS = [
+  ...DATA.map(([k, l]) => ({ id: "has:" + k, name: "Has " + l })),
+  ...DATA.map(([k, l]) => ({ id: "missing:" + k, name: "Missing " + l })),
+];
+
 // withinSource searches the archive's taxa for the Within picker.
 async function withinSource(q) {
   if (!q || q.length < 2) return [];
@@ -219,8 +251,16 @@ class SfgaTaxonTable extends LitElement {
       color: var(--dim);
       font-size: var(--fs-xs);
     }
-    sfga-combobox.within {
+    sfga-combobox.within,
+    sfga-combobox.pick-issue {
       width: 14rem;
+    }
+    sfga-combobox.pick-usage {
+      width: 8rem;
+    }
+    sfga-combobox.pick-rank,
+    sfga-combobox.pick-data {
+      width: 11rem;
     }
     sfga-data-table {
       flex: 1 1 auto;
@@ -240,6 +280,16 @@ class SfgaTaxonTable extends LitElement {
     this._rules = [];
     this._total = null;
     this.icon = () => nothing;
+    this._usageSource = listSource(USAGES);
+    this._dataSource = listSource(DATA_OPTIONS);
+    this._rankSource = listSource(() =>
+      (api.vocab.get("rank") || []).filter((r) => r.id).map((r) => ({ id: r.id, name: r.name || r.id })),
+    );
+    this._issueSource = listSource(() => [
+      { id: "any", name: "With issues" },
+      ...SEVERITIES.map((sv) => ({ id: sv, name: "With " + sv })),
+      ...this._rules.map((r) => ({ id: "rule:" + r.id, name: `${r.name} (${r.count})` })),
+    ]);
     this._fetch = (page) =>
       api.taxon.table({
         q: this._q.trim(),
@@ -278,12 +328,38 @@ class SfgaTaxonTable extends LitElement {
     this._debounce = setTimeout(() => this.renderRoot.querySelector("sfga-data-table")?.reload(), field === "_q" ? 250 : 0);
   }
 
+  // _picker renders a type-to-filter combobox over fixed options for
+  // one filter field; clearing it means "any".
+  _picker(field, label, placeholder, source, value, nameOf) {
+    return html`<label for=${field}>${label}</label>
+      <sfga-combobox
+        id=${field}
+        class=${"pick-" + field}
+        min-search-chars="0"
+        placeholder=${placeholder}
+        .source=${source}
+        .value=${value || ""}
+        .valueName=${value ? nameOf(value) || value : ""}
+        @pick=${(e) => this._changed("_" + field, e.detail.id || "")}
+      ></sfga-combobox>`;
+  }
+
+  _rankName(id) {
+    return (api.vocab.get("rank") || []).find((r) => r.id === id)?.name || id.toLowerCase();
+  }
+
+  _issueName(id) {
+    if (id === "any") return "With issues";
+    if (SEVERITIES.includes(id)) return "With " + id;
+    const rule = this._rules.find((r) => "rule:" + r.id === id);
+    return rule ? rule.name : id;
+  }
+
   _open(row) {
     location.hash = "#/taxon/" + encodeURIComponent(row.taxon_id);
   }
 
   render() {
-    const ranks = (api.vocab.get("rank") || []).filter((r) => r.id);
     return html`
       <div class="toolbar" role="search">
         <h2>Search</h2>
@@ -294,17 +370,8 @@ class SfgaTaxonTable extends LitElement {
           .value=${this._q}
           @input=${(e) => this._changed("_q", e.target.value)}
         />
-        <label for="usage">Usage</label>
-        <select id="usage" @change=${(e) => this._changed("_usage", e.target.value)}>
-          ${[["", "All"], ["accepted", "Accepted"], ["synonym", "Synonyms"]].map(
-            ([v, l]) => html`<option value=${v} ?selected=${this._usage === v}>${l}</option>`,
-          )}
-        </select>
-        <label for="rank">Rank</label>
-        <select id="rank" @change=${(e) => this._changed("_rank", e.target.value)}>
-          <option value="" ?selected=${!this._rank}>All</option>
-          ${ranks.map((r) => html`<option value=${r.id} ?selected=${this._rank === r.id}>${r.name}</option>`)}
-        </select>
+        ${this._picker("usage", "Usage", "Any", this._usageSource, this._usage, (id) => USAGES.find((o) => o.id === id)?.name)}
+        ${this._picker("rank", "Rank", "Any", this._rankSource, this._rank, (id) => this._rankName(id))}
         <label for="within">Within</label>
         <sfga-combobox
           id="within"
@@ -316,33 +383,8 @@ class SfgaTaxonTable extends LitElement {
           .valueName=${this._within?.name || ""}
           @pick=${(e) => this._changed("_within", e.detail.id ? { id: e.detail.id, name: e.detail.name } : null)}
         ></sfga-combobox>
-        <label for="data">Data</label>
-        <select id="data" @change=${(e) => this._changed("_data", e.target.value)}>
-          <option value="" ?selected=${!this._data}>Any</option>
-          <optgroup label="Has">
-            ${DATA.map(([k, l]) => html`<option value=${"has:" + k} ?selected=${this._data === "has:" + k}>Has ${l}</option>`)}
-          </optgroup>
-          <optgroup label="Missing">
-            ${DATA.map(
-              ([k, l]) => html`<option value=${"missing:" + k} ?selected=${this._data === "missing:" + k}>Missing ${l}</option>`,
-            )}
-          </optgroup>
-        </select>
-        <label for="issue">Issues</label>
-        <select id="issue" @change=${(e) => this._changed("_issue", e.target.value)}>
-          <option value="" ?selected=${!this._issue}>Any or none</option>
-          <option value="any" ?selected=${this._issue === "any"}>With issues</option>
-          ${SEVERITIES.map((s) => html`<option value=${s} ?selected=${this._issue === s}>With ${s}</option>`)}
-          ${this._rules.length
-            ? html`<optgroup label="Issue type">
-                ${this._rules.map(
-                  (r) => html`<option value=${"rule:" + r.id} ?selected=${this._issue === "rule:" + r.id}>
-                    ${r.name} (${r.count})
-                  </option>`,
-                )}
-              </optgroup>`
-            : nothing}
-        </select>
+        ${this._picker("data", "Data", "Any", this._dataSource, this._data, (id) => DATA_OPTIONS.find((o) => o.id === id)?.name)}
+        ${this._picker("issue", "Issues", "Any or none", this._issueSource, this._issue, (id) => this._issueName(id))}
         <span class="total" role="status">${this._total === null ? "" : `${this._total.toLocaleString()} names`}</span>
       </div>
       <sfga-data-table
