@@ -77,6 +77,7 @@ const iconPaths = {
   moon: svg`
     <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
   `,
+  user: svg`<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />`,
   monitor: svg`
     <rect width="20" height="14" x="2" y="3" rx="2" />
     <line x1="8" x2="16" y1="21" y2="21" />
@@ -1637,6 +1638,10 @@ class SfgaApp extends LitElement {
     sidebarCollapsed: { state: true },
     helpOpen: { state: true },
     llmProvidersOpen: { state: true },
+    accountOpen: { state: true },
+    // Position of the open settings menu ({top, right}), null when
+    // closed.
+    _settingsMenu: { state: true },
     // Warnings from the most recent create/update, if any. Cleared
     // when the selection moves to a different taxon. See _onMoved.
     _pendingWarnings: { state: true },
@@ -1787,6 +1792,77 @@ class SfgaApp extends LitElement {
       align-items: center;
       gap: var(--sp-1);
       justify-self: end;
+    }
+    .settings-menu {
+      position: fixed;
+      z-index: var(--z-popover);
+      display: grid;
+      min-width: 14rem;
+      padding: var(--sp-1) 0;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px color-mix(in oklab, var(--fg) 20%, transparent);
+      font-size: var(--fs-sm);
+    }
+    .settings-menu > button {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      font: inherit;
+      text-align: left;
+      padding: var(--sp-1) var(--sp-3);
+      background: none;
+      color: inherit;
+      border: 0;
+      cursor: pointer;
+    }
+    .settings-menu > button:hover,
+    .settings-menu > button:focus-visible,
+    .settings-menu .theme-choice button:hover,
+    .settings-menu .theme-choice button:focus-visible {
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
+      outline: none;
+    }
+    .settings-menu kbd {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      color: var(--dim);
+    }
+    .settings-menu .menu-label {
+      padding: var(--sp-1) var(--sp-3) 0;
+      color: var(--dim);
+      font-size: var(--fs-xs);
+    }
+    .settings-menu .theme-choice {
+      display: flex;
+      gap: var(--sp-1);
+      padding: var(--sp-1) var(--sp-3);
+    }
+    .settings-menu .theme-choice button {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--sp-1);
+      font: inherit;
+      padding: var(--sp-1) var(--sp-2);
+      background: none;
+      color: inherit;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .settings-menu .theme-choice button.on {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .settings-menu hr {
+      width: 100%;
+      margin: var(--sp-1) 0;
+      border: 0;
+      border-top: 1px solid var(--border);
     }
     /* A button that opens a menu: its icon plus a small caret. */
     header .add-menu-btn {
@@ -2826,26 +2902,97 @@ class SfgaApp extends LitElement {
     }
   }
 
-  _cycleTheme() {
-    const order = ["auto", "light", "dark"];
-    const next = order[(order.indexOf(this.theme) + 1) % order.length];
-    this.theme = next;
-    setSetting("theme", next);
+  _setTheme(theme) {
+    this.theme = theme;
+    setSetting("theme", theme);
     this._applyTheme();
   }
 
-  // _themeIcon maps the current theme setting to a Lucide icon name.
-  // Monitor = "follows the system"; sun / moon are the explicit
-  // choices. Clicking the button cycles through auto → light → dark.
-  _themeIcon() {
-    switch (this.theme) {
-      case "light":
-        return "sun";
-      case "dark":
-        return "moon";
-      default:
-        return "monitor";
+  // The settings menu holds app-wide choices: theme, AI providers, the
+  // curator's account, and the keyboard shortcuts.
+  _openSettingsMenu(button) {
+    this._settingsButton = button;
+    const r = button.getBoundingClientRect();
+    this._settingsMenu = { top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) };
+    const depth = _modalStack.length;
+    this._unsubSettingsModals = subscribeModalStack(() => {
+      if (_modalStack.length > depth) this._closeSettingsMenu();
+    });
+    this._onSettingsOutside = (e) => {
+      const path = e.composedPath();
+      const menu = this.renderRoot.querySelector(".settings-menu");
+      if (!path.includes(menu) && !path.includes(this._settingsButton)) this._closeSettingsMenu();
+    };
+    window.addEventListener("pointerdown", this._onSettingsOutside, true);
+    this.updateComplete.then(() =>
+      this.renderRoot.querySelector(".settings-menu [role^=menuitem]")?.focus(),
+    );
+  }
+
+  _closeSettingsMenu(refocus = false) {
+    this._settingsMenu = null;
+    this._unsubSettingsModals?.();
+    this._unsubSettingsModals = null;
+    if (this._onSettingsOutside) {
+      window.removeEventListener("pointerdown", this._onSettingsOutside, true);
+      this._onSettingsOutside = null;
     }
+    if (refocus) this._settingsButton?.focus();
+  }
+
+  _renderSettingsMenu() {
+    if (!this._settingsMenu) return nothing;
+    const { top, right } = this._settingsMenu;
+    const run = (fn) => () => {
+      this._closeSettingsMenu();
+      fn();
+    };
+    const themes = [
+      ["auto", "System", "monitor"],
+      ["light", "Light", "sun"],
+      ["dark", "Dark", "moon"],
+    ];
+    return html`<div
+      class="settings-menu"
+      role="menu"
+      aria-label="Settings"
+      style=${`top:${top}px;right:${right}px`}
+      @keydown=${(e) => {
+        const items = [...this.renderRoot.querySelectorAll(".settings-menu [role^=menuitem]")];
+        const i = items.indexOf(this.renderRoot.activeElement);
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this._closeSettingsMenu(true);
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const d = e.key === "ArrowDown" ? 1 : -1;
+          items[(i + d + items.length) % items.length]?.focus();
+        }
+      }}
+    >
+      <div class="menu-label" id="theme-label">Theme</div>
+      <div class="theme-choice" role="group" aria-labelledby="theme-label">
+        ${themes.map(
+          ([id, label, icon]) => html`<button
+            role="menuitemradio"
+            aria-checked=${this.theme === id ? "true" : "false"}
+            class=${this.theme === id ? "on" : ""}
+            @click=${() => this._setTheme(id)}
+          >${renderIcon(icon, 14)} ${label}</button>`,
+        )}
+      </div>
+      <hr />
+      <button role="menuitem" @click=${run(() => (this.accountOpen = true))}>
+        ${renderIcon("user", 14)} Account…
+      </button>
+      <button role="menuitem" @click=${run(() => (this.llmProvidersOpen = true))}>
+        ${renderIcon("sparkles", 14)} AI providers…
+      </button>
+      <hr />
+      <button role="menuitem" @click=${run(() => (this.helpOpen = true))}>
+        ${renderIcon("help-circle", 14)} Keyboard shortcuts <kbd>?</kbd>
+      </button>
+    </div>`;
   }
 
   _onSelected(e) {
@@ -3460,30 +3607,18 @@ class SfgaApp extends LitElement {
         <div class="header-buttons">
           ${this._renderScreenActions()}
           <button
-            class="icon-btn subtle"
-            @click=${() => (this.llmProvidersOpen = true)}
-            title="LLM providers (add / remove keys)"
-            aria-label="LLM providers"
+            class="icon-btn subtle settings-btn"
+            @click=${(e) =>
+              this._settingsMenu ? this._closeSettingsMenu() : this._openSettingsMenu(e.currentTarget)}
+            title="settings"
+            aria-label="settings"
+            aria-haspopup="menu"
+            aria-expanded=${this._settingsMenu ? "true" : "false"}
           >
-            ${renderIcon("sparkles", 18)}
-          </button>
-          <button
-            class="icon-btn subtle"
-            @click=${() => (this.helpOpen = true)}
-            title="help and keyboard shortcuts  (?)"
-            aria-label="help and keyboard shortcuts"
-          >
-            ${renderIcon("help-circle", 18)}
-          </button>
-          <button
-            class="icon-btn subtle"
-            @click=${() => this._cycleTheme()}
-            title="theme: ${this.theme}  (click to cycle)"
-            aria-label="theme: ${this.theme}"
-          >
-            ${renderIcon(this._themeIcon(), 18)}
+            ${renderIcon("settings", 18)}
           </button>
         </div>
+        ${this._renderSettingsMenu()}
       </header>
       <main id="main" tabindex="-1">
         ${this._renderSidebar()}
@@ -3498,6 +3633,11 @@ class SfgaApp extends LitElement {
         ? html`<sfga-llm-provider-modal
             @close=${() => (this.llmProvidersOpen = false)}
           ></sfga-llm-provider-modal>`
+        : ""}
+      ${this.accountOpen
+        ? html`<sfga-account-modal
+            @close=${() => (this.accountOpen = false)}
+          ></sfga-account-modal>`
         : ""}
     `;
   }
@@ -5042,7 +5182,7 @@ class SfgaDetail extends LitElement {
     }
     .add-menu button:hover,
     .add-menu button:focus-visible {
-      background: var(--hover, color-mix(in oklab, var(--fg) 8%, transparent));
+      background: color-mix(in oklab, var(--fg) 8%, transparent);
       outline: none;
     }
     section.vernaculars {
@@ -23418,7 +23558,7 @@ class SfgaHelpModal extends LitElement {
       >
         <div class="modal" role="dialog" aria-labelledby="help-title">
           <header>
-            <h3 id="help-title">Help</h3>
+            <h3 id="help-title">Keyboard shortcuts</h3>
             <button
               class="close-x"
               type="button"
@@ -23429,49 +23569,6 @@ class SfgaHelpModal extends LitElement {
               ×
             </button>
           </header>
-          <section>
-            <h4>Scientific names in papers</h4>
-            <p>
-              Hive uses the Global Names tools to find every scientific
-              name in a paper. GNfinder detects the names in the text, and
-              GNverifier matches them against name sources (currently NCBI
-              Taxonomy and the Catalogue of Life). In the reader, a <b>GN</b> mark shows a
-              name tagged this way; names without it were tagged by the
-              publisher.
-            </p>
-            <p>
-              Hive fills in the higher classification of those names
-              (kingdom through genus) from those sources, so you can find and explore papers by higher taxon
-              even when a paper names only species or genera. The reference
-              list's classification columns and the higher-taxon filter
-              both come from it.
-            </p>
-            <p>
-              Only exact matches count; a near spelling often belongs to an
-              unrelated organism. When a name is used for unrelated
-              organisms (a homonym), the filter finds the paper under each,
-              and the columns use the one whose authors match the
-              authorship the paper gives the name, then one inside the
-              focal taxonomic groups set in Metadata, or else the one
-              that fits the paper's other names. Each column lists the taxa at that rank with how many
-              mentions fall under each, most first. A tag shows the source:
-              the one matching most of the paper's names, or another where
-              that one leaves the rank mostly unassigned. Sources cover
-              different groups and rank them differently, so using more
-              than one helps discovery. Taxa with less than a tenth of the
-              leading taxon's count are left out, so a few stray matches do
-              not fill a cell. Hover a cell for the counts. The Names column
-              lists the names as the paper writes them.
-            </p>
-            <p>
-              These values are for discovery only. They show where the
-              sources place the names a paper mentions, not what the paper
-              itself says, and they are never added to your project's
-              taxonomy. A name matched to the wrong organism can place a
-              paper under the wrong group.
-            </p>
-          </section>
-          <h3>Keyboard shortcuts</h3>
           ${SfgaHelpModal.scopeOrder.map((so) => this._renderSection(so))}
           <div class="hint">
             Esc or click outside to close.

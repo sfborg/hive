@@ -29,11 +29,24 @@ func resolveIdentity(orcidFlag, emailFlag string) (config.Identity, error) {
 		}
 	}
 
-	id := config.Identity{
-		ORCID:         firstNonEmpty(orcidFlag, os.Getenv("HIVE_ORCID"), cfg.ORCID),
-		OpenAlexEmail: firstNonEmpty(emailFlag, os.Getenv("HIVE_OPENALEX_EMAIL"), cfg.OpenAlexEmail),
-	}
+	id := config.Identity{Name: cfg.Name}
+	id.ORCID, id.ORCIDFrom = pick(orcidFlag, os.Getenv("HIVE_ORCID"), cfg.ORCID)
+	id.OpenAlexEmail, id.EmailFrom = pick(emailFlag, os.Getenv("HIVE_OPENALEX_EMAIL"), cfg.OpenAlexEmail)
 	return id, nil
+}
+
+// pick returns the first non-empty of a flag, environment and config
+// value with where it came from.
+func pick(flag, env, file string) (string, string) {
+	switch {
+	case flag != "":
+		return flag, config.SourceFlag
+	case env != "":
+		return env, config.SourceEnv
+	case file != "":
+		return file, config.SourceConfig
+	}
+	return "", ""
 }
 
 func configFileMissing() bool {
@@ -43,15 +56,6 @@ func configFileMissing() bool {
 	}
 	_, err = os.Stat(path)
 	return os.IsNotExist(err)
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // isatty reports whether fd refers to a terminal. Wraps

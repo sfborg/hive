@@ -266,7 +266,8 @@ func Run(archivePath string, opts Options) error {
 	// hive.ActorFromContext when they open a Tx. When ORCID SSO lands, this
 	// middleware chain gets a session-decoding step before the actor-inject
 	// step; core keeps knowing nothing about the source.
-	handler := withActor(opts.Actor, mux)
+	s.actor = newActorSource(opts.Actor)
+	handler := withActor(s.actor, mux)
 
 	srv := &http.Server{
 		Addr:              bind,
@@ -370,17 +371,17 @@ func checkBind(addr string, allowUnauthenticated bool) error {
 	return nil
 }
 
-// withActor wraps next with a middleware that injects `actor` into every
-// request's context via hive.WithActor. Every mutation handler downstream
+// withActor wraps next with a middleware that injects the current actor
+// into every request's context via hive.WithActor. Every mutation handler downstream
 // picks it up when it opens a Tx.
 //
 // Future: once ORCID SSO ships, this middleware moves after a session-
 // decoding middleware that extracts the ORCID iD from the request. The
 // signature and behavior stay the same — only the source of `actor`
 // changes. Core stays ignorant of where the string came from.
-func withActor(actor string, next http.Handler) http.Handler {
+func withActor(actor *actorSource, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := hive.WithActor(r.Context(), actor)
+		ctx := hive.WithActor(r.Context(), actor.get())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

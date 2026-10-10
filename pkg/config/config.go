@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/sfborg/hive/pkg/llm"
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,8 @@ type Config struct {
 	// slower anonymous pool. Per-curator (not project-wide) so
 	// OpenAlex sees real accountability signals.
 	OpenAlexEmail string `yaml:"openalex_email,omitempty"`
+	// Name is the curator's display name, shown in the web interface.
+	Name string `yaml:"name,omitempty"`
 	// LLMProviders is the curator's configured LLM providers, each
 	// resolvable at runtime via pkg/llm into a Provider instance
 	// (registered by name in an llm.Registry). Order in the file is
@@ -141,18 +144,42 @@ func Save(c *Config) error {
 type Identity struct {
 	ORCID         string
 	OpenAlexEmail string
+	Name          string
+	// ORCIDFrom and EmailFrom say where ORCID and OpenAlexEmail came
+	// from: SourceFlag, SourceEnv, SourceConfig, or "" when unset. A
+	// value from a flag or the environment overrides the file, so it
+	// cannot be changed by editing the file.
+	ORCIDFrom string
+	EmailFrom string
 }
 
-var currentIdentity Identity
+// Sources of an identity value.
+const (
+	SourceFlag   = "flag"
+	SourceEnv    = "env"
+	SourceConfig = "config"
+)
 
-// SetIdentity records the merged identity for the process. Called once
-// from main after resolving flag > env > config precedence. Safe to
-// call multiple times but not concurrent-safe — should only happen
-// during startup before any goroutines read it.
-func SetIdentity(id Identity) { currentIdentity = id }
+var (
+	identityMu      sync.RWMutex
+	currentIdentity Identity
+)
+
+// SetIdentity records the merged identity for the process: at startup
+// after resolving flag > env > config precedence, and again when the
+// curator edits their account.
+func SetIdentity(id Identity) {
+	identityMu.Lock()
+	currentIdentity = id
+	identityMu.Unlock()
+}
 
 // CurrentIdentity returns the merged identity set by SetIdentity, or a
 // zero-value Identity if SetIdentity was never called (e.g. in tests).
 // Client packages that need the ORCID actor for auditing or the
 // OpenAlex email for polite-pool headers read from here.
-func CurrentIdentity() Identity { return currentIdentity }
+func CurrentIdentity() Identity {
+	identityMu.RLock()
+	defer identityMu.RUnlock()
+	return currentIdentity
+}

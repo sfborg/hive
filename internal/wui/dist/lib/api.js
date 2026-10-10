@@ -119,6 +119,11 @@ export const api = {
   services: () => j("GET", "/api/services"),
   archive: () => j("GET", "/api/archive"),
 
+  account: {
+    get: () => j("GET", "/api/account"),
+    patch: (patch) => j("PATCH", "/api/account", patch),
+    orcidName: (orcid) => j("GET", `/api/account/orcid-name${qs({ orcid })}`),
+  },
   metadata: {
     get: () => j("GET", "/api/metadata"),
     patch: (patch) => j("PATCH", "/api/metadata", patch),

@@ -22,12 +22,12 @@ import (
 	"time"
 
 	hive "github.com/sfborg/hive/pkg"
-	"github.com/sfborg/hive/pkg/refmanager/casing"
-	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/hive/pkg/assembler"
 	"github.com/sfborg/hive/pkg/correction"
 	"github.com/sfborg/hive/pkg/llm"
+	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/bibtex"
+	"github.com/sfborg/hive/pkg/refmanager/casing"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
@@ -38,7 +38,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/pdftext"
 	"github.com/sfborg/hive/pkg/refmanager/sidecar"
 	"github.com/sfborg/hive/pkg/taxonomy/annotator"
-	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
+	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/hive/pkg/ui"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
@@ -48,7 +48,10 @@ import (
 // Handlers are methods on this type so they can reach dependencies without
 // package-level globals.
 type server struct {
-	a           *hive.Archive
+	a *hive.Archive
+	// actor is the identity stamped into each request; the account
+	// dialog can change it while the server runs.
+	actor       *actorSource
 	archivePath string
 	// grobid is the client for the optional GROBID service (PDF →
 	// TEI conversion). nil when HIVE_GROBID_URL is unset — the
@@ -154,6 +157,9 @@ func (s *server) routes() *http.ServeMux {
 		s.handleDeleteSpeciesInteractionType)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 
+	mux.HandleFunc("GET /api/account", s.handleGetAccount)
+	mux.HandleFunc("PATCH /api/account", s.handlePatchAccount)
+	mux.HandleFunc("GET /api/account/orcid-name", s.handleORCIDLookup)
 	mux.HandleFunc("GET /api/metadata", s.handleGetMetadata)
 	mux.HandleFunc("PATCH /api/metadata", s.handlePatchMetadata)
 
@@ -4675,9 +4681,9 @@ func (s *server) handleReferenceLibraryRegions(w http.ResponseWriter, r *http.Re
 	out := apiRegionList{Items: make([]apiRegion, 0, len(regions))}
 	for _, rg := range regions {
 		item := apiRegion{
-			ID:     rg.ID,
-			Label:  rg.Text,
-			Kind:   rg.Kind,
+			ID:      rg.ID,
+			Label:   rg.Text,
+			Kind:    rg.Kind,
 			Page:    rg.Page,
 			Origin:  rg.Origin,
 			Caption: rg.Caption,
@@ -5895,6 +5901,7 @@ func extractJATSMeta(path string) (string, *apiUploadBibHeader) {
 //   - "doi:10.1234/xyz"
 //   - "urn:doi:10.1234/xyz"
 //   - a plain "10.1234/xyz" when scheme metadata says DOI
+//
 // Any of those get normalized to the bare DOI.
 func extractEPUBMeta(path string) (string, *apiUploadBibHeader) {
 	zr, err := zip.OpenReader(path)
