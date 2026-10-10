@@ -472,7 +472,7 @@ func (rq ReferenceQuery) minMentions() int {
 // parentCond is the condition, over hive__name_mention m joined to
 // raw__taxon t, that the mention's record lies in p.
 func (rq ReferenceQuery) parentCond(p IndexParent) (string, []any) {
-	return `m.raw__source LIKE ? AND m.mention_count >= ?
+	return `m.raw__source LIKE ? AND m.mention_count >= ? AND ` + discoveryMatch("m.") + `
 		AND INSTR(LOWER(t.raw__path), '|' || LOWER(?) || '|') > 0`,
 		[]any{mentions.TagPrefix(p.SourceID) + "%", rq.minMentions(), strings.TrimSpace(p.Name)}
 }

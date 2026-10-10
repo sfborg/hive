@@ -895,13 +895,16 @@ CREATE TABLE IF NOT EXISTS hive__user_setting (
 );
 
 -- hive__reference_taxon_summary records, per reference and rank
--- (kingdom … genus), the most-mentioned taxon among the names the
--- paper mentions, from the first verifier source that classifies one;
--- rank 'name' holds the most-mentioned name as written. distinct_count
--- is how many taxa of that rank are mentioned and top_json the five
--- most mentioned as [[name, count], …]. Discovery data from the
--- name-mention index; refreshed whenever the paper's mentions are
--- indexed.
+-- (kingdom … genus), the taxa the paper's mentioned names fall under,
+-- from the verifier source with the most exact matches; rank 'name'
+-- holds the names as written. name is the most mentioned taxon ('' when
+-- the source places under a tenth of the matched mentions at the
+-- rank), distinct_count how many taxa have at least a tenth of its
+-- count, top_json the leading ones as [[name, count], …],
+-- classified the matched mentions the source places at that rank and
+-- matched the mentions with an exact match. method versions the
+-- computation. Discovery data from the name-mention index; refreshed
+-- whenever the paper's mentions are indexed.
 CREATE TABLE IF NOT EXISTS hive__reference_taxon_summary (
     reference_id    TEXT NOT NULL,
     rank            TEXT NOT NULL,
@@ -910,6 +913,9 @@ CREATE TABLE IF NOT EXISTS hive__reference_taxon_summary (
     mentions        INTEGER NOT NULL,
     distinct_count  INTEGER NOT NULL,
     top_json        TEXT NOT NULL,
+    classified      INTEGER NOT NULL,
+    matched         INTEGER NOT NULL,
+    method          INTEGER NOT NULL,
     PRIMARY KEY (reference_id, rank)
 );
 
@@ -1065,6 +1071,9 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 	if err := migrateExtractionCorrectionForModify(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateTaxonSummaryMethod(ctx, db); err != nil {
+		return err
+	}
 	if err := migrateReferenceAssertionForRunLink(ctx, db); err != nil {
 		return err
 	}
@@ -1077,6 +1086,24 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 // backfill needed; legacy rows just show as unlinked (which is
 // accurate — they weren't produced by an extraction_run).
 // Idempotent: skips columns that already exist.
+// migrateTaxonSummaryMethod drops a hive__reference_taxon_summary
+// that predates the method column. The table holds derived data;
+// BackfillTaxonSummaries refills it.
+func migrateTaxonSummaryMethod(ctx context.Context, db *sql.DB) error {
+	exists, err := tableExists(ctx, db, "hive__reference_taxon_summary")
+	if err != nil || !exists {
+		return err
+	}
+	has, err := columnExists(ctx, db, "hive__reference_taxon_summary", "method")
+	if err != nil || has {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE hive__reference_taxon_summary`); err != nil {
+		return fmt.Errorf("core: drop old taxon summary: %w", err)
+	}
+	return nil
+}
+
 func migrateReferenceAssertionForRunLink(ctx context.Context, db *sql.DB) error {
 	exists, err := tableExists(ctx, db, "hive__reference_assertion")
 	if err != nil {

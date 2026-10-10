@@ -274,7 +274,7 @@ func (a *Archive) ColTaxa(ctx context.Context, sourceID int, prefix string, limi
 		parts = append(parts, `SELECT t.`+col+` AS name, '`+r+`' AS rank, m.reference_id
 			FROM hive__name_mention m
 			JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
-			WHERE m.raw__source LIKE ? AND t.`+col+` != ''
+			WHERE m.raw__source LIKE ? AND t.`+col+` != '' AND `+discoveryMatch("m.")+`
 			  AND LOWER(t.`+col+`) LIKE LOWER(?) ESCAPE '\'`)
 		args = append(args, mentions.TagPrefix(sourceID)+"%", likePrefix(prefix))
 	}

@@ -15205,14 +15205,14 @@ const REFERENCE_COLUMNS = [
     sort: rank,
     rank,
     shown: rank === "family",
-    title: `Most-mentioned ${rank} according to NCBI Taxonomy, or the Catalogue of Life where NCBI has none`,
+    title: `Taxa at ${rank} rank that the paper's mentioned names fall under, with mention counts, from the name index source with the most exact matches (NCBI Taxonomy or the Catalogue of Life). Not the paper's own classification.`,
   })),
   {
     id: "name",
-    label: "Top name",
+    label: "Names",
     sort: "name",
     rank: "name",
-    title: "The scientific name the paper mentions most often, as written",
+    title: "Scientific names found in the paper, as written, with mention counts",
   },
   {
     id: "issues",
@@ -15901,11 +15901,19 @@ class SfgaReferences extends LitElement {
       font-size: var(--fs-xs);
       color: var(--dim);
     }
-    .ref-table .col-family {
-      white-space: nowrap;
+    .ref-table .col-family .taxon-list {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+      min-width: 10em;
+      max-width: 22em;
     }
-    .ref-table.rows-full .col-family {
-      white-space: normal;
+    .ref-table.rows-one .col-family .taxon-list {
+      -webkit-line-clamp: 1;
+    }
+    .ref-table.rows-full .col-family .taxon-list {
+      display: inline;
     }
     .ref-table .issue-counts {
       display: inline-flex;
@@ -18448,26 +18456,39 @@ class SfgaReferences extends LitElement {
     </a>`;
   }
 
-  // _renderRankCell shows a reference's most-mentioned taxon at a
-  // rank (or its most-mentioned name), labelled with the index source
-  // and, when it mentions several, "+N" with the top five in the
-  // tooltip.
+  // _renderRankCell lists a reference's mentioned taxa at a rank (or
+  // its names as written) with their mention counts, most mentioned
+  // first. An empty rank explains in its tooltip how many mentions the
+  // source places at that rank.
   _renderRankCell(h, rank) {
     if (!h.mentions_indexed) {
       return html`<span class="dim" title="Name mentions not indexed yet">—</span>`;
     }
     const ts = h.taxa && h.taxa[rank];
-    if (!ts) {
-      const what = rank === "name" ? "name" : `name placed in a ${rank}`;
-      return html`<span class="dim" title=${`No mentioned ${what} by an index source`}>—</span>`;
+    const src = ts && ts.source ? indexSourceLabel(ts.source) : "";
+    if (!ts || !ts.name) {
+      const title = !ts
+        ? rank === "name"
+          ? "No scientific names found in the paper"
+          : "No mentioned name matched exactly in an index source"
+        : ts.classified
+          ? `${src} places only ${ts.classified} of ${ts.matched} matched mentions in a ${rank}`
+          : `${src} gives no ${rank} for the ${ts.matched} matched mentions`;
+      return html`<span class="dim" title=${title}>—</span>`;
     }
-    const top = (ts.top || []).map((t) => `${t.name} ${t.count}`).join(" · ");
-    const more = ts.distinct > 1 ? ` (${ts.distinct} in total)` : "";
-    const src = ts.source ? `, ${indexSourceLabel(ts.source)}` : "";
-    return html`<span title=${`${top}${more}${src}`}
-      >${ts.name}${ts.source
+    const top = ts.top || [];
+    const shown = top.map((t) => `${t.name} ${t.count}`).join(", ");
+    const rest = ts.distinct > top.length ? `, and ${ts.distinct - top.length} more` : "";
+    const title =
+      rank === "name"
+        ? `${shown}${rest}`
+        : `${shown}${rest}. ${src}: ${ts.classified} of ${ts.matched} matched mentions placed in a ${rank}`;
+    return html`<span class="taxon-list" title=${title}
+      >${top.map(
+        (t, i) => html`${i ? ", " : ""}${t.name} <span class="dim">${t.count}</span>`,
+      )}${ts.distinct > top.length ? html`<span class="dim">, …</span>` : nothing}${ts.source
         ? html` <span class="col-badge">${indexSourceShort(ts.source)}</span>`
-        : nothing}${ts.distinct > 1 ? html` <span class="dim">+${ts.distinct - 1}</span>` : nothing}</span
+        : nothing}</span
     >`;
   }
 
@@ -23139,12 +23160,19 @@ class SfgaHelpModal extends LitElement {
             </p>
             <p>
               The reference list's classification columns (Kingdom through
-              Genus, and Top name) and the higher-taxon filter are
-              calculated automatically from those matches, so you can find
-              and explore papers by classification. Each column shows the
-              taxon the paper mentions most at that rank and the source
-              that placed it; <b>+N</b> means the paper mentions others,
-              and hovering lists the top five.
+              Genus) and the higher-taxon filter are calculated
+              automatically from those matches, so you can find and explore
+              papers by classification. For each paper, one source is used:
+              the one that matches the most of its names exactly. Each
+              column lists the taxa at that rank with how many mentions fall
+              under each, most first; taxa with less than a tenth of the
+              leading taxon's count are left out. A cell is empty when the
+              source places fewer than a tenth of the paper's matched
+              mentions at that rank, so a few stray matches do not fill it;
+              NCBI Taxonomy, for example, places many algae under unranked
+              groups. Hover a
+              cell for the counts. The Names column lists the names as the
+              paper writes them.
             </p>
             <p>
               These values are for discovery only. They show where the

@@ -34,7 +34,7 @@ func runTokens(field string) string {
 // summaryName selects a reference's stored most-mentioned taxon at
 // rank.
 func summaryName(rank string) string {
-	return `(SELECT LOWER(s.name) FROM hive__reference_taxon_summary s
+	return `(SELECT LOWER(NULLIF(s.name, '')) FROM hive__reference_taxon_summary s
 		WHERE s.reference_id = reference.col__id AND s.rank = '` + rank + `')`
 }
 

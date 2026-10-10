@@ -903,19 +903,24 @@ func referenceHitToAPI(h hive.ReferenceHit) apiReferenceHit {
 			a.Taxa[rank] = apiTaxonSummary{
 				Name: ts.Name, Mentions: ts.Mentions, Distinct: ts.Distinct,
 				Source: sourceKey(ts.SourceID), Top: top,
+				Classified: ts.Classified, Matched: ts.Matched,
 			}
 		}
 	}
 	return a
 }
 
-// apiTaxonSummary is a reference's most-mentioned taxon at one rank.
+// apiTaxonSummary is a reference's mentioned taxa at one rank. Name is
+// empty when the source places under a tenth of the matched mentions
+// at the rank.
 type apiTaxonSummary struct {
-	Name     string         `json:"name"`
-	Mentions int            `json:"mentions"`
-	Distinct int            `json:"distinct"`
-	Source   string         `json:"source,omitempty"`
-	Top      []apiNameCount `json:"top"`
+	Name       string         `json:"name"`
+	Mentions   int            `json:"mentions"`
+	Distinct   int            `json:"distinct"`
+	Source     string         `json:"source,omitempty"`
+	Top        []apiNameCount `json:"top"`
+	Classified int            `json:"classified"`
+	Matched    int            `json:"matched"`
 }
 
 type apiNameCount struct {

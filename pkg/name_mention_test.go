@@ -179,8 +179,8 @@ func TestIndexSourcesAreSeparate(t *testing.T) {
 		{Name: "Fictogenus", Rank: "genus", ID: "n9"},
 	}}
 	if err := a.ReplaceNameMentions(ctx, "ref-a", "gnverifier:4@2026-09-28",
-		map[string]int{"Fictogenus alpha": 5},
-		map[string]mentions.Match{"Fictogenus alpha": ncbi},
+		map[string]int{"Fictogenus alpha": 5, "Inventa nova": 1},
+		map[string]mentions.Match{"Fictogenus alpha": ncbi, "Inventa nova": ncbi},
 	); err != nil {
 		t.Fatalf("ReplaceNameMentions ncbi: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestIndexSourcesAreSeparate(t *testing.T) {
 	if len(hits) != 0 {
 		t.Errorf("col_parent Inventaceae matched NCBI rows: %v", hitIDs(hits))
 	}
-	// The family summary prefers NCBI.
+	// Both sources match six mentions exactly; the tie goes to NCBI.
 	all, _, err := a.ListReferencesPage(ctx, 0, 0, ReferenceSortAuthor, ReferenceQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -212,5 +212,49 @@ func TestIndexSourcesAreSeparate(t *testing.T) {
 		if h.ID == "ref-a" && (h.IndexFamily != "Inventaceae" || h.IndexFamilySourceID != mentions.NCBI) {
 			t.Errorf("ref-a family = %q from %d, want Inventaceae from NCBI", h.IndexFamily, h.IndexFamilySourceID)
 		}
+	}
+}
+
+func TestTaxonSummaryLeavesOutStrayMatches(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	seedMentions(t, a, ctx)
+	// Mostly names the source leaves without a phylum, one stray
+	// exact match under an animal phylum, and a fuzzy match to another.
+	unranked := mentions.Match{MatchType: "Exact", RecordID: "d1", Path: []mentions.Rank{
+		{Name: "Dinophyceae", Rank: "class", ID: "c1"},
+		{Name: "Dinogenus", Rank: "genus", ID: "d1"},
+	}}
+	animal := func(id string, mt string) mentions.Match {
+		return mentions.Match{MatchType: mt, RecordID: id, Path: []mentions.Rank{
+			{Name: "Metazoa", Rank: "kingdom", ID: "k9"},
+			{Name: "Arthropoda", Rank: "phylum", ID: "p9"},
+			{Name: "Insecta", Rank: "class", ID: "c9"},
+			{Name: "Stray" + id, Rank: "genus", ID: id},
+		}}
+	}
+	if err := a.ReplaceNameMentions(ctx, "ref-b", testSource,
+		map[string]int{"Dinogenus alpha": 40, "Strayx": 2, "Dinogenus pontica": 30},
+		map[string]mentions.Match{
+			"Dinogenus alpha":   unranked,
+			"Strayx":            animal("x", "Exact"),
+			"Dinogenus pontica": animal("y", "Fuzzy"),
+		},
+	); err != nil {
+		t.Fatalf("ReplaceNameMentions: %v", err)
+	}
+	sums, err := a.batchTaxonSummaries(ctx, []string{"ref-b"})
+	if err != nil {
+		t.Fatalf("batchTaxonSummaries: %v", err)
+	}
+	s := sums["ref-b"]
+	if p := s["phylum"]; p.Name != "" || p.Classified != 2 || p.Matched != 42 {
+		t.Errorf("phylum = %+v, want empty name with 2 of 42 classified", p)
+	}
+	if c := s["class"]; c.Name != "Dinophyceae" || len(c.Top) != 1 {
+		t.Errorf("class = %+v, want Dinophyceae alone", c)
+	}
+	if n := s[SummaryRankName]; len(n.Top) != 3 || n.Top[0].Name != "Dinogenus alpha" {
+		t.Errorf("names = %+v, want all three as written", n.Top)
 	}
 }

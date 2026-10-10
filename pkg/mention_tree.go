@@ -91,7 +91,8 @@ func (a *Archive) loadTaxonTree(ctx context.Context, sourceID, minMentions int) 
 	rows, err := a.db.QueryContext(ctx, `SELECT m.reference_id, t.raw__path, `+strings.Join(cols, ", ")+`
 		FROM hive__name_mention m
 		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
-		WHERE m.raw__source LIKE ? AND m.mention_count >= ? AND t.raw__path != ''`,
+		WHERE m.raw__source LIKE ? AND m.mention_count >= ? AND t.raw__path != ''
+			AND `+discoveryMatch("m."),
 		mentions.TagPrefix(sourceID)+"%", minMentions)
 	if err != nil {
 		return nil, fmt.Errorf("core: taxon tree: %w", err)
