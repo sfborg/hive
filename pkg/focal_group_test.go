@@ -47,10 +47,14 @@ func TestFocalTaxonomicGroups(t *testing.T) {
 	animal := mentions.Match{MatchType: "Exact", RecordID: "x9", Path: []mentions.Rank{
 		{Name: "Metazoa", Rank: "kingdom", ID: "x7"},
 		{Name: "Arthropoda", Rank: "phylum", ID: "x8"},
+		{Name: "Insecta", Rank: "class", ID: "x10"},
+		{Name: "Curculionidae", Rank: "family", ID: "x11"},
 		{Name: "Amphora", Rank: "genus", ID: "x9"},
 	}}
 	diatom := mentions.Match{MatchType: "Exact", RecordID: "d9", Path: []mentions.Rank{
 		{Name: "Bacillariophyta", Rank: "phylum", ID: "d8"},
+		{Name: "Bacillariophyceae", Rank: "class", ID: "d11"},
+		{Name: "Catenulaceae", Rank: "family", ID: "d10"},
 		{Name: "Amphora", Rank: "genus", ID: "d9"},
 	}}
 	animal.Homonyms = []mentions.Match{diatom}
@@ -107,7 +111,20 @@ func TestFocalTaxonomicGroups(t *testing.T) {
 		map[string]int{"Amphora": 2}, map[string]mentions.Match{"Amphora": otherNames}); err != nil {
 		t.Fatalf("ReplaceNameMentions ref-y ncbi: %v", err)
 	}
-	for ref, want := range map[string]int{"ref-x": 0, "ref-y": 1} {
+	// A truncated lineage without class, order or family cannot be
+	// shown to disagree and is kept.
+	bare := mentions.Match{MatchType: "Exact", RecordID: "z9", Path: []mentions.Rank{
+		{Name: "Amphora", Rank: "genus", ID: "z9"},
+	}}
+	if err := a.ReplaceNameMentions(ctx, "ref-z", testSource,
+		map[string]int{"Amphora": 2}, map[string]mentions.Match{"Amphora": animal}); err != nil {
+		t.Fatalf("ReplaceNameMentions ref-z: %v", err)
+	}
+	if err := a.ReplaceNameMentions(ctx, "ref-z", "gnverifier:4@2026-09-28",
+		map[string]int{"Amphora": 2}, map[string]mentions.Match{"Amphora": bare}); err != nil {
+		t.Fatalf("ReplaceNameMentions ref-z ncbi: %v", err)
+	}
+	for ref, want := range map[string]int{"ref-x": 0, "ref-y": 1, "ref-z": 1} {
 		var chosen int
 		if err := a.db.QueryRow(`SELECT COUNT(*) FROM hive__name_mention
 			WHERE reference_id = ? AND mention = 'Amphora' AND raw__source LIKE 'gnverifier:4@%' AND chosen = 1`, ref).Scan(&chosen); err != nil {

@@ -367,10 +367,12 @@ func TestHomonymChosenByAuthorship(t *testing.T) {
 		// Paper context favours the animal, the authorship the alga.
 		"Coccomyxa": {count: 3, paths: [][]string{animal, alga},
 			authorship: "Schmidle, 1901", scores: []float64{0, 1}},
-		"Myxobolus cerebralis": {count: 9, species: true, paths: [][]string{{"Metazoa", "Cnidaria", "Myxobolus"}}},
+		"Myxobolus cerebralis": {count: 9, species: true, paths: [][]string{{"Metazoa", "Cnidaria", "Myxobolus"}},
+			ranks: [][3]string{{"Myxosporea", "Bivalvulida", "Myxobolidae"}}},
 		// A dated authorship that matches no lineage's authors rejects
 		// the name.
 		"Luticola": {count: 4, uninomial: true, paths: [][]string{{"Eukaryota", "Metazoa", "Platyhelminthes", "Typhloplanidae", "Luticola"}},
+			ranks:      [][3]string{{"Rhabditophora", "Rhabdocoela", "Typhloplanidae"}},
 			authorship: "D.G.Mann in Round, Crawford & Mann 1990", scores: []float64{0}},
 		// An undated one decides nothing.
 		"Ulva": {count: 2, paths: [][]string{{"Viridiplantae", "Ulva"}, {"Metazoa", "Ulva"}},
@@ -390,8 +392,10 @@ func TestHomonymChosenByAuthorship(t *testing.T) {
 	// lineage the paper supports.
 	order := map[string]*homonymGroup{
 		"Spirogyrales": {count: 2, uninomial: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyrales"}},
+			ranks:      [][3]string{{"Zygnematophyceae", "Spirogyrales", ""}},
 			authorship: "Clements 1909", scores: []float64{0}},
-		"Spirogyra varians": {count: 5, species: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyra"}}},
+		"Spirogyra varians": {count: 5, species: true, paths: [][]string{{"Plantae", "Zygnematophyceae", "Spirogyra"}},
+			ranks: [][3]string{{"Zygnematophyceae", "Spirogyrales", "Spirogyraceae"}}},
 	}
 	if got := chooseHomonyms(order, nil)["Spirogyrales"]; got != 0 {
 		t.Errorf("Spirogyrales = %d, want 0", got)

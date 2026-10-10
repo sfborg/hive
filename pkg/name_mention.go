@@ -302,6 +302,10 @@ type homonymGroup struct {
 	species bool
 	// uninomial is true for a single-word name (a genus or higher).
 	uninomial bool
+	// ranks are each candidate's class, order and family ("" when the
+	// source gives none). Lineages are compared on these rather than
+	// on path positions, since a source's paths may start anywhere.
+	ranks [][3]string
 	// authorship is what the paper gives the name; scores are the
 	// candidates' author-match scores (see NameAuthorship).
 	authorship string
@@ -355,7 +359,8 @@ func (g *homonymGroup) byAuthorship() (choice int, ok bool) {
 func chooseHomonymRows(tx *Tx, referenceID string) error {
 	rows, err := tx.tx.QueryContext(tx.ctx, `
 		SELECT m.raw__source, m.mention, m.candidate, m.mention_count, m.match_type,
-			t.raw__path, m.authorship, COALESCE(m.author_score, -1)
+			t.raw__path, m.authorship, COALESCE(m.author_score, -1),
+			COALESCE(t.col__class, ''), COALESCE(t.col__order, ''), COALESCE(t.col__family, '')
 		FROM hive__name_mention m
 		JOIN raw__taxon t ON t.raw__source = m.raw__source AND t.col__id = m.raw_taxon_id
 		WHERE m.reference_id = ? AND `+discoveryMatch("m.")+`
@@ -368,7 +373,9 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 		var source, mention, matchType, path, authorship string
 		var candidate, n int
 		var score float64
-		if err := rows.Scan(&source, &mention, &candidate, &n, &matchType, &path, &authorship, &score); err != nil {
+		var ranks [3]string
+		if err := rows.Scan(&source, &mention, &candidate, &n, &matchType, &path, &authorship, &score,
+			&ranks[0], &ranks[1], &ranks[2]); err != nil {
 			rows.Close()
 			return err
 		}
@@ -381,6 +388,7 @@ func chooseHomonymRows(tx *Tx, referenceID string) error {
 			groups[key] = g
 		}
 		g.paths = append(g.paths, strings.Split(strings.Trim(path, "|"), "|"))
+		g.ranks = append(g.ranks, ranks)
 		g.scores = append(g.scores, score)
 	}
 	rows.Close()
@@ -457,24 +465,32 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup, focal map[string]b
 	// or authorship evidence.
 	type context struct {
 		path   []string
+		ranks  [3]string
 		count  int
 		strong bool
 	}
 	var contexts []context
 	var disputed []K
 	// A mention that one source places inside a focal group, and that
-	// another source places only in lineages sharing nothing with that
-	// one, is a homonym the other source lacks; that source's match is
-	// rejected. Sources may name the focal group differently, so
-	// lineages are compared, not focal names.
-	focalPaths := map[string][][]string{}
+	// another source places only in a different broad group (animals,
+	// prokaryotes, fungi), is a homonym the other source lacks; that
+	// source's match is rejected. Sources disagree on classes, orders
+	// and families often enough that only this broad level separates
+	// homonyms from differing classifications; a lineage whose broad
+	// group is unknown (a truncated path) is kept.
+	focalGroups := map[string]map[string]bool{}
 	for _, g := range groups {
 		for _, i := range inFocal(g) {
-			focalPaths[g.mention] = append(focalPaths[g.mention], g.paths[i])
+			if focalGroups[g.mention] == nil {
+				focalGroups[g.mention] = map[string]bool{}
+			}
+			// "" stands for the lineages in none of the broad groups,
+			// algae and protists among them.
+			focalGroups[g.mention][broadGroup(g.paths[i])] = true
 		}
 	}
 	for key, g := range groups {
-		if fp := focalPaths[g.mention]; len(fp) > 0 && len(inFocal(g)) == 0 && !sharesLineage(g, fp) {
+		if fg := focalGroups[g.mention]; len(fg) > 0 && len(inFocal(g)) == 0 && outsideGroups(g.paths, fg) {
 			chosen[key] = noCandidate
 			continue
 		}
@@ -484,16 +500,16 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup, focal map[string]b
 				continue
 			}
 			chosen[key] = choice
-			contexts = append(contexts, context{g.paths[choice], g.count, true})
+			contexts = append(contexts, context{g.paths[choice], g.rank(choice), g.count, true})
 			continue
 		}
 		if len(g.paths) == 1 {
-			contexts = append(contexts, context{g.paths[0], g.count, g.species})
+			contexts = append(contexts, context{g.paths[0], g.rank(0), g.count, g.species})
 			continue
 		}
 		if in := separating(g); len(in) == 1 {
 			chosen[key] = in[0]
-			contexts = append(contexts, context{g.paths[in[0]], g.count, true})
+			contexts = append(contexts, context{g.paths[in[0]], g.rank(in[0]), g.count, true})
 		}
 	}
 	strongOnly := false
@@ -525,25 +541,27 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup, focal map[string]b
 		}
 	}
 	// A name whose authorship matches no lineage is rejected only when
-	// the paper's other names give its lineages no support below the
-	// top two levels (domain, kingdom) either; a higher taxon's
-	// authority is often written differently.
+	// the paper's other names support none of its lineages at class,
+	// order or family either; a higher taxon's authority is often
+	// written differently.
+	var contextRanks [][3]string
+	for _, c := range contexts {
+		contextRanks = append(contextRanks, c.ranks)
+	}
 	for _, key := range disputed {
-		if in := inFocal(groups[key]); len(in) > 0 {
+		g := groups[key]
+		if in := inFocal(g); len(in) > 0 {
 			chosen[key] = in[0]
 			continue
 		}
-		paths := make([][]string, len(groups[key].paths))
-		for i, p := range groups[key].paths {
-			if len(p) > 3 {
-				p = p[2:]
+		chosen[key] = noCandidate
+		for i, r := range g.ranks {
+			// A higher taxon has no class, order or family to compare;
+			// missing ranks are not evidence against it.
+			if r == ([3]string{}) || sharesRank([][3]string{r}, contextRanks) {
+				chosen[key] = i
+				break
 			}
-			paths[i] = p
-		}
-		if best, ok := bestCandidate(paths, weight); ok {
-			chosen[key] = best
-		} else {
-			chosen[key] = noCandidate
 		}
 	}
 	for key, g := range groups {
@@ -571,38 +589,61 @@ func chooseHomonyms[K comparable](groups map[K]*homonymGroup, focal map[string]b
 	return chosen
 }
 
-// sharesLineage reports whether any of g's candidates shares a taxon
-// with any of paths below their top two levels (domain, kingdom),
-// leaving out the words of the mention itself, which homonyms share by
-// definition.
-func sharesLineage(g *homonymGroup, paths [][]string) bool {
-	skip := map[string]bool{}
-	for _, w := range strings.Fields(g.mention) {
-		skip[w] = true
+// rank returns candidate i's class, order and family.
+func (g *homonymGroup) rank(i int) [3]string {
+	if i < len(g.ranks) {
+		return g.ranks[i]
 	}
-	skip[g.mention] = true
-	below := func(p []string) []string {
-		if len(p) > 3 {
-			return p[2:]
-		}
-		return p
-	}
-	other := map[string]bool{}
-	for _, p := range paths {
-		for _, name := range below(p) {
-			if !skip[name] {
-				other[name] = true
-			}
-		}
-	}
-	for _, p := range g.paths {
-		for _, name := range below(p) {
-			if other[name] {
-				return true
+	return [3]string{}
+}
+
+// sharesRank reports whether any lineage in a has the same class,
+// order or family as any lineage in b.
+func sharesRank(a, b [][3]string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			for r := range x {
+				if x[r] != "" && x[r] == y[r] {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// broadGroups maps the top-level names name sources use to the broad
+// groups whose names are governed by different codes, where homonyms
+// arise. Other lineages (algae, protists, plants) have no broad group.
+var broadGroups = map[string]string{
+	"Animalia": "animals", "Metazoa": "animals",
+	"Bacteria": "prokaryotes", "Archaea": "prokaryotes",
+	"Fungi": "fungi",
+}
+
+// broadGroup returns the broad group of a classification path, or ""
+// when it names none.
+func broadGroup(path []string) string {
+	for _, name := range path {
+		if b := broadGroups[name]; b != "" {
+			return b
+		}
+	}
+	return ""
+}
+
+// outsideGroups reports whether every one of paths lies in a known
+// broad group that is not among groups ("" in groups stands for
+// lineages in none). A path with no broad group cannot be shown to
+// differ.
+func outsideGroups(paths [][]string, groups map[string]bool) bool {
+	for _, p := range paths {
+		b := broadGroup(p)
+		if b == "" || groups[b] {
+			return false
+		}
+	}
+	return len(paths) > 0
 }
 
 // bestCandidate returns the index of the highest-scoring path under
