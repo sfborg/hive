@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/sfborg/hive/pkg/refmanager/doi"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -298,7 +299,7 @@ func entryToReference(e *entry) *coldp.Reference {
 		Volume:         f["volume"],
 		Publisher:      f["publisher"],
 		PublisherPlace: f["address"],
-		DOI:            strings.TrimPrefix(strings.TrimPrefix(f["doi"], "https://doi.org/"), "http://doi.org/"),
+		DOI:            doi.Normalize(f["doi"]),
 		ISBN:           f["isbn"],
 		ISSN:           f["issn"],
 		Link:           f["url"],

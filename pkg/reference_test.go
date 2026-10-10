@@ -155,3 +155,38 @@ func indexOf(s, substr string) int {
 	}
 	return -1
 }
+
+func TestStoredDOIsAreNormalized(t *testing.T) {
+	a := newTestArchive(t)
+	ctx := WithActor(context.Background(), "0000-0000-0000-0000")
+	var id string
+	if err := a.WithTx(ctx, func(tx *Tx) (err error) {
+		id, err = tx.CreateReference(coldp.Reference{Title: "x", DOI: "https://doi.org/10.1007/s13199-020-00711-x/"})
+		return err
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var got string
+	if err := a.db.QueryRow(`SELECT col__doi FROM reference WHERE col__id = ?`, id).Scan(&got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != "10.1007/s13199-020-00711-x" {
+		t.Errorf("stored DOI = %q", got)
+	}
+	// A row written before normalization is cleaned on open.
+	if _, err := a.db.Exec(`UPDATE reference SET col__doi = '10.1038/abc/.' WHERE col__id = ?`, id); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := normalizeStoredDOIs(ctx, a.db); err != nil {
+		t.Fatalf("normalizeStoredDOIs: %v", err)
+	}
+	if err := a.db.QueryRow(`SELECT col__doi FROM reference WHERE col__id = ?`, id).Scan(&got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != "10.1038/abc" {
+		t.Errorf("cleaned DOI = %q", got)
+	}
+	if refs, err := a.FindReferencesByDOI(ctx, "doi:10.1038/ABC"); err != nil || len(refs) != 1 {
+		t.Errorf("FindReferencesByDOI = %v, %v", refs, err)
+	}
+}

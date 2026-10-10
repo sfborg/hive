@@ -11408,13 +11408,23 @@ class SfgaDetail extends LitElement {
 function extractDOI(input) {
   const s = (input || "").trim();
   if (!s) return "";
-  // Strip common prefixes; leave the DOI proper for the regex to
-  // validate. `10.NNNN/…` is the DOI shape per doi.org standard.
-  const cleaned = s.replace(
-    /^(https?:\/\/(?:dx\.)?doi\.org\/|doi:)/i,
-    "",
-  );
+  // Strip resolver and scheme prefixes and the trailing punctuation a
+  // DOI picks up at the end of a sentence or link, as the server's
+  // doi.Normalize does. `10.NNNN/…` is the DOI shape per doi.org.
+  const cleaned = s
+    .replace(/^(https?:\/\/(?:dx\.)?doi\.org\/|doi\.org\/|urn:doi:|doi:)/i, "")
+    .trim()
+    .replace(/[\/.,;:)\]}>"']+$/, "");
   return /^10\.\d{4,9}\/\S+$/i.test(cleaned) ? cleaned : "";
+}
+
+// doiLookupMessage explains a failed DOI lookup to the curator; the DOI
+// itself is kept wherever the lookup was started from.
+function doiLookupMessage(err) {
+  const status = err?.status;
+  if (status === 429) return `${err.detail || "OpenAlex is limiting requests"}. The DOI is kept; fetch again later.`;
+  if (status === 404) return "OpenAlex has no record for this DOI. It is kept as entered.";
+  return `Lookup failed (${err?.detail || err?.message || err}). The DOI is kept; fetch again later.`;
 }
 
 // Events:
@@ -11523,6 +11533,12 @@ class SfgaAddReferenceModal extends LitElement {
     // this paper's own DOI. Surfaced as a hint on the File tab so
     // the curator sees why we didn't auto-hop to the DOI tab.
     _rejectedDOI: { state: true },
+    // A DOI found in an uploaded PDF whose lookup failed (rate limit,
+    // network, not found): {doi, message}. Kept in the form; not a
+    // sign that the DOI is wrong.
+    _unresolvedDOI: { state: true },
+    _doiFetchBusy: { state: true },
+    _doiFetchNote: { state: true },
     _dragActive: { state: true },
     // Side-by-side PDF viewer mode. Auto-enables when an upload
     // lands with a sha (a PDF is available to display); the
@@ -11696,6 +11712,25 @@ class SfgaAddReferenceModal extends LitElement {
       .manual-ref-form .case-fix:hover,
       .manual-ref-form .case-fix:focus-visible {
         border-color: var(--accent);
+      }
+      .manual-ref-form .doi-fetch {
+        font: inherit;
+        font-size: var(--fs-sm);
+        padding: 0 var(--sp-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .manual-ref-form .doi-fetch:disabled {
+        color: var(--dim);
+        cursor: default;
+      }
+      .manual-ref-form .doi-note {
+        margin: var(--sp-1) 0 0;
+        color: var(--dim);
+        font-size: var(--fs-sm);
       }
       .manual-ref-form .input-cell {
         display: grid;
@@ -12052,6 +12087,8 @@ class SfgaAddReferenceModal extends LitElement {
     this._uploadError = "";
     this._uploadResult = null;
     this._rejectedDOI = "";
+    this._unresolvedDOI = null;
+    this._doiFetchNote = "";
     this._dragActive = false;
     this._showPDF = true;
     this._manual = null;
@@ -13076,6 +13113,12 @@ class SfgaAddReferenceModal extends LitElement {
   _renderTEIStatusHint(res) {
     switch (res.tei_status) {
       case "stored":
+        if (res.doi && this._unresolvedDOI) {
+          return html`<div class="hint">
+            DOI <code>${res.doi}</code> found in the PDF, but looking it
+            up failed: ${this._unresolvedDOI.message}
+          </div>`;
+        }
         if (res.doi && !this._rejectedDOI) {
           return html`<div class="hint">
             DOI <code>${res.doi}</code> extracted — switching to the DOI tab.
@@ -13180,6 +13223,8 @@ class SfgaAddReferenceModal extends LitElement {
     this._uploadError = "";
     this._uploadResult = null;
     this._rejectedDOI = "";
+    this._unresolvedDOI = null;
+    this._doiFetchNote = "";
     try {
       const result = await api.reference.upload(file);
       this._uploadResult = result;
@@ -13208,11 +13253,17 @@ class SfgaAddReferenceModal extends LitElement {
       //      DOI-recovery candidates.
       //   3. Nothing useful → stay on File tab with a hint.
       if (result.doi) {
-        const accepted = await this._tryAcceptExtractedDOI(
+        const outcome = await this._tryAcceptExtractedDOI(
           result.doi,
           result.metadata,
         );
-        if (accepted) {
+        if (outcome === "unresolved") {
+          // Keep the DOI in the form with whatever GROBID read from
+          // the PDF; Fetch next to the DOI field retries the lookup.
+          const base = result.metadata ? manualFromMetadata(result.metadata) : emptyManualReference();
+          this._manual = { ...base, doi: extractDOI(result.doi) || result.doi };
+          this._tab = SfgaAddReferenceModal._tabIndex("manual");
+        } else if (outcome === "accepted") {
           // Land on Manual with the OpenAlex-resolved reference
           // pre-filled — GROBID's metadata is still in state, so
           // the inline conflict picker per input surfaces any
@@ -13253,9 +13304,13 @@ class SfgaAddReferenceModal extends LitElement {
   // that happens, discard the DOI, remember it for the status hint,
   // and let the caller fall through to the DOI-recovery flow.
   //
-  // Returns true when the DOI was accepted (preview populated,
-  // ready to hop to DOI tab); false when rejected.
-  async _tryAcceptExtractedDOI(doi, metadata) {
+  // Returns "accepted" when the DOI was accepted (preview populated),
+  // "rejected" when it resolved to a different paper, and
+  // "unresolved" when the lookup itself failed: then the DOI is kept
+  // (DOI tab prefilled, _unresolvedDOI set) since the failure says
+  // nothing about whether it is right.
+  async _tryAcceptExtractedDOI(found, metadata) {
+    const doi = extractDOI(found) || found;
     this._doiInput = doi;
     try {
       const ref = await api.reference.resolveDOI(doi);
@@ -13270,17 +13325,14 @@ class SfgaAddReferenceModal extends LitElement {
         this._doiInput = "";
         this._preview = null;
         this._previewOpenAlex = null;
-        return false;
+        return "rejected";
       }
       this._preview = { ...ref };
       this._previewOpenAlex = ref;
-      return true;
+      return "accepted";
     } catch (err) {
-      // Resolve failed (network, 404, whatever). Treat as rejection
-      // so the flow falls through to the metadata-driven path.
-      this._rejectedDOI = doi;
-      this._doiInput = "";
-      return false;
+      this._unresolvedDOI = { doi, message: doiLookupMessage(err), status: err?.status };
+      return "unresolved";
     }
   }
 
@@ -13445,6 +13497,13 @@ class SfgaAddReferenceModal extends LitElement {
       ${this._manualError
         ? html`<div class="error" role="alert">${this._manualError}</div>`
         : ""}
+      ${this._unresolvedDOI
+        ? html`<p class="empty" style="margin: 0 0 var(--sp-2) 0">
+            DOI <code>${this._unresolvedDOI.doi}</code> was found in the
+            PDF and is filled in below, but looking it up failed:
+            ${this._unresolvedDOI.message}
+          </p>`
+        : ""}
       ${this._rejectedDOI
         ? html`<p class="empty" style="margin: 0 0 var(--sp-2) 0">
             GROBID guessed DOI <code>${this._rejectedDOI}</code>,
@@ -13583,10 +13642,17 @@ class SfgaAddReferenceModal extends LitElement {
         ? this._uploadResult.metadata
         : null;
     const oa = this._previewOpenAlex;
-    if (!g || !oa) return false;
-    const gv = g[key] || "";
+    if (!oa) return false;
     const ov = oa[key] || "";
-    if (!gv || !ov) return false;
+    if (!ov) return false;
+    // Without GROBID (a reference being edited, or a DOI fetched by
+    // hand), OpenAlex is compared with what the form holds.
+    if (!g) {
+      const current = this._manual && this._manual[key] != null ? this._manual[key] : "";
+      return !!current && this._normalizeForCompare(current) !== this._normalizeForCompare(ov);
+    }
+    const gv = g[key] || "";
+    if (!gv) return false;
     return this._normalizeForCompare(gv) !== this._normalizeForCompare(ov);
   }
 
@@ -13597,12 +13663,12 @@ class SfgaAddReferenceModal extends LitElement {
   // No chip when sources agree or one is missing.
   _renderManualConflictChip(key) {
     if (!this._manualFieldHasConflict(key)) return "";
-    const g = this._uploadResult.metadata[key] || "";
+    const g = this._uploadResult?.metadata?.[key] || "";
     const oa = this._previewOpenAlex[key] || "";
     const current =
       this._manual && this._manual[key] != null ? this._manual[key] : "";
     const cn = this._normalizeForCompare(current);
-    const showG = cn !== this._normalizeForCompare(g);
+    const showG = !!g && cn !== this._normalizeForCompare(g);
     const showOA = cn !== this._normalizeForCompare(oa);
     if (!showG && !showOA) return "";
     return html`
@@ -13651,10 +13717,56 @@ class SfgaAddReferenceModal extends LitElement {
             @input=${(e) => this._manualFieldChange(key, e.target.value)}
           />
           ${this._renderCaseFix(key, d[key] || "")}
+          ${key === "doi"
+            ? html`<button
+                type="button"
+                class="doi-fetch"
+                ?disabled=${!extractDOI(d.doi) || this._doiFetchBusy}
+                title="Fill empty fields from the DOI's OpenAlex record"
+                @click=${() => this._fetchManualDOI()}
+              >${this._doiFetchBusy ? "Fetching…" : "Fetch"}</button>`
+            : nothing}
         </div>
+        ${key === "doi" && this._doiFetchNote
+          ? html`<p class="doi-note" role="status">${this._doiFetchNote}</p>`
+          : nothing}
         ${this._renderManualConflictChip(key)}
       </div>
     `;
+  }
+
+  // _fetchManualDOI looks the form's DOI up in OpenAlex and fills the
+  // fields that are still empty. Fields where OpenAlex differs from what
+  // the form holds get a chip offering its value. The DOI stays in the
+  // form whatever the outcome.
+  async _fetchManualDOI() {
+    const d = this._manual || emptyManualReference();
+    const doi = extractDOI(d.doi);
+    if (!doi) return;
+    this._doiFetchBusy = true;
+    this._doiFetchNote = "";
+    try {
+      const ref = await api.reference.resolveDOI(doi);
+      this._previewOpenAlex = ref;
+      const fetched = manualFromReference(ref);
+      const merged = { ...d, doi };
+      let filled = 0;
+      for (const [k, v] of Object.entries(fetched)) {
+        if (v && !merged[k]) {
+          merged[k] = v;
+          filled++;
+        }
+      }
+      this._manual = merged;
+      const differs = Object.keys(fetched).filter((k) => this._manualFieldHasConflict(k)).length;
+      this._doiFetchNote =
+        (filled ? `Filled ${filled} empty field${filled === 1 ? "" : "s"} from OpenAlex.` : "No empty fields to fill.") +
+        (differs ? ` OpenAlex differs on ${differs}; its values are shown under those fields.` : "");
+    } catch (err) {
+      this._doiFetchNote = doiLookupMessage(err);
+    } finally {
+      this._doiFetchBusy = false;
+    }
   }
 
   // _renderCaseFix shows a button that restores the case of a field

@@ -28,6 +28,7 @@ import (
 	"github.com/sfborg/hive/pkg/refmanager/bhlnames"
 	"github.com/sfborg/hive/pkg/refmanager/bibtex"
 	"github.com/sfborg/hive/pkg/refmanager/casing"
+	doiutil "github.com/sfborg/hive/pkg/refmanager/doi"
 	"github.com/sfborg/hive/pkg/refmanager/figextract"
 	"github.com/sfborg/hive/pkg/refmanager/grobid"
 	"github.com/sfborg/hive/pkg/refmanager/jatsconv"
@@ -5084,11 +5085,28 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, out)
 }
 
+// writeRateLimited answers 429 with the provider's Retry-After when
+// err is a rate-limit refusal, and reports whether it did.
+func writeRateLimited(w http.ResponseWriter, r *http.Request, provider string, err error) bool {
+	if !errors.Is(err, openalex.ErrRateLimited) {
+		return false
+	}
+	detail := provider + " is limiting requests right now; try again later"
+	var rl *openalex.RateLimitError
+	if errors.As(err, &rl) && rl.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())))
+		detail = fmt.Sprintf("%s is limiting requests; try again in %s", provider, rl.RetryAfter.Round(time.Second))
+	}
+	writeProblemDetail(w, r, http.StatusTooManyRequests, "urn:hive:error:rate-limited", "rate limited", detail)
+	return true
+}
+
 // handleResolveDOI fetches an OpenAlex Work for the DOI in the `doi`
 // query param and returns the resulting coldp.Reference — *unsaved*.
 // The modal shows this as a preview form; on curator confirm the WUI
 // POSTs to /api/reference to persist. Returns 404 with a distinguishing
-// problem type when OpenAlex has no match, 502 on upstream errors.
+// problem type when OpenAlex has no match, 429 when it is limiting
+// requests, 502 on other upstream errors.
 //
 // @Summary      Resolve a DOI to a reference preview
 // @Description  Fetch a reference by DOI from the configured resolver. Returns an unsaved apiReference preview (empty id); the curator confirms and POSTs to /api/reference to persist.
@@ -5102,11 +5120,16 @@ func (s *server) handleCreateReference(w http.ResponseWriter, r *http.Request) {
 // @Failure      502 {object} problem
 // @Router       /reference/resolve-doi [get]
 func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
-	doi := strings.TrimSpace(r.URL.Query().Get("doi"))
-	if doi == "" {
+	raw := strings.TrimSpace(r.URL.Query().Get("doi"))
+	if raw == "" {
 		writeBadRequest(w, r, "query parameter 'doi' is required")
 		return
 	}
+	if !doiutil.Valid(raw) {
+		writeBadRequest(w, r, "not a DOI: "+raw)
+		return
+	}
+	doi := doiutil.Normalize(raw)
 	resolver := s.a.Lookup.DOIResolver()
 	if resolver == nil {
 		writeProblemDetail(w, r, http.StatusNotImplemented,
@@ -5120,6 +5143,9 @@ func (s *server) handleResolveDOI(w http.ResponseWriter, r *http.Request) {
 			writeProblemDetail(w, r, http.StatusNotFound,
 				"urn:hive:error:doi-not-found", "not found",
 				resolver.Name()+" has no work for DOI "+doi)
+			return
+		}
+		if writeRateLimited(w, r, resolver.Name(), err) {
 			return
 		}
 		writeProblemDetail(w, r, http.StatusBadGateway,
@@ -5187,6 +5213,9 @@ func (s *server) handleLookupOpenAlex(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := searcher.Search(r.Context(), q, 5)
 	if err != nil {
+		if writeRateLimited(w, r, searcher.Name(), err) {
+			return
+		}
 		writeProblemDetail(w, r, http.StatusBadGateway,
 			"urn:hive:error:free-text-search", searcher.Name()+" lookup failed", err.Error())
 		return
@@ -6091,7 +6120,7 @@ func normalizeEPUBDOI(value, scheme string) string {
 			return ""
 		}
 	}
-	v = strings.TrimSpace(v)
+	v = doiutil.Normalize(v)
 	if strings.HasPrefix(v, "10.") && strings.Contains(v, "/") {
 		return v
 	}

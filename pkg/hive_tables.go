@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sfborg/hive/pkg/refmanager/doi"
 )
 
 // hiveSchemaDDL is the DDL for every metadata table hive manages
@@ -1002,6 +1004,40 @@ func ensureHiveTables(ctx context.Context, db *sql.DB) error {
 	}
 	if err := ensureRawNameTables(ctx, db); err != nil {
 		return err
+	}
+	return normalizeStoredDOIs(ctx, db)
+}
+
+// normalizeStoredDOIs rewrites stored reference DOIs that carry a
+// resolver prefix or trailing punctuation (see doi.Normalize). New
+// writes are normalized on the way in; this cleans rows written before
+// that. Only changed rows are touched, so repeat opens are a no-op.
+func normalizeStoredDOIs(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx,
+		`SELECT col__id, col__doi FROM reference WHERE COALESCE(col__doi, '') <> ''`)
+	if err != nil {
+		return fmt.Errorf("core: read reference DOIs: %w", err)
+	}
+	fixes := map[string]string{}
+	for rows.Next() {
+		var id, value string
+		if err := rows.Scan(&id, &value); err != nil {
+			rows.Close()
+			return err
+		}
+		if n := doi.Normalize(value); n != value {
+			fixes[id] = n
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id, value := range fixes {
+		if _, err := db.ExecContext(ctx,
+			`UPDATE reference SET col__doi = ? WHERE col__id = ?`, value, id); err != nil {
+			return fmt.Errorf("core: normalize DOI of %s: %w", id, err)
+		}
 	}
 	return nil
 }

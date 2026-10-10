@@ -1,8 +1,13 @@
 package openalex
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestToReference exercises the JSON → coldp.Reference mapping without
@@ -236,5 +241,34 @@ func TestUserAgent(t *testing.T) {
 	anon := New("").userAgent()
 	if anon != "hive/0.1 (+https://github.com/sfborg/hive)" {
 		t.Errorf("anonymous UA = %q", anon)
+	}
+}
+
+func TestRateLimitRetriesShortPausesOnly(t *testing.T) {
+	calls := 0
+	retryAfterValue := "0"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 || retryAfterValue == "3600" {
+			w.Header().Set("Retry-After", retryAfterValue)
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"doi":"https://doi.org/10.1/x","title":"T"}`))
+	}))
+	defer srv.Close()
+	c := New("")
+	c.baseURL = srv.URL
+
+	ref, err := c.ResolveDOI(context.Background(), "10.1/x")
+	if err != nil || ref.DOI != "10.1/x" || calls != 2 {
+		t.Fatalf("short pause: ref=%v err=%v calls=%d; want one retry", ref, err, calls)
+	}
+
+	calls, retryAfterValue = 0, "3600"
+	_, err = c.ResolveDOI(context.Background(), "10.1/x")
+	var rl *RateLimitError
+	if !errors.Is(err, ErrRateLimited) || !errors.As(err, &rl) || rl.RetryAfter != time.Hour || calls != 1 {
+		t.Errorf("long pause: err=%v calls=%d; want RateLimitError of 1h without retry", err, calls)
 	}
 }

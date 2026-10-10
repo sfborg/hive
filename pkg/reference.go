@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sfborg/hive/pkg/refmanager/doi"
 	"github.com/sfborg/hive/pkg/taxonomy"
 	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 	"github.com/sfborg/sflib/pkg/coldp"
@@ -827,6 +828,7 @@ func (t *Tx) CreateReference(r coldp.Reference) (string, error) {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
+	r.DOI = doi.Normalize(r.DOI)
 	// col__citation is a derived / cached field. Auto-compose it
 	// when the caller didn't supply one — the citation string is
 	// what search paths hit against and it would otherwise stay
@@ -895,6 +897,7 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 	if r.ID == "" {
 		return fmt.Errorf("core: update reference: %w: ID required", ErrValidation)
 	}
+	r.DOI = doi.Normalize(r.DOI)
 	preSnapshot, _ := t.snapshotReference(r.ID)
 	if r.Modified != "" {
 		var current string
@@ -984,14 +987,8 @@ func (t *Tx) UpdateReference(r coldp.Reference) error {
 // the JATS for a paper whose PDF is already ingested lands the
 // JATS as a sidecar attachment on the existing reference row
 // instead of minting a duplicate reference.
-func (a *Archive) FindReferencesByDOI(ctx context.Context, doi string) ([]coldp.Reference, error) {
-	if doi == "" {
-		return nil, nil
-	}
-	needle := strings.TrimSpace(doi)
-	needle = strings.TrimPrefix(needle, "https://doi.org/")
-	needle = strings.TrimPrefix(needle, "http://doi.org/")
-	needle = strings.TrimPrefix(needle, "doi:")
+func (a *Archive) FindReferencesByDOI(ctx context.Context, value string) ([]coldp.Reference, error) {
+	needle := doi.Normalize(value)
 	if needle == "" {
 		return nil, nil
 	}

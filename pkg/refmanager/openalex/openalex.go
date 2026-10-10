@@ -27,6 +27,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/sfborg/hive/pkg/refmanager/doi"
 	"github.com/sfborg/sflib/pkg/coldp"
 )
 
@@ -59,6 +60,28 @@ func (c *Client) Name() string { return "openalex" }
 // from "OpenAlex is down."
 var ErrNotFound = errors.New("openalex: work not found")
 
+// ErrRateLimited is returned when OpenAlex refuses a request for rate
+// or daily-budget limits (HTTP 429). errors.As a *RateLimitError for
+// how long OpenAlex asked to wait.
+var ErrRateLimited = errors.New("openalex: rate limited")
+
+// RateLimitError is a 429 response. RetryAfter is OpenAlex's
+// Retry-After value, zero when it gave none.
+type RateLimitError struct{ RetryAfter time.Duration }
+
+func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("openalex: rate limited; retry after %s", e.RetryAfter)
+	}
+	return "openalex: rate limited"
+}
+
+func (e *RateLimitError) Is(target error) bool { return target == ErrRateLimited }
+
+// maxRetryWait bounds the pause before the single retry after a 429.
+// Longer waits (a spent daily budget) are returned to the caller.
+const maxRetryWait = 5 * time.Second
+
 // ResolveDOI fetches the OpenAlex Work record for a DOI and maps it to
 // a coldp.Reference. The DOI may be a bare identifier
 // ("10.1234/abcd") or a full URL ("https://doi.org/10.1234/abcd").
@@ -67,15 +90,12 @@ var ErrNotFound = errors.New("openalex: work not found")
 // The returned Reference carries no ID; the caller assigns one before
 // persisting. OpenAlex's own W-IDs aren't preserved into sfga; a
 // curator wanting that linkage can add it to col__alternative_id.
-func (c *Client) ResolveDOI(ctx context.Context, doi string) (*coldp.Reference, error) {
-	doi = strings.TrimSpace(doi)
-	doi = strings.TrimPrefix(doi, "https://doi.org/")
-	doi = strings.TrimPrefix(doi, "http://doi.org/")
-	doi = strings.TrimPrefix(doi, "doi:")
-	if doi == "" {
+func (c *Client) ResolveDOI(ctx context.Context, value string) (*coldp.Reference, error) {
+	id := doi.Normalize(value)
+	if id == "" {
 		return nil, fmt.Errorf("openalex: empty DOI")
 	}
-	path := "/works/doi:" + url.PathEscape(doi)
+	path := "/works/doi:" + url.PathEscape(id)
 	var raw work
 	if err := c.get(ctx, path, nil, &raw); err != nil {
 		return nil, err
@@ -126,20 +146,40 @@ func (c *Client) get(ctx context.Context, path string, extra url.Values, out any
 	if len(extra) > 0 {
 		full += "?" + extra.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
-	if err != nil {
-		return fmt.Errorf("openalex: build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent())
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("openalex: %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("openalex: read %s: %w", path, err)
+	// One retry after a short 429 pause; a long one is the caller's.
+	var resp *http.Response
+	var body []byte
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
+		if err != nil {
+			return fmt.Errorf("openalex: build request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", c.userAgent())
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("openalex: %s: %w", path, err)
+		}
+		body, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("openalex: read %s: %w", path, err)
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			break
+		}
+		wait := retryAfter(resp.Header.Get("Retry-After"))
+		if attempt > 0 || wait > maxRetryWait {
+			return &RateLimitError{RetryAfter: wait}
+		}
+		if wait == 0 {
+			wait = time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -153,6 +193,24 @@ func (c *Client) get(ctx context.Context, path string, extra url.Values, out any
 		return fmt.Errorf("openalex: parse %s: %w", path, err)
 	}
 	return nil
+}
+
+// retryAfter parses a Retry-After header given in seconds or as an
+// HTTP date; zero when absent or unparseable.
+func retryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func (c *Client) userAgent() string {
@@ -384,8 +442,7 @@ func (w work) toReference() *coldp.Reference {
 	if issued == "" && w.PublicationYear != 0 {
 		issued = strconv.Itoa(w.PublicationYear)
 	}
-	doi := strings.TrimPrefix(w.DOI, "https://doi.org/")
-	doi = strings.TrimPrefix(doi, "http://doi.org/")
+	workDOI := doi.Normalize(w.DOI)
 
 	return &coldp.Reference{
 		Citation:       "",
@@ -399,7 +456,7 @@ func (w work) toReference() *coldp.Reference {
 		Publisher:      publisher,
 		Issued:         issued,
 		ISSN:           strings.Join(issns, ", "),
-		DOI:            doi,
+		DOI:            workDOI,
 		Link:           landing,
 	}
 }

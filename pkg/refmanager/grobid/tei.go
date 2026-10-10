@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/sfborg/hive/pkg/refmanager/doi"
 )
 
 // BibHeader captures the bibliographic metadata GROBID extracts from
@@ -312,7 +314,7 @@ func ParseHeader(tei []byte) (*BibHeader, error) {
 // doiRegex matches the DOI syntax per the DOI Handbook:
 // `10.<registrant-code>/<suffix>` where the registrant is 4-9 digits
 // and the suffix is any run of non-whitespace. Trailing punctuation
-// (`.`, `,`, `;`, `)`, `]`, `>`) is stripped by trimDOIPunct because
+// (`.`, `,`, `;`, `)`, `]`, `>`) is stripped by doi.Normalize because
 // the regex captures greedily.
 var doiRegex = regexp.MustCompile(`10\.\d{4,9}/[^\s<>"']+`)
 
@@ -346,13 +348,13 @@ func ExtractDOI(tei []byte) string {
 		if end := bytesIndex(rest, []byte("</idno>")); end > 0 {
 			candidate := strings.TrimSpace(string(rest[:end]))
 			if doiRegex.MatchString(candidate) {
-				return trimDOIPunct(candidate)
+				return doi.Normalize(candidate)
 			}
 		}
 	}
 	// Free-text fallback inside the header slice only.
 	if m := doiRegex.Find(header); m != nil {
-		return trimDOIPunct(string(m))
+		return doi.Normalize(string(m))
 	}
 	return ""
 }
@@ -371,22 +373,6 @@ func teiHeaderSlice(tei []byte) []byte {
 		return nil
 	}
 	return tei[open : open+close]
-}
-
-// trimDOIPunct strips trailing punctuation the DOI regex captured
-// greedily but that isn't part of the identifier. Common when a DOI
-// appears at end of sentence or inside parentheses in reference text.
-func trimDOIPunct(s string) string {
-	for len(s) > 0 {
-		last := s[len(s)-1]
-		if last == '.' || last == ',' || last == ';' ||
-			last == ')' || last == ']' || last == '>' {
-			s = s[:len(s)-1]
-			continue
-		}
-		break
-	}
-	return s
 }
 
 // bytesIndex wraps strings.Index for the []byte-first idiom.
