@@ -947,6 +947,13 @@ function vocabSource(name) {
   };
 }
 
+// rankLabel returns a rank's display name from the vocabulary ("class",
+// "unranked (clade)"), falling back to the lowercased ID.
+function rankLabel(id) {
+  const t = api.vocab.get("rank").find((r) => r.id === id);
+  return t?.name || (id || "").toLowerCase();
+}
+
 // vocabResolver(name) resolves a vocab ID → display name synchronously
 // (Promise wrap-around for a uniform combobox interface).
 function vocabResolver(name) {
@@ -1058,8 +1065,10 @@ const sexResolver = isoResolver(api.sex, "id", null, "symbol");
 function childRankSource(allowed) {
   const base = vocabSource("rank");
   if (!allowed || allowed.length === 0) return base;
-  const allowSet = new Set(allowed.map((r) => r.id));
-  const typicalSet = new Set(allowed.filter((r) => r.typical_use).map((r) => r.id));
+  // A clade (unranked) can sit anywhere in the tree, so it is always
+  // offered whatever the parent's rank.
+  const allowSet = new Set([...allowed.map((r) => r.id), "UNRANKED"]);
+  const typicalSet = new Set([...allowed.filter((r) => r.typical_use).map((r) => r.id), "UNRANKED"]);
   return async (q) => {
     const all = await base(q);
     const needle = (q || "").toLowerCase().trim();
@@ -9477,7 +9486,7 @@ class SfgaDetail extends LitElement {
         ${this._sectionHeader("All fields")}
       <dl>
         ${row("ID", t.id)} ${row("Parent", parentDisplay)}
-        ${row("Rank", n?.rank ? n.rank.toLowerCase() : "")}
+        ${row("Rank", n?.rank ? rankLabel(n.rank) : "")}
         <dt>Status</dt>
         <dd>${t.status || "accepted"}</dd>
         ${t.extinct !== undefined

@@ -136,6 +136,11 @@ export const api = {
     load: async () => {
       if (vocabCache) return vocabCache;
       vocabCache = await j("GET", "/api/vocab");
+      // Clades are recorded as unranked; the label says so, so a
+      // curator looking for "clade" finds it in the rank picker.
+      for (const t of vocabCache.rank || []) {
+        if (t.id === "UNRANKED") t.name = "unranked (clade)";
+      }
       return vocabCache;
     },
     // get returns the terms for a named vocabulary synchronously. Returns
