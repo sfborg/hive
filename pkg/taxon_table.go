@@ -35,7 +35,12 @@ type TaxonTableQuery struct {
 	// (see TaxonTableData). Taxon-level kinds apply to accepted rows.
 	Has, Missing string
 	Sort         []ReferenceSortKey
-	Limit        int
+	// Limit is the page size (default 100, at most 1000); -1 returns
+	// every row, without counting them separately.
+	Limit int
+	// DetailLimit bounds the values listed per supplemental cell; 0
+	// means the table's default (20). Exports list everything.
+	DetailLimit int
 	// Offset skips that many rows of the ordered result.
 	Offset int
 }
@@ -276,9 +281,12 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		JOIN name n ON n.col__id = u.name_id
 		LEFT JOIN taxon at ON at.col__id = u.taxon_id`
 
+	all := q.Limit < 0
 	var total int
-	if err := a.db.QueryRowContext(ctx, `SELECT COUNT(*) `+from+` WHERE `+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("core: count taxon table: %w", err)
+	if !all {
+		if err := a.db.QueryRowContext(ctx, `SELECT COUNT(*) `+from+` WHERE `+where, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("core: count taxon table: %w", err)
+		}
 	}
 
 	// Sorting by a classification rank needs every row's lineage: walk
@@ -304,7 +312,9 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 	}
 	order = append(order, "LOWER(n.col__scientific_name)", "u.ord")
 	limit := q.Limit
-	if limit <= 0 || limit > 500 {
+	if all {
+		limit = -1 // SQLite: no limit
+	} else if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
 	cols := []string{
@@ -358,8 +368,14 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if err := a.addTaxonTableDetails(ctx, out); err != nil {
-		return nil, 0, err
+	// Supplemental details in chunks: one IN list per query.
+	for start := 0; start < len(out); start += 500 {
+		if err := a.addTaxonTableDetails(ctx, out[start:min(start+500, len(out))], q.DetailLimit); err != nil {
+			return nil, 0, err
+		}
+	}
+	if all {
+		total = len(out)
 	}
 	return out, total, nil
 }
@@ -370,9 +386,12 @@ const detailLimit = 20
 
 // addTaxonTableDetails fills the supplemental lists, counts and issues
 // of a page of rows.
-func (a *Archive) addTaxonTableDetails(ctx context.Context, rows []TaxonTableRow) error {
+func (a *Archive) addTaxonTableDetails(ctx context.Context, rows []TaxonTableRow, limit int) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	if limit <= 0 {
+		limit = detailLimit
 	}
 	byTaxon := map[string][]*TaxonTableRow{}
 	byName := map[string][]*TaxonTableRow{}
@@ -419,7 +438,7 @@ func (a *Archive) addTaxonTableDetails(ctx context.Context, rows []TaxonTableRow
 		return res.Err()
 	}
 	appendCapped := func(dst *[]string, v string) {
-		if v != "" && len(*dst) < detailLimit {
+		if v != "" && len(*dst) < limit {
 			*dst = append(*dst, v)
 		}
 	}
@@ -468,12 +487,12 @@ func (a *Archive) addTaxonTableDetails(ctx context.Context, rows []TaxonTableRow
 			return err
 		}
 	}
-	return a.addTaxonTableIssues(ctx, rows)
+	return a.addTaxonTableIssues(ctx, rows, limit)
 }
 
 // addTaxonTableIssues fills each row's open issues: counts per
 // severity and the rule names, most serious first.
-func (a *Archive) addTaxonTableIssues(ctx context.Context, rows []TaxonTableRow) error {
+func (a *Archive) addTaxonTableIssues(ctx context.Context, rows []TaxonTableRow, limit int) error {
 	type key struct{ table, id string }
 	rowsOf := map[key][]*TaxonTableRow{}
 	var ids []string
@@ -523,7 +542,7 @@ func (a *Archive) addTaxonTableIssues(ctx context.Context, rows []TaxonTableRow)
 				r.IssuesBySeverity = map[string]int{}
 			}
 			r.IssuesBySeverity[severity]++
-			if len(r.IssueRules) < detailLimit && !slices.Contains(r.IssueRules, rule) {
+			if len(r.IssueRules) < limit && !slices.Contains(r.IssueRules, rule) {
 				r.IssueRules = append(r.IssueRules, rule)
 			}
 		}

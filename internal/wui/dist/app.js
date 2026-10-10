@@ -19100,6 +19100,21 @@ class SfgaReferences extends LitElement {
     this._fetchPage(true);
   }
 
+  // _exportURL downloads the reference list with the current search,
+  // filters, sort and shown columns.
+  _exportURL(format) {
+    const params = {
+      format,
+      q: this._query.trim(),
+      sort: this._sortParam(),
+      columns: this._columns.filter((c) => c !== "actions").join(","),
+      ...this._indexOpts(),
+    };
+    if (this._stepFilterParam()) params.filter = this._stepFilterParam();
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== "" && v != null));
+    return "/api/reference/export?" + qs;
+  }
+
   // willUpdate keeps the filter's source among the archive's name
   // sources, which can change under Settings → Name sources.
   willUpdate(changed) {
@@ -21263,6 +21278,7 @@ class SfgaReferences extends LitElement {
           >
             ?
           </button>
+          <sfga-export-menu .href=${(format) => this._exportURL(format)}></sfga-export-menu>
         </div>
       </div>
       ${this._loading && this._hits.length === 0

@@ -15,6 +15,7 @@ import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
 import { api } from "/lib/api.js";
 import { getSetting, setSetting } from "/lib/settings.js";
 import "/components/data-table.js";
+import "/components/export-menu.js";
 
 const SEVERITIES = ["error", "warn", "info", "debug"];
 const ABOVE_GENUS = new Set([
@@ -292,13 +293,7 @@ class SfgaTaxonTable extends LitElement {
     ]);
     this._fetch = (page) =>
       api.taxon.table({
-        q: this._q.trim(),
-        usage: this._usage,
-        rank: this._rank,
-        issue: this._issue,
-        within: this._within?.id || "",
-        has: this._data.startsWith("has:") ? this._data.slice(4) : "",
-        missing: this._data.startsWith("missing:") ? this._data.slice(8) : "",
+        ...this._filterParams(),
         sort: page.sort,
         limit: page.limit,
         offset: page.offset,
@@ -355,6 +350,28 @@ class SfgaTaxonTable extends LitElement {
     return rule ? rule.name : id;
   }
 
+  // _filterParams are the API parameters for the current filters.
+  _filterParams() {
+    return {
+      q: this._q.trim(),
+      usage: this._usage,
+      rank: this._rank,
+      issue: this._issue,
+      within: this._within?.id || "",
+      has: this._data.startsWith("has:") ? this._data.slice(4) : "",
+      missing: this._data.startsWith("missing:") ? this._data.slice(8) : "",
+    };
+  }
+
+  // _exportURL downloads the table with the current filters, sort and
+  // shown columns.
+  _exportURL(format) {
+    const table = this.renderRoot.querySelector("sfga-data-table");
+    const params = { ...this._filterParams(), ...(table?.exportParams() || {}), format };
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
+    return "/api/taxon/table/export?" + qs;
+  }
+
   _open(row) {
     location.hash = "#/taxon/" + encodeURIComponent(row.taxon_id);
   }
@@ -386,6 +403,7 @@ class SfgaTaxonTable extends LitElement {
         ${this._picker("data", "Data", "Any", this._dataSource, this._data, (id) => DATA_OPTIONS.find((o) => o.id === id)?.name)}
         ${this._picker("issue", "Issues", "Any or none", this._issueSource, this._issue, (id) => this._issueName(id))}
         <span class="total" role="status">${this._total === null ? "" : `${this._total.toLocaleString()} names`}</span>
+        <sfga-export-menu .href=${(format) => this._exportURL(format)}></sfga-export-menu>
       </div>
       <sfga-data-table
         .columns=${COLUMNS}

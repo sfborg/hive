@@ -339,6 +339,12 @@ class SfgaDataTable extends LitElement {
     return this._sort.map((k) => `${k.column}:${k.desc ? "desc" : "asc"}`).join(",");
   }
 
+  // exportParams returns the shown columns and sort, for an export of
+  // the same view.
+  exportParams() {
+    return { columns: (this._shown || []).join(","), sort: this._sortParam() };
+  }
+
   // reload fetches the first page again, discarding loaded rows.
   reload() {
     this._generation++;

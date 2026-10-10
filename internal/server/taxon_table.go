@@ -79,17 +79,7 @@ func (s *server) handleTaxonTable(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]apiTaxonTableRow, len(rows))
 	for i, row := range rows {
-		items[i] = apiTaxonTableRow{
-			NameID: row.NameID, TaxonID: row.TaxonID, SynonymID: row.SynonymID,
-			Usage: row.Usage, Status: row.Status, Name: row.Name, Authorship: row.Authorship,
-			Rank: row.Rank, Code: row.Code, Related: row.Related,
-			Classification: row.Classification, Extinct: row.Extinct, Modified: row.Modified,
-			Vernaculars: row.Vernaculars, Distribution: row.Distribution,
-			Interactions: row.Interactions, TypeMaterial: row.TypeMaterial,
-			Media: row.Media, Properties: row.Properties, Estimates: row.Estimates,
-			Synonyms: row.Synonyms, NameRelations: row.NameRelations,
-			Issues: row.IssuesBySeverity, IssueRules: row.IssueRules,
-		}
+		items[i] = taxonTableRowToAPI(row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
@@ -119,4 +109,18 @@ func (s *server) handleTaxonTableIssueRules(w http.ResponseWriter, r *http.Reque
 		items[i] = apiRule{rule.ID, rule.Name, rule.Severity, rule.Count}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func taxonTableRowToAPI(row hive.TaxonTableRow) apiTaxonTableRow {
+	return apiTaxonTableRow{
+		NameID: row.NameID, TaxonID: row.TaxonID, SynonymID: row.SynonymID,
+		Usage: row.Usage, Status: row.Status, Name: row.Name, Authorship: row.Authorship,
+		Rank: row.Rank, Code: row.Code, Related: row.Related,
+		Classification: row.Classification, Extinct: row.Extinct, Modified: row.Modified,
+		Vernaculars: row.Vernaculars, Distribution: row.Distribution,
+		Interactions: row.Interactions, TypeMaterial: row.TypeMaterial,
+		Media: row.Media, Properties: row.Properties, Estimates: row.Estimates,
+		Synonyms: row.Synonyms, NameRelations: row.NameRelations,
+		Issues: row.IssuesBySeverity, IssueRules: row.IssueRules,
+	}
 }
