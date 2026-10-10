@@ -52,7 +52,11 @@ type server struct {
 	a *hive.Archive
 	// actor is the identity stamped into each request; the account
 	// dialog can change it while the server runs.
-	actor       *actorSource
+	actor *actorSource
+	// reindex runs name-mention re-indexing in the background;
+	// available caches GNverifier's data source list.
+	reindex     reindexJob
+	available   availableSources
 	archivePath string
 	// grobid is the client for the optional GROBID service (PDF →
 	// TEI conversion). nil when HIVE_GROBID_URL is unset — the
@@ -158,6 +162,11 @@ func (s *server) routes() *http.ServeMux {
 		s.handleDeleteSpeciesInteractionType)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 
+	mux.HandleFunc("GET /api/name-sources", s.handleGetNameSources)
+	mux.HandleFunc("PUT /api/name-sources", s.handlePutNameSources)
+	mux.HandleFunc("GET /api/name-sources/available", s.handleAvailableNameSources)
+	mux.HandleFunc("POST /api/name-sources/reindex", s.handleReindexNameMentions)
+	mux.HandleFunc("GET /api/name-sources/reindex", s.handleReindexStatus)
 	mux.HandleFunc("GET /api/account", s.handleGetAccount)
 	mux.HandleFunc("PATCH /api/account", s.handlePatchAccount)
 	mux.HandleFunc("GET /api/account/orcid-name", s.handleORCIDLookup)
@@ -3760,7 +3769,12 @@ func (s *server) handleReferences(w http.ResponseWriter, r *http.Request) {
 	case "year":
 		sort = hive.ReferenceSortYear
 	}
-	rq, msg := parseReferenceQuery(r)
+	sources, err := s.a.NameSources(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	rq, msg := parseReferenceQuery(r, sources)
 	if msg != "" {
 		writeBadRequest(w, r, msg)
 		return
@@ -3814,13 +3828,8 @@ func (s *server) handleColTaxa(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	key := r.URL.Query().Get("source")
-	if key == "" {
-		key = mentions.Sources[0].Key
-	}
-	src, ok := mentions.SourceByKey(key)
+	src, ok := s.nameSource(w, r, r.URL.Query().Get("source"))
 	if !ok {
-		writeBadRequest(w, r, "invalid 'source' value (ncbi | col)")
 		return
 	}
 	taxa, err := s.a.ColTaxa(r.Context(), src.ID, r.URL.Query().Get("q"), limit)
@@ -3865,13 +3874,8 @@ type apiTaxonTreeNode struct {
 // @Router       /name-mentions/tree [get]
 func (s *server) handleTaxonTree(w http.ResponseWriter, r *http.Request) {
 	qv := r.URL.Query()
-	key := qv.Get("source")
-	if key == "" {
-		key = mentions.Sources[0].Key
-	}
-	src, ok := mentions.SourceByKey(key)
+	src, ok := s.nameSource(w, r, qv.Get("source"))
 	if !ok {
-		writeBadRequest(w, r, "invalid 'source' value (ncbi | col)")
 		return
 	}
 	tq := hive.TaxonTreeQuery{SourceID: src.ID, Path: qv.Get("path"), Q: qv.Get("q")}
@@ -3907,7 +3911,7 @@ func (s *server) handleTaxonTree(w http.ResponseWriter, r *http.Request) {
 // parseReferenceQuery reads the reference-list narrowing parameters
 // shared by GET /api/reference and /api/reference/search. It returns
 // a client-facing message for invalid values.
-func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
+func parseReferenceQuery(r *http.Request, sources []mentions.Source) (hive.ReferenceQuery, string) {
 	qv := r.URL.Query()
 	var rq hive.ReferenceQuery
 	// "author", "recent" and "year" are the single-sort values handled
@@ -3930,7 +3934,7 @@ func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 			rq.Filters = append(rq.Filters, f)
 		}
 	}
-	for _, src := range mentions.Sources {
+	for _, src := range sources {
 		if v := strings.TrimSpace(qv.Get(src.Key + "_parent")); v != "" {
 			rq.Parents = append(rq.Parents, hive.IndexParent{SourceID: src.ID, Name: v})
 		}
@@ -3943,6 +3947,29 @@ func parseReferenceQuery(r *http.Request) (hive.ReferenceQuery, string) {
 		rq.MinMentions = n
 	}
 	return rq, ""
+}
+
+// nameSource resolves a source key from a request against the
+// archive's name sources; "" picks the first. It writes the error
+// response and reports false when the key is unknown.
+func (s *server) nameSource(w http.ResponseWriter, r *http.Request, key string) (mentions.Source, bool) {
+	sources, err := s.a.NameSources(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return mentions.Source{}, false
+	}
+	if key == "" {
+		return sources[0], true
+	}
+	if src, ok := mentions.SourceByKey(sources, key); ok {
+		return src, true
+	}
+	keys := make([]string, len(sources))
+	for i, src := range sources {
+		keys[i] = src.Key
+	}
+	writeBadRequest(w, r, "invalid 'source' value ("+strings.Join(keys, " | ")+")")
+	return mentions.Source{}, false
 }
 
 // handleReferenceSearch returns references whose author, title,
@@ -3978,7 +4005,12 @@ func (s *server) handleReferenceSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = clampPageSize(n)
 	}
-	rq, msg := parseReferenceQuery(r)
+	sources, err := s.a.NameSources(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	rq, msg := parseReferenceQuery(r, sources)
 	if msg != "" {
 		writeBadRequest(w, r, msg)
 		return

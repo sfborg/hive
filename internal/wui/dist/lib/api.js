@@ -119,6 +119,15 @@ export const api = {
   services: () => j("GET", "/api/services"),
   archive: () => j("GET", "/api/archive"),
 
+  // nameSources are the GNverifier data sources the archive's
+  // name-mention index uses; saving them starts a re-index.
+  nameSources: {
+    get: () => j("GET", "/api/name-sources"),
+    available: () => j("GET", "/api/name-sources/available"),
+    put: (ids) => j("PUT", "/api/name-sources", { ids }),
+    reindex: () => j("POST", "/api/name-sources/reindex"),
+    reindexStatus: () => j("GET", "/api/name-sources/reindex"),
+  },
   account: {
     get: () => j("GET", "/api/account"),
     patch: (patch) => j("PATCH", "/api/account", patch),

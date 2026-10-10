@@ -892,12 +892,14 @@ CREATE TABLE IF NOT EXISTS hive__reference_license (
 CREATE INDEX IF NOT EXISTS idx_hive__reference_license_license
     ON hive__reference_license (license);
 
--- hive__user_setting holds each user's interface preferences (column
--- choices, sort order, theme, reading positions) keyed by actor, the
--- ORCID iD in hosted mode or the configured local identity. Values
--- are JSON. Kept in the archive so settings survive clearing browser
--- data and stay separate per user on a shared server.
-CREATE TABLE IF NOT EXISTS hive__user_setting (
+-- hive__setting holds settings as JSON values: each user's interface
+-- preferences (column choices, sort order, theme, reading positions)
+-- keyed by actor, the ORCID iD in hosted mode or the configured local
+-- identity, and project-wide settings (such as the name sources) under
+-- the empty actor. Kept in the archive so settings survive clearing
+-- browser data, travel with the archive and stay separate per user on
+-- a shared server.
+CREATE TABLE IF NOT EXISTS hive__setting (
     actor       TEXT NOT NULL,
     key         TEXT NOT NULL,
     value       TEXT NOT NULL,
@@ -1142,6 +1144,9 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 	if err := migrateTaxonSummaryMethod(ctx, db); err != nil {
 		return err
 	}
+	if err := migrateSettingTable(ctx, db); err != nil {
+		return err
+	}
 	if err := migrateReferenceAssertionForRunLink(ctx, db); err != nil {
 		return err
 	}
@@ -1154,6 +1159,23 @@ func migratePreCanonicalTables(ctx context.Context, db *sql.DB) error {
 // backfill needed; legacy rows just show as unlinked (which is
 // accurate — they weren't produced by an extraction_run).
 // Idempotent: skips columns that already exist.
+// migrateSettingTable renames hive__user_setting, which held only user
+// settings, to hive__setting.
+func migrateSettingTable(ctx context.Context, db *sql.DB) error {
+	old, err := tableExists(ctx, db, "hive__user_setting")
+	if err != nil || !old {
+		return err
+	}
+	exists, err := tableExists(ctx, db, "hive__setting")
+	if err != nil || exists {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE hive__user_setting RENAME TO hive__setting`); err != nil {
+		return fmt.Errorf("core: rename hive__user_setting: %w", err)
+	}
+	return nil
+}
+
 // migrateTaxonSummaryMethod drops a hive__reference_taxon_summary
 // that predates the method column. The table holds derived data;
 // BackfillTaxonSummaries refills it.

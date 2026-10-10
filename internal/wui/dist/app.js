@@ -1649,6 +1649,7 @@ class SfgaApp extends LitElement {
     helpOpen: { state: true },
     llmProvidersOpen: { state: true },
     accountOpen: { state: true },
+    nameSourcesOpen: { state: true },
     // Position of the open settings menu ({top, right}), null when
     // closed.
     _settingsMenu: { state: true },
@@ -2459,6 +2460,7 @@ class SfgaApp extends LitElement {
         api.archive(),
         api.metadata.get().catch(() => null), // legacy archive w/o seeded metadata → null header
         api.vocab.load(),
+        loadIndexSources(),
         api.nomen.load(),
         api.keymap.load(),
       ]);
@@ -3001,6 +3003,9 @@ class SfgaApp extends LitElement {
       </button>
       <button role="menuitem" @click=${run(() => (this.llmProvidersOpen = true))}>
         ${renderIcon("sparkles", 14)} AI providers…
+      </button>
+      <button role="menuitem" @click=${run(() => (this.nameSourcesOpen = true))}>
+        ${renderIcon("network", 14)} Name sources…
       </button>
       <hr />
       <button role="menuitem" @click=${run(() => (this.helpOpen = true))}>
@@ -3647,6 +3652,13 @@ class SfgaApp extends LitElement {
         ? html`<sfga-llm-provider-modal
             @close=${() => (this.llmProvidersOpen = false)}
           ></sfga-llm-provider-modal>`
+        : ""}
+      ${this.nameSourcesOpen
+        ? html`<sfga-name-sources-modal
+            .readOnly=${!!this.archive?.read_only}
+            @close=${() => (this.nameSourcesOpen = false)}
+            @name-sources-changed=${() => loadIndexSources().then(() => this.requestUpdate())}
+          ></sfga-name-sources-modal>`
         : ""}
       ${this.accountOpen
         ? html`<sfga-account-modal
@@ -15738,6 +15750,24 @@ const INDEX_SOURCES = [
   { key: "ncbi", label: "NCBI Taxonomy", short: "NCBI" },
   { key: "col", label: "Catalogue of Life", short: "CoL" },
 ];
+
+// loadIndexSources replaces INDEX_SOURCES with the archive's name
+// sources (chosen under Settings → Name sources), in place so every
+// screen sees them.
+async function loadIndexSources() {
+  try {
+    const res = await api.nameSources.get();
+    const list = (res.sources || []).map((s) => ({
+      key: s.key,
+      label: s.label,
+      short: s.short || s.label,
+    }));
+    if (list.length) INDEX_SOURCES.splice(0, INDEX_SOURCES.length, ...list);
+  } catch (_) {
+    /* keep the defaults */
+  }
+  return INDEX_SOURCES;
+}
 const indexSourceLabel = (key) =>
   (INDEX_SOURCES.find((s) => s.key === key) || {}).label || key;
 const indexSourceShort = (key) =>
@@ -18308,7 +18338,7 @@ class SfgaReferences extends LitElement {
       ? getSetting("references.rowHeight")
       : "two";
     this._indexParent = "";
-    this._indexSource = "ncbi";
+    this._indexSource = INDEX_SOURCES[0]?.key || "ncbi";
     this._minMentions = 1;
     this._stepFilters = {};
     this._help = null;
@@ -19064,6 +19094,15 @@ class SfgaReferences extends LitElement {
     if (v === this._indexParent) return;
     this._indexParent = v;
     this._fetchPage(true);
+  }
+
+  // willUpdate keeps the filter's source among the archive's name
+  // sources, which can change under Settings → Name sources.
+  willUpdate(changed) {
+    super.willUpdate?.(changed);
+    if (INDEX_SOURCES.length && !INDEX_SOURCES.some((s) => s.key === this._indexSource)) {
+      this._indexSource = INDEX_SOURCES[0].key;
+    }
   }
 
   _setIndexSource(src) {

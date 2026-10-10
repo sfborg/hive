@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sfborg/hive/pkg/taxonomy/mentions"
 )
 
 // SummaryRanks are the ranks summarized per reference, highest first.
@@ -128,10 +127,15 @@ type summarySource struct {
 	matched int
 }
 
-// summarySources returns the sources with discovery matches in the
-// reference, most matched mentions first; ties follow
-// mentions.Sources.
+// summarySources returns the archive's name sources with discovery
+// matches in the reference, most matched mentions first; ties follow
+// the archive's source order. Rows left from sources no longer in use
+// are ignored.
 func summarySources(tx *Tx, referenceID string) ([]summarySource, error) {
+	sources, err := readNameSources(tx.ctx, tx.tx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := tx.tx.QueryContext(tx.ctx, `
 		SELECT raw__source, SUM(mention_count) FROM hive__name_mention
 		WHERE reference_id = ? AND `+discoveryMatch("")+` AND chosen = 1 AND raw_taxon_id IS NOT NULL
@@ -157,7 +161,7 @@ func summarySources(tx *Tx, referenceID string) ([]summarySource, error) {
 		return nil, err
 	}
 	var out []summarySource
-	for _, s := range mentions.Sources {
+	for _, s := range sources {
 		if src, ok := bySource[s.ID]; ok {
 			out = append(out, src)
 		}

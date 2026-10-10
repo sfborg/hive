@@ -31,24 +31,39 @@ type Source struct {
 	// ID is the GNverifier data source ID.
 	ID int
 	// Key names the source in query parameters and facets
-	// ("col" → col_parent, "ncbi" → ncbi_parent).
+	// ("col" → col_parent, "ncbi" → ncbi_parent, "gn195" →
+	// gn195_parent); see KeyFor.
 	Key string
-	// Label is the source's display name.
+	// Label is the source's display name; Short its abbreviation.
 	Label string
+	Short string
 }
 
-// Sources are the discovery sources, in display-preference order: a
-// summary that can come from either source uses the first that has
-// it. NCBI Taxonomy comes first because it covers algae the Catalogue
-// of Life base release lacks.
-var Sources = []Source{
-	{ID: NCBI, Key: "ncbi", Label: "NCBI Taxonomy"},
-	{ID: CatalogueOfLife, Key: "col", Label: "Catalogue of Life"},
+// DefaultSources are the discovery sources an archive uses until its
+// curator picks others, in preference order: a summary that can come
+// from either source uses the first that has it. NCBI Taxonomy comes
+// first because it covers algae the Catalogue of Life base release
+// lacks.
+var DefaultSources = []Source{
+	{ID: NCBI, Key: "ncbi", Label: "NCBI Taxonomy", Short: "NCBI"},
+	{ID: CatalogueOfLife, Key: "col", Label: "Catalogue of Life", Short: "CoL"},
 }
 
-// SourceByKey returns the source with the given key.
-func SourceByKey(key string) (Source, bool) {
-	for _, s := range Sources {
+// KeyFor returns the key of a GNverifier source: "col" and "ncbi" for
+// the two original sources, "gn<id>" for any other.
+func KeyFor(id int) string {
+	switch id {
+	case CatalogueOfLife:
+		return "col"
+	case NCBI:
+		return "ncbi"
+	}
+	return fmt.Sprintf("gn%d", id)
+}
+
+// SourceByKey returns the source in sources with the given key.
+func SourceByKey(sources []Source, key string) (Source, bool) {
+	for _, s := range sources {
 		if s.Key == key {
 			return s, true
 		}
@@ -56,9 +71,9 @@ func SourceByKey(key string) (Source, bool) {
 	return Source{}, false
 }
 
-// SourceByID returns the source with the given GNverifier ID.
-func SourceByID(id int) (Source, bool) {
-	for _, s := range Sources {
+// SourceByID returns the source in sources with the given ID.
+func SourceByID(sources []Source, id int) (Source, bool) {
+	for _, s := range sources {
 		if s.ID == id {
 			return s, true
 		}
@@ -154,6 +169,12 @@ func NewVerifier(sourceID int) Verifier {
 	return gnverifier.New(cfg, verifrest.New(cfg.VerifierURL))
 }
 
+// DataSources lists every data source GNverifier offers.
+func DataSources() ([]vlib.DataSource, error) {
+	cfg := gnverifierconfig.New()
+	return gnverifier.New(cfg, verifrest.New(cfg.VerifierURL)).DataSources()
+}
+
 // SourceTag identifies the data source and its release for provenance,
 // as "gnverifier:<id>@<release>". The release is the source's version
 // string, else its release date, else the date GNverifier harvested it.
@@ -195,8 +216,17 @@ const batchSize = 1000
 // matched a record with a classification: the top-scored lineage with
 // any homonyms. Names without a match are absent from the result.
 func Verify(ctx context.Context, v Verifier, names []string) map[string]Match {
+	return VerifyWithProgress(ctx, v, names, nil)
+}
+
+// VerifyWithProgress is Verify reporting, after each batch, how many of
+// the names are done.
+func VerifyWithProgress(ctx context.Context, v Verifier, names []string, progress func(done, total int)) map[string]Match {
 	out := make(map[string]Match, len(names))
 	for start := 0; start < len(names); start += batchSize {
+		if progress != nil {
+			progress(start, len(names))
+		}
 		end := min(start+batchSize, len(names))
 		res := v.VerifyBatch(ctx, names[start:end])
 		for i, r := range res {

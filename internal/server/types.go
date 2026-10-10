@@ -960,13 +960,13 @@ type apiNameCount struct {
 	Count int    `json:"count"`
 }
 
-// sourceKey returns a verifier source's key ("ncbi", "col"), or "" for
-// an unknown or zero ID.
+// sourceKey returns a verifier source's key ("ncbi", "col", "gn195"),
+// or "" for a zero ID.
 func sourceKey(id int) string {
-	if src, ok := mentions.SourceByID(id); ok {
-		return src.Key
+	if id <= 0 {
+		return ""
 	}
-	return ""
+	return mentions.KeyFor(id)
 }
 
 func indexMatchToAPI(m *hive.IndexMatch) *apiIndexMatch {
