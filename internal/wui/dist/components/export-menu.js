@@ -5,8 +5,10 @@
  * supplies href(format) → URL of the export endpoint with the screen's
  * filters, sort and columns; choosing a format downloads it.
  *
- * Properties: href — (format) => string; formats — [{id, label, hint}]
- * (defaults to CSV and SQLite).
+ * Properties: href — (format, options) => string; formats — [{id,
+ * label, hint}] (defaults to CSV and SQLite); options — [{id, label,
+ * title, checked, formats}] checkboxes under the formats, each passed
+ * to href as options[id] for the formats it lists.
  */
 
 import { LitElement, html, css, nothing } from "/vendor/lit-3.x.x.min.js";
@@ -20,6 +22,8 @@ class SfgaExportMenu extends LitElement {
   static properties = {
     href: { attribute: false },
     formats: { attribute: false },
+    options: { attribute: false },
+    _checked: { state: true },
     _open: { state: true },
     _right: { state: true },
   };
@@ -71,6 +75,16 @@ class SfgaExportMenu extends LitElement {
       background: color-mix(in oklab, var(--fg) 8%, transparent);
       outline: none;
     }
+    .option {
+      display: flex;
+      gap: var(--sp-2);
+      align-items: baseline;
+      padding: var(--sp-1) var(--sp-3);
+      border-top: 1px solid var(--border);
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      cursor: pointer;
+    }
     .hint {
       color: var(--dim);
       font-size: var(--fs-xs);
@@ -80,6 +94,8 @@ class SfgaExportMenu extends LitElement {
   constructor() {
     super();
     this.formats = DEFAULT_FORMATS;
+    this.options = [];
+    this._checked = {};
     this._open = false;
   }
 
@@ -108,11 +124,19 @@ class SfgaExportMenu extends LitElement {
   _download(format) {
     this._close();
     const a = document.createElement("a");
-    a.href = this.href(format);
+    const opts = {};
+    for (const o of this.options) {
+      if (o.formats.includes(format)) opts[o.id] = this._isChecked(o);
+    }
+    a.href = this.href(format, opts);
     a.download = "";
     document.body.append(a);
     a.click();
     a.remove();
+  }
+
+  _isChecked(o) {
+    return this._checked[o.id] ?? !!o.checked;
   }
 
   render() {
@@ -142,6 +166,16 @@ class SfgaExportMenu extends LitElement {
               (f) => html`<button role="menuitem" @click=${() => this._download(f.id)}>
                 <span>${f.label}</span>${f.hint ? html`<span class="hint">${f.hint}</span>` : nothing}
               </button>`,
+            )}
+            ${this.options.map(
+              (o) => html`<label class="option" title=${o.title || nothing}>
+                <input
+                  type="checkbox"
+                  .checked=${this._isChecked(o)}
+                  @change=${(e) => (this._checked = { ...this._checked, [o.id]: e.target.checked })}
+                />
+                ${o.label}
+              </label>`,
             )}
           </div>`
         : nothing}

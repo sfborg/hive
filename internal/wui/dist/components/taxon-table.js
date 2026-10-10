@@ -203,6 +203,16 @@ const EXPORT_FORMATS = [
   },
 ];
 
+const EXPORT_OPTIONS = [
+  {
+    id: "validation",
+    label: "Include validation results (SFGA archive)",
+    title: "Copy the validation results on the exported records into the archive",
+    checked: true,
+    formats: ["sfga"],
+  },
+];
+
 class SfgaTaxonTable extends LitElement {
   static properties = {
     icon: { attribute: false },
@@ -375,9 +385,10 @@ class SfgaTaxonTable extends LitElement {
 
   // _exportURL downloads the table with the current filters, sort and
   // shown columns.
-  _exportURL(format) {
+  _exportURL(format, opts = {}) {
     const table = this.renderRoot.querySelector("sfga-data-table");
     const params = { ...this._filterParams(), ...(table?.exportParams() || {}), format };
+    if (opts.validation === false) params.validation = "0";
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
     return "/api/taxon/table/export?" + qs;
   }
@@ -413,7 +424,11 @@ class SfgaTaxonTable extends LitElement {
         ${this._picker("data", "Data", "Any", this._dataSource, this._data, (id) => DATA_OPTIONS.find((o) => o.id === id)?.name)}
         ${this._picker("issue", "Issues", "Any or none", this._issueSource, this._issue, (id) => this._issueName(id))}
         <span class="total" role="status">${this._total === null ? "" : `${this._total.toLocaleString()} names`}</span>
-        <sfga-export-menu .formats=${EXPORT_FORMATS} .href=${(format) => this._exportURL(format)}></sfga-export-menu>
+        <sfga-export-menu
+          .formats=${EXPORT_FORMATS}
+          .options=${EXPORT_OPTIONS}
+          .href=${(format, opts) => this._exportURL(format, opts)}
+        ></sfga-export-menu>
       </div>
       <sfga-data-table
         .columns=${COLUMNS}

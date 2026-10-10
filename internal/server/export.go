@@ -349,6 +349,7 @@ func splitColumns(raw string) []string {
 // @Produce      text/csv
 // @Param        format  query string false "csv (default), sqlite (one table) or sfga (the matching records and their related tables, with taxon_table_view)"
 // @Param        columns query string false "comma-separated column ids, in order; identifiers always come first"
+// @Param        validation query string false "sfga: 0 leaves out the validation results"
 // @Success      200 {file} file
 // @Router       /taxon/table/export [get]
 func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) {
@@ -376,7 +377,7 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 	if sfga {
 		info := s.exportInfo(r, "taxon table")
 		sendSQLite(w, r, "taxa-"+time.Now().Format("2006-01-02")+".sfga.sqlite", func(path string) error {
-			return s.a.ExportTaxaSFGA(r.Context(), path, found, info)
+			return s.a.ExportTaxaSFGA(r.Context(), path, found, v.Get("validation") != "0", info)
 		})
 		return
 	}

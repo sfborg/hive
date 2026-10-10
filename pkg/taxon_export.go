@@ -15,10 +15,12 @@ import (
 // names, distribution, interactions, type material, name relations,
 // media, properties, species estimates, treatments, concept relations,
 // name matches), the references those records
-// cite, the vocabularies and the metadata. The rows that matched are
+// cite, the vocabularies, the metadata and the validation results on
+// the copied records (resolved ones included) unless validation is
+// false. The rows that matched are
 // listed in export_scope, and the view taxon_table_view shows them as
 // the flat table, computed from the related tables.
-func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonTableRow, info map[string]string) error {
+func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonTableRow, validation bool, info map[string]string) error {
 	db, err := sql.Open(sqliteDriver, "file:"+path+"?mode=rwc")
 	if err != nil {
 		return err
@@ -155,7 +157,13 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 		}
 	}
 
-	if err := exec(`CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL()); err != nil {
+	issues := false
+	if validation {
+		if issues, err = a.copyExportIssues(ctx, db, copied); err != nil {
+			return err
+		}
+	}
+	if err := exec(`CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL(issues)); err != nil {
 		return err
 	}
 	if err := exec(`CREATE TABLE export_info (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
@@ -169,6 +177,54 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 		}
 	}
 	return nil
+}
+
+// validatorTables hold the validation results and when each rule last
+// ran.
+var validatorTables = []string{"__gsvalidator_results", "__gsvalidator_rule_state"}
+
+// copyExportIssues creates the validator tables in the export, as the
+// source defines them, and copies the results on records the export
+// holds. It reports false when the source has never been validated.
+func (a *Archive) copyExportIssues(ctx context.Context, db *sql.DB, tables []string) (bool, error) {
+	for _, t := range validatorTables {
+		rows, err := db.QueryContext(ctx, `SELECT sql FROM src.sqlite_master
+			WHERE tbl_name = ? AND sql IS NOT NULL ORDER BY type = 'index'`, t)
+		if err != nil {
+			return false, err
+		}
+		var ddl []string
+		for rows.Next() {
+			var q string
+			if err := rows.Scan(&q); err != nil {
+				rows.Close()
+				return false, err
+			}
+			ddl = append(ddl, q)
+		}
+		rows.Close()
+		if len(ddl) == 0 {
+			return false, nil
+		}
+		for _, q := range ddl {
+			if _, err := db.ExecContext(ctx, q); err != nil {
+				return false, fmt.Errorf("core: export %s: %w", t, err)
+			}
+		}
+	}
+	if err := a.copyExportTable(ctx, db, "__gsvalidator_rule_state", "1"); err != nil {
+		return false, err
+	}
+	for _, t := range tables {
+		if ok, _ := columnIn(ctx, db, "main", t, "col__id"); !ok {
+			continue
+		}
+		where := `table_name = '` + t + `' AND record_id IN (SELECT col__id FROM main."` + t + `")`
+		if err := a.copyExportTable(ctx, db, "__gsvalidator_results", where); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // copyExportTable copies src rows of table matching where into the
@@ -250,7 +306,7 @@ func sharedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 // taxonTableViewSQL is the query behind taxon_table_view: the matched
 // usages of export_scope with the taxon table's columns, computed from
 // the related tables. Lists are joined with "; ".
-func taxonTableViewSQL() string {
+func taxonTableViewSQL(issues bool) string {
 	acc := func(expr string) string { return `CASE WHEN u.usage = 'accepted' THEN (` + expr + `) END` }
 	cols := []string{
 		`u.name_id`, `u.taxon_id`, `NULLIF(u.synonym_id, '') AS synonym_id`,
@@ -281,6 +337,21 @@ func taxonTableViewSQL() string {
 		`(SELECT COUNT(*) FROM name_relation nr
 			WHERE nr.col__name_id = u.name_id OR nr.col__related_name_id = u.name_id) AS name_relations`,
 	)
+	if issues {
+		// Open results on the row's name and on its taxon or synonym
+		// record, as the taxon table counts them.
+		open := `FROM __gsvalidator_results r WHERE r.is_resolved = 0 AND (
+				(r.table_name = 'name' AND r.record_id = u.name_id)
+				OR (u.usage = 'accepted' AND r.table_name = 'taxon' AND r.record_id = u.taxon_id)
+				OR (u.usage <> 'accepted' AND r.table_name = 'synonym' AND r.record_id = u.synonym_id))`
+		cols = append(cols,
+			`(SELECT group_concat(severity || ' ' || n, '; ') FROM (SELECT r.severity, COUNT(*) AS n `+open+`
+				GROUP BY r.severity ORDER BY CASE r.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2
+					WHEN 'info' THEN 3 ELSE 4 END)) AS issues`,
+			`(SELECT group_concat(rule_name, '; ') FROM (SELECT DISTINCT r.rule_name `+open+`
+				ORDER BY r.rule_name)) AS issue_rules`,
+		)
+	}
 	return `SELECT ` + strings.Join(cols, ",\n\t") + `
 FROM export_scope u
 JOIN name n ON n.col__id = u.name_id
