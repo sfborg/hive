@@ -229,8 +229,15 @@ const EXPORT_FORMATS = [
 
 const EXPORT_OPTIONS = [
   {
+    id: "linnaean",
+    label: "Include all Linnaean ranks in CSV and SQLite (recommended if you plan to edit the classification and re-import)",
+    title: "Add kingdom, phylum, class, order, family, genus and species columns to the ones shown",
+    checked: false,
+    formats: ["csv", "sqlite"],
+  },
+  {
     id: "validation",
-    label: "Include validation results (SFGA archive)",
+    label: "Include validation results in the SFGA archive",
     title: "Copy the validation results on the exported records into the archive",
     checked: true,
     formats: ["sfga"],
@@ -428,6 +435,7 @@ class SfgaTaxonTable extends LitElement {
     const table = this.renderRoot.querySelector("sfga-data-table");
     const params = { ...this._filterParams(), ...(table?.exportParams() || {}), format };
     if (opts.validation === false) params.validation = "0";
+    if (opts.linnaean) params.linnaean = "1";
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
     return "/api/taxon/table/export?" + qs;
   }

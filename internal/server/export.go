@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,55 @@ func taxonExportColumns(ranks []string) []exportColumn[apiTaxonTableRow] {
 		textCol("issue_rules", "Issue types", func(r R) string { return joinList(r.IssueRules) }),
 	)
 }
+
+// withLinnaean adds the Linnaean ranks missing from the requested
+// column ids, keeping all rank columns together in hierarchy order
+// where the first one was, or after the name columns when none was.
+func (s *server) withLinnaean(ctx context.Context, ids []string) ([]string, error) {
+	ranks, err := s.a.TaxonRanks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	isRank, want := map[string]bool{}, map[string]bool{}
+	for _, r := range ranks {
+		isRank[r.ID] = true
+		if r.Linnean {
+			want[r.ID] = true
+		}
+	}
+	at := -1
+	var rest []string
+	for _, id := range ids {
+		if isRank[id] {
+			want[id] = true
+			if at < 0 {
+				at = len(rest)
+			}
+			continue
+		}
+		rest = append(rest, id)
+	}
+	if at < 0 {
+		at = 0
+		for i, id := range rest {
+			if slices.Contains(taxonNameColumns, id) {
+				at = i + 1
+			}
+		}
+	}
+	var block []string
+	for _, r := range ranks {
+		if want[r.ID] {
+			block = append(block, r.ID)
+		}
+	}
+	return slices.Concat(rest[:at], block, rest[at:]), nil
+}
+
+// taxonNameColumns are the taxon table's name-level columns, which come
+// before the classification.
+var taxonNameColumns = []string{"name_id", "taxon_id", "synonym_id", "name", "authorship", "rank",
+	"usage", "related", "status", "code", "extinct", "modified"}
 
 // exportLineage picks the classification ranks among the requested
 // column ids, in hierarchy order; with no columns requested, the
@@ -377,6 +427,7 @@ func splitColumns(raw string) []string {
 // @Param        format  query string false "csv (default), sqlite (one table) or sfga (the matching records and their related tables, with taxon_table_view)"
 // @Param        columns query string false "comma-separated column ids, in order; identifiers always come first"
 // @Param        validation query string false "sfga: 0 leaves out the validation results"
+// @Param        linnaean query string false "csv, sqlite: 1 adds every Linnaean rank column"
 // @Success      200 {file} file
 // @Router       /taxon/table/export [get]
 func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) {
@@ -392,6 +443,12 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	ids := splitColumns(v.Get("columns"))
+	if v.Get("linnaean") == "1" {
+		if ids, err = s.withLinnaean(r.Context(), ids); err != nil {
+			writeProblem(w, r, err)
+			return
+		}
+	}
 	if q.Lineage, err = s.exportLineage(r.Context(), ids); err != nil {
 		writeProblem(w, r, err)
 		return
