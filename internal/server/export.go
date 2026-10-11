@@ -53,7 +53,9 @@ func severityCounts(m map[string]int) string {
 	return strings.Join(parts, "; ")
 }
 
-var taxonExportColumns = func() []exportColumn[apiTaxonTableRow] {
+// taxonExportColumns lists the taxon table's export columns, with a
+// classification column for each of ranks (lowercase rank IDs).
+func taxonExportColumns(ranks []string) []exportColumn[apiTaxonTableRow] {
 	type R = apiTaxonTableRow
 	cols := []exportColumn[R]{
 		textCol("name_id", "Name ID", func(r R) string { return r.NameID }),
@@ -74,8 +76,9 @@ var taxonExportColumns = func() []exportColumn[apiTaxonTableRow] {
 		}),
 		textCol("modified", "Modified", func(r R) string { return r.Modified }),
 	}
-	for _, rank := range hive.TaxonTableRanks {
-		cols = append(cols, textCol(rank, strings.ToUpper(rank[:1])+rank[1:],
+	for _, rank := range ranks {
+		label := strings.ReplaceAll(rank, "_", " ")
+		cols = append(cols, textCol(rank, strings.ToUpper(label[:1])+label[1:],
 			func(r R) string { return r.Classification[rank] }))
 	}
 	return append(cols,
@@ -91,7 +94,31 @@ var taxonExportColumns = func() []exportColumn[apiTaxonTableRow] {
 		textCol("issues", "Issues", func(r R) string { return severityCounts(r.Issues) }),
 		textCol("issue_rules", "Issue types", func(r R) string { return joinList(r.IssueRules) }),
 	)
-}()
+}
+
+// exportLineage picks the classification ranks among the requested
+// column ids, in hierarchy order; with no columns requested, the
+// table's default ranks.
+func (s *server) exportLineage(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return hive.TaxonTableRanks, nil
+	}
+	ranks, err := s.a.TaxonRanks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := []string{}
+	for _, r := range ranks {
+		if want[r.ID] {
+			out = append(out, r.ID)
+		}
+	}
+	return out, nil
+}
 
 // taxonSummaryCell renders a classification summary as
 // "Dinophyceae 256; Spirotrichea 134".
@@ -364,6 +391,11 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 		writeBadRequest(w, r, err.Error())
 		return
 	}
+	ids := splitColumns(v.Get("columns"))
+	if q.Lineage, err = s.exportLineage(r.Context(), ids); err != nil {
+		writeProblem(w, r, err)
+		return
+	}
 	q.Sort, q.Limit = sort, -1
 	sfga := v.Get("format") == "sfga"
 	if sfga {
@@ -385,7 +417,7 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 	for i, row := range found {
 		rows[i] = taxonTableRowToAPI(row)
 	}
-	cols := pickColumns(taxonExportColumns, splitColumns(v.Get("columns")), 3)
+	cols := pickColumns(taxonExportColumns(q.Lineage), ids, 3)
 	writeExport(w, r, v.Get("format"), "taxa", "taxa", cols, rows, s.exportInfo(r, "taxon table"))
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -43,6 +45,10 @@ type TaxonTableQuery struct {
 	DetailLimit int
 	// Offset skips that many rows of the ordered result.
 	Offset int
+	// Lineage lists the classification ranks to fill in, as lowercase
+	// rank IDs of the archive's rank vocabulary; nil means
+	// TaxonTableRanks.
+	Lineage []string
 }
 
 // TaxonTableRow is one name usage.
@@ -61,7 +67,7 @@ type TaxonTableRow struct {
 	// Related is the parent's name for accepted rows and the accepted
 	// name for synonym rows.
 	Related        string
-	Classification map[string]string // kingdom … genus of the accepted taxon, itself included
+	Classification map[string]string // the query's Lineage ranks of the accepted taxon, itself included
 	Extinct        *bool
 	Modified       string
 
@@ -103,8 +109,85 @@ var taxonLevelData = map[string]bool{
 	"properties": true, "estimates": true, "synonyms": true,
 }
 
-// TaxonTableRanks are the classification ranks the table shows.
+// TaxonTableRanks are the classification ranks the table fills in
+// unless the query lists others.
 var TaxonTableRanks = []string{"kingdom", "phylum", "class", "order", "family", "genus"}
+
+// denormalizedRanks are the ranks the taxon table has a stored
+// classification column for (col__family, …).
+var denormalizedRanks = map[string]bool{
+	"species": true, "section": true, "subgenus": true, "genus": true, "subtribe": true,
+	"tribe": true, "subfamily": true, "family": true, "superfamily": true, "suborder": true,
+	"order": true, "subclass": true, "class": true, "subphylum": true, "phylum": true,
+	"kingdom": true,
+}
+
+// rankColumnID matches what can be a rank column: a lowercase rank ID.
+var rankColumnID = regexp.MustCompile(`^[a-z][a-z_]*$`)
+
+// TaxonRank is a rank of the archive's vocabulary, offered as a
+// classification column.
+type TaxonRank struct {
+	ID      string // lowercase rank ID, the column's id
+	Name    string
+	Linnean bool
+	Taxa    int // accepted taxa of this rank in the archive
+}
+
+// TaxonRanks lists the archive's ranks in hierarchy order, with how
+// many taxa each has.
+func (a *Archive) TaxonRanks(ctx context.Context) ([]TaxonRank, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT LOWER(r.col__id), COALESCE(r.col__name, ''), COALESCE(r.col__linnean, 0), COALESCE(c.n, 0)
+		FROM rank r
+		LEFT JOIN (SELECT UPPER(n.col__rank_id) AS id, COUNT(*) AS n
+			FROM taxon t JOIN name n ON n.col__id = t.col__name_id GROUP BY 1) c ON c.id = UPPER(r.col__id)
+		WHERE r.col__id <> ''
+		ORDER BY r.rowid`)
+	if err != nil {
+		return nil, fmt.Errorf("core: taxon ranks: %w", err)
+	}
+	defer rows.Close()
+	var out []TaxonRank
+	for rows.Next() {
+		var r TaxonRank
+		if err := rows.Scan(&r.ID, &r.Name, &r.Linnean, &r.Taxa); err != nil {
+			return nil, err
+		}
+		if rankColumnID.MatchString(r.ID) {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
+// lineageRanks checks ranks against the archive's vocabulary and
+// returns them in hierarchy order, without repeats.
+func (a *Archive) lineageRanks(ctx context.Context, ranks []string) ([]string, error) {
+	if ranks == nil {
+		return TaxonTableRanks, nil
+	}
+	known, err := a.TaxonRanks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, r := range ranks {
+		want[strings.ToLower(strings.TrimSpace(r))] = true
+	}
+	delete(want, "")
+	var out []string
+	for _, r := range known {
+		if want[r.ID] {
+			out = append(out, r.ID)
+			delete(want, r.ID)
+		}
+	}
+	for r := range want {
+		return nil, fmt.Errorf("%w: unknown rank %q", ErrValidation, r)
+	}
+	return out, nil
+}
 
 // taxonUsages selects every name usage: one row per taxon and one per
 // synonym, with the accepted taxon each belongs to.
@@ -161,31 +244,29 @@ var TaxonTableSortColumns = map[string]string{
 	"issue_rules": `(SELECT MIN(r.rule_name) FROM __gsvalidator_results r WHERE ` + issueMatch + `)`,
 }
 
-func init() {
-	for _, r := range TaxonTableRanks {
-		TaxonTableSortColumns[r] = "LOWER(" + lineageRank(r) + ")"
+// lineageTable defines cls: for every taxon, the names at ranks in its
+// classification (itself included), from one walk of the parent
+// chains. Column c_<rank> holds each rank's name.
+func lineageTable(ranks []string) string {
+	cols := make([]string, len(ranks))
+	in := make([]string, len(ranks))
+	for i, r := range ranks {
+		up := strings.ToUpper(r)
+		cols[i] = `MAX(CASE WHEN UPPER(nn.col__rank_id) = '` + up +
+			`' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS "c_` + r + `"`
+		in[i] = `'` + up + `'`
 	}
-}
-
-// lineageTable defines cls: for every taxon, the names at the table's
-// ranks in its classification (itself included), from one walk of the
-// parent chains.
-const lineageTable = `WITH RECURSIVE up(start, id, d) AS (
+	return `WITH RECURSIVE up(start, id, d) AS (
 		SELECT col__id, col__id, 0 FROM taxon
 		UNION ALL
 		SELECT up.start, p.col__parent_id, up.d + 1 FROM up JOIN taxon p ON p.col__id = up.id
 		WHERE COALESCE(p.col__parent_id, '') <> '' AND up.d < 60),
-	cls AS MATERIALIZED (SELECT up.start AS taxon_id,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'KINGDOM' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_kingdom,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'PHYLUM' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_phylum,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'CLASS' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_class,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'ORDER' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_order,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'FAMILY' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_family,
-		MAX(CASE WHEN UPPER(nn.col__rank_id) = 'GENUS' THEN COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name) END) AS c_genus
+	cls AS MATERIALIZED (SELECT up.start AS taxon_id, ` + strings.Join(cols, ", ") + `
 		FROM up JOIN taxon x ON x.col__id = up.id JOIN name nn ON nn.col__id = x.col__name_id
-		WHERE UPPER(nn.col__rank_id) IN ('KINGDOM', 'PHYLUM', 'CLASS', 'ORDER', 'FAMILY', 'GENUS')
+		WHERE UPPER(nn.col__rank_id) IN (` + strings.Join(in, ", ") + `)
 		GROUP BY up.start)
 	`
+}
 
 // lineageRank selects the name at rank in the classification of the
 // usage row's accepted taxon: the taxon itself or its nearest ancestor
@@ -202,13 +283,31 @@ func lineageRank(rank string) string {
 		SELECT COALESCE(NULLIF(nn.gn__canonical_simple, ''), nn.col__scientific_name)
 		FROM up JOIN taxon x ON x.col__id = up.id JOIN name nn ON nn.col__id = x.col__name_id
 		WHERE UPPER(nn.col__rank_id) = '` + strings.ToUpper(rank) + `'
-		ORDER BY up.d LIMIT 1), NULLIF(at.col__` + rank + `, ''))`
+		ORDER BY up.d LIMIT 1)` + denormalized(rank) + `)`
+}
+
+// denormalized is the stored classification column to fall back on for
+// rank, as ", NULLIF(at.col__<rank>, ”)", or "" when there is none.
+func denormalized(rank string) string {
+	if !denormalizedRanks[rank] {
+		return ", NULL"
+	}
+	return `, NULLIF(at.col__` + rank + `, '')`
 }
 
 // ParseTaxonTableSort parses "col:asc,col:desc" against the taxon
-// table's columns.
+// table's columns. Any lowercase rank ID is accepted as a
+// classification column; TaxonTable checks it against the archive's
+// ranks.
 func ParseTaxonTableSort(raw string) ([]ReferenceSortKey, error) {
-	return parseSortKeys(raw, TaxonTableSortColumns)
+	columns := maps.Clone(TaxonTableSortColumns)
+	for _, part := range strings.Split(raw, ",") {
+		col, _, _ := strings.Cut(strings.TrimSpace(part), ":")
+		if _, ok := columns[col]; !ok && rankColumnID.MatchString(col) {
+			columns[col] = ""
+		}
+	}
+	return parseSortKeys(raw, columns)
 }
 
 // predicate returns the WHERE condition over u, n and at.
@@ -289,19 +388,30 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		}
 	}
 
+	lineage, err := a.lineageRanks(ctx, q.Lineage)
+	if err != nil {
+		return nil, 0, err
+	}
 	// Sorting by a classification rank needs every row's lineage: walk
 	// all taxa once into a materialized table rather than per row.
-	ranks := map[string]bool{}
-	for _, r := range TaxonTableRanks {
-		ranks[r] = true
+	var sortRanks []string
+	for _, k := range q.Sort {
+		if _, ok := TaxonTableSortColumns[k.Column]; !ok {
+			sortRanks = append(sortRanks, k.Column)
+		}
+	}
+	if sortRanks, err = a.lineageRanks(ctx, sortRanks); err != nil {
+		return nil, 0, err
 	}
 	prefix, join := "", ""
+	if len(sortRanks) > 0 {
+		prefix, join = lineageTable(sortRanks), ` LEFT JOIN cls ON cls.taxon_id = u.taxon_id`
+	}
 	order := make([]string, 0, len(q.Sort)+2)
 	for _, k := range q.Sort {
-		expr := TaxonTableSortColumns[k.Column]
-		if ranks[k.Column] {
-			prefix, join = lineageTable, ` LEFT JOIN cls ON cls.taxon_id = u.taxon_id`
-			expr = "LOWER(COALESCE(cls.c_" + k.Column + ", NULLIF(at.col__" + k.Column + ", '')))"
+		expr, ok := TaxonTableSortColumns[k.Column]
+		if !ok {
+			expr = `LOWER(COALESCE(cls."c_` + k.Column + `"` + denormalized(k.Column) + `))`
 		}
 		dir := "ASC"
 		if k.Desc {
@@ -328,7 +438,7 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 			 WHERE p.col__id = at.col__parent_id)
 		ELSE (SELECT an.col__scientific_name FROM name an WHERE an.col__id = at.col__name_id) END`,
 	}
-	for _, r := range TaxonTableRanks {
+	for _, r := range lineage {
 		cols = append(cols, "COALESCE("+lineageRank(r)+", '')")
 	}
 	rows, err := a.db.QueryContext(ctx, prefix+`SELECT `+strings.Join(cols, ", ")+` `+from+join+
@@ -342,7 +452,7 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		var r TaxonTableRow
 		var extinct sql.NullBool
 		var related sql.NullString
-		ranks := make([]string, len(TaxonTableRanks))
+		ranks := make([]string, len(lineage))
 		dest := []any{&r.NameID, &r.TaxonID, &r.SynonymID, &r.Usage, &r.Status, &r.Modified,
 			&r.Name, &r.Authorship, &r.Rank, &r.Code, &extinct, &related}
 		for i := range ranks {
@@ -357,7 +467,7 @@ func (a *Archive) TaxonTable(ctx context.Context, q TaxonTableQuery) ([]TaxonTab
 		}
 		r.Related = related.String
 		r.Classification = map[string]string{}
-		for i, rank := range TaxonTableRanks {
+		for i, rank := range lineage {
 			if ranks[i] != "" {
 				r.Classification[rank] = ranks[i]
 			}

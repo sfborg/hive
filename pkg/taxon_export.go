@@ -163,7 +163,11 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 			return err
 		}
 	}
-	if err := exec(`CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL(issues)); err != nil {
+	ranks, err := usedRanks(ctx, db)
+	if err != nil {
+		return err
+	}
+	if err := exec(`CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL(ranks, issues)); err != nil {
 		return err
 	}
 	if err := exec(`CREATE TABLE export_info (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
@@ -303,10 +307,34 @@ func sharedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
+// usedRanks lists the ranks of the exported taxa, in hierarchy order:
+// the view's classification columns.
+func usedRanks(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT LOWER(r.col__id) FROM main.rank r
+		WHERE r.col__id <> '' AND UPPER(r.col__id) IN (
+			SELECT UPPER(n.col__rank_id) FROM main.taxon t JOIN main.name n ON n.col__id = t.col__name_id)
+		ORDER BY r.rowid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		if rankColumnID.MatchString(r) {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
 // taxonTableViewSQL is the query behind taxon_table_view: the matched
 // usages of export_scope with the taxon table's columns, computed from
-// the related tables. Lists are joined with "; ".
-func taxonTableViewSQL(issues bool) string {
+// the related tables, and a classification column for each of ranks. Lists are joined with "; ".
+func taxonTableViewSQL(ranks []string, issues bool) string {
 	acc := func(expr string) string { return `CASE WHEN u.usage = 'accepted' THEN (` + expr + `) END` }
 	cols := []string{
 		`u.name_id`, `u.taxon_id`, `NULLIF(u.synonym_id, '') AS synonym_id`,
@@ -319,7 +347,7 @@ func taxonTableViewSQL(issues bool) string {
 			AS parent_or_accepted`,
 		`lower(n.col__code_id) AS code`,
 	}
-	for _, r := range TaxonTableRanks {
+	for _, r := range ranks {
 		cols = append(cols, lineageRank(r)+` AS "`+r+`"`)
 	}
 	cols = append(cols,

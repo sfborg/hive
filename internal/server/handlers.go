@@ -211,6 +211,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/name/{id}/dependencies", s.handleNameDependencies)
 	mux.HandleFunc("GET /api/taxon/table", s.handleTaxonTable)
 	mux.HandleFunc("GET /api/taxon/table/issue-rules", s.handleTaxonTableIssueRules)
+	mux.HandleFunc("GET /api/taxon/table/ranks", s.handleTaxonTableRanks)
 	mux.HandleFunc("GET /api/taxon/table/export", s.handleTaxonTableExport)
 	mux.HandleFunc("POST /api/taxon", s.handleCreateTaxon)
 	mux.HandleFunc("DELETE /api/taxon/{id}", s.handleDeleteTaxon)

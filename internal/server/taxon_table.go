@@ -52,6 +52,7 @@ type apiTaxonTableRow struct {
 // @Param        has     query string false "keep rows with this data: vernaculars, distribution, interactions, media, properties, estimates, synonyms, type_material, name_relations"
 // @Param        missing query string false "keep rows lacking this data (same kinds as has)"
 // @Param        sort   query string false "col:asc|desc, comma-separated"
+// @Param        lineage query string false "comma-separated lowercase rank IDs to fill the classification with (default kingdom,phylum,class,order,family,genus)"
 // @Param        limit  query int    false "page size (default 100, max 500)"
 // @Param        offset query int    false "rows to skip"
 // @Success      200 {object} map[string]any
@@ -70,6 +71,12 @@ func (s *server) handleTaxonTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q.Sort = sort
+	if v.Has("lineage") {
+		q.Lineage = []string{}
+		if raw := strings.TrimSpace(v.Get("lineage")); raw != "" {
+			q.Lineage = strings.Split(raw, ",")
+		}
+	}
 	q.Limit, _ = strconv.Atoi(v.Get("limit"))
 	q.Offset, _ = strconv.Atoi(v.Get("offset"))
 	rows, total, err := s.a.TaxonTable(r.Context(), q)
@@ -82,6 +89,27 @@ func (s *server) handleTaxonTable(w http.ResponseWriter, r *http.Request) {
 		items[i] = taxonTableRowToAPI(row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// handleTaxonTableRanks lists the archive's ranks in hierarchy order,
+// with how many taxa each has, for the table's classification columns.
+//
+// @Summary      Ranks for classification columns
+// @Tags         taxa
+// @Produce      json
+// @Success      200 {object} map[string]any
+// @Router       /taxon/table/ranks [get]
+func (s *server) handleTaxonTableRanks(w http.ResponseWriter, r *http.Request) {
+	ranks, err := s.a.TaxonRanks(r.Context())
+	if err != nil {
+		writeProblem(w, r, err)
+		return
+	}
+	items := make([]map[string]any, len(ranks))
+	for i, rk := range ranks {
+		items[i] = map[string]any{"id": rk.ID, "name": rk.Name, "linnean": rk.Linnean, "taxa": rk.Taxa}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // handleTaxonTableIssueRules lists the validation rules with open

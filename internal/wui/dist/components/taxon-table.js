@@ -63,15 +63,7 @@ const COLUMNS = [
   { id: "code", label: "Code", group: "name", sort: "code", cell: (r) => (r.code || "").toLowerCase() },
   { id: "extinct", label: "Extinct", group: "name", cell: (r) => (r.extinct ? "†" : "") },
   { id: "modified", label: "Modified", group: "name", sort: "modified", cell: (r) => (r.modified || "").slice(0, 10) },
-  ...["kingdom", "phylum", "class", "order", "family", "genus"].map((rank) => ({
-    id: rank,
-    label: rank[0].toUpperCase() + rank.slice(1),
-    group: "classification",
-    sort: rank,
-    shown: rank === "family",
-    title: `The accepted taxon's ${rank}`,
-    cell: (r) => (r.classification && r.classification[rank]) || "",
-  })),
+  { classification: true },
   {
     id: "vernaculars", label: "Vernacular names", group: "supplemental", sort: "vernaculars", shown: true,
     title: "Vernacular names of the taxon (accepted rows); sorts by how many",
@@ -128,6 +120,37 @@ const COLUMNS = [
     cell: (r) => list(r.issue_rules),
   },
 ];
+
+// FALLBACK_RANKS are the classification columns offered when the
+// archive's ranks cannot be listed.
+const FALLBACK_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus"].map((id) => ({
+  id,
+  name: id,
+  linnean: true,
+}));
+
+// buildColumns places a classification column for each rank where
+// COLUMNS has its placeholder: the Linnaean ranks under
+// "Classification", every other rank under "All ranks".
+function buildColumns(ranks) {
+  const rankColumns = ranks.map((rk) => {
+    const name = (rk.name || rk.id).replaceAll("_", " ");
+    const label = name[0].toUpperCase() + name.slice(1);
+    return {
+      id: rk.id,
+      label,
+      group: rk.linnean ? "classification" : "ranks",
+      sort: rk.id,
+      shown: rk.id === "family",
+      reload: true,
+      title: `The accepted taxon's ${name}, from its parent chain`,
+      hint: rk.taxa ? `${rk.taxa.toLocaleString()} taxa` : "none in this archive",
+      dim: !rk.taxa,
+      cell: (r) => (r.classification && r.classification[rk.id]) || "",
+    };
+  });
+  return COLUMNS.flatMap((c) => (c.classification ? rankColumns : [c]));
+}
 
 // DATA lists the kinds of supplemental data the Data filter can require
 // or exclude.
@@ -189,6 +212,7 @@ async function withinSource(q) {
 const GROUPS = [
   { id: "name", label: "Name" },
   { id: "classification", label: "Classification" },
+  { id: "ranks", label: "All ranks", collapsible: true, filter: "Filter ranks…" },
   { id: "supplemental", label: "Supplemental data" },
   { id: "issues", label: "Issues" },
 ];
@@ -224,6 +248,7 @@ class SfgaTaxonTable extends LitElement {
     _data: { state: true },
     _rules: { state: true },
     _total: { state: true },
+    _columns: { state: true },
   };
 
   static styles = css`
@@ -311,9 +336,11 @@ class SfgaTaxonTable extends LitElement {
       ...SEVERITIES.map((sv) => ({ id: sv, name: "With " + sv })),
       ...this._rules.map((r) => ({ id: "rule:" + r.id, name: `${r.name} (${r.count})` })),
     ]);
+    this._columns = null;
     this._fetch = (page) =>
       api.taxon.table({
         ...this._filterParams(),
+        lineage: this._lineage(page.columns),
         sort: page.sort,
         limit: page.limit,
         offset: page.offset,
@@ -322,6 +349,12 @@ class SfgaTaxonTable extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // The rank columns come from the archive's vocabulary; the table
+    // waits for them so its first page fills the saved columns.
+    api.taxon
+      .tableRanks()
+      .then((res) => (this._columns = buildColumns(res.items?.length ? res.items : FALLBACK_RANKS)))
+      .catch(() => (this._columns = buildColumns(FALLBACK_RANKS)));
     api.taxon
       .tableIssueRules()
       .then((res) => (this._rules = res.items || []))
@@ -357,6 +390,12 @@ class SfgaTaxonTable extends LitElement {
         .valueName=${value ? nameOf(value) || value : ""}
         @pick=${(e) => this._changed("_" + field, e.detail.id || "")}
       ></sfga-combobox>`;
+  }
+
+  // _lineage lists the classification ranks among the shown columns.
+  _lineage(shown) {
+    const ranks = new Set((this._columns || []).filter((c) => c.reload).map((c) => c.id));
+    return (shown || []).filter((id) => ranks.has(id)).join(",");
   }
 
   _rankName(id) {
@@ -430,8 +469,16 @@ class SfgaTaxonTable extends LitElement {
           .href=${(format, opts) => this._exportURL(format, opts)}
         ></sfga-export-menu>
       </div>
+      ${this._columns
+        ? this._renderTable()
+        : html`<p class="total" role="status">Loading…</p>`}
+    `;
+  }
+
+  _renderTable() {
+    return html`
       <sfga-data-table
-        .columns=${COLUMNS}
+        .columns=${this._columns}
         .groups=${GROUPS}
         .settingsKey=${"taxa.table"}
         .fetchPage=${this._fetch}

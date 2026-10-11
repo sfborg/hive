@@ -322,6 +322,9 @@ export const api = {
     // name usage with classification, supplemental data and issues.
     table: (opts) => j("GET", `/api/taxon/table${qs(opts)}`),
     tableIssueRules: () => j("GET", "/api/taxon/table/issue-rules"),
+    // tableRanks lists the archive's ranks in hierarchy order with
+    // their taxon counts: {items: [{id, name, linnean, taxa}]}.
+    tableRanks: () => j("GET", "/api/taxon/table/ranks"),
     // rowSources returns hive__row_source entries for the taxon's
     // extension rows (type_material, distribution, vernacular).
     // Backs the source badges on the detail-pane extension tables.

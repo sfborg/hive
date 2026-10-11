@@ -11,10 +11,17 @@
  *
  * Properties:
  *   columns     [{id, label, group?, sort?, numeric?, shown?, title?,
- *                 cell(row) → template}]
- *   groups      [{id, label}] — sections of the column menu, in order
+ *                 hint?, dim?, reload?, cell(row) → template}] — hint is
+ *                 dim text after the label in the menu; dim greys the
+ *                 label; reload refetches when the column is shown
+ *                 (its values come from the server only on request)
+ *   groups      [{id, label, collapsible?, filter?}] — sections of the
+ *                 column menu, in order; a collapsible one starts
+ *                 closed, and filter is a placeholder for a box that
+ *                 narrows its columns
  *   settingsKey "taxa.table" → "taxa.table.columns" etc.
- *   fetchPage   async ({offset, limit, sort}) → {items, total}
+ *   fetchPage   async ({offset, limit, sort, columns}) → {items, total},
+ *                 columns being the shown column ids
  *   rowKey      (row) → string
  *   icon        (name, size) → template (the app's icon renderer)
  *   defaultSort [{column, desc}]
@@ -47,6 +54,7 @@ class SfgaDataTable extends LitElement {
     _rowHeight: { state: true },
     _menu: { state: true },
     _drag: { state: true },
+    _groupFilter: { state: true },
   };
 
   static styles = css`
@@ -235,6 +243,27 @@ class SfgaDataTable extends LitElement {
       color: var(--dim);
       font-size: var(--fs-xs);
     }
+    .menu li label.dim {
+      color: var(--dim);
+    }
+    .menu details summary {
+      color: var(--dim);
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      margin: var(--sp-2) 0 var(--sp-1);
+      cursor: pointer;
+    }
+    .menu details input[type="search"] {
+      box-sizing: border-box;
+      width: 100%;
+      margin-bottom: var(--sp-1);
+      font: inherit;
+      padding: 2px var(--sp-1);
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
     .reset {
       margin-top: var(--sp-2);
       font: inherit;
@@ -299,6 +328,7 @@ class SfgaDataTable extends LitElement {
     this._error = "";
     this._menu = null;
     this._drag = null;
+    this._groupFilter = {};
     this._generation = 0;
   }
 
@@ -361,7 +391,12 @@ class SfgaDataTable extends LitElement {
     const generation = this._generation;
     this._loading = true;
     try {
-      const page = await this.fetchPage({ offset: this._rows.length, limit: PAGE, sort: this._sortParam() });
+      const page = await this.fetchPage({
+        offset: this._rows.length,
+        limit: PAGE,
+        sort: this._sortParam(),
+        columns: this._shown,
+      });
       if (generation !== this._generation) return;
       this._rows = [...this._rows, ...(page.items || [])];
       this._total = page.total ?? this._rows.length;
@@ -421,7 +456,10 @@ class SfgaDataTable extends LitElement {
   }
 
   _toggle(id, show) {
-    if (show && !this._shown.includes(id)) this._setShown([...this._shown, id]);
+    if (show && !this._shown.includes(id)) {
+      this._setShown([...this._shown, id]);
+      if (this.columns.find((c) => c.id === id)?.reload) this.reload();
+    }
     if (!show && this._shown.length > 1) this._setShown(this._shown.filter((c) => c !== id));
   }
 
@@ -566,6 +604,23 @@ class SfgaDataTable extends LitElement {
     </th>`;
   }
 
+  // _renderHidden lists columns that are not shown, to add.
+  _renderHidden(cols) {
+    return html`<ul>
+      ${repeat(
+        cols,
+        (c) => c.id,
+        (c) => html`<li>
+          <span class="grip" aria-hidden="true"></span>
+          <label title=${c.title || nothing} class=${c.dim ? "dim" : ""}>
+            <input type="checkbox" .checked=${live(false)} @change=${() => this._toggle(c.id, true)} />
+            ${c.label}${c.hint ? html` <span class="hint">${c.hint}</span>` : nothing}
+          </label>
+        </li>`,
+      )}
+    </ul>`;
+  }
+
   // _renderMenu lists the shown columns in order (drag or arrows to
   // reorder), then every other column under its group.
   _renderMenu() {
@@ -656,20 +711,22 @@ class SfgaDataTable extends LitElement {
       ${groups.map((g) => {
         const cols = hidden.filter((c) => (g.id === undefined ? true : c.group === g.id));
         if (!cols.length) return nothing;
-        return html`<h4>${g.label}</h4>
-          <ul>
-            ${repeat(
-              cols,
-              (c) => c.id,
-              (c) => html`<li>
-                <span class="grip" aria-hidden="true"></span>
-                <label title=${c.title || nothing}>
-                  <input type="checkbox" .checked=${live(false)} @change=${() => this._toggle(c.id, true)} />
-                  ${c.label}
-                </label>
-              </li>`,
-            )}
-          </ul>`;
+        if (!g.collapsible) return html`<h4>${g.label}</h4>${this._renderHidden(cols)}`;
+        const needle = (this._groupFilter[g.id] || "").trim().toLowerCase();
+        const narrowed = needle ? cols.filter((c) => c.label.toLowerCase().includes(needle)) : cols;
+        return html`<details>
+          <summary>${g.label}</summary>
+          ${g.filter
+            ? html`<input
+                type="search"
+                placeholder=${g.filter}
+                aria-label=${g.filter}
+                .value=${this._groupFilter[g.id] || ""}
+                @input=${(e) => (this._groupFilter = { ...this._groupFilter, [g.id]: e.target.value })}
+              />`
+            : nothing}
+          ${this._renderHidden(narrowed)}
+        </details>`;
       })}
       <button type="button" class="reset" @click=${() => this._setShown(this._defaultColumns())}>
         Reset to defaults
