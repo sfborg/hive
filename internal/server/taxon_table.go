@@ -107,7 +107,8 @@ func (s *server) handleTaxonTableRanks(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]map[string]any, len(ranks))
 	for i, rk := range ranks {
-		items[i] = map[string]any{"id": rk.ID, "name": rk.Name, "linnean": rk.Linnean, "taxa": rk.Taxa}
+		items[i] = map[string]any{"id": rk.ID, "name": rk.Name, "linnean": rk.Linnean,
+			"intermediate": rk.Intermediate, "taxa": rk.Taxa}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

@@ -123,7 +123,7 @@ const COLUMNS = [
 
 // FALLBACK_RANKS are the classification columns offered when the
 // archive's ranks cannot be listed.
-const FALLBACK_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus"].map((id) => ({
+const FALLBACK_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "subgenus"].map((id) => ({
   id,
   name: id,
   linnean: true,
@@ -131,7 +131,8 @@ const FALLBACK_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus"
 
 // buildColumns places a classification column for each rank where
 // COLUMNS has its placeholder: the Linnaean ranks under
-// "Classification", every other rank under "All ranks".
+// "Classification", the common ranks between them under "Intermediate
+// ranks", every other rank under "All ranks".
 function buildColumns(ranks) {
   const rankColumns = ranks.map((rk) => {
     const name = (rk.name || rk.id).replaceAll("_", " ");
@@ -139,7 +140,7 @@ function buildColumns(ranks) {
     return {
       id: rk.id,
       label,
-      group: rk.linnean ? "classification" : "ranks",
+      group: rk.linnean ? "classification" : rk.intermediate ? "intermediate" : "ranks",
       sort: rk.id,
       shown: rk.id === "family",
       reload: true,
@@ -212,6 +213,7 @@ async function withinSource(q) {
 const GROUPS = [
   { id: "name", label: "Name" },
   { id: "classification", label: "Classification" },
+  { id: "intermediate", label: "Intermediate ranks" },
   { id: "ranks", label: "All ranks", collapsible: true, filter: "Filter ranks…" },
   { id: "supplemental", label: "Supplemental data" },
   { id: "issues", label: "Issues" },
@@ -231,7 +233,7 @@ const EXPORT_OPTIONS = [
   {
     id: "linnaean",
     label: "Include all Linnaean ranks in CSV and SQLite (recommended if you plan to edit the classification and re-import)",
-    title: "Add kingdom, phylum, class, order, family, genus and species columns to the ones shown",
+    title: "Add kingdom, phylum, class, order, family, genus and subgenus columns to the ones shown",
     checked: false,
     formats: ["csv", "sqlite"],
   },

@@ -125,20 +125,28 @@ var denormalizedRanks = map[string]bool{
 // rankColumnID matches what can be a rank column: a lowercase rank ID.
 var rankColumnID = regexp.MustCompile(`^[a-z][a-z_]*$`)
 
+// LinnaeanRanks are the classic Linnaean ranks of a classification.
+var LinnaeanRanks = []string{"kingdom", "phylum", "class", "order", "family", "genus", "subgenus"}
+
+// IntermediateRanks are ranks commonly used between the Linnaean ones.
+var IntermediateRanks = []string{"superorder", "suborder", "superfamily", "subfamily",
+	"supertribe", "tribe", "subtribe"}
+
 // TaxonRank is a rank of the archive's vocabulary, offered as a
 // classification column.
 type TaxonRank struct {
-	ID      string // lowercase rank ID, the column's id
-	Name    string
-	Linnean bool
-	Taxa    int // accepted taxa of this rank in the archive
+	ID           string // lowercase rank ID, the column's id
+	Name         string
+	Linnean      bool // one of LinnaeanRanks
+	Intermediate bool // one of IntermediateRanks
+	Taxa         int  // accepted taxa of this rank in the archive
 }
 
 // TaxonRanks lists the archive's ranks in hierarchy order, with how
 // many taxa each has.
 func (a *Archive) TaxonRanks(ctx context.Context) ([]TaxonRank, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT LOWER(r.col__id), COALESCE(r.col__name, ''), COALESCE(r.col__linnean, 0), COALESCE(c.n, 0)
+		SELECT LOWER(r.col__id), COALESCE(r.col__name, ''), COALESCE(c.n, 0)
 		FROM rank r
 		LEFT JOIN (SELECT UPPER(n.col__rank_id) AS id, COUNT(*) AS n
 			FROM taxon t JOIN name n ON n.col__id = t.col__name_id GROUP BY 1) c ON c.id = UPPER(r.col__id)
@@ -151,9 +159,11 @@ func (a *Archive) TaxonRanks(ctx context.Context) ([]TaxonRank, error) {
 	var out []TaxonRank
 	for rows.Next() {
 		var r TaxonRank
-		if err := rows.Scan(&r.ID, &r.Name, &r.Linnean, &r.Taxa); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Taxa); err != nil {
 			return nil, err
 		}
+		r.Linnean = slices.Contains(LinnaeanRanks, r.ID)
+		r.Intermediate = slices.Contains(IntermediateRanks, r.ID)
 		if rankColumnID.MatchString(r.ID) {
 			out = append(out, r)
 		}
