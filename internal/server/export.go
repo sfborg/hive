@@ -234,6 +234,37 @@ var referenceExportColumns = func() []exportColumn[apiReferenceHit] {
 	)
 }()
 
+// referenceLiveColumns are the reference list columns reference_list_view
+// computes from the SFGA tables; the others are exported as details.
+var referenceLiveColumns = []string{"id", "author", "year", "title", "citation", "issues", "modified"}
+
+// referenceDetails holds the reference list columns computed from hive's
+// own tables, for an SFGA export. Token counts keep their attribution in
+// the column id.
+func referenceDetails(rows []apiReferenceHit) hive.ExportDetails {
+	var cols []exportColumn[apiReferenceHit]
+	d := hive.ExportDetails{Rows: map[string][]string{}}
+	for _, c := range referenceExportColumns {
+		if slices.Contains(referenceLiveColumns, c.id) {
+			continue
+		}
+		id := c.id
+		if id == "tokens" {
+			id = "tokens_provider_reported"
+		}
+		cols = append(cols, c)
+		d.Columns = append(d.Columns, hive.ExportDetailColumn{ID: id, Label: c.label})
+	}
+	for _, row := range rows {
+		vals := make([]string, len(cols))
+		for i, c := range cols {
+			vals[i] = fmt.Sprint(c.value(row))
+		}
+		d.Rows[row.ID] = vals
+	}
+	return d
+}
+
 // pickColumns returns the identifier columns followed by the requested
 // columns in the requested order; unknown ids are skipped and an empty
 // request exports every column.
@@ -484,8 +515,9 @@ func (s *server) handleTaxonTableExport(w http.ResponseWriter, r *http.Request) 
 // @Summary      Export the reference list
 // @Tags         references
 // @Produce      text/csv
-// @Param        format  query string false "csv (default) or sqlite"
+// @Param        format  query string false "csv (default), sqlite (one table) or sfga (the references with the records citing them, with reference_list_view)"
 // @Param        columns query string false "comma-separated column ids, in order; the reference id always comes first"
+// @Param        validation query string false "sfga: 0 leaves out the validation results"
 // @Success      200 {file} file
 // @Router       /reference/export [get]
 func (s *server) handleReferenceExport(w http.ResponseWriter, r *http.Request) {
@@ -520,6 +552,19 @@ func (s *server) handleReferenceExport(w http.ResponseWriter, r *http.Request) {
 	rows := make([]apiReferenceHit, len(hits))
 	for i, h := range hits {
 		rows[i] = referenceHitToAPI(h)
+	}
+	if r.URL.Query().Get("format") == "sfga" {
+		ids := make([]string, len(rows))
+		for i, row := range rows {
+			ids[i] = row.ID
+		}
+		details := referenceDetails(rows)
+		validation := r.URL.Query().Get("validation") != "0"
+		info := s.exportInfo(r, "reference list")
+		sendSQLite(w, r, "references-"+time.Now().Format("2006-01-02")+".sfga.sqlite", func(path string) error {
+			return s.a.ExportReferencesSFGA(r.Context(), path, ids, details, validation, info)
+		})
+		return
 	}
 	cols := pickColumns(referenceExportColumns, splitColumns(r.URL.Query().Get("columns")), 1)
 	writeExport(w, r, r.URL.Query().Get("format"), "references", "reference_list", cols, rows,

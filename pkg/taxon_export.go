@@ -10,17 +10,150 @@ import (
 )
 
 // ExportTaxaSFGA writes the taxon table rows to a new SFGA archive at
-// path: their names, taxa (with every ancestor, so the classification
-// stays whole) and synonyms, the supplemental records (vernacular
-// names, distribution, interactions, type material, name relations,
-// media, properties, species estimates, treatments, concept relations,
-// name matches), the references those records
-// cite, the vocabularies, the metadata and the validation results on
-// the copied records (resolved ones included) unless validation is
-// false. The rows that matched are
+// path (see exportSFGA for what it holds). The rows that matched are
 // listed in export_scope, and the view taxon_table_view shows them as
 // the flat table, computed from the related tables.
 func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonTableRow, validation bool, info map[string]string) error {
+	seed := func(ctx context.Context, db *sql.DB) error {
+		err := insertRows(ctx, db, `CREATE TABLE export_scope (
+			name_id TEXT NOT NULL, taxon_id TEXT, synonym_id TEXT, usage TEXT NOT NULL, ordinal INTEGER NOT NULL)`,
+			`INSERT INTO export_scope VALUES (?, ?, ?, ?, ?)`, len(rows), func(i int) []any {
+				r := rows[i]
+				return []any{r.NameID, r.TaxonID, r.SynonymID, r.Usage, i + 1}
+			})
+		if err != nil {
+			return err
+		}
+		return execAll(ctx, db,
+			`INSERT OR IGNORE INTO sc_taxon SELECT taxon_id FROM export_scope WHERE COALESCE(taxon_id, '') <> ''`,
+			`INSERT OR IGNORE INTO sc_name SELECT name_id FROM export_scope`)
+	}
+	view := func(ranks []string, issues bool) string {
+		return `CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL(ranks, issues)
+	}
+	info["format"] = "SFGA archive with the matched rows (export_scope) and taxon_table_view"
+	return a.exportSFGA(ctx, path, seed, view, validation, info)
+}
+
+// ExportReferencesSFGA writes the references refIDs, in that order, to
+// a new SFGA archive at path with the names, taxa and other records
+// that cite them (see exportSFGA). details holds the reference list's
+// columns that hive computes from its own tables (workflow status,
+// name summaries, license, sizes); they are stored as computed at
+// export time in export_reference_details. The view
+// reference_list_view joins them with the reference table to show the
+// flat list.
+func (a *Archive) ExportReferencesSFGA(ctx context.Context, path string, refIDs []string, details ExportDetails, validation bool, info map[string]string) error {
+	seed := func(ctx context.Context, db *sql.DB) error {
+		err := insertRows(ctx, db, `CREATE TABLE export_scope (reference_id TEXT NOT NULL, ordinal INTEGER NOT NULL)`,
+			`INSERT INTO export_scope VALUES (?, ?)`, len(refIDs), func(i int) []any { return []any{refIDs[i], i + 1} })
+		if err != nil {
+			return err
+		}
+		if err := details.write(ctx, db, refIDs); err != nil {
+			return err
+		}
+		if err := execAll(ctx, db, `INSERT OR IGNORE INTO sc_ref SELECT reference_id FROM export_scope`); err != nil {
+			return err
+		}
+		// Records citing the references bring in their names and taxa.
+		for _, t := range citingTables {
+			for _, col := range []string{"col__reference_id", "col__according_to_id"} {
+				if ok, _ := columnIn(ctx, db, "src", t.table, col); !ok {
+					continue
+				}
+				cites := ` FROM src.` + t.table + ` WHERE ` + col + ` IN (SELECT id FROM sc_ref)`
+				var qs []string
+				if t.taxon != "" {
+					qs = append(qs, `INSERT OR IGNORE INTO sc_taxon SELECT `+t.taxon+cites+` AND COALESCE(`+t.taxon+`, '') <> ''`)
+				}
+				if t.name != "" {
+					qs = append(qs, `INSERT OR IGNORE INTO sc_name SELECT `+t.name+cites+` AND COALESCE(`+t.name+`, '') <> ''`)
+				}
+				if err := execAll(ctx, db, qs...); err != nil {
+					return err
+				}
+			}
+		}
+		// The usages of cited names.
+		return execAll(ctx, db,
+			`INSERT OR IGNORE INTO sc_taxon SELECT col__id FROM src.taxon WHERE col__name_id IN (SELECT id FROM sc_name)`,
+			`INSERT OR IGNORE INTO sc_taxon SELECT col__taxon_id FROM src.synonym WHERE col__name_id IN (SELECT id FROM sc_name)`)
+	}
+	view := func(_ []string, issues bool) string {
+		return `CREATE VIEW reference_list_view AS ` + referenceListViewSQL(details.Columns, issues)
+	}
+	info["format"] = "SFGA archive with the matched references (export_scope), the records citing them and reference_list_view"
+	return a.exportSFGA(ctx, path, seed, view, validation, info)
+}
+
+// citingTables are the tables whose records can cite a reference, with
+// the taxon and name columns that place a record.
+var citingTables = []struct{ table, taxon, name string }{
+	{"name", "", "col__id"},
+	{"taxon", "col__id", "col__name_id"},
+	{"synonym", "col__taxon_id", "col__name_id"},
+	{"vernacular", "col__taxon_id", ""},
+	{"distribution", "col__taxon_id", ""},
+	{"species_interaction", "col__taxon_id", ""},
+	{"taxon_property", "col__taxon_id", ""},
+	{"species_estimate", "col__taxon_id", ""},
+	{"taxon_concept_relation", "col__taxon_id", ""},
+	{"type_material", "", "col__name_id"},
+	{"name_relation", "", "col__name_id"},
+}
+
+// ExportDetails are flat columns computed outside the SFGA tables,
+// one row of values per exported record, keyed by its ID.
+type ExportDetails struct {
+	Columns []ExportDetailColumn
+	Rows    map[string][]string
+}
+
+// ExportDetailColumn is a column of ExportDetails.
+type ExportDetailColumn struct{ ID, Label string }
+
+// write stores the details as export_reference_details.
+func (d ExportDetails) write(ctx context.Context, db *sql.DB, ids []string) error {
+	cols := []string{"reference_id TEXT PRIMARY KEY"}
+	marks := []string{"?"}
+	for _, c := range d.Columns {
+		if !rankColumnID.MatchString(c.ID) {
+			return fmt.Errorf("core: export detail column %q", c.ID)
+		}
+		cols = append(cols, `"`+c.ID+`" TEXT`)
+		marks = append(marks, "?")
+	}
+	return insertRows(ctx, db, `CREATE TABLE export_reference_details (`+strings.Join(cols, ", ")+`)`,
+		`INSERT OR IGNORE INTO export_reference_details VALUES (`+strings.Join(marks, ", ")+`)`, len(ids),
+		func(i int) []any {
+			vals := []any{ids[i]}
+			row := d.Rows[ids[i]]
+			for j := range d.Columns {
+				v := ""
+				if j < len(row) {
+					v = row[j]
+				}
+				vals = append(vals, v)
+			}
+			return vals
+		})
+}
+
+// exportSFGA writes a new SFGA archive at path holding a part of this
+// one. seed creates export_scope and fills the temporary tables
+// sc_taxon, sc_name and sc_ref with the taxa, names and references the
+// export starts from. The export then holds those taxa with every
+// ancestor (so the classification stays whole), their names and
+// synonyms, the supplemental records (vernacular names, distribution,
+// interactions, type material, name relations, media, properties,
+// species estimates, treatments, concept relations, name matches), the
+// references all of these cite, the vocabularies, the metadata and,
+// when validation is true, the validation results on the copied
+// records (resolved ones included). view returns the CREATE VIEW
+// statement for the flat view, given the ranks the exported taxa use.
+func (a *Archive) exportSFGA(ctx context.Context, path string, seed func(context.Context, *sql.DB) error,
+	view func(ranks []string, issues bool) string, validation bool, info map[string]string) error {
 	db, err := sql.Open(sqliteDriver, "file:"+path+"?mode=rwc")
 	if err != nil {
 		return err
@@ -46,53 +179,28 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 		}
 		return nil
 	}
-
-	// The matched rows, then the taxa and names they reach.
-	if err := exec(`CREATE TABLE export_scope (
-		name_id TEXT NOT NULL, taxon_id TEXT, synonym_id TEXT, usage TEXT NOT NULL, ordinal INTEGER NOT NULL)`); err != nil {
-		return err
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	ins, err := tx.PrepareContext(ctx, `INSERT INTO export_scope VALUES (?, ?, ?, ?, ?)`)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	for i, r := range rows {
-		if _, err := ins.ExecContext(ctx, r.NameID, r.TaxonID, r.SynonymID, r.Usage, i+1); err != nil {
-			ins.Close()
-			tx.Rollback()
-			return err
-		}
-	}
-	ins.Close()
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	steps := []string{
+	if err := execAll(ctx, db,
 		`CREATE TEMP TABLE sc_taxon (id TEXT PRIMARY KEY)`,
 		`CREATE TEMP TABLE sc_name (id TEXT PRIMARY KEY)`,
-		`CREATE TEMP TABLE sc_ref (id TEXT PRIMARY KEY)`,
+		`CREATE TEMP TABLE sc_ref (id TEXT PRIMARY KEY)`); err != nil {
+		return err
+	}
+	if err := seed(ctx, db); err != nil {
+		return err
+	}
+	if err := execAll(ctx, db,
 		`INSERT OR IGNORE INTO sc_taxon
 			WITH RECURSIVE up(id) AS (
-				SELECT taxon_id FROM export_scope WHERE COALESCE(taxon_id, '') <> ''
+				SELECT id FROM sc_taxon
 				UNION
 				SELECT t.col__parent_id FROM src.taxon t JOIN up ON t.col__id = up.id
 				WHERE COALESCE(t.col__parent_id, '') <> '')
 			SELECT id FROM up`,
 		`INSERT OR IGNORE INTO sc_name SELECT col__name_id FROM src.taxon WHERE col__id IN (SELECT id FROM sc_taxon)`,
 		`INSERT OR IGNORE INTO sc_name SELECT col__name_id FROM src.synonym WHERE col__taxon_id IN (SELECT id FROM sc_taxon)`,
-		`INSERT OR IGNORE INTO sc_name SELECT name_id FROM export_scope`,
 		`INSERT OR IGNORE INTO sc_name SELECT col__related_name_id FROM src.name_relation
-			WHERE col__name_id IN (SELECT id FROM sc_name) AND COALESCE(col__related_name_id, '') <> ''`,
-	}
-	for _, q := range steps {
-		if err := exec(q); err != nil {
-			return err
-		}
+			WHERE col__name_id IN (SELECT id FROM sc_name) AND COALESCE(col__related_name_id, '') <> ''`); err != nil {
+		return err
 	}
 
 	byTaxon := "col__taxon_id IN (SELECT id FROM sc_taxon)"
@@ -156,7 +264,6 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 			return err
 		}
 	}
-
 	issues := false
 	if validation {
 		if issues, err = a.copyExportIssues(ctx, db, copied); err != nil {
@@ -167,17 +274,49 @@ func (a *Archive) ExportTaxaSFGA(ctx context.Context, path string, rows []TaxonT
 	if err != nil {
 		return err
 	}
-	if err := exec(`CREATE VIEW taxon_table_view AS ` + taxonTableViewSQL(ranks, issues)); err != nil {
+	if err := exec(view(ranks, issues)); err != nil {
 		return err
 	}
 	if err := exec(`CREATE TABLE export_info (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
 		return err
 	}
-	info["format"] = "SFGA archive with the matched rows (export_scope) and taxon_table_view"
 	info["exported_at"] = time.Now().UTC().Format(time.RFC3339)
 	for k, v := range info {
 		if err := exec(`INSERT INTO export_info VALUES (?, ?)`, k, v); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// insertRows creates a table with create and fills it with n rows from
+// row, in one transaction.
+func insertRows(ctx context.Context, db *sql.DB, create, insert string, n int, row func(int) []any) error {
+	if _, err := db.ExecContext(ctx, create); err != nil {
+		return fmt.Errorf("core: export: %w", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ins, err := tx.PrepareContext(ctx, insert)
+	if err != nil {
+		return err
+	}
+	defer ins.Close()
+	for i := range n {
+		if _, err := ins.ExecContext(ctx, row(i)...); err != nil {
+			return fmt.Errorf("core: export: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func execAll(ctx context.Context, db *sql.DB, qs ...string) error {
+	for _, q := range qs {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("core: export: %w\n%s", err, q)
 		}
 	}
 	return nil
@@ -385,4 +524,36 @@ FROM export_scope u
 JOIN name n ON n.col__id = u.name_id
 LEFT JOIN taxon at ON at.col__id = u.taxon_id
 ORDER BY u.ordinal`
+}
+
+// referenceListViewSQL is the query behind reference_list_view: the
+// matched references in order, their bibliographic columns from the
+// reference table, the detail columns hive computed at export time
+// and, when issues is true, their open validation issues.
+func referenceListViewSQL(details []ExportDetailColumn, issues bool) string {
+	cols := []string{
+		`r.col__id AS id`, `COALESCE(r.col__author, '') AS author`,
+		`COALESCE(substr(r.col__issued, 1, 4), '') AS year`, `COALESCE(r.col__title, '') AS title`,
+		`COALESCE(r.col__citation, '') AS citation`, `lower(COALESCE(r.col__type_id, '')) AS type`,
+		`COALESCE(r.col__modified, '') AS modified`,
+	}
+	for _, c := range details {
+		cols = append(cols, `d."`+c.ID+`"`)
+	}
+	if issues {
+		open := `FROM __gsvalidator_results v WHERE v.is_resolved = 0 AND v.table_name = 'reference'
+				AND v.record_id = r.col__id`
+		cols = append(cols,
+			`(SELECT group_concat(severity || ' ' || n, '; ') FROM (SELECT v.severity, COUNT(*) AS n `+open+`
+				GROUP BY v.severity ORDER BY CASE v.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2
+					WHEN 'info' THEN 3 ELSE 4 END)) AS issues`,
+			`(SELECT group_concat(rule_name, '; ') FROM (SELECT DISTINCT v.rule_name `+open+`
+				ORDER BY v.rule_name)) AS issue_rules`,
+		)
+	}
+	return `SELECT ` + strings.Join(cols, ",\n\t") + `
+FROM export_scope s
+JOIN reference r ON r.col__id = s.reference_id
+LEFT JOIN export_reference_details d ON d.reference_id = s.reference_id
+ORDER BY s.ordinal`
 }

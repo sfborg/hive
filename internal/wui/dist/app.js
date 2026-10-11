@@ -948,6 +948,27 @@ function vocabSource(name) {
   };
 }
 
+// REFERENCE_EXPORT_FORMATS and REFERENCE_EXPORT_OPTIONS configure the
+// reference list's Export menu.
+const REFERENCE_EXPORT_FORMATS = [
+  { id: "csv", label: "CSV", hint: "For spreadsheets" },
+  { id: "sqlite", label: "SQLite", hint: "One flat table, as shown" },
+  {
+    id: "sfga",
+    label: "SFGA archive",
+    hint: "The matching references with the records citing them; reference_list_view shows them as here",
+  },
+];
+const REFERENCE_EXPORT_OPTIONS = [
+  {
+    id: "validation",
+    label: "Include validation results in the SFGA archive",
+    title: "Copy the validation results on the exported records into the archive",
+    checked: true,
+    formats: ["sfga"],
+  },
+];
+
 // rankLabel returns a rank's display name from the vocabulary,
 // falling back to the lowercased ID.
 function rankLabel(id) {
@@ -19102,9 +19123,10 @@ class SfgaReferences extends LitElement {
 
   // _exportURL downloads the reference list with the current search,
   // filters, sort and shown columns.
-  _exportURL(format) {
+  _exportURL(format, opts = {}) {
     const params = {
       format,
+      validation: opts.validation === false ? "0" : "",
       q: this._query.trim(),
       sort: this._sortParam(),
       columns: this._columns.filter((c) => c !== "actions").join(","),
@@ -21278,7 +21300,11 @@ class SfgaReferences extends LitElement {
           >
             ?
           </button>
-          <sfga-export-menu .href=${(format) => this._exportURL(format)}></sfga-export-menu>
+          <sfga-export-menu
+            .formats=${REFERENCE_EXPORT_FORMATS}
+            .options=${REFERENCE_EXPORT_OPTIONS}
+            .href=${(format, opts) => this._exportURL(format, opts)}
+          ></sfga-export-menu>
         </div>
       </div>
       ${this._loading && this._hits.length === 0
